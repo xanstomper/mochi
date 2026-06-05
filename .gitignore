@@ -1,0 +1,78 @@
+# Binaries
+mochi
+mochi.exe
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of go coverage
+*.out
+coverage.txt
+coverage.html
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace
+go.work
+go.work.sum
+
+# Env files
+.env
+.env.local
+.env.*.local
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+build/
+bin/
+out/
+target/
+
+# Profiling
+*.prof
+*.pprof
+cpu.prof
+mem.prof
+profile.out
+
+# Logs
+*.log
+logs/
+
+# Local config and secrets
+.mochi/
+mochi.db
+mochi.db-*
+*.sqlite
+*.sqlite3
+
+# OS files
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Temporary
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp

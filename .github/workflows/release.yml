@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          release-type: go
+          package-name: mochi
+      - uses: actions/checkout@v4
+        if: steps.release.outputs.release_created
+      - name: Set up Go
+        if: steps.release.outputs.release_created
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+      - name: Build binaries
+        if: steps.release.outputs.release_created
+        run: |
+          mkdir -p dist
+          for target in \
+            "darwin/amd64" \
+            "darwin/arm64" \
+            "linux/amd64" \
+            "linux/arm64" \
+            "linux/musl/amd64" \
+            "windows/amd64" \
+            "windows/arm64" \
+            "freebsd/amd64"; do
+            GOOS="${target%/*}"
+            GOARCH="${target##*/}"
+            EXTRA=""
+            if [[ "$target" == *musl* ]]; then
+              EXTRA="-musl"
+            fi
+            ext=""
+            if [[ "$GOOS" == "windows" ]]; then
+              ext=".exe"
+            fi
+            output="dist/mochi-${GOOS}-${GOARCH}${EXTRA}${ext}"
+            if [[ -n "$EXTRA" ]]; then
+              CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -extldflags=-static" -o "$output" .
+            else
+              CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$output" .
+            fi
+          done
+      - name: Create checksums
+        if: steps.release.outputs.release_created
+        run: |
+          cd dist
+          sha256sum mochi-* > SHA256SUMS
+      - name: Upload binaries
+        if: steps.release.outputs.release_created
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*
+            SHA256SUMS
+          fail_on_unmatched_files: true
+          generate_release_notes: true

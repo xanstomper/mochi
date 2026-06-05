@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test on ${{ matrix.os }} / Go ${{ matrix.go }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        go: ['1.24', '1.25']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
+      - name: Download modules
+        run: go mod download
+      - name: Verify modules
+        run: go mod verify
+      - name: Build
+        run: go build ./...
+      - name: Test
+        run: go test -race -coverprofile=coverage.txt -covermode=atomic ./...
+      - name: Upload coverage
+        if: matrix.os == 'ubuntu-latest' && matrix.go == '1.24'
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.txt
+          flags: unittests
+          fail_ci_if_error: false
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --timeout=5m
+
+  fuzz:
+    name: Fuzz (5m per package)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+      - name: Fuzz internal/ui/canvas
+        run: go test -fuzz=. -fuzztime=5m ./internal/ui/canvas/
+      - name: Fuzz internal/ui/statusbar
+        run: go test -fuzz=. -fuzztime=5m ./internal/ui/statusbar/
+      - name: Fuzz internal/ui/streamviz
+        run: go test -fuzz=. -fuzztime=5m ./internal/ui/streamviz/
+      - name: Fuzz internal/ui/banner
+        run: go test -fuzz=. -fuzztime=5m ./internal/ui/banner/

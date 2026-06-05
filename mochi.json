@@ -1,0 +1,140 @@
+{
+  "$schema": "https://charm.land/MOCHI.json",
+  "models": {
+    "large": {
+      "provider": "atessa",
+      "model": "gpt-5.5",
+      "max_tokens": 16384
+    },
+    "default": {
+      "provider": "atessa",
+      "model": "gpt-5.5",
+      "max_tokens": 16384
+    },
+    "planner": {
+      "provider": "atessa",
+      "model": "gpt-5.6",
+      "max_tokens": 16384
+    },
+    "coder": {
+      "provider": "atessa",
+      "model": "gpt-5.5",
+      "max_tokens": 16384
+    },
+    "reviewer": {
+      "provider": "atessa",
+      "model": "claude-sonnet-4-5",
+      "max_tokens": 16384
+    },
+    "small": {
+      "provider": "atessa",
+      "model": "gpt-4o-mini",
+      "max_tokens": 8192
+    },
+    "summarizer": {
+      "provider": "atessa",
+      "model": "gpt-4o-mini",
+      "max_tokens": 8192
+    },
+    "fallback": {
+      "provider": "nim07",
+      "model": "meta/llama-3.3-70b-instruct",
+      "max_tokens": 8192
+    }
+  },
+  "providers": {
+    "atessa": {
+      "name": "Atessa",
+      "type": "openai-compat",
+      "base_url": "https://atessa.top/v1",
+      "api_key": "${ATESSA_API_KEY:?set ATESSA_API_KEY}",
+      "models": [
+        { "id": "gpt-5.5", "name": "GPT-5.5", "context_window": 128000, "default_max_tokens": 16384, "can_reason": true, "supports_attachments": true },
+        { "id": "gpt-5.6", "name": "GPT-5.6", "context_window": 128000, "default_max_tokens": 16384, "can_reason": true, "supports_attachments": true },
+        { "id": "gpt-5.4", "name": "GPT-5.4", "context_window": 128000, "default_max_tokens": 16384, "can_reason": true, "supports_attachments": true },
+        { "id": "gpt-5.3-codex", "name": "GPT-5.3 Codex", "context_window": 128000, "default_max_tokens": 16384, "can_reason": true, "supports_attachments": true },
+        { "id": "gpt-4o", "name": "GPT-4o", "context_window": 128000, "default_max_tokens": 16384, "supports_attachments": true },
+        { "id": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6", "context_window": 200000, "default_max_tokens": 16384, "can_reason": true, "supports_attachments": true },
+        { "id": "claude-opus-4-8", "name": "Claude Opus 4.8", "context_window": 200000, "default_max_tokens": 16384, "can_reason": true, "supports_attachments": true },
+        { "id": "claude-haiku-4-5", "name": "Claude Haiku 4.5", "context_window": 200000, "default_max_tokens": 8192, "supports_attachments": true },
+        { "id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro", "context_window": 128000, "default_max_tokens": 16384, "can_reason": true },
+        { "id": "deepseek-v4-flash", "name": "DeepSeek V4 Flash", "context_window": 128000, "default_max_tokens": 8192 },
+        { "id": "gemini-3.1-pro", "name": "Gemini 3.1 Pro", "context_window": 1000000, "default_max_tokens": 16384, "can_reason": true, "supports_attachments": true },
+        { "id": "gemini-3.5-flash", "name": "Gemini 3.5 Flash", "context_window": 1000000, "default_max_tokens": 8192, "supports_attachments": true },
+        { "id": "mimo-v2.5-pro", "name": "Mimo V2.5 Pro", "context_window": 128000, "default_max_tokens": 16384, "can_reason": true },
+        { "id": "kimi-k2.6", "name": "Kimi K2.6", "context_window": 128000, "default_max_tokens": 16384, "can_reason": true },
+        { "id": "glm-5.1", "name": "GLM 5.1", "context_window": 128000, "default_max_tokens": 16384, "can_reason": true },
+        { "id": "gpt-5.3", "name": "GPT-5.3", "context_window": 128000, "default_max_tokens": 16384, "can_reason": true, "supports_attachments": true },
+        { "id": "claude-sonnet-4-5", "name": "Claude Sonnet 4.5", "context_window": 200000, "default_max_tokens": 16384, "can_reason": true, "supports_attachments": true },
+        { "id": "claude-opus-4-5", "name": "Claude Opus 4.5", "context_window": 200000, "default_max_tokens": 16384, "can_reason": true, "supports_attachments": true },
+        { "id": "gpt-4o-mini", "name": "GPT-4o Mini", "context_window": 128000, "default_max_tokens": 8192, "supports_attachments": true },
+        { "id": "deepseek-ai/deepseek-v4-pro", "name": "DeepSeek AI DeepSeek V4 Pro", "context_window": 128000, "default_max_tokens": 16384, "can_reason": true },
+        { "id": "deepseek-ai/deepseek-v4-flash", "name": "DeepSeek AI DeepSeek V4 Flash", "context_window": 128000, "default_max_tokens": 8192 }
+      ]
+    },
+    "nim07": {
+      "name": "NVIDIA NIM 07",
+      "type": "openai-compat",
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "api_key": "${NVIDIA_NIM07_API_KEY:?set NVIDIA_NIM07_API_KEY}",
+      "models": [
+        { "id": "meta/llama-3.3-70b-instruct", "name": "Llama 3.3 70B Instruct", "context_window": 128000, "default_max_tokens": 8192 },
+        { "id": "meta/llama-4-maverick-17b-128e-instruct", "name": "Llama 4 Maverick 17B 128E Instruct", "context_window": 128000, "default_max_tokens": 8192 },
+        { "id": "mistralai/mistral-large-3-675b-instruct-2512", "name": "Mistral Large 3 675B Instruct", "context_window": 128000, "default_max_tokens": 8192 },
+        { "id": "deepseek-ai/deepseek-v4-flash", "name": "DeepSeek V4 Flash", "context_window": 128000, "default_max_tokens": 8192 },
+        { "id": "deepseek-ai/deepseek-v4-pro", "name": "DeepSeek V4 Pro", "context_window": 128000, "default_max_tokens": 8192, "can_reason": true },
+        { "id": "nvidia/llama-3.1-nemotron-70b-instruct", "name": "Llama 3.1 Nemotron 70B Instruct", "context_window": 128000, "default_max_tokens": 8192 },
+        { "id": "microsoft/phi-4-multimodal-instruct", "name": "Phi 4 Multimodal Instruct", "context_window": 128000, "default_max_tokens": 8192, "supports_attachments": true },
+        { "id": "mistralai/codestral-22b-instruct-v0.1", "name": "Codestral 22B Instruct", "context_window": 32000, "default_max_tokens": 8192 }
+      ]
+    }
+  },
+  "options": {
+    "tui": {
+      "compact_mode": true,
+      "diff_mode": "unified"
+    },
+    "attribution": {
+      "generated_with": true,
+      "trailer_style": "assisted-by"
+    },
+    "disable_metrics": true
+  },
+  "lsp": {
+    "gopls": {
+      "options": {
+        "gofumpt": true,
+        "codelenses": {
+          "gc_details": true,
+          "generate": true,
+          "run_govulncheck": true,
+          "test": true,
+          "tidy": true,
+          "upgrade_dependency": true
+        },
+        "hints": {
+          "assignVariableTypes": true,
+          "compositeLiteralFields": true,
+          "compositeLiteralTypes": true,
+          "constantValues": true,
+          "functionTypeParameters": true,
+          "parameterNames": true,
+          "rangeVariableTypes": true
+        },
+        "analyses": {
+          "nilness": true,
+          "unusedparams": true,
+          "unusedvariable": true,
+          "unusedwrite": true,
+          "useany": true
+        },
+        "staticcheck": true,
+        "directoryFilters": [
+          "-.git",
+          "-node_modules"
+        ],
+        "semanticTokens": true
+      }
+    }
+  }
+}
