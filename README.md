@@ -23,7 +23,7 @@
 ---
 
 <p align="center">
-  <img src="docs/assets/banner.png" alt="Mochi — the fast, beautiful AI CLI, SDK, and terminal agent" width="100%">
+  <img src="docs/assets/banner.jpg" alt="Mochi — the fast, beautiful AI CLI, SDK, and terminal agent" width="100%">
 </p>
 
 <p align="center">
@@ -528,7 +528,7 @@ And special thanks to all our [contributors](https://github.com/xanstomper/mochi
 This project uses the [FSL-1.1-MIT](https://fsl.software/) license: source-available now, automatically converting to MIT two years after each release. You can use, modify, and redistribute the code for any purpose, including commercial use; the only restriction is that you may not sell a competing product based on the source code itself until the MIT conversion date for that release.
 
 <p align="center">
-  <img src="docs/assets/banner.png" alt="Mochi" width="60%">
+  <img src="docs/assets/banner.jpg" alt="Mochi" width="60%">
 </p>
 
 <p align="center">
