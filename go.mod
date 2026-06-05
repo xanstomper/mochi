@@ -1,22 +1,21 @@
 module github.com/mochi/mochi
 
-go 1.26.3
+go 1.26.4
 
 require (
 	charm.land/bubbles/v2 v2.1.0
 	charm.land/bubbletea/v2 v2.0.7
-	charm.land/catwalk v0.44.7
+	charm.land/catwalk v0.44.13
 	charm.land/fang/v2 v2.0.1
-	charm.land/fantasy v0.29.0
+	charm.land/fantasy v0.31.0
 	charm.land/glamour/v2 v2.0.0
 	charm.land/lipgloss/v2 v2.0.3
 	charm.land/log/v2 v2.0.0
 	charm.land/x/vcr v0.1.1
 	github.com/JohannesKaufmann/html-to-markdown v1.6.0
-	github.com/MakeNowJust/heredoc v1.0.0
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/PuerkitoBio/goquery v1.12.0
-	github.com/alecthomas/chroma/v2 v2.26.0
+	github.com/alecthomas/chroma/v2 v2.26.1
 	github.com/atotto/clipboard v0.1.4
 	github.com/aymanbagabas/go-nativeclipboard v0.1.3
 	github.com/aymanbagabas/go-udiff v0.4.1
@@ -50,10 +49,10 @@ require (
 	github.com/lucasb-eyer/go-colorful v1.4.0
 	github.com/mattn/go-isatty v0.0.22
 	github.com/modelcontextprotocol/go-sdk v1.6.1
-	github.com/ncruces/go-sqlite3 v0.34.3
+	github.com/ncruces/go-sqlite3 v0.34.4
 	github.com/nxadm/tail v1.4.11
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c
-	github.com/posthog/posthog-go v1.13.1
+	github.com/posthog/posthog-go v1.14.0
 	github.com/pressly/goose/v3 v3.27.1
 	github.com/qjebbs/go-jsons v1.0.0-alpha.5
 	github.com/rivo/uniseg v0.4.7
@@ -113,7 +112,7 @@ require (
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
 	github.com/cyphar/filepath-securejoin v0.6.1 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
-	github.com/dlclark/regexp2/v2 v2.1.0 // indirect
+	github.com/dlclark/regexp2/v2 v2.1.1 // indirect
 	github.com/ebitengine/purego v0.10.1 // indirect
 	github.com/esiqveland/notify v0.13.3 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
@@ -164,7 +163,7 @@ require (
 	github.com/muesli/mango-cobra v1.2.0 // indirect
 	github.com/muesli/mango-pflag v0.1.0 // indirect
 	github.com/muesli/roff v0.1.0 // indirect
-	github.com/ncruces/go-sqlite3-wasm/v2 v2.5.35301 // indirect
+	github.com/ncruces/go-sqlite3-wasm/v2 v2.6.35302 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/ncruces/julianday v1.0.0 // indirect
 	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646 // indirect
@@ -200,11 +199,11 @@ require (
 	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/exp v0.0.0-20260410095643-746e56fc9e2f // indirect
 	golang.org/x/image v0.38.0 // indirect
-	golang.org/x/mod v0.35.0 // indirect
+	golang.org/x/mod v0.36.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/term v0.43.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
-	golang.org/x/tools v0.44.0 // indirect
+	golang.org/x/tools v0.45.0 // indirect
 	google.golang.org/api v0.282.0 // indirect
 	google.golang.org/genai v1.58.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
