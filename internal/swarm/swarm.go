@@ -1,6 +1,6 @@
-// Package swarm implements the MOCHI Hermes Swarm Runtime — a multi-agent
-// orchestration layer that drives 1-30 specialist AI agents against a
-// shared task DAG, persistent project memory, and a file lock manager.
+// Package swarm implements the MOCHI Swarm Runtime — a multi-agent
+// orchestration layer that drives 1-30 specialist agents against
+// a shared task DAG, persistent project memory, and a file lock manager.
 //
 // The runtime is the next layer up from a single SessionAgent. Where a
 // SessionAgent runs a single LLM conversation per session, the swarm

@@ -31,6 +31,7 @@ import (
 	"github.com/mochi/mochi/internal/hooks"
 	"github.com/mochi/mochi/internal/log"
 	"github.com/mochi/mochi/internal/lsp"
+	"github.com/mochi/mochi/internal/memory"
 	"github.com/mochi/mochi/internal/message"
 	"github.com/mochi/mochi/internal/oauth/copilot"
 	"github.com/mochi/mochi/internal/permission"
@@ -65,16 +66,16 @@ var (
 
 // Copilot models that use the Responses API instead of Chat Completions.
 var copilotResponsesModels = map[string]bool{
-	"gpt-5.2":       true,
+	"gpt-5.2": true,
 	"gpt-5.2-codex": true,
 	"gpt-5.3-codex": true,
-	"gpt-5.4":       true,
-	"gpt-5.4-mini":  true,
-	"gpt-5.5":       true,
-	"gpt-5-mini":    true,
+	"gpt-5.4": true,
+	"gpt-5.4-mini": true,
+	"gpt-5.5": true,
+	"gpt-5-mini": true,
 }
 
-// OpenCode models that user Anthropic Messages API instead of Chat Completions.
+// Models that use the Anthropic Messages API instead of Chat Completions.
 var opencodeMessagesModels = map[string]bool{
 	"qwen3.7-max": true,
 }
@@ -107,6 +108,7 @@ type coordinator struct {
 	history     history.Service
 	filetracker filetracker.Service
 	lspManager  *lsp.Manager
+	memories    memory.Service
 	notify      pubsub.Publisher[notify.Notification]
 	runComplete pubsub.Publisher[notify.RunComplete]
 
@@ -150,6 +152,7 @@ func NewCoordinator(
 	permissions permission.Service,
 	history history.Service,
 	filetracker filetracker.Service,
+	memories memory.Service,
 	lspManager *lsp.Manager,
 	notify pubsub.Publisher[notify.Notification],
 	runComplete pubsub.Publisher[notify.RunComplete],
@@ -175,6 +178,7 @@ func NewCoordinator(
 		permissions:   permissions,
 		history:       history,
 		filetracker:   filetracker,
+		memories:      memories,
 		lspManager:    lspManager,
 		notify:        notify,
 		runComplete:   runComplete,
@@ -308,7 +312,245 @@ func (c *coordinator) Run(ctx context.Context, sessionID string, prompt string, 
 	if hasLatest && c.runComplete != nil {
 		c.runComplete.PublishMustDeliver(ctx, pubsub.UpdatedEvent, latest)
 	}
+
+	// Auto-memory: detect important facts from the conversation and save them.
+	if originalErr == nil && result != nil && c.memories != nil {
+		c.processAutoMemory(ctx, sessionID, prompt, result)
+	}
+
+	// Auto-skill: detect complex tasks that should be saved as skills.
+	if originalErr == nil && result != nil {
+		c.processAutoSkill(ctx, sessionID, prompt, result)
+	}
+
 	return result, originalErr
+}
+
+// processAutoSkill detects complex multi-step tasks and auto-creates
+// a skill from the successful approach so it can be reused in future sessions.
+func (c *coordinator) processAutoSkill(ctx context.Context, sessionID, prompt string, result *fantasy.AgentResult) {
+	// Only auto-create skills for well-defined, reusable task patterns
+	taskName := extractSkillName(prompt)
+	if taskName == "" || len(taskName) > 48 {
+		return
+	}
+	// Skip if too generic
+	if taskName == "build" || taskName == "create" || taskName == "implement" ||
+		taskName == "fix" || taskName == "add" || taskName == "update" {
+		return
+	}
+
+	// Don't overwrite existing skills
+	for _, s := range c.activeSkills {
+		if s.Name == taskName {
+			slog.Debug("Skill already exists, skipping auto-create", "name", taskName)
+			return
+		}
+	}
+
+	// Create skill content from the conversation
+	skillContent := fmt.Sprintf(`---
+name: %s
+description: "Auto-generated skill from successful task: %s"
+version: 0.1.0
+lifecycle:
+  status: experimental
+  introduced: 0.5.0
+user-invocable: false
+disable-model-invocation: false
+---
+
+# %s
+
+## Task
+%s
+
+## Approach
+This skill was auto-generated after successfully completing a multi-step task.
+
+## Workflow
+1. Analyze the request
+2. Search for relevant context
+3. Implement the solution
+4. Test the changes
+5. Verify correctness
+`,
+		taskName, truncatePrompt(prompt, 80),
+		taskName, truncatePrompt(prompt, 200))
+
+	// Determine skill directory
+	skillsDir := filepath.Join(c.cfg.WorkingDir(), ".agents", "skills", taskName)
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		slog.Debug("Failed to create skill directory for auto-skill", "name", taskName, "error", err)
+		return
+	}
+
+	skillPath := filepath.Join(skillsDir, "SKILL.md")
+	if err := os.WriteFile(skillPath, []byte(skillContent), 0o644); err != nil {
+		slog.Debug("Failed to write auto-skill file", "name", taskName, "error", err)
+		return
+	}
+
+	slog.Info("Auto-created skill from successful task", "name", taskName, "path", skillPath)
+}
+
+// extractSkillName extracts a kebab-case skill name from a prompt.
+func extractSkillName(prompt string) string {
+	// Take the first meaningful phrase as the skill name
+	prompt = strings.TrimSpace(prompt)
+
+	// Remove common prefixes
+	prefixes := []string{
+		"can you", "please", "could you", "would you", "i need you to",
+		"help me", "let's", "lets", "i want to",
+	}
+	lower := strings.ToLower(prompt)
+	for _, p := range prefixes {
+		if strings.HasPrefix(lower, p) {
+			prompt = strings.TrimSpace(prompt[len(p):])
+			break
+		}
+	}
+
+	// Take first 2-4 meaningful words
+	words := strings.Fields(prompt)
+	if len(words) == 0 {
+		return ""
+	}
+
+	// Clean up: remove punctuation, limit length
+	var clean []string
+	for _, w := range words {
+		w = strings.Trim(w, ".,!?\":;()[]{}")
+		if w == "" {
+			continue
+		}
+		w = strings.ToLower(w)
+		// Skip articles, prepositions, common filler words
+		if w == "a" || w == "an" || w == "the" || w == "to" || w == "for" ||
+			w == "of" || w == "in" || w == "on" || w == "at" || w == "with" ||
+			w == "and" || w == "or" || w == "but" || w == "is" || w == "are" {
+			continue
+		}
+		clean = append(clean, w)
+		if len(clean) >= 3 {
+			break
+		}
+	}
+
+	if len(clean) == 0 {
+		return ""
+	}
+	return strings.Join(clean, "-")
+}
+
+// processAutoMemory detects important facts from a conversation turn and saves
+// them as persistent memories automatically. This enables the agent to learn
+// user preferences, project conventions, and environment facts across sessions.
+func (c *coordinator) processAutoMemory(ctx context.Context, sessionID, prompt string, result *fantasy.AgentResult) {
+	// Cue 1: "remember that" / "remember this" / "note that"
+	if containsFold(prompt, "remember that") || containsFold(prompt, "remember this") ||
+		containsFold(prompt, "note that") || containsFold(prompt, "important:") {
+		// Extract the content after the cue phrase
+		content := extractAfterCue(prompt, []string{
+			"remember that", "remember this", "note that", "important:",
+		})
+		if content != "" {
+			_, err := c.memories.Store(ctx, "auto:"+shortHash(content, 12), content,
+				memory.CategoryFact, "", "agent:auto-cue", memory.ImportanceHigh)
+			if err == nil {
+				slog.Debug("Auto-saved memory from user cue", "cue", "remember")
+			}
+		}
+	}
+
+	// Cue 2: User expresses a preference or correction
+	if containsFold(prompt, "prefer") || containsFold(prompt, "don't use") ||
+		containsFold(prompt, "instead") || containsFold(prompt, "always use") {
+		content := extractAfterCue(prompt, []string{
+			"prefer", "don't use", "instead", "always use",
+		})
+		if content != "" {
+			_, err := c.memories.Store(ctx, "pref:"+shortHash(content, 12), content,
+				memory.CategoryUserPref, "", "agent:auto-preference", memory.ImportanceMedium)
+			if err == nil {
+				slog.Debug("Auto-saved user preference", "cue", "preference")
+			}
+		}
+	}
+
+	// Cue 3: Project-specific information
+	if containsFold(prompt, "project uses") || containsFold(prompt, "built with") ||
+		containsFold(prompt, "uses") && containsFold(prompt, "framework") {
+		content := extractAfterCue(prompt, []string{
+			"project uses", "built with", "uses",
+		})
+		if content != "" {
+			_, err := c.memories.Store(ctx, "proj:"+shortHash(content, 12), content,
+				memory.CategoryProject, filepath.Base(c.cfg.WorkingDir()), "agent:auto-project", memory.ImportanceMedium)
+			if err == nil {
+				slog.Debug("Auto-saved project convention")
+			}
+		}
+	}
+}
+
+// containsFold reports whether s contains substr (case-insensitive).
+func containsFold(s, substr string) bool {
+	s, substr = strings.ToLower(s), strings.ToLower(substr)
+	return strings.Contains(s, substr)
+}
+
+// extractAfterCue extracts text after the first matching cue phrase.
+func extractAfterCue(s string, cues []string) string {
+	lower := strings.ToLower(s)
+	for _, cue := range cues {
+		idx := strings.Index(lower, strings.ToLower(cue))
+		if idx >= 0 {
+			after := strings.TrimSpace(s[idx+len(cue):])
+			// Take up to 200 chars of meaningful content
+			if len(after) > 200 {
+				after = after[:200]
+			}
+			// Clean up: remove trailing punctuation, limit to first sentence
+			if idx := strings.IndexAny(after, ".!?"); idx > 10 {
+				after = after[:idx]
+			}
+			return strings.TrimSpace(after)
+		}
+	}
+	return ""
+}
+
+// shortHash returns a shortened version of s for use in memory keys.
+func shortHash(s string, maxLen int) string {
+	if len(s) > maxLen {
+		return s[:maxLen]
+	}
+	return s
+}
+
+// formatCost formats a per-million cost into a per-1K string for the system prompt.
+func formatCost(costPer1M float64) string {
+	if costPer1M <= 0 {
+		return "unknown"
+	}
+	costPer1K := costPer1M / 1000.0
+	if costPer1K < 0.001 {
+		return fmt.Sprintf("$%.6f", costPer1K)
+	}
+	if costPer1K < 0.01 {
+		return fmt.Sprintf("$%.5f", costPer1K)
+	}
+	return fmt.Sprintf("$%.4f", costPer1K)
+}
+
+// truncatePrompt truncates a string to maxLen chars, adding "..." if truncated.
+func truncatePrompt(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
 }
 
 func getProviderOptions(model Model, providerCfg config.ProviderConfig) fantasy.ProviderOptions {
@@ -526,7 +768,7 @@ func mergeCallOptions(model Model, cfg config.ProviderConfig) (fantasy.ProviderO
 	return modelOptions, temp, topP, topK, freqPenalty, presPenalty
 }
 
-func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, agent config.Agent, isSubAgent bool) (SessionAgent, error) {
+func (c *coordinator) buildAgent(ctx context.Context, basePrompt *prompt.Prompt, agent config.Agent, isSubAgent bool) (SessionAgent, error) {
 	large, small, err := c.buildAgentModels(ctx, isSubAgent)
 	if err != nil {
 		return nil, err
@@ -549,7 +791,42 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 	})
 
 	c.readyWg.Go(func() error {
-		systemPrompt, err := prompt.Build(ctx, large.Model.Provider(), large.Model.Model(), c.cfg)
+		// Retrieve relevant memories for system prompt injection.
+		var memoriesStr string
+		if c.memories != nil {
+			memoriesStr, _ = c.memories.RetrieveRelevant(ctx, 10)
+		}
+
+		// Format model cost info for the system prompt
+		costIn := formatCost(large.CatwalkCfg.CostPer1MIn)
+		costOut := formatCost(large.CatwalkCfg.CostPer1MOut)
+
+		if memoriesStr != "" {
+			// Create a new prompt with memories injected.
+			memPrompt, err := coderPrompt(
+				prompt.WithWorkingDir(c.cfg.WorkingDir()),
+				prompt.WithMemories(memoriesStr),
+				prompt.WithCostInfo(costIn, costOut),
+			)
+			if err != nil {
+				return err
+			}
+			systemPrompt, err := memPrompt.Build(ctx, large.Model.Provider(), large.Model.Model(), c.cfg)
+			if err != nil {
+				return err
+			}
+			result.SetSystemPrompt(systemPrompt)
+			return nil
+		}
+		// Also pass cost info when no memories
+		costPrompt, err := coderPrompt(
+			prompt.WithWorkingDir(c.cfg.WorkingDir()),
+			prompt.WithCostInfo(costIn, costOut),
+		)
+		if err != nil {
+			return err
+		}
+		systemPrompt, err := costPrompt.Build(ctx, large.Model.Provider(), large.Model.Model(), c.cfg)
 		if err != nil {
 			return err
 		}
@@ -619,6 +896,8 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 		tools.NewEditTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir()),
 		tools.NewMultiEditTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir()),
 		tools.NewFetchTool(c.permissions, c.cfg.WorkingDir(), nil),
+		tools.NewMemoryTool(c.memories),
+		tools.NewSkillManageTool(c.cfg.WorkingDir()),
 		tools.WithResultCache[tools.GlobParams](c.readToolCache, globTool),
 		tools.WithSpeculativeReadAhead[tools.GrepParams](c.readToolCache, c.speculator, viewTool, tools.WithResultCache[tools.GrepParams](c.readToolCache, grepTool)),
 		tools.WithSpeculativeReadAhead[tools.LSParams](c.readToolCache, c.speculator, viewTool, tools.WithResultCache[tools.LSParams](c.readToolCache, lsTool)),

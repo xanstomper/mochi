@@ -72,6 +72,8 @@ func init() {
 		loginCmd,
 		statsCmd,
 		sessionCmd,
+		selfCmd,
+		SwarmCmd,
 	)
 }
 

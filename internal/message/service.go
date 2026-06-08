@@ -67,7 +67,7 @@ func (s *MemService) Create(ctx context.Context, sessionID string, params Create
 	s.messages[msg.ID] = msg
 	s.sessions[sessionID] = append(s.sessions[sessionID], msg.ID)
 	s.mu.Unlock()
-	s.broker.Publish(pubsub.EventType(sessionID), msg)
+	s.broker.Publish(pubsub.CreatedEvent, msg)
 	return msg, nil
 }
 
@@ -124,20 +124,22 @@ func (s *MemService) ListAllUserMessages(ctx context.Context) ([]Message, error)
 
 func (s *MemService) Update(ctx context.Context, m Message) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if _, ok := s.messages[m.ID]; !ok {
+		s.mu.Unlock()
 		return errNotFound(m.ID)
 	}
 	m.UpdatedAt = time.Now().UnixMilli()
 	s.messages[m.ID] = m
+	s.mu.Unlock()
+	s.broker.Publish(pubsub.UpdatedEvent, m)
 	return nil
 }
 
 func (s *MemService) Delete(ctx context.Context, id string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	m, ok := s.messages[id]
 	if !ok {
+		s.mu.Unlock()
 		return errNotFound(id)
 	}
 	delete(s.messages, id)
@@ -148,6 +150,8 @@ func (s *MemService) Delete(ctx context.Context, id string) error {
 			break
 		}
 	}
+	s.mu.Unlock()
+	s.broker.Publish(pubsub.DeletedEvent, m)
 	return nil
 }
 
@@ -168,6 +172,17 @@ func (s *MemService) Subscribe(ctx context.Context) <-chan pubsub.Event[Message]
 func (s *MemService) FlushAll(ctx context.Context) error {
 	s.broker.PublishMustDeliver(ctx, pubsub.EventType("flush"), Message{})
 	return nil
+}
+
+// importMessages bulk-loads messages into the in-memory store without
+// publishing events. Used by DurableService to seed MemService from SQLite.
+func (s *MemService) importMessages(ctx context.Context, msgs []Message) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, msg := range msgs {
+		s.messages[msg.ID] = msg
+		s.sessions[msg.SessionID] = append(s.sessions[msg.SessionID], msg.ID)
+	}
 }
 
 type notFoundErr string

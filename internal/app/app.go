@@ -34,8 +34,10 @@ import (
 	"github.com/mochi/mochi/internal/log"
 	"github.com/mochi/mochi/internal/lsp"
 	"github.com/mochi/mochi/internal/message"
+	"github.com/mochi/mochi/internal/memory"
 	"github.com/mochi/mochi/internal/permission"
 	"github.com/mochi/mochi/internal/pubsub"
+	"github.com/mochi/mochi/internal/scheduler"
 	"github.com/mochi/mochi/internal/session"
 	"github.com/mochi/mochi/internal/shell"
 	"github.com/mochi/mochi/internal/skills"
@@ -58,6 +60,8 @@ type App struct {
 	History     history.Service
 	Permissions permission.Service
 	FileTracker filetracker.Service
+	Memories    memory.Service
+	Cron        *scheduler.Scheduler
 
 	AgentCoordinator agent.Coordinator
 
@@ -92,7 +96,7 @@ type App struct {
 func New(ctx context.Context, conn *sql.DB, store *config.ConfigStore, skillsMgr *skills.Manager) (*App, error) {
 	q := db.New(conn)
 	sessions := session.NewService(q, conn)
-	messages := message.NewService()
+	messages := message.NewDurableService(q, conn)
 	files := history.NewService(q, conn)
 	cfg := store.Config()
 	skipPermissionsRequests := store.Overrides().SkipPermissionRequests
@@ -107,6 +111,8 @@ func New(ctx context.Context, conn *sql.DB, store *config.ConfigStore, skillsMgr
 		History:     files,
 		Permissions: permission.NewPermissionService(store.WorkingDir(), skipPermissionsRequests, allowedTools),
 		FileTracker: filetracker.NewService(q),
+		Memories:    memory.NewService(conn),
+		Cron:        scheduler.New(conn, nil),
 		LSPManager:  lsp.NewManager(store),
 		Skills:      skillsMgr,
 
@@ -123,6 +129,12 @@ func New(ctx context.Context, conn *sql.DB, store *config.ConfigStore, skillsMgr
 
 	app.setupEvents()
 
+	// Start the cron scheduler in background
+	if app.Cron != nil {
+		app.Cron.Start()
+		slog.Info("Cron scheduler started")
+	}
+
 	// Check for updates in the background.
 	go app.checkForUpdates(ctx)
 
@@ -138,6 +150,7 @@ func New(ctx context.Context, conn *sql.DB, store *config.ConfigStore, skillsMgr
 	dataDir := cfg.Options.DataDirectory
 	app.cleanupFuncs = append(
 		app.cleanupFuncs,
+		func(context.Context) error { app.Cron.Stop(); return nil },
 		func(context.Context) error { return db.Release(dataDir) },
 		func(ctx context.Context) error { return mcp.Close(ctx) },
 	)
@@ -585,6 +598,7 @@ func (app *App) InitCoderAgent(ctx context.Context) error {
 		app.Permissions,
 		app.History,
 		app.FileTracker,
+		app.Memories,
 		app.LSPManager,
 		app.agentNotifications,
 		app.runCompletions,

@@ -26,17 +26,23 @@ type Prompt struct {
 	now        func() time.Time
 	platform   string
 	workingDir string
+	memories   string
+	costPer1KIn  string
+	costPer1KOut string
 }
 
 type PromptDat struct {
 	Provider      string
 	Model         string
+	CostPer1KIn   string   // NEW: estimated cost per 1K input tokens
+	CostPer1KOut  string   // NEW: estimated cost per 1K output tokens
 	Config        config.Config
 	WorkingDir    string
 	IsGitRepo     bool
 	Platform      string
 	Date          string
 	GitStatus     string
+	Memories      string
 	ContextFiles  []ContextFile
 	AvailSkillXML string
 }
@@ -63,6 +69,19 @@ func WithPlatform(platform string) Option {
 func WithWorkingDir(workingDir string) Option {
 	return func(p *Prompt) {
 		p.workingDir = workingDir
+	}
+}
+
+func WithMemories(memories string) Option {
+	return func(p *Prompt) {
+		p.memories = memories
+	}
+}
+
+func WithCostInfo(costIn, costOut string) Option {
+	return func(p *Prompt) {
+		p.costPer1KIn = costIn
+		p.costPer1KOut = costOut
 	}
 }
 
@@ -202,11 +221,14 @@ func (p *Prompt) promptData(ctx context.Context, provider, model string, store *
 	data := PromptDat{
 		Provider:      provider,
 		Model:         model,
+		CostPer1KIn:   p.costPer1KIn,
+		CostPer1KOut:  p.costPer1KOut,
 		Config:        *cfg,
 		WorkingDir:    filepath.ToSlash(workingDir),
 		IsGitRepo:     isGit,
 		Platform:      platform,
 		Date:          p.now().Format("1/2/2006"),
+		Memories:      p.memories,
 		AvailSkillXML: availSkillXML,
 	}
 	if isGit {

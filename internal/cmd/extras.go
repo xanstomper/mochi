@@ -30,7 +30,7 @@ func init() {
 
 var extrasCmd = &cobra.Command{
 	Use:   "extras",
-	Short: "Mochi-specific extras beyond crush (memory, cron, system info)",
+	Short: "Mochi-specific extended features (memory, cron, system info)",
 }
 
 var extrasMemoryCmd = &cobra.Command{
@@ -172,60 +172,8 @@ var extrasCronCmd = &cobra.Command{
 	Short: "Manage scheduled agent tasks",
 }
 
-var cronListCmd = &cobra.Command{
-	Use:   "list",
-	Short: "List scheduled jobs",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		store := loadCron()
-		if len(store.Jobs) == 0 {
-			cmd.Println("(no scheduled jobs)")
-			return nil
-		}
-		for _, j := range store.Jobs {
-			fmt.Fprintf(cmd.OutOrStdout(), "%s: %s (every %s, %d runs)\n",
-				j.Name, j.Prompt, j.Schedule, j.RunCount)
-		}
-		return nil
-	},
-}
-
-var cronAddCmd = &cobra.Command{
-	Use:   "add [name] [schedule] [prompt]",
-	Short: "Add a scheduled job",
-	Args:  cobra.MinimumNArgs(3),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		store := loadCron()
-		store.Jobs = append(store.Jobs, cronJob{
-			Name:     args[0],
-			Schedule: args[1],
-			Prompt:   strings.Join(args[2:], " "),
-			Enabled:  true,
-			LastRun:  time.Time{},
-			NextRun:  time.Now().Add(time.Hour),
-		})
-		return saveJSON(cronDBPath, store)
-	},
-}
-
-var cronRemoveCmd = &cobra.Command{
-	Use:   "remove [name]",
-	Short: "Remove a scheduled job",
-	Args:  cobra.MinimumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		store := loadCron()
-		out := store.Jobs[:0]
-		for _, j := range store.Jobs {
-			if j.Name != args[0] {
-				out = append(out, j)
-			}
-		}
-		store.Jobs = out
-		return saveJSON(cronDBPath, store)
-	},
-}
-
 func init() {
-	extrasCronCmd.AddCommand(cronListCmd, cronAddCmd, cronRemoveCmd)
+	// Cron commands moved to cron.go (SQLite-backed)
 }
 
 type cronJob struct {
@@ -276,13 +224,13 @@ var extrasVersionCmd = &cobra.Command{
 		out := cmd.OutOrStdout()
 		fmt.Fprintln(out, "mochi extras v2.0.0")
 		fmt.Fprintln(out, "")
-		fmt.Fprintln(out, "Mochi features beyond crush:")
+		fmt.Fprintln(out, "Mochi extended capabilities:")
 		fmt.Fprintln(out, "  • Long-term memory store (remember/recall)")
 		fmt.Fprintln(out, "  • Cron-based task scheduler")
 		fmt.Fprintln(out, "  • Self-critique and security audit tools")
 		fmt.Fprintln(out, "  • Plugin registry for extensions")
 		fmt.Fprintln(out, "  • Multi-project workspace manager")
-		fmt.Fprintln(out, "  • Hermes-style subagent orchestration")
+		fmt.Fprintln(out, "  • Specialist subagent orchestration")
 		return nil
 	},
 }

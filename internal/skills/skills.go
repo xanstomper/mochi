@@ -1,4 +1,4 @@
-// Package skills implements the Agent Skills open standard.
+// Package skills implements the Agent Skills open standard (v2).
 // See https://agentskills.io for the specification.
 package skills
 
@@ -13,9 +13,11 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/charlievieth/fastwalk"
 	"github.com/mochi/mochi/internal/pubsub"
+	"golang.org/x/mod/semver"
 	"gopkg.in/yaml.v3"
 )
 
@@ -34,28 +36,101 @@ var (
 	latestStatesMu sync.RWMutex
 )
 
-// Skill represents a parsed SKILL.md file.
+// --- Lifecycle types (v2) ---
+
+// LifecycleStatus represents the stability/status of a skill.
+type LifecycleStatus string
+
+const (
+	LifecycleExperimental LifecycleStatus = "experimental"
+	LifecycleStable       LifecycleStatus = "stable"
+	LifecycleDeprecated   LifecycleStatus = "deprecated"
+	LifecycleArchived     LifecycleStatus = "archived"
+)
+
+// Deprecation describes skill deprecation metadata.
+type Deprecation struct {
+	Message             string `yaml:"message" json:"message"`
+	SuggestedReplacement string `yaml:"suggested_replacement" json:"suggested_replacement"`
+	Effective           string `yaml:"effective" json:"effective"`
+}
+
+// Lifecycle holds skill lifecycle metadata.
+type Lifecycle struct {
+	Status      LifecycleStatus `yaml:"status" json:"status"`
+	Introduced  string          `yaml:"introduced" json:"introduced"`
+	Deprecation *Deprecation    `yaml:"deprecation,omitempty" json:"deprecation,omitempty"`
+}
+
+// ExtendedMetadata holds extended skill metadata (v2).
+type ExtendedMetadata struct {
+	Author          string   `yaml:"author,omitempty" json:"author,omitempty"`
+	AuthorURL       string   `yaml:"author_url,omitempty" json:"author_url,omitempty"`
+	Repository      string   `yaml:"repository,omitempty" json:"repository,omitempty"`
+	License         string   `yaml:"license,omitempty" json:"license,omitempty"`
+	Tags            []string `yaml:"tags,omitempty" json:"tags,omitempty"`
+	Categories      []string `yaml:"categories,omitempty" json:"categories,omitempty"`
+	MinMochiVersion string   `yaml:"min_mochi_version,omitempty" json:"min_mochi_version,omitempty"`
+	Icon            string   `yaml:"icon,omitempty" json:"icon,omitempty"`
+	Version         string   `yaml:"version,omitempty" json:"version,omitempty"` // v1 compat: metadata.version
+}
+
+// LifecycleState is the runtime lifecycle state tracked by the curator.
+type LifecycleState int
+
+const (
+	StateUnknown LifecycleState = iota
+	StateFresh
+	StateActive
+	StateStale
+	StateArchived
+)
+
+func (s LifecycleState) String() string {
+	switch s {
+	case StateUnknown:
+		return "unknown"
+	case StateFresh:
+		return "fresh"
+	case StateActive:
+		return "active"
+	case StateStale:
+		return "stale"
+	case StateArchived:
+		return "archived"
+	default:
+		return "unknown"
+	}
+}
+
+// Skill represents a parsed SKILL.md file (v2).
 type Skill struct {
 	Name                   string            `yaml:"name" json:"name"`
 	Description            string            `yaml:"description" json:"description"`
+	Version                string            `yaml:"version,omitempty" json:"version,omitempty"`                                  // NEW v2: semver
+	Lifecycle              *Lifecycle        `yaml:"lifecycle,omitempty" json:"lifecycle,omitempty"`                              // NEW v2
+	Meta                   *ExtendedMetadata `yaml:"metadata,omitempty" json:"metadata,omitempty"`                                // NEW v2: extends v1 map
+	Metadata               map[string]string `yaml:"-" json:"metadata,omitempty" swaggerignore:"true"`                                 // KEPT for v1 compat
 	UserInvocable          bool              `yaml:"user-invocable" json:"user_invocable"`
 	DisableModelInvocation bool              `yaml:"disable-model-invocation" json:"disable_model_invocation"`
 	License                string            `yaml:"license,omitempty" json:"license,omitempty"`
 	Compatibility          string            `yaml:"compatibility,omitempty" json:"compatibility,omitempty"`
-	Metadata               map[string]string `yaml:"metadata,omitempty" json:"metadata,omitempty"`
 	Instructions           string            `yaml:"-" json:"instructions"`
 	Path                   string            `yaml:"-" json:"path"`
 	SkillFilePath          string            `yaml:"-" json:"skill_file_path"`
 	Builtin                bool              `yaml:"-" json:"builtin"`
+
+	// Runtime state (not from file)
+	LifecycleState LifecycleState `yaml:"-" json:"lifecycle_state"`     // NEW: curator-managed
+	LastUsed       time.Time      `yaml:"-" json:"last_used"`           // NEW: curator-tracked
+	UsageCount     int            `yaml:"-" json:"usage_count"`         // NEW: curator-tracked
 }
 
 // DiscoveryState represents the outcome of discovering a single skill file.
 type DiscoveryState int
 
 const (
-	// StateNormal indicates the skill was parsed and validated successfully.
 	StateNormal DiscoveryState = iota
-	// StateError indicates discovery encountered a scan/parse/validate error.
 	StateError
 )
 
@@ -84,8 +159,6 @@ func PublishStates(states []*SkillState) {
 	broker.Publish(pubsub.UpdatedEvent, Event{States: cloneStates(states)})
 }
 
-// cloneStates returns a deep copy of the given state slice so callers cannot
-// accidentally mutate the source.
 func cloneStates(states []*SkillState) []*SkillState {
 	if states == nil {
 		return nil
@@ -105,16 +178,40 @@ func GetLatestStates() []*SkillState {
 	return cloneStates(latestStates)
 }
 
-// SetLatestStates stores the given states in the package-level cache so that
-// GetLatestStates can return them synchronously before the first pubsub event
-// arrives.
+// SetLatestStates stores the given states in the package-level cache.
 func SetLatestStates(states []*SkillState) {
 	latestStatesMu.Lock()
 	latestStates = cloneStates(states)
 	latestStatesMu.Unlock()
 }
 
-// Validate checks if the skill meets spec requirements.
+// VersionDisplay returns the version string or "0.0.0" if unset.
+func (s *Skill) VersionDisplay() string {
+	if s.Version != "" {
+		return s.Version
+	}
+	return "0.0.0"
+}
+
+// LifecycleStatusDisplay returns the lifecycle status or "stable" for v1 legacy skills.
+func (s *Skill) LifecycleStatusDisplay() LifecycleStatus {
+	if s.Lifecycle != nil && s.Lifecycle.Status != "" {
+		return s.Lifecycle.Status
+	}
+	return LifecycleStable
+}
+
+// IsDeprecated returns true if the skill is marked as deprecated.
+func (s *Skill) IsDeprecated() bool {
+	return s.Lifecycle != nil && s.Lifecycle.Status == LifecycleDeprecated
+}
+
+// IsExperimental returns true if the skill is marked as experimental.
+func (s *Skill) IsExperimental() bool {
+	return s.Lifecycle != nil && s.Lifecycle.Status == LifecycleExperimental
+}
+
+// Validate checks if the skill meets spec requirements (v2).
 func (s *Skill) Validate() error {
 	var errs []error
 
@@ -140,6 +237,33 @@ func (s *Skill) Validate() error {
 
 	if len(s.Compatibility) > MaxCompatibilityLength {
 		errs = append(errs, fmt.Errorf("compatibility exceeds %d characters", MaxCompatibilityLength))
+	}
+
+	// v2 validations
+	if s.Version != "" {
+		if !semver.IsValid(s.Version) {
+			errs = append(errs, fmt.Errorf("version %q is not valid semver", s.Version))
+		}
+	}
+
+	if s.Lifecycle != nil {
+		switch s.Lifecycle.Status {
+		case LifecycleExperimental, LifecycleStable, LifecycleDeprecated, LifecycleArchived:
+			// valid
+		case "":
+			// absent = stable for backward compat
+		default:
+			errs = append(errs, fmt.Errorf("invalid lifecycle status: %q", s.Lifecycle.Status))
+		}
+		if s.Lifecycle.Deprecation != nil && s.Lifecycle.Status != LifecycleDeprecated {
+			errs = append(errs, errors.New("deprecation info requires lifecycle.status=deprecated"))
+		}
+	}
+
+	if s.Meta != nil && s.Meta.MinMochiVersion != "" {
+		if !semver.IsValid(s.Meta.MinMochiVersion) {
+			errs = append(errs, fmt.Errorf("min_mochi_version %q is not valid semver", s.Meta.MinMochiVersion))
+		}
 	}
 
 	return errors.Join(errs...)
@@ -170,9 +294,42 @@ func ParseContent(content []byte) (*Skill, error) {
 		return nil, err
 	}
 
+	// Parse into v2 Skill struct
 	var skill Skill
 	if err := yaml.Unmarshal([]byte(frontmatter), &skill); err != nil {
 		return nil, fmt.Errorf("parsing frontmatter: %w", err)
+	}
+
+	// Populate v1 Metadata map from v2 Meta for backward compatibility
+	if skill.Meta != nil || skill.Version != "" {
+		skill.Metadata = make(map[string]string)
+		if skill.Meta != nil {
+			if skill.Meta.Author != "" {
+				skill.Metadata["author"] = skill.Meta.Author
+			}
+			if skill.Meta.AuthorURL != "" {
+				skill.Metadata["author_url"] = skill.Meta.AuthorURL
+			}
+			if skill.Meta.Repository != "" {
+				skill.Metadata["repository"] = skill.Meta.Repository
+			}
+			if skill.Meta.License != "" {
+				skill.Metadata["license"] = skill.Meta.License
+			}
+			if skill.Meta.MinMochiVersion != "" {
+				skill.Metadata["min_mochi_version"] = skill.Meta.MinMochiVersion
+			}
+			if skill.Meta.Icon != "" {
+				skill.Metadata["icon"] = skill.Meta.Icon
+			}
+			if skill.Meta.Version != "" {
+				skill.Metadata["version"] = skill.Meta.Version
+			}
+			// Tags and Categories are slices, skip for v1 map compat
+		}
+		if skill.Version != "" {
+			skill.Metadata["version"] = skill.Version
+		}
 	}
 
 	skill.Instructions = strings.TrimSpace(body)
@@ -180,11 +337,24 @@ func ParseContent(content []byte) (*Skill, error) {
 	return &skill, nil
 }
 
+func splitComma(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	result := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			result = append(result, p)
+		}
+	}
+	return result
+}
+
 // splitFrontmatter extracts YAML frontmatter and body from markdown content.
 func splitFrontmatter(content string) (frontmatter, body string, err error) {
-	// Strip UTF-8 BOM for compatibility with editors that include it.
 	content = strings.TrimPrefix(content, "\uFEFF")
-	// Normalize line endings to \n for consistent parsing.
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 	content = strings.ReplaceAll(content, "\r", "\n")
 
@@ -215,9 +385,7 @@ func Discover(paths []string) []*Skill {
 	return skills
 }
 
-// DiscoverWithStates finds all valid skills in the given paths and also
-// returns a per-file state slice describing parse/validation outcomes. Useful
-// for diagnostics and UI reporting.
+// DiscoverWithStates finds all valid skills in the given paths.
 func DiscoverWithStates(paths []string) ([]*Skill, []*SkillState) {
 	var skills []*Skill
 	var states []*SkillState
@@ -225,24 +393,12 @@ func DiscoverWithStates(paths []string) ([]*Skill, []*SkillState) {
 	seen := make(map[string]bool)
 	addState := func(name, path string, state DiscoveryState, err error) {
 		mu.Lock()
-		states = append(states, &SkillState{
-			Name:  name,
-			Path:  path,
-			State: state,
-			Err:   err,
-		})
+		states = append(states, &SkillState{Name: name, Path: path, State: state, Err: err})
 		mu.Unlock()
 	}
 
 	for _, base := range paths {
-		// We use fastwalk with Follow: true instead of filepath.WalkDir because
-		// WalkDir doesn't follow symlinked directories at any depth—only entry
-		// points. This ensures skills in symlinked subdirectories are discovered.
-		// fastwalk is concurrent, so we protect shared state (seen, skills) with mu.
-		conf := fastwalk.Config{
-			Follow:  true,
-			ToSlash: fastwalk.DefaultToSlash(),
-		}
+		conf := fastwalk.Config{Follow: true, ToSlash: fastwalk.DefaultToSlash()}
 		err := fastwalk.Walk(&conf, base, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				slog.Warn("Failed to walk skills path entry", "base", base, "path", path, "error", err)
@@ -270,7 +426,7 @@ func DiscoverWithStates(paths []string) ([]*Skill, []*SkillState) {
 				addState(skill.Name, path, StateError, err)
 				return nil
 			}
-			slog.Debug("Successfully loaded skill", "name", skill.Name, "path", path)
+			slog.Debug("Successfully loaded skill", "name", skill.Name, "path", path, "version", skill.VersionDisplay())
 			mu.Lock()
 			skills = append(skills, skill)
 			mu.Unlock()
@@ -282,8 +438,6 @@ func DiscoverWithStates(paths []string) ([]*Skill, []*SkillState) {
 		}
 	}
 
-	// fastwalk traversal order is non-deterministic, so sort for stable output.
-	// Sort by path first, then alphabetically by name within each path.
 	slices.SortStableFunc(skills, func(a, b *Skill) int {
 		if c := strings.Compare(strings.ToLower(a.Path), strings.ToLower(b.Path)); c != 0 {
 			return c
@@ -295,7 +449,6 @@ func DiscoverWithStates(paths []string) ([]*Skill, []*SkillState) {
 }
 
 // ToPromptXML generates XML for injection into the system prompt.
-// Skills with DisableModelInvocation set to true are excluded.
 func ToPromptXML(skills []*Skill) string {
 	if len(skills) == 0 {
 		return ""
@@ -304,7 +457,6 @@ func ToPromptXML(skills []*Skill) string {
 	var sb strings.Builder
 	sb.WriteString("<available_skills>\n")
 	for _, s := range skills {
-		// Skip skills that have disable-model-invocation set
 		if s.DisableModelInvocation {
 			continue
 		}
@@ -312,8 +464,12 @@ func ToPromptXML(skills []*Skill) string {
 		fmt.Fprintf(&sb, "    <name>%s</name>\n", escape(s.Name))
 		fmt.Fprintf(&sb, "    <description>%s</description>\n", escape(s.Description))
 		fmt.Fprintf(&sb, "    <location>%s</location>\n", escape(s.SkillFilePath))
+		fmt.Fprintf(&sb, "    <version>%s</version>\n", escape(s.VersionDisplay()))
 		if s.Builtin {
 			sb.WriteString("    <type>builtin</type>\n")
+		}
+		if s.LifecycleStatusDisplay() != "" {
+			fmt.Fprintf(&sb, "    <status>%s</status>\n", escape(string(s.LifecycleStatusDisplay())))
 		}
 		sb.WriteString("  </skill>\n")
 	}
@@ -328,6 +484,7 @@ func (s *Skill) FormatInvocation() string {
 	fmt.Fprintf(&sb, "  <name>%s</name>\n", escape(s.Name))
 	fmt.Fprintf(&sb, "  <description>%s</description>\n", escape(s.Description))
 	fmt.Fprintf(&sb, "  <location>%s</location>\n", escape(s.SkillFilePath))
+	fmt.Fprintf(&sb, "  <version>%s</version>\n", escape(s.VersionDisplay()))
 	sb.WriteString("  <instructions>\n")
 	sb.WriteString(escape(s.Instructions))
 	sb.WriteString("\n  </instructions>\n")
@@ -339,35 +496,32 @@ func escape(s string) string {
 	return promptReplacer.Replace(s)
 }
 
-// DeduplicateStates removes duplicate skill states by name. When duplicates exist,
-// the last occurrence wins (consistent with Deduplicate for skills).
-func DeduplicateStates(all []*SkillState) []*SkillState {
-	seen := make(map[string]int, len(all))
-	for i, s := range all {
-		if s.Name != "" {
-			seen[s.Name] = i
-		}
-	}
+// --- Filtering & Deduplication ---
 
-	result := make([]*SkillState, 0, len(seen))
-	for i, s := range all {
-		// If it's the last occurrence of this name, or it has no name (error state), keep it
-		if s.Name == "" || seen[s.Name] == i {
+// Filter removes skills whose names appear in the disabled list.
+func Filter(all []*Skill, disabled []string) []*Skill {
+	if len(disabled) == 0 {
+		return all
+	}
+	disabledSet := make(map[string]bool, len(disabled))
+	for _, name := range disabled {
+		disabledSet[name] = true
+	}
+	result := make([]*Skill, 0, len(all))
+	for _, s := range all {
+		if !disabledSet[s.Name] {
 			result = append(result, s)
 		}
 	}
 	return result
 }
 
-// Deduplicate removes duplicate skills by name. When duplicates exist, the
-// last occurrence wins. This means user skills (appended after builtins)
-// override builtin skills with the same name.
+// Deduplicate removes duplicate skills by name (last occurrence wins).
 func Deduplicate(all []*Skill) []*Skill {
 	seen := make(map[string]int, len(all))
 	for i, s := range all {
 		seen[s.Name] = i
 	}
-
 	result := make([]*Skill, 0, len(seen))
 	for i, s := range all {
 		if seen[s.Name] == i {
@@ -377,32 +531,27 @@ func Deduplicate(all []*Skill) []*Skill {
 	return result
 }
 
-// ApproxTokenCount returns a rough estimate of how many tokens a string
-// occupies when sent to an LLM. Uses the common ~4-chars-per-token heuristic
-// that approximates GPT/Claude tokenizers well enough for diagnostic logging.
+// DeduplicateStates removes duplicate states by name (last occurrence wins).
+func DeduplicateStates(all []*SkillState) []*SkillState {
+	seen := make(map[string]int, len(all))
+	for i, s := range all {
+		if s.Name != "" {
+			seen[s.Name] = i
+		}
+	}
+	result := make([]*SkillState, 0, len(all))
+	for i, s := range all {
+		if s.Name == "" || seen[s.Name] == i {
+			result = append(result, s)
+		}
+	}
+	return result
+}
+
+// ApproxTokenCount estimates tokens (~4 chars per token).
 func ApproxTokenCount(s string) int {
 	if s == "" {
 		return 0
 	}
 	return (len(s) + 3) / 4
-}
-
-// Filter removes skills whose names appear in the disabled list.
-func Filter(all []*Skill, disabled []string) []*Skill {
-	if len(disabled) == 0 {
-		return all
-	}
-
-	disabledSet := make(map[string]bool, len(disabled))
-	for _, name := range disabled {
-		disabledSet[name] = true
-	}
-
-	result := make([]*Skill, 0, len(all))
-	for _, s := range all {
-		if !disabledSet[s.Name] {
-			result = append(result, s)
-		}
-	}
-	return result
 }
