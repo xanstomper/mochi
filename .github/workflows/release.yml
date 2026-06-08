@@ -13,17 +13,17 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     steps:
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@v5
         id: release
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           release-type: go
           package-name: mochi
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         if: steps.release.outputs.release_created
       - name: Set up Go
         if: steps.release.outputs.release_created
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: '1.24'
           cache: true
@@ -64,7 +64,7 @@ jobs:
           sha256sum mochi-* > SHA256SUMS
       - name: Upload binaries
         if: steps.release.outputs.release_created
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/*
