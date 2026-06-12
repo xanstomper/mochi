@@ -5,6 +5,15 @@ All notable changes to Mochi will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.0.0 (2026-06-12)
+
+
+### Features
+
+* begin Mochi → MOFU migration — styles, anim, util, themes, grad ([471c16c](https://github.com/xanstomper/mochi/commit/471c16cdf37905d28bcf92270fb8c19896786165))
+* durable messages, auto-skill, auto-memory, memory store, skill mgmt, cron scheduler, SDK, swarm ([74d9665](https://github.com/xanstomper/mochi/commit/74d9665c0a50bb2e1766689ccf30a7a6018d3751))
+* initial release of mochi v0.4.0 ([0089cd9](https://github.com/xanstomper/mochi/commit/0089cd975fbedbc68a7efe38d7fce89a999c10ea))
+
 ## [Unreleased]
 
 ### Added
