@@ -67,10 +67,11 @@ require (
 	github.com/tidwall/sjson v1.2.5
 	github.com/zeebo/xxh3 v1.1.0
 	go.uber.org/goleak v1.3.0
+	golang.org/x/mod v0.36.0
 	golang.org/x/net v0.55.0
-	golang.org/x/sync v0.20.0
-	golang.org/x/sys v0.45.0
-	golang.org/x/text v0.37.0
+	golang.org/x/sync v0.21.0
+	golang.org/x/sys v0.46.0
+	golang.org/x/text v0.38.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.51.0
@@ -155,7 +156,7 @@ require (
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/klauspost/pgzip v1.2.6 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
-	github.com/mattn/go-runewidth v0.0.23 // indirect
+	github.com/mattn/go-runewidth v0.0.24 // indirect
 	github.com/mfridman/interpolate v0.0.2 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
@@ -185,6 +186,7 @@ require (
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/u-root/u-root v0.14.1-0.20250807200646-5e7721023dc7 // indirect
 	github.com/u-root/uio v0.0.0-20240224005618-d2acac8f3701 // indirect
+	github.com/xanstomper/mofu v1.0.0 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/yuin/goldmark v1.7.8 // indirect
@@ -197,14 +199,13 @@ require (
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.3 // indirect
-	golang.org/x/crypto v0.52.0 // indirect
+	golang.org/x/crypto v0.53.0 // indirect
 	golang.org/x/exp v0.0.0-20260410095643-746e56fc9e2f // indirect
 	golang.org/x/image v0.38.0 // indirect
-	golang.org/x/mod v0.35.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/term v0.43.0 // indirect
+	golang.org/x/term v0.44.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
-	golang.org/x/tools v0.44.0 // indirect
+	golang.org/x/tools v0.45.0 // indirect
 	google.golang.org/api v0.282.0 // indirect
 	google.golang.org/genai v1.58.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
@@ -218,3 +219,5 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+replace github.com/xanstomper/mofu => ../mofu

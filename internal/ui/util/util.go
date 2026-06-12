@@ -7,21 +7,21 @@ import (
 	"os/exec"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
+	"github.com/xanstomper/mofu"
 	"mvdan.cc/sh/v3/shell"
 )
 
 type Cursor interface {
-	Cursor() *tea.Cursor
+	SetPosition(x, y int) string
 }
 
-func CmdHandler(msg tea.Msg) tea.Cmd {
-	return func() tea.Msg {
+func CmdHandler(msg mofu.Msg) mofu.Cmd {
+	return func() mofu.Msg {
 		return msg
 	}
 }
 
-func ReportError(err error) tea.Cmd {
+func ReportError(err error) mofu.Cmd {
 	return CmdHandler(NewErrorMsg(err))
 }
 
@@ -56,11 +56,11 @@ func NewErrorMsg(err error) InfoMsg {
 	}
 }
 
-func ReportInfo(info string) tea.Cmd {
+func ReportInfo(info string) mofu.Cmd {
 	return CmdHandler(NewInfoMsg(info))
 }
 
-func ReportWarn(warn string) tea.Cmd {
+func ReportWarn(warn string) mofu.Cmd {
 	return CmdHandler(NewWarnMsg(warn))
 }
 
@@ -73,16 +73,12 @@ type (
 	ClearStatusMsg struct{}
 )
 
-// IsEmpty checks if the [InfoMsg] is empty.
 func (m InfoMsg) IsEmpty() bool {
 	var zero InfoMsg
 	return m == zero
 }
 
-// ExecShell parses a shell command string and executes it with exec.Command.
-// Uses shell.Fields for proper handling of shell syntax like quotes and
-// arguments while preserving TTY handling for terminal editors.
-func ExecShell(ctx context.Context, cmdStr string, callback tea.ExecCallback) tea.Cmd {
+func ExecShell(ctx context.Context, cmdStr string, callback func(error) mofu.Msg) mofu.Cmd {
 	fields, err := shell.Fields(cmdStr, nil)
 	if err != nil {
 		return ReportError(err)
@@ -92,5 +88,11 @@ func ExecShell(ctx context.Context, cmdStr string, callback tea.ExecCallback) te
 	}
 
 	cmd := exec.CommandContext(ctx, fields[0], fields[1:]...)
-	return tea.ExecProcess(cmd, callback)
+	return func() mofu.Msg {
+		err := cmd.Run()
+		if callback != nil {
+			return callback(err)
+		}
+		return nil
+	}
 }

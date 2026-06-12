@@ -11,8 +11,7 @@ import (
 
 	"github.com/zeebo/xxh3"
 
-	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
+	"github.com/xanstomper/mofu"
 	"github.com/lucasb-eyer/go-colorful"
 
 	"github.com/mochi/mochi/internal/csync"
@@ -24,69 +23,32 @@ const (
 	labelGap      = " "
 	labelGapWidth = 1
 
-	// Periods of ellipsis animation speed in steps.
-	//
-	// If the FPS is 20 (50 milliseconds) this means that the ellipsis will
-	// change every 8 frames (400 milliseconds).
 	ellipsisAnimSpeed = 8
-
-	// The maximum number of animation steps that can pass before a
-	// character appears. With fps == 20 this is ~1s of staggered
-	// entrance, identical to the previous wall-clock-driven value.
-	// Switching from wall-clock + rand to a step-driven birth schedule
-	// keeps Render() deterministic: two Anim instances built from the
-	// same Settings produce byte-identical output when no Animate ticks
-	// have advanced their step counter.
-	maxBirthSteps = 20
-
-	// Number of frames to prerender for the animation. After this number
-	// of frames, the animation will loop. This only applies when color
-	// cycling is disabled.
+	maxBirthSteps     = 20
 	prerenderedFrames = 10
 
-	// Default number of cycling chars.
 	defaultNumCyclingChars = 10
 )
 
-// Default colors for gradient.
 var (
 	defaultGradColorA = color.RGBA{R: 0xff, G: 0, B: 0, A: 0xff}
 	defaultGradColorB = color.RGBA{R: 0, G: 0, B: 0xff, A: 0xff}
 	defaultLabelColor = color.RGBA{R: 0xcc, G: 0xcc, B: 0xcc, A: 0xff}
 
-	// kawaiiGradColorA and kawaiiGradColorB are the active
-	// defaults for the Sakura theme. They live at package scope
-	// so the cache key in New() stays deterministic across
-	// processes (a Settings{GradColorA: …} pointer would
-	// otherwise produce a different hash for two processes that
-	// selected the same kawaii palette).
-	kawaiiGradColorA = color.RGBA{R: 0xFF, G: 0x4D, B: 0x94, A: 0xFF} // #FF4D94
-	kawaiiGradColorB = color.RGBA{R: 0xFF, G: 0xB3, B: 0xD1, A: 0xFF} // #FFB3D1
+	kawaiiGradColorA = color.RGBA{R: 0xFF, G: 0x4D, B: 0x94, A: 0xFF}
+	kawaiiGradColorB = color.RGBA{R: 0xFF, G: 0xB3, B: 0xD1, A: 0xFF}
 )
 
 var (
 	availableRunes = []rune("0123456789abcdefABCDEF~!@#$£€%^&*()+=_")
 	ellipsisFrames = []string{".", "..", "...", ""}
-
-	// kawaiiRunes is the rune set for the kawaii preset: sakura
-	// blossoms, sparkles, hearts, stars, and Japanese kana dots.
-	// Used when the theme is Sakura; falls back to the
-	// engineering-default availableRunes otherwise.
-	kawaiiRunes = []rune("✿❀✾✺✦✧★♡♥◌◍◎·")
+	kawaiiRunes    = []rune("✿❀✾✺✦✧★♡♥◌◍◎·")
 )
 
-// IsKawaii reports whether the running theme wants kawaii
-// runes. The current policy is "always kawaii" for the
-// Sakura-themed default; the function exists so future
-// themes (or user overrides) can opt out without rewriting
-// callers.
 func IsKawaii() bool {
 	return true
 }
 
-// RuneSet returns the active rune pool. Callers that want to
-// pre-render spinner frames can use this to avoid hardcoding
-// the engineering glyphs.
 func RuneSet() []rune {
 	if IsKawaii() {
 		return kawaiiRunes
@@ -94,23 +56,17 @@ func RuneSet() []rune {
 	return availableRunes
 }
 
-// KawaiiGradient returns the default kawaii gradient: hot
-// sakura pink at the left, soft rose at the right. Cycles
-// through the spectrum for the wave/cycle variants.
 func KawaiiGradient() (color.RGBA, color.RGBA) {
-	return color.RGBA{R: 0xFF, G: 0x4D, B: 0x94, A: 0xFF}, // #FF4D94 hot sakura
-		color.RGBA{R: 0xFF, G: 0xB3, B: 0xD1, A: 0xFF} // #FFB3D1 soft rose
+	return color.RGBA{R: 0xFF, G: 0x4D, B: 0x94, A: 0xFF},
+		color.RGBA{R: 0xFF, G: 0xB3, B: 0xD1, A: 0xFF}
 }
 
-// Internal ID management. Used during animating to ensure that frame messages
-// are received only by spinner components that sent them.
 var lastID atomic.Int64
 
 func nextID() int {
 	return int(lastID.Add(1))
 }
 
-// Cache for expensive animation calculations
 type animCache struct {
 	initialFrames  [][]string
 	cyclingFrames  [][]string
@@ -122,7 +78,6 @@ type animCache struct {
 
 var animCacheMap = csync.NewMap[string, *animCache]()
 
-// settingsHash creates a hash key for the settings to use for caching
 func settingsHash(opts Settings) string {
 	h := xxh3.New()
 	fmt.Fprintf(h, "%d-%s-%v-%v-%v-%t",
@@ -130,10 +85,8 @@ func settingsHash(opts Settings) string {
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
-// StepMsg is a message type used to trigger the next step in the animation.
 type StepMsg struct{ ID string }
 
-// Settings defines settings for the animation.
 type Settings struct {
 	ID          string
 	Size        int
@@ -144,10 +97,6 @@ type Settings struct {
 	CycleColors bool
 }
 
-// Default settings.
-const ()
-
-// Anim is a Bubble for an animated spinner.
 type Anim struct {
 	width            int
 	cyclingCharWidth int
@@ -155,20 +104,18 @@ type Anim struct {
 	labelWidth       int
 	labelColor       color.Color
 	birthSteps       []int
-	initialFrames    [][]string // frames for the initial characters
+	initialFrames    [][]string
 	initialized      atomic.Bool
-	cyclingFrames    [][]string           // frames for the cycling characters
-	step             atomic.Int64         // current main frame step (wraps)
-	framesSinceStart atomic.Int64         // total Animate ticks (does not wrap)
-	ellipsisStep     atomic.Int64         // current ellipsis frame step
-	ellipsisFrames   *csync.Slice[string] // ellipsis animation frames
+	cyclingFrames    [][]string
+	step             atomic.Int64
+	framesSinceStart atomic.Int64
+	ellipsisStep     atomic.Int64
+	ellipsisFrames   *csync.Slice[string]
 	id               string
 }
 
-// New creates a new Anim instance with the specified width and label.
 func New(opts Settings) *Anim {
 	a := &Anim{}
-	// Validate settings.
 	if opts.Size < 1 {
 		opts.Size = defaultNumCyclingChars
 	}
@@ -198,12 +145,10 @@ func New(opts Settings) *Anim {
 	a.cyclingCharWidth = opts.Size
 	a.labelColor = opts.LabelColor
 
-	// Check cache first
 	cacheKey := settingsHash(opts)
 	cached, exists := animCacheMap.Get(cacheKey)
 
 	if exists {
-		// Use cached values
 		a.width = cached.width
 		a.labelWidth = cached.labelWidth
 		a.label = csync.NewSliceFrom(cached.label)
@@ -211,19 +156,15 @@ func New(opts Settings) *Anim {
 		a.initialFrames = cached.initialFrames
 		a.cyclingFrames = cached.cyclingFrames
 	} else {
-		// Generate new values and cache them
-		a.labelWidth = lipgloss.Width(opts.Label)
+		a.labelWidth = mofu.MeasureWidth(opts.Label)
 
-		// Total width of anim, in cells.
 		a.width = opts.Size
 		if opts.Label != "" {
-			a.width += labelGapWidth + lipgloss.Width(opts.Label)
+			a.width += labelGapWidth + mofu.MeasureWidth(opts.Label)
 		}
 
-		// Render the label
 		a.renderLabel(opts.Label)
 
-		// Pre-generate gradient.
 		var ramp []color.Color
 		numFrames := prerenderedFrames
 		if opts.CycleColors {
@@ -233,14 +174,13 @@ func New(opts Settings) *Anim {
 			ramp = makeGradientRamp(a.width, opts.GradColorA, opts.GradColorB)
 		}
 
-		// Pre-render initial characters.
 		a.initialFrames = make([][]string, numFrames)
 		offset := 0
 		for i := range a.initialFrames {
 			a.initialFrames[i] = make([]string, a.width+labelGapWidth+a.labelWidth)
 			for j := range a.initialFrames[i] {
 				if j+offset >= len(ramp) {
-					continue // skip if we run out of colors
+					continue
 				}
 
 				var c color.Color
@@ -250,22 +190,16 @@ func New(opts Settings) *Anim {
 					c = opts.LabelColor
 				}
 
-				// Also prerender the initial character with Lip Gloss to avoid
-				// processing in the render loop.
-				a.initialFrames[i][j] = lipgloss.NewStyle().
-					Foreground(c).
-					Render(string(initialChar))
+				r, g, b, _ := c.RGBA()
+				a.initialFrames[i][j] = mofu.DefaultStyle().
+					Fg(mofu.RGB(uint8(r>>8), uint8(g>>8), uint8(b>>8))).
+					Apply(string(initialChar))
 			}
 			if opts.CycleColors {
 				offset++
 			}
 		}
 
-		// Prerender scrambled rune frames for the animation. Seed
-		// the rune picker off the settings hash so cyclingFrames is
-		// a pure function of Settings: two processes with identical
-		// Settings populate the cache with the same glyphs, which
-		// keeps any cross-process golden-file comparison stable.
 		seed := xxh3.HashString(cacheKey)
 		rng := rand.New(rand.NewPCG(seed, ^seed))
 		a.cyclingFrames = make([][]string, numFrames)
@@ -274,22 +208,20 @@ func New(opts Settings) *Anim {
 			a.cyclingFrames[i] = make([]string, a.width)
 			for j := range a.cyclingFrames[i] {
 				if j+offset >= len(ramp) {
-					continue // skip if we run out of colors
+					continue
 				}
 
-				// Also prerender the color with Lip Gloss here to avoid processing
-				// in the render loop.
 				r := availableRunes[rng.IntN(len(availableRunes))]
-				a.cyclingFrames[i][j] = lipgloss.NewStyle().
-					Foreground(ramp[j+offset]).
-					Render(string(r))
+				cr, cg, cb, _ := ramp[j+offset].RGBA()
+				a.cyclingFrames[i][j] = mofu.DefaultStyle().
+					Fg(mofu.RGB(uint8(cr>>8), uint8(cg>>8), uint8(cb>>8))).
+					Apply(string(r))
 			}
 			if opts.CycleColors {
 				offset++
 			}
 		}
 
-		// Cache the results
 		labelSlice := make([]string, a.label.Len())
 		for i, v := range a.label.Seq2() {
 			labelSlice[i] = v
@@ -309,15 +241,6 @@ func New(opts Settings) *Anim {
 		animCacheMap.Set(cacheKey, cached)
 	}
 
-	// Assign a deterministic birth step to each column for a
-	// staggered entrance effect. The schedule is seeded off the
-	// spinner id and the settings hash, so two spinners with the
-	// same role and identity stagger identically (this is what
-	// keeps Render() byte-equal across cache hits and across
-	// processes for the same Settings+ID) while spinners with
-	// different ids — distinct assistant messages, different tool
-	// calls, "Thinking" vs "Generating" labels — fade in with
-	// different patterns instead of marching in lock-step.
 	birthSeed := xxh3.HashString(a.id + "|" + cacheKey)
 	birthRng := rand.New(rand.NewPCG(birthSeed, ^birthSeed))
 	a.birthSteps = make([]int, a.width)
@@ -328,39 +251,33 @@ func New(opts Settings) *Anim {
 	return a
 }
 
-// SetLabel updates the label text and re-renders it.
 func (a *Anim) SetLabel(newLabel string) {
-	a.labelWidth = lipgloss.Width(newLabel)
-
-	// Update total width
+	a.labelWidth = mofu.MeasureWidth(newLabel)
 	a.width = a.cyclingCharWidth
 	if newLabel != "" {
 		a.width += labelGapWidth + a.labelWidth
 	}
-
-	// Re-render the label
 	a.renderLabel(newLabel)
 }
 
-// renderLabel renders the label with the current label color.
 func (a *Anim) renderLabel(label string) {
 	if a.labelWidth > 0 {
-		// Pre-render the label.
 		labelRunes := []rune(label)
 		a.label = csync.NewSlice[string]()
+		lr, lg, lb, _ := a.labelColor.RGBA()
+		lc := mofu.RGB(uint8(lr>>8), uint8(lg>>8), uint8(lb>>8))
 		for i := range labelRunes {
-			rendered := lipgloss.NewStyle().
-				Foreground(a.labelColor).
-				Render(string(labelRunes[i]))
+			rendered := mofu.DefaultStyle().
+				Fg(lc).
+				Apply(string(labelRunes[i]))
 			a.label.Append(rendered)
 		}
 
-		// Pre-render the ellipsis frames which come after the label.
 		a.ellipsisFrames = csync.NewSlice[string]()
 		for _, frame := range ellipsisFrames {
-			rendered := lipgloss.NewStyle().
-				Foreground(a.labelColor).
-				Render(frame)
+			rendered := mofu.DefaultStyle().
+				Fg(lc).
+				Apply(frame)
 			a.ellipsisFrames.Append(rendered)
 		}
 	} else {
@@ -369,7 +286,6 @@ func (a *Anim) renderLabel(label string) {
 	}
 }
 
-// Width returns the total width of the animation.
 func (a *Anim) Width() (w int) {
 	w = a.width
 	if a.labelWidth > 0 {
@@ -377,7 +293,7 @@ func (a *Anim) Width() (w int) {
 
 		var widestEllipsisFrame int
 		for _, f := range ellipsisFrames {
-			fw := lipgloss.Width(f)
+			fw := mofu.MeasureWidth(f)
 			if fw > widestEllipsisFrame {
 				widestEllipsisFrame = fw
 			}
@@ -387,13 +303,11 @@ func (a *Anim) Width() (w int) {
 	return w
 }
 
-// Start starts the animation.
-func (a *Anim) Start() tea.Cmd {
+func (a *Anim) Start() mofu.Cmd {
 	return a.Step()
 }
 
-// Animate advances the animation to the next step.
-func (a *Anim) Animate(msg StepMsg) tea.Cmd {
+func (a *Anim) Animate(msg StepMsg) mofu.Cmd {
 	if msg.ID != a.id {
 		return nil
 	}
@@ -405,7 +319,6 @@ func (a *Anim) Animate(msg StepMsg) tea.Cmd {
 
 	frames := a.framesSinceStart.Add(1)
 	if a.initialized.Load() && a.labelWidth > 0 {
-		// Manage the ellipsis animation.
 		ellipsisStep := a.ellipsisStep.Add(1)
 		if int(ellipsisStep) >= ellipsisAnimSpeed*len(ellipsisFrames) {
 			a.ellipsisStep.Store(0)
@@ -416,7 +329,6 @@ func (a *Anim) Animate(msg StepMsg) tea.Cmd {
 	return a.Step()
 }
 
-// Render renders the current state of the animation.
 func (a *Anim) Render() string {
 	var b strings.Builder
 	step := int(a.step.Load())
@@ -424,23 +336,17 @@ func (a *Anim) Render() string {
 	for i := range a.width {
 		switch {
 		case !a.initialized.Load() && i < len(a.birthSteps) && frames < a.birthSteps[i]:
-			// Birth step not reached: render initial character.
 			b.WriteString(a.initialFrames[step][i])
 		case i < a.cyclingCharWidth:
-			// Render a cycling character.
 			b.WriteString(a.cyclingFrames[step][i])
 		case i == a.cyclingCharWidth:
-			// Render label gap.
 			b.WriteString(labelGap)
 		case i > a.cyclingCharWidth:
-			// Label.
 			if labelChar, ok := a.label.Get(i - a.cyclingCharWidth - labelGapWidth); ok {
 				b.WriteString(labelChar)
 			}
 		}
 	}
-	// Render animated ellipsis at the end of the label if all characters
-	// have been initialized.
 	if a.initialized.Load() && a.labelWidth > 0 {
 		ellipsisStep := int(a.ellipsisStep.Load())
 		if ellipsisFrame, ok := a.ellipsisFrames.Get(ellipsisStep / ellipsisAnimSpeed); ok {
@@ -451,15 +357,12 @@ func (a *Anim) Render() string {
 	return b.String()
 }
 
-// Step is a command that triggers the next step in the animation.
-func (a *Anim) Step() tea.Cmd {
-	return tea.Tick(time.Second/time.Duration(fps), func(t time.Time) tea.Msg {
+func (a *Anim) Step() mofu.Cmd {
+	return mofu.Tick(time.Second/time.Duration(fps), func() mofu.Msg {
 		return StepMsg{ID: a.id}
 	})
 }
 
-// makeGradientRamp() returns a slice of colors blended between the given keys.
-// Blending is done as Hcl to stay in gamut.
 func makeGradientRamp(size int, stops ...color.Color) []color.Color {
 	if len(stops) < 2 {
 		return nil
@@ -476,12 +379,10 @@ func makeGradientRamp(size int, stops ...color.Color) []color.Color {
 	}
 	blended := make([]color.Color, 0, size)
 
-	// Calculate how many colors each segment should have.
 	segmentSizes := make([]int, numSegments)
 	baseSize := size / numSegments
 	remainder := size % numSegments
 
-	// Distribute the remainder across segments.
 	for i := range numSegments {
 		segmentSizes[i] = baseSize
 		if i < remainder {
@@ -489,7 +390,6 @@ func makeGradientRamp(size int, stops ...color.Color) []color.Color {
 		}
 	}
 
-	// Generate colors for each segment.
 	for i := range numSegments {
 		c1 := points[i]
 		c2 := points[i+1]
