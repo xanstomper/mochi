@@ -127,22 +127,27 @@ export class Runtime {
     return result.summary;
   }
 
-  /** When the caller opts into it (or config has enhance enabled) and a
-   *  Chameleon binary is available, generate synthetic-parameter reasoning
-   *  context and fold it into the goal's constraints so it feeds every task's
-   *  context. Falls back gracefully to bitflip when unavailable. */
+  /** When the caller opts into it (or config has enhance enabled), generate
+   *  synthetic-parameter reasoning context with the agent's OWN model and fold
+   *  it into the goal's task contexts. No external API / CLI required. */
   private async enhancedCtx(objective: string, opts?: { enhance?: boolean; enhanceMode?: string }): Promise<string[]> {
     const cfg = (this.config as unknown as Record<string, unknown>).enhance;
     const enabled = opts?.enhance ?? (cfg ? (cfg as { enabled?: boolean }).enabled : false);
     if (!enabled) return [];
     try {
-      const { enhance, chameleonAvailable } = await import('./chameleon.js');
-      if (!(await chameleonAvailable())) return [];
-      const ctx = await enhance({ task: objective, mode: opts?.enhanceMode ?? 'auto', offline: true });
-      return [`Lazy Chameleon synthetic-parameter reasoning context:\n${String(ctx).slice(0, 12000)}`];
+      const r = await this.enhance(objective, (opts?.enhanceMode ?? 'auto') as never);
+      if (!r.context.trim()) return [];
+      return [`Chameleon reasoning enhancement (mode ${r.mode}):\n${r.context.slice(0, 12000)}`];
     } catch {
       return [];
     }
+  }
+
+  /** Generate internal Chameleon enhancement context with the agent's model. */
+  async enhance(task: string, mode?: import('./chameleon.js').ChameleonMode, budget?: import('./budget.js').BudgetEngine)
+    : Promise<import('./chameleon.js').EnhanceResult> {
+    const { ChameleonEngine } = await import('./chameleon.js');
+    return new ChameleonEngine(this.config).enhance({ task, mode, budget });
   }
 
   async runPrompt(prompt: string): Promise<string> {

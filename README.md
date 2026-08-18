@@ -274,11 +274,12 @@ isn't re-reading `MOCHI.md`/`AGENTS.md`/memory from disk on every model call.
 
 ## Integrations
 
-### Lazy Chameleon (synthetic-parameter reasoning)
+### Chameleon (internal synthetic-parameter reasoning)
 
 Turns a flash-class model into a frontier-grade reasoner for hard goals by
 generating dense "synthetic parameter" reasoning context, injected into the
-agent prompt. Requires the `chameleon` CLI on PATH (or `CHAMELEON_BIN`).
+agent prompt. This is built into Mochi — it uses the agent's OWN configured
+provider, so there's no external CLI, no shell-out, and no extra API key.
 
 ```bash
 # Print enhancement context for a task
@@ -296,19 +297,27 @@ Opt in without a flag via config:
 { "enhance": { "enabled": true, "mode": "auto" } }
 ```
 
-Graceful no-op when Chameleon isn't installed.
+Enhance uses the same provider the agent loop uses, so a failed provider call
+is a graceful no-op. Modes map to how many reasoning strategies run:
+`flash<turbo<easy<medium<hard<deep<extreme/genius`.
 
-### Termix (lightweight terminal)
+### Termix (multi-session workbench)
 
-Launch the Termix GTK3+VTE multi-terminal (tabs, splits, regex search, no
-Electron) as Mochi's visual companion terminal:
+Termix is Mochi's baked-in multi-session workbench — a UI command, not an
+auto-launcher and not a third-party app. It opens N parallel agent sessions
+against the configured provider and you choose whether they talk or stay silent:
 
 ```bash
-mochi termix            # launch if present
-mochi termix --install  # clone to ~/termix first, then launch
+mochi termix "Refactor the auth module"           # communicate (default)
+mochi termix "Refactor the auth module" --coms      # sessions share a broadcast channel
+mochi termix "Refactor the auth module" --sep       # sessions fully isolated
+mochi termix "..." --sessions 5                     # 5 parallel sessions
 ```
 
-Mochi seeds `~/.config/termix/config.json` with a compatible dark default.
+Each session takes a distinct angle (architect, adversarial reviewer, SRE, ...).
+`--coms` sessions write `<broadcast>` notes onto a shared channel that peers
+read between passes; `--sep` sessions work from first principles. The run prints
+steps/tokens/cost per session and a project-wide total.
 
 ## Symbol graph backends
 

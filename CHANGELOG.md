@@ -1,5 +1,27 @@
 # Mochi Changelog
 
+## 0.5.5
+
+Internal Chameleon + Termix rework (no external services, no auto-launch):
+
+- **Chameleon is fully internal now.** Drops the external `chameleon` CLI /
+  shell-out path entirely. `ChameleonEngine` generates synthetic-parameter
+  reasoning context via the agent's OWN configured provider
+  (`createProvider(config.model, 'reasoning')`) — so enhance behaves as
+  "basically part of the agent." `mochi enhance` and the `--enhance` /
+  auto-inject path now report tokens, cost, and strategies used, and gracefully
+  no-op if the provider call fails. `chameleon` tool no longer needs network
+  permission (it uses the same provider the loop uses).
+- **Termix is now a baked-in UI command, not an auto-launcher and not a
+  third-party app.** `mochi termix "<task>" [--coms|--sep]` opens N parallel
+  agent sessions against the configured provider. `--coms` (default) lets the
+  sessions COMMUNICATE over a shared broadcast channel; `--sep` keeps them
+  fully isolated. Result line reports steps/tokens/cost per session.
+- **Mock provider is gated to the test harness.** `createProvider` now refuses
+  `provider: 'mock'` unless an explicit `mockResponses` fixture array is present
+  (only ever set in unit tests). Leaving via env/CLI/config `provider: mock`
+  throws rather than silently running on a fake model.
+
 ## 0.5.4
 
 External tool integrations:

@@ -1,99 +1,173 @@
-import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { homedir } from 'node:os';
+import { createProvider } from './model/router.js';
+import { BudgetEngine, estimateCostUsd } from './budget.js';
+import type { MochiConfig, ChatMessage } from './types.js';
 
-// Termix integration. Termix is a lightweight GTK3+VTE multi-terminal workspace
-// (tabs, split panes, regex search, Catppuccin dark theme) — a single Python
-// file, no Electron/web runtime. Mochi launches it as the visual companion
-// terminal and can seed a compatible config. Returns operational strings so the
-// CLI can print exactly what happened.
+// "Termix" is Mochi's baked-in multi-session workbench. It is NOT a separate
+// app and it does NOT auto-launch: the user explicitly runs `mochi termix`.
+// A Termix run opens N agent sessions that all speak through the agent's OWN
+// configured provider (same model, no external API). The user chooses whether
+// the sessions COMMUNICATE (they share a rolling broadcast channel so each
+// session sees what its peers concluded) or STAY SEPARATE (fully isolated).
 
-const GIT_URL = process.env.TERMIX_GO_URL || 'https://github.com/xanstomper/termix.git';
-const DEFAULT_DIR = resolve(homedir(), 'termix');
-const CONFIG_PATH = resolve(homedir(), '.config/termix/config.json');
+export type TermixMode = 'communicate' | 'separate';
 
-const DEFAULT_CONFIG = {
-  theme: { bg: '#0F0F15', fg: '#E0DEF4', accent: '#F5A0C0' },
-  behavior: { scrollback: 10000, cursor_blink: true },
-};
-
-function which(bin: string): Promise<boolean> {
-  return new Promise((r) => execFile('sh', ['-c', `command -v ${bin}`], { timeout: 5000 }, (e) => r(!e)));
+export interface TermixOptions {
+  mode: TermixMode;
+  sessions: number; // number of parallel agent sessions (default 3)
+  task: string; // the work given to every session
+  config?: MochiConfig;
 }
 
-export interface TermixResult { launched: boolean; location?: string; message: string; }
-
-/** Find an installed termix script on PATH. */
-export async function findTermix(): Promise<string | null> {
-  if (await which('termix')) return 'termix';
-  if (existsSync(join(DEFAULT_DIR, 'termix'))) return join(DEFAULT_DIR, 'termix');
-  return null;
+export interface SessionResult {
+  index: number;
+  role: string;
+  steps: number;
+  tokensUsed: number;
+  costUsd: number;
+  durationMs: number;
+  output: string;
+  error?: string;
 }
 
-/** Ensure a default config exists (auto-created by Termix anyway). */
-export function ensureConfig(): string {
+export interface TermixRun {
+  mode: TermixMode;
+  sessions: number;
+  task: string;
+  results: SessionResult[];
+  tokensUsed: number;
+  costUsd: number;
+  durationMs: number;
+}
+
+// Distinct session personas so each agent in a run takes a fresh angle.
+// Higher session counts reuse personas from the start of the list.
+const ROLES = [
+  'Lead architect', 'Systems engineer', 'Adversarial reviewer', 'Distributed systems reviewer',
+  'Performance/edge-case', 'UX & API designer', 'Security researcher', 'Reliability SRE',
+  'Testability/QA', 'Maintainability/refactor',
+];
+
+const SYSTEM = (role: string, communicate: boolean) =>
+  `You are a Mochi agent session with the angle: ${role}.${communicate
+    ? '\nA shared broadcast channel is active: build on peer notes when present and keep your own <broadcast> note updated.'
+    : '\nYou are isolated: work from first principles and do not reference other sessions.'}\nExecute the work directly with tools, then report a short, concrete outcome in plain prose (no fences).`;
+
+const roleFor = (index: number): string => ROLES[index % ROLES.length];
+
+function peerNotes(broadcast: string[], selfIndex: number): string {
+  return broadcast.filter((line) => !line.startsWith(`[${selfIndex}]`)).join('\n');
+}
+
+function nextUserPrompt(i: number, mode: TermixMode, peer: string, mine: string): string {
+  const base = i === 0 ? 'Work this task:' : 'Continue and strengthen the result, building on (not repeating) prior slices.';
+  const shared = mode === 'communicate' && (i === 0 || peer)
+    ? `\n\nPeer notes (shared channel):\n${peer || '(none yet)'}`
+    : '';
+
+  return `${base}${shared}${mine ? `\n\nMy prior notes:\n${mine}` : ''}\n\nTask: (provided above)\nProduce the next concrete slice of work${i === 0 ? '' : ' now'}.${mode === 'communicate' ? ' Keep exactly one <broadcast> tag (overwrite your own note), then give the output.' : ''}`;
+}
+
+async function runSession(
+  config: MochiConfig,
+  task: string,
+  index: number,
+  mode: TermixMode,
+  broadcast: string[],
+): Promise<SessionResult> {
+  const budget = new BudgetEngine(config.safety);
+  budget.start();
+  const provider = createProvider(config.model, 'reasoning');
+  const role = roleFor(index);
+  const startedAt = performance.now();
+  let mine = '';
+  let tokensUsed = 0;
+  let costUsd = 0;
+  let steps = 0;
+  let output = '';
+
+  const messages: ChatMessage[] = [
+    { role: 'system', content: SYSTEM(role, mode === 'communicate') },
+    { role: 'user', content: task },
+  ];
+
   try {
-    if (!existsSync(CONFIG_PATH)) {
-      mkdirSync(resolve(homedir(), '.config/termix'), { recursive: true });
-      writeFileSync(CONFIG_PATH, JSON.stringify(DEFAULT_CONFIG, null, 2));
-      return CONFIG_PATH;
+    for (let i = 0; i < 8; i++) {
+      if (i === 0) {
+        messages[1] = { role: 'user', content: task };
+      } else {
+        const peer = mode === 'communicate' ? peerNotes(broadcast, index) : '';
+        messages.push({
+          role: 'user',
+          content: nextUserPrompt(i, mode, peer, mine),
+        });
+      }
+
+      const response = await provider.chat(messages, [], { temperature: 0.5 });
+      output = response.content ?? '';
+      if (response.usage) {
+        tokensUsed += response.usage.totalTokens;
+        budget.recordTokens(response.usage.totalTokens, config.model.model);
+        costUsd += estimateCostUsd(response.usage.totalTokens, config.model.model);
+      }
+      steps++;
+
+      const bm = output.match(/<broadcast>\s*([^<]*)/);
+      if (bm) {
+        mine = `[${index}] ${bm[1].trim()}`;
+        if (mode === 'communicate') {
+          const existing = broadcast.findIndex((l) => l.startsWith(`[${index}]`));
+          if (existing >= 0) broadcast[existing] = mine;
+          else broadcast.push(mine);
+        }
+      }
+      if (i > 0 && output.length < 240) break;
     }
-    return CONFIG_PATH;
-  } catch {
-    return CONFIG_PATH;
-  }
-}
-
-async function clone(cloneDir: string): Promise<void> {
-  await new Promise<void>((resolvePromise, reject) => {
-    execFile('git', ['clone', '--depth', '1', GIT_URL, cloneDir], { timeout: 120000 }, (err) =>
-      err ? reject(new Error(`git clone failed: ${err.message}`)) : resolvePromise());
-  });
-}
-
-function launch(loc: string): boolean {
-  // Launch detached so the terminal keeps running independent of `mochi`.
-  try {
-    const child = execFile('sh', ['-c', `${JSON.stringify(loc)} >/dev/null 2>&1 &`]);
-    child.unref();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Ensure Termix is available (install to ~/localix when missing and CLI passes
- * `install: true`), write a default config, then launch it.
- */
-export async function termix(opts: { mode?: 'launch' | 'install'; autoInstall?: boolean } = {}): Promise<TermixResult> {
-  const config = ensureConfig();
-  let loc = await findTermix();
-
-  const autoInstall = opts.autoInstall ?? (opts.mode === 'install');
-  if (!loc && autoInstall) {
-    try {
-      await clone(DEFAULT_DIR);
-      loc = join(DEFAULT_DIR, 'termix');
-    } catch (e) {
-      return { launched: false, message: `Termix not installed and auto-install failed: ${e instanceof Error ? e.message : e}` };
-    }
-  }
-
-  if (!loc) {
+  } catch (e) {
     return {
-      launched: false,
-      message: `Termix not found on PATH. Run 'python3 -m pip install termix' or install it, then set PATH, or re-run with --install to clone it to ~/termix. Config: ${config}`,
+      index, role, steps, tokensUsed, costUsd,
+      durationMs: Math.round(performance.now() - startedAt),
+      output,
+      error: e instanceof Error ? e.message : String(e),
     };
   }
 
-  const launched = launch(loc);
   return {
-    launched,
-    location: loc,
-    message: launched
-      ? `Launched Termix (${loc}). Config: ${config}`
-      : `Termix found at ${loc} but failed to launch. Config: ${config}`,
+    index, role, steps, tokensUsed, costUsd,
+    durationMs: Math.round(performance.now() - startedAt),
+    output,
+  };
+}
+
+/**
+ * Run the multi-session Termix workbench using the agent's own provider.
+ * `mode: 'communicate'` shares peer notes between sessions; `separate` keeps
+ * them isolated.
+ */
+export async function termix(opts: TermixOptions): Promise<TermixRun> {
+  if (!opts.config) throw new Error('termix requires a Mochi config');
+  const sessions = Math.max(1, Math.min(opts.sessions || 3, 10));
+  const startedAt = performance.now();
+  const broadcast: string[] = [];
+
+  const results = await Promise.all(
+    Array.from({ length: sessions }, (_, i) =>
+      runSession(opts.config!, opts.task, i, opts.mode, broadcast),
+    ),
+  );
+
+  if (opts.mode === 'communicate') {
+    for (const r of results) {
+      if (!r.error && r.output) broadcast.push(`[${r.index}] ${r.output.slice(0, 400)}`);
+    }
+  }
+
+  return {
+    mode: opts.mode,
+    sessions,
+    task: opts.task,
+    results,
+    tokensUsed: results.reduce((s, r) => s + r.tokensUsed, 0),
+    costUsd: results.reduce((s, r) => s + r.costUsd, 0),
+    durationMs: Math.round(performance.now() - startedAt),
   };
 }

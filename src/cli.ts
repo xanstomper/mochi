@@ -93,7 +93,7 @@ Usage:
   mochi inspect "<query>"
   mochi speculate "<question>"
   mochi enhance "<task>" [--mode <mode>]
-  mochi termix [--install]
+  mochi termix ["<task>"] [--coms|--sep] [--sessions N]
   mochi tui
   mochi perf
 
@@ -345,16 +345,11 @@ async function main() {
   if (first === 'enhance') {
     const question = positional.slice(1).join(' ');
     if (!question) { console.error('Usage: mochi enhance "<task>" [--mode <mode>]'); process.exit(1); }
-    const { enhance, chameleonAvailable } = await import('./chameleon.js');
-    if (!(await chameleonAvailable())) {
-      console.error('chameleon CLI not found on PATH (install Lazy Chameleon or set CHAMELEON_BIN).');
-      process.exit(1);
-    }
     const mode = flags.mode ? String(flags.mode) : 'auto';
     try {
-      const context = await enhance({ task: question, mode, offline: flags.offline === false ? false : true });
-      console.log(`# Lazy Chameleon enhancement (mode ${mode})\n`);
-      console.log(context);
+      const r = await runtime.enhance(question, mode as never);
+      console.log(`# Chameleon enhancement (mode ${r.mode}, ${r.strategies.length} strategies, ${r.tokensUsed} tokens, $${r.costUsd.toFixed(4)})\n`);
+      console.log(r.context);
     } catch (e) {
       console.error('Enhance failed:', e instanceof Error ? e.message : e);
       process.exit(1);
@@ -362,14 +357,23 @@ async function main() {
     return;
   }
   if (first === 'termix') {
+    // Baked-in multi-session workbench (a UI command, never auto-launched).
     const { termix } = await import('./termix.js');
-    const r = await termix({
-      mode: flags.install ? 'install' : 'launch',
-      autoInstall: flags.install ? true : false,
-    });
-    if (r.launched) console.log(r.message);
-    else console.error(r.message);
-    process.exitCode = r.launched ? 0 : 1;
+    const task = (flags.task ? String(flags.task) : positional.slice(1).join(' ')).trim()
+      || 'Solve the stated objective and report concrete progress.';
+    const mode = String(flags.mode ?? '') as 'communicate' | 'separate';
+    const requested = mode === 'communicate' || mode === 'separate'
+      ? mode
+      : (flags.coms ? 'communicate' : (flags.sep ? 'separate' : 'communicate'));
+    const sessions = flags.sessions ? Number(flags.sessions) : 3;
+    const run = await termix({ mode: requested, sessions, task, config: runtime.config });
+    console.log(`# Termix ${run.mode} run — ${run.sessions} sessions\n`);
+    for (const s of run.results) {
+      const status = s.error ? `ERROR: ${s.error}` : 'ok';
+      console.log(`[${s.index}] ${s.role}  steps=${s.steps} tokens=${s.tokensUsed} $${s.costUsd.toFixed(4)} (${s.durationMs}ms) — ${status}`);
+    }
+    console.log(`\nTotal: ${run.tokensUsed} tokens, $${run.costUsd.toFixed(4)} (${run.durationMs}ms)`);
+    process.exitCode = run.results.some((s) => s.error) ? 1 : 0;
     return;
   }
   if (first === 'speculate') {
