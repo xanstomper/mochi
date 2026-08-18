@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
+import { execSync } from 'node:child_process';
 import { VerifierEngine } from './verification.js';
 import { Workspace } from './workspace.js';
 import { EventBus } from './events.js';
@@ -113,5 +114,34 @@ describe('VerifierEngine', () => {
     const result = await verifier.verify(task, 'Implemented feature');
     expect(result.status).toBe('PASS');
     expect(result.passed).toContain('criteria met');
+  });
+
+  it('downgrades a PASS to PARTIAL when an injected mutation survives a weak test suite', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-verify-mut-'));
+    // A git repo with changed source AND a test command that never fails - the
+    // adversarial mutation check will inject a logic bug, see it survive, and
+    // downgrade the naive PASS.
+    execSync('git init -q', { cwd: dir });
+    execSync('git config user.email t@t && git config user.name t', { cwd: dir });
+    writeFileSync(resolve(dir, 'seed.txt'), 'seed');
+    execSync('git add -A && git commit -qm init', { cwd: dir });
+    writeFileSync(resolve(dir, 'util.ts'), 'export function cmp(a,b){ if (a > b) return "big"; return "small"; }');
+    writeFileSync(resolve(dir, 'package.json'), JSON.stringify({ scripts: { test: 'node -e "process.exit(0)"' } }));
+
+    const workspace = new Workspace(dir, '.mochi');
+    workspace.ensure();
+    const verifier = new VerifierEngine({
+      cwd: dir,
+      workspace,
+      config: baseConfig,
+      events: new EventBus(),
+      budget: new BudgetEngine(baseConfig.safety),
+    });
+    const task = createTask('Implement cmp', 'Add comparison logic', { acceptanceCriteria: ['cmp works'], verificationCommand: 'npm test' });
+    const result = await verifier.verify(task, 'Added cmp');
+    // The suite passes, but the mutation ('a > b' -> 'a < b') survives, so the
+    // verifier must NOT report a clean PASS.
+    expect(result.status).toBe('PARTIAL');
+    expect(result.summary).toContain('Mutation check');
   });
 });

@@ -7,6 +7,7 @@ import type { EventBus } from './events.js';
 import type { MochiConfig, Task } from './types.js';
 import type { Workspace } from './workspace.js';
 import { BudgetEngine } from './budget.js';
+import { runMutationCheck, type MutationCheck } from './mutation.js';
 
 export type VerificationStatus = 'PASS' | 'FAIL' | 'PARTIAL' | 'BLOCKED';
 
@@ -84,8 +85,38 @@ export class VerifierEngine {
       });
     }
 
+    // Adversarial mutation verification: only when there is a meaningful test
+    // command and the plain checks passed. Inject one logic bug into a changed
+    // source file and re-run the test; if the suite does NOT catch it (mutant
+    // survives), that is a real coverage hole the plain PASS hides. We surface
+    // it as evidence and downgrade a naive PASS to PARTIAL so the agent knows
+    // to harden its tests.
+    let mutationCheck: MutationCheck = { applied: false };
+    const testCommand = task.verificationCommand ?? repo.testCommand;
+    if (testCommand && evidence.some((e) => e.passed)) {
+      try {
+        mutationCheck = await runMutationCheck(this.cwd, testCommand, async (cmd) => this.exitCode(cmd));
+        if (mutationCheck.applied) {
+          evidence.push({
+            source: 'mutation-check',
+            result: mutationCheck.note ?? '',
+            passed: mutationCheck.killed === true,
+          });
+        }
+      } catch {
+        // mutation is adversarial best-effort; never fail verification on its own
+      }
+    }
+
     const modelVerdict = await this.judge(task, agentSummary, evidence);
-    const verdict = modelVerdict ?? this.ruleBased(task, evidence);
+    let verdict = modelVerdict ?? this.ruleBased(task, evidence);
+
+    // Adversarial verdict adjustment: a suite that passes but lets an injected
+    // mutation survive cannot be trusted to guard that logic. Downgrade a clean
+    // PASS to PARTIAL and tell the agent exactly which mutation escaped.
+    if (mutationCheck.applied && mutationCheck.survived && verdict.status === 'PASS') {
+      verdict = this.build('PARTIAL', verdict.passed, [...verdict.failed, 'Mutation check: injected logic bug was NOT caught by the tests; coverage is weak.'], 'Tests passed but did not catch an injected logic mutation. Harden your tests to cover this path and re-verify.', evidence);
+    }
 
     await this.hooks.runAfter('after_verify', { task: task.id, status: verdict.status });
     return verdict;
@@ -171,5 +202,12 @@ export class VerifierEngine {
         resolve(`exit_code: ${exit}\nstdout:\n${String(stdout ?? '')}\nstderr:\n${String(stderr ?? '')}`);
       });
     });
+  }
+
+  /** Reuse the shell runner for the mutation check, returning just the exit code. */
+  private async exitCode(command: string): Promise<number> {
+    const out = await this.runCommand(command, 120);
+    const m = out.match(/^exit_code: (\d+)/);
+    return m ? Number(m[1]) : 1;
   }
 }

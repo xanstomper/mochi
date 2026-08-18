@@ -86,8 +86,17 @@ Internal Chameleon + Termix rework (no external services, no auto-launch):
   identical query is deduped, but a write/edit/delete invalidates the stale
   entry instantly (O(1), no tree re-walk), so the cache can never serve a result
   that a subsequent edit has already made wrong.
-- 81 tests green (relevance, search-structure/dedup/cache-invalidation, and
-  one-shot classification + decomposition coverage), typecheck clean.
+- **Adversarial mutation verification** (`src/mutation.ts`): a clean PASS no
+  longer just means "commands exited 0". After the agent's test command passes,
+  the verifier injects one real logic bug (a *mutation*) into a changed source
+  file and re-runs the test suite. If the mutation is caught the tests are
+  sound; if it **survives**, the verifier downgrades a naive PASS to PARTIAL
+  with an explicit "Mutation check: injected logic bug was NOT caught" signal so
+  the agent hears that its coverage is weak on that path instead of getting a
+  false green. Deterministic operator flips, no model in the mutation loop, and
+  the file is always restored after the check - the repo is never left mutated.
+- 88 tests green (mutation engine + verifier downgrade coverage added),
+  typecheck clean, native binary rebuilt.
 
 ## 0.5.4
 
