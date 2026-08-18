@@ -35,6 +35,9 @@ export interface MochiConfig {
   model: ModelConfig;
   safety: SafetyConfig;
   permissions: PermissionConfig;
+  mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string> }>;
+  /** Plan-then-act: in plan mode the agent produces a plan instead of editing. */
+  planMode?: boolean;
   telemetry: boolean;
   projectDir: string;
   configDir: string;

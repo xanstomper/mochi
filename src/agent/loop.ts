@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { Attempt, ChatMessage, MochiConfig, ModelProfile, Task, ToolDefinition, ToolCall, ToolResult } from '../types.js';
 import type { EventBus } from '../events.js';
 import type { Workspace } from '../workspace.js';
-import type { ContextEngine } from '../context.js';
+import { ContextEngine } from '../context.js';
 import { createProvider } from '../model/router.js';
 import { executeTool, buildTools } from '../tools/index.js';
 import type { ToolContext, ReadCache } from '../tools/types.js';
@@ -15,6 +15,7 @@ import { LearningStore, classifyFailure } from '../learning.js';
 import { HookManager } from '../hooks.js';
 import { resolve } from 'node:path';
 import { classifyOneShot } from '../one-shot.js';
+import { buildMcpTools } from '../mcp/tools.js';
 
 export interface AgentOptions {
   id?: string;
@@ -29,6 +30,10 @@ export interface AgentOptions {
   budget?: BudgetEngine;
   abortSignal?: AbortSignal;
   readCache?: ReadCache;
+  /** Extra tools registered externally (e.g. MCP server tools). */
+  extraTools?: Map<string, import('../tools/types.js').Tool>;
+  /** When true, the agent plans then waits for approval before editing. */
+  planMode?: boolean;
 }
 
 export interface AgentResult {
@@ -69,6 +74,8 @@ export class Agent {
   private lastSig = '';
   private sigStreak = 0;
   private readCache: ReadCache;
+  private planMode: boolean;
+  private mcpClose?: () => void;
 
   constructor(opts: AgentOptions) {
     this.id = opts.id ?? randomUUID();
@@ -87,6 +94,12 @@ export class Agent {
     const profileService = new AgentProfileService(this.workspace.dir);
     this.profile = opts.profile ?? profileService.get(opts.role) ?? profileService.get('coder')!;
     this.tools = buildTools(this.config, this.profile.tools);
+    if (opts.extraTools) {
+      for (const [name, tool] of opts.extraTools) {
+        if (!this.tools.has(name)) this.tools.set(name, tool);
+      }
+    }
+    this.planMode = opts.planMode ?? this.config.planMode ?? false;
     this.learning = new LearningStore(this.workspace.dir);
     this.hooks = new HookManager(this.workspace.dir);
     this.toolDefs = [...this.tools.values()].map((t) => t.def);
@@ -99,6 +112,12 @@ export class Agent {
     this.events.emit({ type: 'task:started', task, agentId: this.id });
     this.context.updateState({ nextAction: `Start task: ${task.title}` });
     this.context.addMessage({ role: 'system', content: this.profile.systemPrompt });
+    if (this.planMode) {
+      this.context.addMessage({
+        role: 'system',
+        content: 'PLAN MODE: Research the codebase, then produce a concrete plan (steps, files to change, risks, verification). Do NOT edit files or run mutating commands. Finish with the plan as your answer.',
+      });
+    }
 
     const repo = detectRepo(this.cwd);
     const gitStatus = await this.runShell('git status --short');
@@ -119,6 +138,24 @@ export class Agent {
     });
     if (oneShot.suggests) {
       this.context.addMessage({ role: 'system', content: oneShot.suggests });
+    }
+
+    // Wire any configured MCP servers into the toolset. These tools are closed
+    // when the run finishes (see finish()), so subprocesses don't leak.
+    if (this.config.mcpServers) {
+      const log = (m: string): undefined => {
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: m } as never);
+        return undefined;
+      };
+      const connected = await buildMcpTools(this.config.mcpServers, log);
+      for (const [name, tool] of connected.tools) {
+        if (!this.tools.has(name)) this.tools.set(name, tool);
+      }
+      for (const err of connected.errors) log(err);
+      if (connected.tools.size > 0) {
+        this.toolDefs = [...this.tools.values()].map((t) => t.def);
+      }
+      this.mcpClose = connected.close;
     }
 
     for (let i = 0; i < maxIterations; i++) {
@@ -222,6 +259,19 @@ export class Agent {
 
       if (response.toolCalls && response.toolCalls.length > 0) {
         this.context.addMessage({ role: 'assistant', content: response.content ?? '', tool_calls: response.toolCalls });
+        // Plan mode: allow read-only research, but veto any mutating tool and
+        // force the model to hand back a plan instead of editing.
+        if (this.planMode) {
+          const mutating = response.toolCalls.some((c) => ['write', 'edit', 'delete', 'shell'].includes(c.function.name));
+          if (mutating) {
+            const planText = (response.content ?? '').trim();
+            this.context.addMessage({
+              role: 'system',
+              content: 'PLAN MODE: you are only planning right now. Do not edit files or run mutating commands. Do not call write/edit/delete/shell. Stop and hand back your plan (steps, files to touch, risks) as the final answer.',
+            });
+            return this.finish(task, true, planText || this.context['state'].nextAction || 'Planned. No files were changed.');
+          }
+        }
         // Loop guard: repeated identical tool calls -> force the model to answer.
         const nowSig = response.toolCalls.map((c) => `${c.function.name}:${c.function.arguments}`).join('|');
         if (nowSig === this.lastSig) this.sigStreak++;
@@ -335,6 +385,42 @@ export class Agent {
     }
   }
 
+  /** Spawn a fresh child agent on a subtask and return a short summary. The
+   *  child shares this run's config, workspace, events, cwd, abort signal,
+   *  budget, and file read cache so delegation is cheap and consistent. */
+  private async spawnSubagent(prompt: string, role?: string): Promise<string> {
+    const childRole = (role ?? 'coder') as import('../types.js').AgentRole;
+    const childProfile = new AgentProfileService(this.workspace.dir).get(childRole) ?? this.profile;
+    const child = new Agent({
+      id: `${this.id}-sub-${Math.random().toString(36).slice(2, 8)}`,
+      role: childRole,
+      modelProfile: childProfile.defaultModel ?? 'coding',
+      profile: childProfile,
+      config: this.config,
+      workspace: this.workspace,
+      events: this.events,
+      cwd: this.cwd,
+      context: new ContextEngine(this.config, this.cwd),
+      budget: this.budget,
+      abortSignal: this.abortSignal,
+      readCache: this.readCache,
+    });
+    const task: Task = {
+      id: `sub-${Math.random().toString(36).slice(2, 10)}`,
+      title: `Subtask: ${prompt.split('\n')[0].slice(0, 60)}`,
+      description: prompt,
+      role: childRole,
+      status: 'pending',
+      priority: 1,
+      dependencies: [],
+      acceptanceCriteria: [],
+      attempts: [],
+      createdAt: Date.now(),
+    };
+    const result = await child.run(task);
+    return `[completed=${result.success}] ${result.summary} (${result.tokensUsed} tokens, ${result.durationMs}ms)`;
+  }
+
   private async runMoolCall(tc: ToolCall): Promise<void> {
     if (this.abortSignal?.aborted) return;
     if (this.budget) {
@@ -366,6 +452,7 @@ export class Agent {
       agentId: this.id,
       abortSignal: this.abortSignal,
       readCache: this.readCache,
+      spawnSubagent: (prompt: string, opts?: { role?: string }) => this.spawnSubagent(prompt, opts?.role),
     };
     const { output, error, durationMs } = await executeTool(tc.function.name, args, ctx, this.tools);
     const result: ToolResult = {
@@ -474,6 +561,8 @@ export class Agent {
   }
 
   private finish(task: Task, success: boolean, summary: string): AgentResult {
+    this.mcpClose?.();
+    this.mcpClose = undefined;
     this.budget?.recordAgentEnd();
     if (success) {
       for (const pattern of this.seenPatterns) {

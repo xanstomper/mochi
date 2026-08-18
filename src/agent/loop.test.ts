@@ -74,4 +74,44 @@ describe('Agent', () => {
     expect(readFileSync(resolve(dir, 'hello.txt'), 'utf8')).toBe('hello mochi');
     await fake.close();
   });
+
+  it('plan mode vetoes edits and returns a plan without writing', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-plan-'));
+    const fake = await startFakeOpenAI([
+      {
+        content: 'I will change the file.',
+        toolCalls: [
+          {
+            id: '1',
+            type: 'function',
+            function: { name: 'write', arguments: JSON.stringify({ path: resolve(dir, 'plan.txt'), content: 'should not appear' }) },
+          },
+        ],
+        finishReason: 'tool_calls',
+      },
+    ]);
+    const config = makeConfig(dir, fake.url);
+    const workspace = new Workspace(dir, '.mochi');
+    workspace.ensure();
+    const context = new ContextEngine(config, dir);
+    context.setGoal('plan a change');
+    const task = createTask('Plan change', 'Produce a plan to modify plan.txt.');
+
+    const agent = new Agent({
+      id: 'plan-agent',
+      role: 'coder',
+      config,
+      workspace,
+      events: new EventBus(),
+      cwd: dir,
+      context,
+      planMode: true,
+    });
+
+    const result = await agent.run(task);
+    // Plan mode must not change any file.
+    expect(result.success).toBe(true);
+    expect(() => readFileSync(resolve(dir, 'plan.txt'), 'utf8')).toThrow();
+    await fake.close();
+  });
 });

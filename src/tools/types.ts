@@ -18,6 +18,9 @@ export interface ToolContext {
   abortSignal?: AbortSignal;
   /** Per-run file read cache so unchanged files are only read from disk once. */
   readCache?: ReadCache;
+  /** Injected by the agent loop: spawn a child agent on a subtask and resolve
+   *  to its summary. Returns a short result string (summary, success, tokens). */
+  spawnSubagent?: (prompt: string, opts?: { role?: string }) => Promise<string>;
 }
 
 export interface Tool {
