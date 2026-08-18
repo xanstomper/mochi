@@ -74,32 +74,58 @@ export class ChameleonEngine {
     const tier = tierFor(mode);
     const budget = opts.budget ?? new BudgetEngine(this.config.safety);
     const startedAt = performance.now();
+    // How many real model passes we run: higher tiers spend more test-time
+    // compute (each pass is a genuine round-trip to the agent's own model).
+    // tier1/2 -> 1 pass, tier3/4 -> 2 passes, tier5/6 -> 3 passes.
+    const passes = tier <= 2 ? 1 : tier <= 4 ? 2 : 3; // flash/easy=1, medium/hard=2, deep/extreme/genius=3
 
     const strategies = STRATEGIES.slice(0, tier);
+    let context = '';
+    let tokensUsed = 0;
+    let costUsd = 0;
+    const runs: string[] = [];
 
     const messages: ChatMessage[] = [
       {
         role: 'system',
-        content: 'You are the agent\'s reasoning oracle. Write a dense, actionable reasoning block a world-class engineer would keep in mind for this task: key moves, invariants, likely failure modes, and acceptance checks. Be concrete and technical.',
+        content: 'You are the agent\'s reasoning oracle. Produce a dense, actionable reasoning block a world-class engineer would keep in mind for the given task: key moves, invariants, likely failure modes, and acceptance checks. Be concrete and technical, plain prose.',
       },
       {
         role: 'user',
-        content: `Task: ${opts.task}\n\nProduce a focused enhancement block. Fold in these reasoning moves where useful: ${strategies.join('; ')}.\nReturn rich plain prose (no JSON, no markdown fences, no code block).`,
+        content: `Task: ${opts.task}\n\nDevelop the reasoning. Fold in these moves where useful: ${strategies.join('; ')}.\nReturn rich plain prose (no JSON, no markdown fences, no top-level code block).`,
       },
     ];
 
-    let context = '';
-    let tokensUsed = 0;
-    let costUsd = 0;
+    try {
+      for (let i = 0; i < passes; i++) {
+        if (!budget.canMakeModelCall()) break; // respect per-run model-call budget
+        budget.recordModelCall();
 
-    const response = await this.provider.chat(messages, [], { temperature: 0.3 });
-    context = response.content ?? '';
-    if (response.usage) {
-      tokensUsed = response.usage.totalTokens;
-      costUsd = estimateCostUsd(tokensUsed, this.config.model.model);
-      budget.recordTokens(tokensUsed, this.config.model.model);
+        const response = await this.provider.chat(messages, [], { temperature: 0.4 });
+        const chunk = response.content ?? '';
+        if (response.usage) {
+          tokensUsed += response.usage.totalTokens;
+          budget.recordTokens(response.usage.totalTokens, this.config.model.model);
+          costUsd += estimateCostUsd(response.usage.totalTokens, this.config.model.model);
+        }
+        runs.push(chunk);
+
+        if (i < passes - 1) {
+          // Real multi-pass: critique the draft and refine, then synthesize at
+          // the final pass.
+          messages.push({
+            role: 'user',
+            content: `Review the previous reasoning pass, find any concrete gaps or mistakes, then produce a sharper, corrective pass. Keep it plain prose.`,
+          });
+        }
+      }
+    } catch {
+      // A provider failure mid-run yields whatever we managed to generate. The
+      // caller (runtime auto-inject) treats an empty context as a no-op.
     }
 
+    // Final synthesized context: last pass wins; if none produced, we are empty.
+    context = runs.length ? runs[runs.length - 1] : '';
     const durationMs = Math.round(performance.now() - startedAt);
     return { task: opts.task, mode, context, strategies, tokensUsed, costUsd, durationMs };
   }

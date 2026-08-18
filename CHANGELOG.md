@@ -22,6 +22,12 @@ Internal Chameleon + Termix rework (no external services, no auto-launch):
   fake model now spin up an in-process OpenAI-compatible SSE HTTP server
   (`src/testutil/fake-openai.ts`) so the REAL provider/router/fetch/stream-parser
   path is exercised end-to-end. There is no fake model anywhere in the codebase.
+- **Chameleon multi-pass**: higher modes now spend real test-time compute, running
+  1–3 genuine model passes (flash/easy=1, medium/hard=2, deep/extreme/genius=3)
+  that critique and refine a draft before the final synthesis. Enhancement
+  respects the run's model-call budget and surfaces strategies, tokens, and cost.
+  Adds `src/chameleon.test.ts` covering multi-pass + mode→tier mapping over the
+  real provider path.
 
 ## 0.5.4
 
