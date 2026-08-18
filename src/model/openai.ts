@@ -1,5 +1,6 @@
 import { StreamParser } from '../stream-parser.js';
 import type { ChatMessage, ModelResponse, StreamChunk, ToolDefinition } from '../types.js';
+import { describeModelError } from '../utils/http-error.js';
 
 export interface ProviderConfig {
   baseUrl: string;
@@ -70,8 +71,8 @@ export function createOpenAIProvider(config: ProviderConfig) {
     });
 
     if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw new Error(`Model request failed (${res.status}): ${text.slice(0, 500)}`);
+      const body = await res.text().catch(() => '');
+      throw describeModelError(res.status, body, model, 'opencode/OpenAI-compatible');
     }
 
     if (!res.body) throw new Error('No response body from model');

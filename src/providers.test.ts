@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { PROVIDERS, providerById, providerByName } from './providers.js';
 import { setProvider, login } from './model-manager.js';
-import { createProvider } from './model/router.js';
+import { createProvider, resolveProvider } from './model/router.js';
 import type { MochiConfig } from './types.js';
 
 const base = {
@@ -66,5 +66,20 @@ describe('providers', () => {
     const cfg = login({ ...base }, 'groq', 'gk');
     expect(cfg.model.provider).toBe('groq');
     expect(cfg.model.model).toBe('llama-3.3-70b-versatile');
+  });
+
+  it('strips the opencode.ai prefix to a bare model id (API uses bare ids)', () => {
+    const cfg = resolveProvider({ provider: 'opencode-zen', baseUrl: 'https://opencode.ai/zen/v1', model: 'opencode/deepseek-v4-flash-free' });
+    expect(cfg.model).toBe('deepseek-v4-flash-free');
+  });
+
+  it('keeps non-opencode model ids unchanged (freeinference, openai, ...)', () => {
+    for (const c of [
+      { provider: 'freeinference', baseUrl: 'https://freeinference.org/v1', model: 'deepseek-v4-flash' },
+      { provider: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+      { provider: 'together', baseUrl: 'https://api.together.xyz/v1', model: 'meta-llama/Llama-3.3-70B' },
+    ]) {
+      expect(resolveProvider(c as never).model).toBe(c.model);
+    }
   });
 });

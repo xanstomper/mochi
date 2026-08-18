@@ -71,21 +71,37 @@ export function loadConfig(overrides: Partial<MochiConfig> = {}, configPath?: st
   const user = readJsonFile(configPath ?? resolve(cfg.configDir, 'config.json'));
   if (user) merge(cfg as unknown as Record<string, unknown>, user);
 
-  // provider-specific API keys
-  if (!cfg.model.apiKey) {
-    const p = cfg.model.provider.toLowerCase();
-    if (p.includes('opencode-zen')) cfg.model.apiKey = process.env.OPENCODE_ZEN_API_KEY;
-    else if (p.includes('opencode-go')) cfg.model.apiKey = process.env.OPENCODE_GO_API_KEY;
-    else if (p.includes('openai')) cfg.model.apiKey = process.env.OPENAI_API_KEY;
-    else if (p.includes('anthropic')) cfg.model.apiKey = process.env.ANTHROPIC_API_KEY;
-    else if (p.includes('gemini') || p.includes('google')) cfg.model.apiKey = process.env.GEMINI_API_KEY;
-    else if (p.includes('deepseek')) cfg.model.apiKey = process.env.DEEPSEEK_API_KEY;
-    else if (p.includes('openrouter')) cfg.model.apiKey = process.env.OPENROUTER_API_KEY;
-    else if (p.includes('groq')) cfg.model.apiKey = process.env.GROQ_API_KEY;
-    else if (p.includes('mistral')) cfg.model.apiKey = process.env.MISTRAL_API_KEY;
-    else if (p.includes('xai') || p.includes('grok')) cfg.model.apiKey = process.env.XAI_API_KEY;
-    else if (p.includes('freeinference')) cfg.model.apiKey = process.env.FREEINFERENCE_API_KEY || cfg.model.apiKey;
+  function isPlaceholderKey(key: string | undefined): boolean {
+    if (!key) return true;
+    const k = key.trim().toLowerCase();
+    return k.length < 6 ||
+      k === 'hi' || k.startsWith('your') || k.startsWith('sk-your') ||
+      k.includes('your-key') || k.includes('set me') || k.startsWith('<');
   }
+
+ // provider-specific API keys: prefer the real env key, and only fall back to a
+ // config-file key when it is not a placeholder (so `apiKey: "hi"` in
+ // config.json does not silently override a real FREEINFERENCE_API_KEY).
+const configuredKey = cfg.model.apiKey && !isPlaceholderKey(cfg.model.apiKey) ? cfg.model.apiKey : undefined;
+const p = cfg.model.provider.toLowerCase();
+const envKeyMap: Record<string, string> = {
+  'opencode-zen': 'OPENCODE_ZEN_API_KEY',
+  'opencode-go': 'OPENCODE_GO_API_KEY',
+  'openai': 'OPENAI_API_KEY',
+  'anthropic': 'ANTHROPIC_API_KEY',
+  'gemini': 'GEMINI_API_KEY',
+  'google': 'GEMINI_API_KEY',
+  'deepseek': 'DEEPSEEK_API_KEY',
+  'openrouter': 'OPENROUTER_API_KEY',
+  'groq': 'GROQ_API_KEY',
+  'mistral': 'MISTRAL_API_KEY',
+  'freeinference': 'FREEINFERENCE_API_KEY',
+  'xai': 'XAI_API_KEY',
+};
+const envKey = Object.entries(envKeyMap).find(([needle]) => p.includes(needle))?.[1];
+if (envKey) {
+  cfg.model.apiKey = process.env[envKey] || configuredKey;
+}
 
   merge(cfg as unknown as Record<string, unknown>, { model: envModelConfig() });
   if (process.env.MOCHI_PROJECT_DIR) cfg.projectDir = process.env.MOCHI_PROJECT_DIR;

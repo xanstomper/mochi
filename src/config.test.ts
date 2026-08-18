@@ -14,4 +14,35 @@ describe('loadConfig', () => {
     expect(cfg.model.provider).toBe('openai');
     expect(cfg.model.model).toBe('gpt-4o');
   });
+
+  it('ignores a placeholder apiKey in a config file in favor of the real env key', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { resolve } = await import('node:path');
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-cfg-'));
+    const cfgPath = resolve(dir, 'config.json');
+    writeFileSync(cfgPath, JSON.stringify({ model: { provider: 'freeinference', model: 'deepseek-v4-flash', apiKey: 'hi' } }));
+    const prior = process.env.FREEINFERENCE_API_KEY;
+    process.env.FREEINFERENCE_API_KEY = 'sk-real-xxxxxxxx';
+    try {
+      const cfg = loadConfig({}, cfgPath);
+      expect(cfg.model.apiKey).toBe('sk-real-xxxxxxxx'); // env wins over "hi"
+      expect(cfg.model.apiKey).not.toBe('hi');
+    } finally {
+      if (prior === undefined) delete process.env.FREEINFERENCE_API_KEY;
+      else process.env.FREEINFERENCE_API_KEY = prior;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a real config apiKey when no env key is present', () => {
+    const prior = process.env.FREEINFERENCE_API_KEY;
+    delete process.env.FREEINFERENCE_API_KEY;
+    try {
+      const cfg = loadConfig({ model: { provider: 'freeinference', model: 'deepseek-v4-flash', apiKey: 'sk-real-1234567890abcdef' } });
+      expect(cfg.model.apiKey).toBe('sk-real-1234567890abcdef');
+    } finally {
+      if (prior !== undefined) process.env.FREEINFERENCE_API_KEY = prior;
+    }
+  });
 });

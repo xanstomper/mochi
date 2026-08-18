@@ -1,5 +1,6 @@
 import type { ChatMessage, ModelResponse, StreamChunk, ToolDefinition } from '../types.js';
 import type { ProviderConfig } from './router.js';
+import { describeModelError } from '../utils/http-error.js';
 
 export function createGeminiProvider(config: ProviderConfig) {
   const base = config.baseUrl.replace(/\/$/, '');
@@ -28,7 +29,7 @@ export function createGeminiProvider(config: ProviderConfig) {
     });
     if (!res.ok) {
       const text = await res.text();
-      throw new Error(`Gemini request failed (${res.status}): ${text.slice(0, 400)}`);
+      throw describeModelError(res.status, text, model, 'Gemini');
     }
     const data: any = await res.json();
     const candidates = data.candidates ?? [];

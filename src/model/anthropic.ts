@@ -1,5 +1,6 @@
 import type { ChatMessage, ModelResponse, StreamChunk, ToolDefinition } from '../types.js';
 import type { ProviderConfig } from './router.js';
+import { describeModelError } from '../utils/http-error.js';
 
 export function createAnthropicProvider(config: ProviderConfig) {
   const base = config.baseUrl.replace(/\/$/, '');
@@ -31,7 +32,7 @@ export function createAnthropicProvider(config: ProviderConfig) {
     });
     if (!res.ok) {
       const text = await res.text();
-      throw new Error(`Anthropic request failed (${res.status}): ${text.slice(0, 400)}`);
+      throw describeModelError(res.status, text, model, 'Anthropic');
     }
     const data: any = await res.json();
     const blocks = data.content ?? [];
