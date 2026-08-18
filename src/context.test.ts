@@ -1,0 +1,44 @@
+import { describe, it, expect } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { ContextEngine } from './context.js';
+import type { MochiConfig } from './types.js';
+
+function cfg(): MochiConfig {
+  return {
+    model: { provider: 'mock', model: 'mock' },
+    safety: { contextBudgetTokens: 100000, maxIterations: 50, maxRuntimeMinutes: 10, mode: 'safe' as const },
+  } as MochiConfig;
+}
+
+const NO_TOOLS = [];
+
+describe('ContextEngine project-rule + memory caching', () => {
+  it('loads project rules from AGENTS.md and reflects edits on fingerprint change', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mochi-ctx-'));
+    mkdirSync(join(dir, '.mochi', 'memory'), { recursive: true });
+    const rulesPath = join(dir, 'AGENTS.md');
+    writeFileSync(rulesPath, '# v1 rules');
+
+    const engine = new ContextEngine(cfg(), dir);
+    const p1 = engine.buildPacket(NO_TOOLS);
+    expect(p1.systemPrompt).toContain('# v1 rules');
+
+    // Same fingerprint: cached, no change observed.
+    const p2 = engine.buildPacket(NO_TOOLS);
+    expect(p2.systemPrompt).toContain('# v1 rules');
+
+    // Edit the file (size/mtime change) then confirm the cache refreshes.
+    writeFileSync(rulesPath, '# v2 rules after edit');
+    const p3 = engine.buildPacket(NO_TOOLS);
+    expect(p3.systemPrompt).toContain('# v2 rules after edit');
+  });
+
+  it('returns empty rules when no candidate file exists', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mochi-ctx-'));
+    const engine = new ContextEngine(cfg(), dir);
+    const p = engine.buildPacket(NO_TOOLS);
+    expect(p.systemPrompt).not.toContain('Project rules');
+  });
+});
