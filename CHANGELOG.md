@@ -1,5 +1,24 @@
 # Mochi Changelog
 
+## 0.5.4
+
+External tool integrations:
+
+- **Lazy Chameleon** (synthetic-parameter reasoner):
+  - `mochi enhance "<task>" [--mode <mode>]` shells out to the `chameleon` CLI
+    and prints the dense reasoning context it synthesizes (offline by default).
+  - New `chameleon` agent tool in the tool bus: the model can generate
+    enhancement context before tackling a hard task.
+  - Auto-inject: `mochi goal --enhance "<task>"` (and `--mode`) runs
+    `chameleon enhance` first and injects the result as a leading system
+    message into every task's agent context, so a cheap model reasons like a
+    bigger one on hard goals. Config `{ "enhance": { "enabled": true } }` also
+    opts in without a flag. Graceful no-op when `chameleon` isn't installed.
+- **Termix** (lightweight GTK3+VTE multi-terminal): `mochi termix` launches it,
+  `--install` clones the repo to `~/termix` first; Mochi seeds
+  `~/.config/termix/config.json` with a compatible default. No Electron.
+- Adds `chameleon` tool schema test.
+
 ## 0.5.3
 
 - `bench/task.mjs` (`npm run bench:task`): runs a real multi-turn agent task and

@@ -11,8 +11,9 @@ import { gitTool } from './git.js';
 import { inspectTool } from './inspect.js';
 import { memoryTool } from './memory.js';
 import { symbolTools } from './symbol.js';
+import { chameleonTool } from './chameleon.js';
 
-const ALL_TOOLS: Tool[] = [readTool, writeTool, editTool, deleteTool, shellTool, searchTool, globTool, gitTool, inspectTool, memoryTool, ...symbolTools];
+const ALL_TOOLS: Tool[] = [readTool, writeTool, editTool, deleteTool, shellTool, searchTool, globTool, gitTool, inspectTool, memoryTool, ...symbolTools, chameleonTool];
 
 export function buildTools(config: MochiConfig, allowed?: string[]): Map<string, Tool> {
   const map = new Map<string, Tool>();

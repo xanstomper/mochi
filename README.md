@@ -272,6 +272,44 @@ Long agent runs also avoid repeated disk work: project rules and project memory 
 fingerprint-cached per iteration (see `src/context.ts`), so a multi-hundred-iteration task
 isn't re-reading `MOCHI.md`/`AGENTS.md`/memory from disk on every model call.
 
+## Integrations
+
+### Lazy Chameleon (synthetic-parameter reasoning)
+
+Turns a flash-class model into a frontier-grade reasoner for hard goals by
+generating dense "synthetic parameter" reasoning context, injected into the
+agent prompt. Requires the `chameleon` CLI on PATH (or `CHAMELEON_BIN`).
+
+```bash
+# Print enhancement context for a task
+mochi enhance "Build a Redis rate limiter" --mode hard
+
+# Auto-inject enhancement before solving a hard goal
+mochi goal --enhance "finish the auth flow" --mode auto
+
+# The agent can also call the `chameleon` tool directly while working.
+```
+
+Opt in without a flag via config:
+
+```json
+{ "enhance": { "enabled": true, "mode": "auto" } }
+```
+
+Graceful no-op when Chameleon isn't installed.
+
+### Termix (lightweight terminal)
+
+Launch the Termix GTK3+VTE multi-terminal (tabs, splits, regex search, no
+Electron) as Mochi's visual companion terminal:
+
+```bash
+mochi termix            # launch if present
+mochi termix --install  # clone to ~/termix first, then launch
+```
+
+Mochi seeds `~/.config/termix/config.json` with a compatible dark default.
+
 ## Symbol graph backends
 
 `get_function` / `find_callers` / `type_hierarchy` index the repo into an

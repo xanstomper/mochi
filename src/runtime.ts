@@ -89,17 +89,17 @@ export class Runtime {
     return new RetrievalEngine(this.cwd).inspect(query);
   }
 
-  async goal(objective: string, constraints: string[] = []): Promise<string> {
+  async goal(objective: string, constraints: string[] = [], opts?: { enhance?: boolean; enhanceMode?: string }): Promise<string> {
     const goal = await this.goals.createGoal(objective, constraints);
     const tasks = await this.goals.decompose(goal);
-    const result = await this.goals.runGoal(goal, tasks);
+    const result = await this.goals.runGoal(goal, tasks, await this.enhancedCtx(objective, opts));
     this.recordUsage(goal.objective, result);
     return result.summary;
   }
 
-  async team(objective: string): Promise<string> {
+  async team(objective: string, opts?: { enhance?: boolean; enhanceMode?: string }): Promise<string> {
     // For now, team mode is a goal with multiple concurrent agents handled by the scheduler.
-    return this.goal(objective);
+    return this.goal(objective, [], opts);
   }
 
   async plan(objective: string): Promise<string> {
@@ -125,6 +125,24 @@ export class Runtime {
     this.recordUsage(pending.objective, result);
     this.workspace.writeJson('state/pending-goal.json', {});
     return result.summary;
+  }
+
+  /** When the caller opts into it (or config has enhance enabled) and a
+   *  Chameleon binary is available, generate synthetic-parameter reasoning
+   *  context and fold it into the goal's constraints so it feeds every task's
+   *  context. Falls back gracefully to bitflip when unavailable. */
+  private async enhancedCtx(objective: string, opts?: { enhance?: boolean; enhanceMode?: string }): Promise<string[]> {
+    const cfg = (this.config as unknown as Record<string, unknown>).enhance;
+    const enabled = opts?.enhance ?? (cfg ? (cfg as { enabled?: boolean }).enabled : false);
+    if (!enabled) return [];
+    try {
+      const { enhance, chameleonAvailable } = await import('./chameleon.js');
+      if (!(await chameleonAvailable())) return [];
+      const ctx = await enhance({ task: objective, mode: opts?.enhanceMode ?? 'auto', offline: true });
+      return [`Lazy Chameleon synthetic-parameter reasoning context:\n${String(ctx).slice(0, 12000)}`];
+    } catch {
+      return [];
+    }
   }
 
   async runPrompt(prompt: string): Promise<string> {

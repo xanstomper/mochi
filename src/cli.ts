@@ -7,7 +7,7 @@ import type { MochiConfig } from './types.js';
 // Resolve the version from package.json when running from source; when Mochi is
 // compiled to a standalone binary there is no package.json next to it, so fall
 // back to the constant (kept in sync with package.json at build time).
-let VERSION = '0.5.3';
+let VERSION = '0.5.4';
 try {
   const pkgPath = resolve(dirname(fileURLToPath(import.meta.url)), '../package.json');
   VERSION = JSON.parse(readFileSync(pkgPath, 'utf8')).version;
@@ -16,7 +16,7 @@ try {
 }
 
 const BOOLEAN_FLAGS = new Set([
-  'p', 'print', 'auto', 'quiet', 'q', 'verbose', 'v', 'debug', 'h', 'help', 'version',
+  'p', 'print', 'auto', 'quiet', 'q', 'verbose', 'v', 'debug', 'h', 'help', 'version', 'offline', 'enhance', 'install',
 ]);
 
 function parseArgs(argv: string[]): { flags: Record<string, string | boolean>; positional: string[] } {
@@ -92,6 +92,8 @@ Usage:
   mochi memory
   mochi inspect "<query>"
   mochi speculate "<question>"
+  mochi enhance "<task>" [--mode <mode>]
+  mochi termix [--install]
   mochi tui
   mochi perf
 
@@ -184,13 +186,13 @@ async function main() {
         return;
       }
     }
-    console.log(await runtime.goal(objective));
+    console.log(await runtime.goal(objective, [], { enhance: flags.enhance === true, enhanceMode: flags.mode ? String(flags.mode) : undefined }));
     return;
   }
   if (first === 'team') {
     const objective = positional.slice(1).join(' ');
     if (!objective) { console.error('Usage: mochi team "<objective>"'); process.exit(1); }
-    console.log(await runtime.team(objective));
+    console.log(await runtime.team(objective, { enhance: flags.enhance === true, enhanceMode: flags.mode ? String(flags.mode) : undefined }));
     return;
   }
   if (first === 'plan') {
@@ -340,6 +342,36 @@ async function main() {
   if (first === 'usage') { console.log(runtime.usage.summary()); return; }
   if (first === 'known-good') { console.log(await runtime.recordGood()); return; }
   if (first === 'check') { console.log(await runtime.knownGood()); return; }
+  if (first === 'enhance') {
+    const question = positional.slice(1).join(' ');
+    if (!question) { console.error('Usage: mochi enhance "<task>" [--mode <mode>]'); process.exit(1); }
+    const { enhance, chameleonAvailable } = await import('./chameleon.js');
+    if (!(await chameleonAvailable())) {
+      console.error('chameleon CLI not found on PATH (install Lazy Chameleon or set CHAMELEON_BIN).');
+      process.exit(1);
+    }
+    const mode = flags.mode ? String(flags.mode) : 'auto';
+    try {
+      const context = await enhance({ task: question, mode, offline: flags.offline === false ? false : true });
+      console.log(`# Lazy Chameleon enhancement (mode ${mode})\n`);
+      console.log(context);
+    } catch (e) {
+      console.error('Enhance failed:', e instanceof Error ? e.message : e);
+      process.exit(1);
+    }
+    return;
+  }
+  if (first === 'termix') {
+    const { termix } = await import('./termix.js');
+    const r = await termix({
+      mode: flags.install ? 'install' : 'launch',
+      autoInstall: flags.install ? true : false,
+    });
+    if (r.launched) console.log(r.message);
+    else console.error(r.message);
+    process.exitCode = r.launched ? 0 : 1;
+    return;
+  }
   if (first === 'speculate') {
     const question = positional.slice(1).join(' ');
     if (!question) { console.error('Usage: mochi speculate "<question>"'); process.exit(1); }

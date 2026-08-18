@@ -129,7 +129,7 @@ Return ONLY the JSON array, no markdown.`;
     return tasks;
   }
 
-  async runGoal(goal: Goal, tasks?: Task[]): Promise<GoalResult> {
+  async runGoal(goal: Goal, tasks?: Task[], extraContext: string[] = []): Promise<GoalResult> {
     const goalHook = await this.hooks.runBefore('before_goal', { goal: goal.id });
     if (!goalHook.allowed) {
       return {
@@ -170,7 +170,7 @@ Return ONLY the JSON array, no markdown.`;
           return;
         }
         scheduler.start(task.id);
-        const result = await this.runTask(goal, task, abortController.signal, budget);
+        const result = await this.runTask(goal, task, abortController.signal, budget, extraContext);
         this.goalStats.tokens += result.tokensUsed;
         this.goalStats.duration += result.durationMs;
         if (!result.success) {
@@ -229,7 +229,7 @@ Return ONLY the JSON array, no markdown.`;
     return `agent-${task.role}-${task.id.slice(0, 8)}`;
   }
 
-  private async runTask(goal: Goal, task: Task, abortSignal: AbortSignal, budget: BudgetEngine) {
+  private async runTask(goal: Goal, task: Task, abortSignal: AbortSignal, budget: BudgetEngine, extraContext: string[] = []) {
     const profile = this.profiles.get(task.role) ?? this.profiles.get('coder')!;
     const modelProfile = profile.defaultModel ?? 'coding';
     const context = new ContextEngine(this.config, this.cwd);
@@ -240,6 +240,11 @@ Return ONLY the JSON array, no markdown.`;
       completedTasks: this.workspace.loadState().completedTasks,
     });
     context.addMessage({ role: 'user', content: `Task: ${task.title}\n${task.description}\nAcceptance criteria: ${task.acceptanceCriteria.join('; ')}` });
+    // Optional synthetic-parameter context (e.g. Lazy Chameleon enhancement) is
+    // injected as a leading system message so the agent reasons within it.
+    for (const extra of extraContext) {
+      if (extra && extra.trim()) context.addMessage({ role: 'system', content: extra });
+    }
 
     const agentHook = await this.hooks.runBefore('before_agent', { agent: this.agentId(task), task: task.id });
     if (!agentHook.allowed) {
