@@ -13,13 +13,14 @@ import { memoryTool } from './memory.js';
 import { symbolTools } from './symbol.js';
 import { chameleonTool } from './chameleon.js';
 import { todoTool } from './todo.js';
+import { skillTool } from './skill.js';
 
-const ALL_TOOLS: Tool[] = [readTool, writeTool, editTool, deleteTool, shellTool, searchTool, globTool, gitTool, inspectTool, memoryTool, todoTool, ...symbolTools, chameleonTool];
+const ALL_TOOLS: Tool[] = [readTool, writeTool, editTool, deleteTool, shellTool, searchTool, globTool, gitTool, inspectTool, memoryTool, todoTool, skillTool, ...symbolTools, chameleonTool];
 
 export function buildTools(config: MochiConfig, allowed?: string[]): Map<string, Tool> {
   const map = new Map<string, Tool>();
   for (const tool of ALL_TOOLS) {
-    if (!allowed || allowed.includes(tool.def.name) || tool.def.name === 'todo') {
+    if (!allowed || allowed.includes(tool.def.name) || tool.def.name === 'todo' || tool.def.name === 'skill') {
       map.set(tool.def.name, tool);
     }
   }

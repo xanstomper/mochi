@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { MemoryStore } from './memory.js';
 import type { MemoryEntry } from './memory.js';
 import { selectRelevant } from './relevance.js';
+import { loadProjectSkills, formatSkillsForPrompt } from './skills.js';
 import type { ChatMessage, MochiConfig, RepoInfo, Task, ToolDefinition } from './types.js';
 
 const CANDIDATE_RULES = ['MOCHI.md', 'mochi.md', 'AGENTS.md', 'CLAUDE.md'];
@@ -56,6 +57,8 @@ export class ContextEngine {
   private memoryCache = '';
   private memoryFingerprint = '';
   private memoryQuery = '';
+  private skillsCache = '';
+  private skillsFingerprint = '';
 
   constructor(config: MochiConfig, projectRoot: string) {
     this.budget = config.safety.contextBudgetTokens;
@@ -145,6 +148,22 @@ export class ContextEngine {
     return this.rulesCache;
   }
 
+  /** Advertise project skills in the system prompt so the model knows to load
+   *  them. Recomputes only when the skills dir fingerprint changes. */
+  private skills(): string {
+    const skillsDir = resolve(this.projectRoot, '.mochi', 'skills');
+    const fp = fingerprint(skillsDir);
+    if (fp === '' || fp === this.skillsFingerprint) return this.skillsCache;
+    try {
+      this.skillsFingerprint = fp;
+      const { skills } = loadProjectSkills(this.projectRoot);
+      this.skillsCache = formatSkillsForPrompt(skills);
+    } catch {
+      this.skillsCache = '';
+    }
+    return this.skillsCache;
+  }
+
   private buildSystemPrompt(tools: ToolDefinition[], repo?: RepoInfo, task?: Task): string {
     const rules = this.loadProjectRules();
     const query = task ? `${task.title} ${task.description}` : this.state.goal ?? '';
@@ -202,7 +221,7 @@ Repository:
    - Honor project rules, memory, and conventions. If the repo has an established pattern, follow it.
    - Carry forward what previous steps decided and learned; avoid re-deriving settled conclusions.
 
-${rules ? rules + '\n' : ''}${memory ? `Project memory:\n${memory}\n` : ''}${repoInfo}
+${rules ? rules + '\n' : ''}${memory ? `Project memory:\n${memory}\n` : ''}${repoInfo}${this.skills()}
 `.trim();
   }
 
