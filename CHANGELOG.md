@@ -1,5 +1,20 @@
 # Mochi Changelog
 
+## 0.5.3
+
+- `bench/task.mjs` (`npm run bench:task`): runs a real multi-turn agent task and
+  reports total tokens, cost, and wall time (the per-task efficiency number, vs.
+  the cold-start microbench). Verified live: writing+running a small module took
+  ~43k tokens / ~$0.006 / ~37s on the configured provider.
+- Budget-phase-aware model routing in the agent loop: when the budget drops to
+  `cheap`/`verify`, later iterations fall back to the `fast` model profile
+  (cheaper/leaner) while critical early reasoning stays on the full profile.
+  Providers are cached per profile so they aren't rebuilt every iteration.
+- Compact-first context floor: the agent rolls up old turns (semantic ledger)
+  as soon as the live transcript exceeds 60% of the context budget, so long runs
+  stay lean regardless of iteration cadence. Adds `ContextEngine.estimateTokens()`.
+- Adds tests for `estimateTokens()`.
+
 ## 0.5.2
 
 - Adds `npm run build:bin`: compiles the CLI into a standalone native executable

@@ -52,6 +52,7 @@ export class Agent {
   private tools: Map<string, import('../tools/types.js').Tool>;
   private toolDefs: ToolDefinition[];
   private provider: ReturnType<typeof createProvider>;
+  private providers = new Map<ModelProfile, ReturnType<typeof createProvider>>();
   private tokensUsed = 0;
   private startTime = 0;
   private errors: string[] = [];
@@ -116,6 +117,15 @@ export class Agent {
 
       if (i > 0 && i % 8 === 0) this.context.compact();
 
+      // Compact-first context floor: once the live transcript grows past a
+      // fraction of the context budget, roll up old turns so the packet never
+      // balloons. This is measured before building the packet so short runs are
+      // untouched but long runs stay lean regardless of iteration cadence.
+      const floor = this.config.safety.contextBudgetTokens * 0.6;
+      if (i > 0 && this.context.estimateTokens() > floor) {
+        this.context.compact();
+      }
+
       const pulse = this.pulse(i, task);
       if (pulse.abort) {
         return this.finish(task, false, pulse.reason ?? 'Pulse abort');
@@ -131,7 +141,7 @@ export class Agent {
       }
       this.emitMessage('system', `Tokens used: ${packet.usedTokens}/${packet.budgetTokens}`);
 
-      const activeProvider = this.budget?.shouldUseCheaperModel() ? createProvider(this.config.model, 'fast') : this.provider;
+      const activeProvider = this.pickProvider();
       let response;
       const gatherStream = async (messages: any) => {
         const chunks: import('../types.js').StreamChunk[] = [];
@@ -229,6 +239,28 @@ export class Agent {
 
     this.addAttempt(task, 'exhausted', [], 'failure', `Reached maximum iterations (${maxIterations})`);
     return this.finish(task, false, `Reached maximum iterations (${maxIterations})`);
+  }
+
+  /**
+   * Budget-phase-aware model selection. When the budget drops to the "cheap"
+   * or "verify" phase we fall back to the `fast` model profile for the rest of
+   * the run (cheaper/lighter), which keeps critical reasoning on the full
+   * profile while trimming spend on later, lower-risk iterations. Providers are
+   * cached per profile so we don't rebuild them on every iteration.
+   */
+  private pickProvider(): ReturnType<typeof createProvider> {
+    const base = this.profile.defaultModel ?? 'coding';
+    let profile: ModelProfile = base;
+    if (this.budget && this.budget.shouldUseCheaperModel()) {
+      profile = 'fast';
+    }
+    if (profile === base) return this.provider;
+    let p = this.providers.get(profile);
+    if (!p) {
+      p = createProvider(this.config.model, profile);
+      this.providers.set(profile, p);
+    }
+    return p;
   }
 
   private isReadOnly(name: string): boolean {

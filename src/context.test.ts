@@ -41,4 +41,14 @@ describe('ContextEngine project-rule + memory caching', () => {
     const p = engine.buildPacket(NO_TOOLS);
     expect(p.systemPrompt).not.toContain('Project rules');
   });
+
+  it('estimates growing transcript tokens', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mochi-ctx-'));
+    const engine = new ContextEngine(cfg(), dir);
+    const before = engine.estimateTokens();
+    engine.addMessage({ role: 'user', content: 'hello world this is a message'.repeat(50) });
+    const after = engine.estimateTokens();
+    expect(after).toBeGreaterThan(before);
+    expect(after).toBeGreaterThan(0);
+  });
 });

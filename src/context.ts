@@ -89,6 +89,14 @@ export class ContextEngine {
     this.messages.push(message);
   }
 
+  /** Rough size of the current transcript in approximate tokens (excludes the
+   *  per-request system/state/tool headers, which are re-added separately). */
+  estimateTokens(): number {
+    let sum = 0;
+    for (const m of this.messages) sum += approxTokens(JSON.stringify(m));
+    return sum;
+  }
+
   private loadMemory(): string {
     const fp = fingerprint(resolve(this.projectRoot, '.mochi', 'project.md'));
     if (fp !== this.memoryFingerprint) {

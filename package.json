@@ -1,6 +1,6 @@
 {
   "name": "@mochi/agent",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Minimal, fast, autonomous coding agent for the terminal.",
   "type": "module",
   "bin": {
@@ -21,6 +21,7 @@
     "test": "vitest run",
     "bench": "node bench/startup.mjs",
     "bench:efficiency": "node bench/efficiency.mjs",
+    "bench:task": "node bench/task.mjs",
     "typecheck": "tsc --noEmit"
   },
   "engines": {
