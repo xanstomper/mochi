@@ -3,6 +3,7 @@ import { resolve, relative, dirname } from 'node:path';
 import ts from 'typescript';
 import { createRequire } from 'node:module';
 import type { DatabaseSync } from 'node:sqlite';
+import { mutationGeneration } from './tools/fs-signal.js';
 
 // Keep Node's "SQLite is experimental" noise out of the TUI.
 process.removeAllListeners?.('warning');
@@ -173,26 +174,74 @@ function tsIndexFile(file: string, rel: string, database: DatabaseSync): void {
   } catch { /* per-file error: skip; tsc backend still works */ }
 }
 
-// Per-cwd in-memory SQLite databases (WAL-backed symbol/relation tables).
-const dbCache = new Map<string, DatabaseSync>();
+// Per-cwd in-memory SQLite databases (symbol/relation tables) kept fresh via a
+// generation fence: any write/edit/delete bumps the workspace mutation
+// generation (see tools/fs-signal.ts), and here we re-index only the files whose
+// (mtime,size) fingerprint changed — never the whole tree. So read tools
+// (`get_function`, `find_callers`, `type_hierarchy`) always reflect the latest
+// edits without a full O(repo) re-walk on every symbol read.
+interface CachedDb {
+  database: DatabaseSync;
+  gen: number;
+  files: Map<string, string>; // abs path -> "mtimeMs:size"
+}
+const dbCache = new Map<string, CachedDb>();
+
+function fingerprint(full: string): string {
+  try {
+    const st = statSync(full);
+    return `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return '';
+  }
+}
 
 function db(cwd: string): DatabaseSync {
-  let database = dbCache.get(cwd);
-  if (database) return database;
+  const cached = dbCache.get(cwd);
+  const gen = mutationGeneration();
+  if (cached && cached.gen === gen && cached.files.size > 0) return cached.database;
+
   const DatabaseSyncCtor = DatabaseSyncType();
-  database = new DatabaseSyncCtor(':memory:');
-  database.exec('CREATE TABLE IF NOT EXISTS symbols(name TEXT,line INTEGER,kind TEXT,file TEXT,rel TEXT,body TEXT);');
-  database.exec('CREATE INDEX IF NOT EXISTS idx_sym ON symbols(name);');
-  database.exec('CREATE TABLE IF NOT EXISTS relations(src TEXT,dst TEXT,kind TEXT,file TEXT);');
-  database.exec('CREATE INDEX IF NOT EXISTS idx_rel_src ON relations(src);');
-  database.exec('CREATE INDEX IF NOT EXISTS idx_rel_dst ON relations(dst);');
-  const useTs = getParserBackend() === 'tree-sitter';
-  for (const file of walkFiles(cwd, cwd)) {
-    const rel = relative(cwd, file).replace(/\\/g, '/');
-    if (useTs) tsIndexFile(file, rel, database);
-    else indexFile(file, rel, database);
+  const database = cached?.database ?? (() => {
+    const db = new DatabaseSyncCtor(':memory:');
+    db.exec('CREATE TABLE IF NOT EXISTS symbols(name TEXT,line INTEGER,kind TEXT,file TEXT,rel TEXT,body TEXT);');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_sym ON symbols(name);');
+    db.exec('CREATE TABLE IF NOT EXISTS relations(src TEXT,dst TEXT,kind TEXT,file TEXT);');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_rel_src ON relations(src);');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_rel_dst ON relations(dst);');
+    return db;
+  })();
+
+  const files = cached?.files ?? new Map<string, string>();
+  const prevRels = new Set(files.keys());
+  const useImpl = getParserBackend() === 'tree-sitter';
+  const delSym = database.prepare('DELETE FROM symbols WHERE file=?');
+  const delRel = database.prepare('DELETE FROM relations WHERE file=?');
+
+  for (const full of walkFiles(cwd, cwd)) {
+    const fp = fingerprint(full);
+    if (fp && fp === files.get(full)) {
+      prevRels.delete(full); // unchanged and still present
+      continue;
+    }
+    // Changed or new file: drop any stale rows and re-index just this one.
+    prevRels.delete(full); // it is present -- do not let it be purged below
+    files.delete(full);
+    if (cached) { delSym.run(full); delRel.run(full); }
+    if (fp) {
+      const rel = relative(cwd, full).replace(/\\/g, '/');
+      if (useImpl) tsIndexFile(full, rel, database);
+      else indexFile(full, rel, database);
+      files.set(full, fp);
+    }
   }
-  dbCache.set(cwd, database);
+  // Files that existed in the cache but no longer walk: purge their rows.
+  for (const gone of prevRels) {
+    if (cached) { delSym.run(gone); delRel.run(gone); }
+    files.delete(gone);
+  }
+
+  dbCache.set(cwd, { database, gen, files });
   return database;
 }
 
@@ -213,6 +262,7 @@ export function findCallers(cwd: string, name: string): string {
     declSet.add(`${r.file}:${r.line}`);
   }
   const hits: string[] = [];
+  const seen = new Set<string>();
   for (const full of walkFiles(cwd, cwd)) {
     if (!EXT.has(full.slice(full.lastIndexOf('.')))) continue;
     let lines: string[];
@@ -220,7 +270,7 @@ export function findCallers(cwd: string, name: string): string {
     for (let i = 0; i < lines.length; i++) {
       if (q.test(lines[i])) {
         const hit = `${relative(cwd, full).replace(/\\/g, '/')}:${i + 1}: ${lines[i].trim()}`;
-        if (!declSet.has(`${full}:${i + 1}`) && !hits.includes(hit)) hits.push(hit);
+        if (!declSet.has(`${full}:${i + 1}`) && !seen.has(hit)) { seen.add(hit); hits.push(hit); }
         if (hits.length >= 12) return hits.join('\n');
       }
     }
