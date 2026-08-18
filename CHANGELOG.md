@@ -28,6 +28,11 @@ Internal Chameleon + Termix rework (no external services, no auto-launch):
   respects the run's model-call budget and surfaces strategies, tokens, and cost.
   Adds `src/chameleon.test.ts` covering multi-pass + mode→tier mapping over the
   real provider path.
+- **Stronger agent system prompt**: a clear identity plus eight operating
+  principles (small reviewable changes, verify everything, move with intent,
+  safety, budget-aware, correctness under hard problems, and learning from the
+  codebase). Live-verified: Mochi made a minimal surgical fix and ran the test
+  to confirm it passed.
 
 ## 0.5.4
 
