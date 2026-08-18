@@ -7,7 +7,7 @@ import type { MochiConfig } from './types.js';
 
 function cfg(): MochiConfig {
   return {
-    model: { provider: 'mock', model: 'mock' },
+    model: { provider: 'openai', baseUrl: 'http://127.0.0.1:1/v1', model: 'fake-model' },
     safety: { contextBudgetTokens: 100000, maxIterations: 50, maxRuntimeMinutes: 10, mode: 'safe' as const },
   } as MochiConfig;
 }

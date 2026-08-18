@@ -1,38 +1,46 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { SpeculativeEngine } from './speculative.js';
 import { BudgetEngine } from './budget.js';
+import { startFakeOpenAI, type FakeOpenAI } from './testutil/fake-openai.js';
 import type { MochiConfig } from './types.js';
 
-const config = {
-  model: {
-    provider: 'mock',
-    baseUrl: '',
-    model: 'mock',
-    mockResponses: [
-      { content: '["inspect types","reproduce with logging","check dependencies"]' },
-      { content: 'Inspect the inferred types and fix the caller.' },
-      { content: 'Add logging and reproduce the failure.' },
-      { content: 'Check dependency versions and imports.' },
-      { content: '{"index":1,"reason":"Type inspection finds the root cause most directly."}' },
-    ],
-  },
-  safety: {
-    mode: 'auto',
-    commandTimeoutSeconds: 10,
-    maxIterations: 10,
-    maxRuntimeMinutes: 10,
-    maxConcurrentAgents: 2,
-    contextBudgetTokens: 1000,
-    maxModelCalls: 10,
-  },
-  permissions: { read: true, write: true, shell: true, network: true, gitDestructive: false },
-  telemetry: false,
-  projectDir: '.mochi',
-  configDir: '/tmp',
-  quiet: true,
-  verbose: false,
-  debug: false,
-} as unknown as MochiConfig;
+let fake: FakeOpenAI;
+let config: MochiConfig;
+
+beforeAll(async () => {
+  fake = await startFakeOpenAI([
+    { content: '["inspect types","reproduce with logging","check dependencies"]', completionTokens: 20 },
+    { content: 'Inspect the inferred types and fix the caller.', completionTokens: 12 },
+    { content: 'Add logging and reproduce the failure.', completionTokens: 12 },
+    { content: 'Check dependency versions and imports.', completionTokens: 12 },
+    { content: '{"index":1,"reason":"Type inspection finds the root cause most directly."}', completionTokens: 24 },
+  ]);
+  config = {
+    model: {
+      provider: 'openai',
+      baseUrl: fake.url,
+      model: 'fake-model',
+    },
+    safety: {
+      mode: 'auto',
+      commandTimeoutSeconds: 10,
+      maxIterations: 10,
+      maxRuntimeMinutes: 10,
+      maxConcurrentAgents: 2,
+      contextBudgetTokens: 1000,
+      maxModelCalls: 10,
+    },
+    permissions: { read: true, write: true, shell: true, network: true, gitDestructive: false },
+    telemetry: false,
+    projectDir: '.mochi',
+    configDir: '/tmp',
+    quiet: true,
+    verbose: false,
+    debug: false,
+  } as unknown as MochiConfig;
+});
+
+afterAll(async () => { await fake.close(); });
 
 describe('SpeculativeEngine', () => {
   it('generates strategies, evaluates them, and selects the best candidate', async () => {

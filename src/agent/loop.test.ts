@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
@@ -7,28 +7,15 @@ import { ContextEngine } from '../context.js';
 import { EventBus } from '../events.js';
 import { Workspace } from '../workspace.js';
 import { createTask } from '../goals/task.js';
-import type { MochiConfig, ModelResponse } from '../types.js';
+import { startFakeOpenAI } from '../testutil/fake-openai.js';
+import type { MochiConfig } from '../types.js';
 
-function makeConfig(dir: string): MochiConfig {
+function makeConfig(dir: string, url: string): MochiConfig {
   return {
     model: {
-      provider: 'mock',
-      baseUrl: '',
-      model: 'mock',
-      mockResponses: [
-        {
-          content: 'I will write the file now.',
-          toolCalls: [
-            {
-              id: '1',
-              type: 'function',
-              function: { name: 'write', arguments: JSON.stringify({ path: resolve(dir, 'hello.txt'), content: 'hello mochi' }) },
-            },
-          ],
-          finishReason: 'tool_calls',
-        },
-        { content: 'Done.', finishReason: 'stop' },
-      ] as unknown as ModelResponse['toolCalls'],
+      provider: 'openai',
+      baseUrl: url,
+      model: 'fake-model',
     },
     safety: {
       mode: 'auto',
@@ -51,7 +38,21 @@ function makeConfig(dir: string): MochiConfig {
 describe('Agent', () => {
   it('runs a task and writes a file', async () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-agent-'));
-    const config = makeConfig(dir);
+    const fake = await startFakeOpenAI([
+      {
+        content: 'I will write the file now.',
+        toolCalls: [
+          {
+            id: '1',
+            type: 'function',
+            function: { name: 'write', arguments: JSON.stringify({ path: resolve(dir, 'hello.txt'), content: 'hello mochi' }) },
+          },
+        ],
+        finishReason: 'tool_calls',
+      },
+      { content: 'Done.', finishReason: 'stop', completionTokens: 8 },
+    ]);
+    const config = makeConfig(dir, fake.url);
     const workspace = new Workspace(dir, '.mochi');
     workspace.ensure();
     const context = new ContextEngine(config, dir);
@@ -71,5 +72,6 @@ describe('Agent', () => {
     const result = await agent.run(task);
     expect(result.success).toBe(true);
     expect(readFileSync(resolve(dir, 'hello.txt'), 'utf8')).toBe('hello mochi');
+    await fake.close();
   });
 });

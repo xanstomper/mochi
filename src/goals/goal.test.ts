@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
@@ -6,46 +6,54 @@ import { GoalEngine } from './goal.js';
 import { Workspace } from '../workspace.js';
 import { EventBus } from '../events.js';
 import { createTask } from './task.js';
+import { startFakeOpenAI, type FakeOpenAI } from '../testutil/fake-openai.js';
 import type { MochiConfig } from '../types.js';
 
-const config = {
-  model: {
-    provider: 'mock',
-    baseUrl: '',
-    model: 'mock',
-    mockResponses: [
-      {
-        content: 'Writing file.',
-        toolCalls: [
-          {
-            id: '1',
-            type: 'function',
-            function: { name: 'write', arguments: JSON.stringify({ path: 'generated.txt', content: 'mochi goal' }) },
-          },
-        ],
-        finishReason: 'tool_calls',
-      },
-      { content: 'Done.', finishReason: 'stop' },
-      { content: '{"status":"PASS","passed":["file created","tests passed"],"failed":[],"recommendation":"Complete"}', finishReason: 'stop' },
-    ],
-  },
-  safety: {
-    mode: 'auto',
-    commandTimeoutSeconds: 10,
-    maxIterations: 10,
-    maxRuntimeMinutes: 10,
-    maxConcurrentAgents: 2,
-    contextBudgetTokens: 4000,
-    maxModelCalls: 10,
-  },
-  permissions: { read: true, write: true, shell: true, network: true, gitDestructive: false },
-  telemetry: false,
-  projectDir: '.mochi',
-  configDir: '/tmp',
-  quiet: true,
-  verbose: false,
-  debug: false,
-} as unknown as MochiConfig;
+let fake: FakeOpenAI;
+let config: MochiConfig;
+
+beforeAll(async () => {
+  fake = await startFakeOpenAI([
+    {
+      content: 'Writing file.',
+      toolCalls: [
+        {
+          id: '1',
+          type: 'function',
+          function: { name: 'write', arguments: JSON.stringify({ path: 'generated.txt', content: 'mochi goal' }) },
+        },
+      ],
+      finishReason: 'tool_calls',
+    },
+    { content: 'Done.', finishReason: 'stop', completionTokens: 8 },
+    { content: '{"status":"PASS","passed":["file created","tests passed"],"failed":[],"recommendation":"Complete"}', finishReason: 'stop', completionTokens: 40 },
+  ]);
+  config = {
+    model: {
+      provider: 'openai',
+      baseUrl: fake.url,
+      model: 'fake-model',
+    },
+    safety: {
+      mode: 'auto',
+      commandTimeoutSeconds: 10,
+      maxIterations: 10,
+      maxRuntimeMinutes: 10,
+      maxConcurrentAgents: 2,
+      contextBudgetTokens: 4000,
+      maxModelCalls: 10,
+    },
+    permissions: { read: true, write: true, shell: true, network: true, gitDestructive: false },
+    telemetry: false,
+    projectDir: '.mochi',
+    configDir: '/tmp',
+    quiet: true,
+    verbose: false,
+    debug: false,
+  } as unknown as MochiConfig;
+});
+
+afterAll(async () => { await fake.close(); });
 
 describe('GoalEngine', () => {
   it('runs a task through the builder, verifier, and scheduler', async () => {

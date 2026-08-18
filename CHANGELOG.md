@@ -17,10 +17,11 @@ Internal Chameleon + Termix rework (no external services, no auto-launch):
   agent sessions against the configured provider. `--coms` (default) lets the
   sessions COMMUNICATE over a shared broadcast channel; `--sep` keeps them
   fully isolated. Result line reports steps/tokens/cost per session.
-- **Mock provider is gated to the test harness.** `createProvider` now refuses
-  `provider: 'mock'` unless an explicit `mockResponses` fixture array is present
-  (only ever set in unit tests). Leaving via env/CLI/config `provider: mock`
-  throws rather than silently running on a fake model.
+- **Mock provider removed entirely.** `src/model/mock.ts` is gone and
+  `createProvider` no longer has a mock branch. Tests that previously drove a
+  fake model now spin up an in-process OpenAI-compatible SSE HTTP server
+  (`src/testutil/fake-openai.ts`) so the REAL provider/router/fetch/stream-parser
+  path is exercised end-to-end. There is no fake model anywhere in the codebase.
 
 ## 0.5.4
 

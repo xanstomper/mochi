@@ -24,7 +24,7 @@ describe('UsageStore', () => {
   it('persists across instances', () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-usage-'));
     const a = new UsageStore(dir);
-    a.record('models/mock', 'task one', { tokensOut: 10, modelCalls: 1 });
+    a.record('models/fake-model', 'task one', { tokensOut: 10, modelCalls: 1 });
     const b = new UsageStore(dir);
     expect(b.total().modelCalls).toBe(1);
   });

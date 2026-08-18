@@ -3,7 +3,6 @@ import { PROVIDERS } from '../providers.js';
 import { createOpenAIProvider, type ProviderConfig } from './openai.js';
 import { createAnthropicProvider } from './anthropic.js';
 import { createGeminiProvider } from './gemini.js';
-import { createMockProvider } from './mock.js';
 export type { ProviderConfig } from './openai.js';
 
 const ALIASES: Record<string, { baseUrl: string; defaultModel: string }> = {
@@ -35,18 +34,6 @@ export function selectModel(config: ModelConfig, profile: ModelProfile): string 
 }
 
 export function createProvider(config: ModelConfig, profile?: ModelProfile) {
-  // The mock provider exists ONLY for the test harness. A production/CLI config
-  // can never reach it: it requires both `provider: 'mock'` AND an explicit
-  // `mockResponses` fixture array (only ever present in unit tests). If someone
-  // sets provider=mock through an env var or config file, they get a clear error
-  // instead of a silent mock.
-  const mockResponses = (config as unknown as Record<string, unknown>).mockResponses as any;
-  if (config.provider === 'mock') {
-    if (!Array.isArray(mockResponses)) {
-      throw new Error('provider "mock" is test-only and requires an explicit mockResponses array; refusing to use it in production config paths.');
-    }
-    return createMockProvider(mockResponses ?? []);
-  }
   // Resolve aliates
   const name = config.provider.toLowerCase();
   const kind = kindOf(config.provider);
