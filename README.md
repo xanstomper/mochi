@@ -301,23 +301,26 @@ Enhance uses the same provider the agent loop uses, so a failed provider call
 is a graceful no-op. Modes map to how many reasoning strategies run:
 `flash<turbo<easy<medium<hard<deep<extreme/genius`.
 
-### Termix (multi-session workbench)
+### Termix (multi-session split)
 
-Termix is Mochi's baked-in multi-session workbench — a UI command, not an
-auto-launcher and not a third-party app. It opens N parallel agent sessions
-against the configured provider and you choose whether they talk or stay silent:
+Termix **splits your current session into N split windows** — all in-process
+agent sessions on the same configured provider. It opens nothing extra: no
+external app, no auto-launched process, no extra terminal. Run it and choose how
+many panes, then whether the panes **communicate** or **separate**:
 
 ```bash
-mochi termix "Refactor the auth module"           # communicate (default)
-mochi termix "Refactor the auth module" --coms      # sessions share a broadcast channel
-mochi termix "Refactor the auth module" --sep       # sessions fully isolated
-mochi termix "..." --sessions 5                     # 5 parallel sessions
+mochi termix                 # interactive: pick task, pane count, and mode
+mochi termix "dedupe JSON"   # pick pane count + mode, task given
+mochi termix "fix auth" --sessions 3 --coms   # 3 panes, shared broadcast channel
+mochi termix "fix auth" --sep                # panes fully isolated
 ```
 
-Each session takes a distinct angle (architect, adversarial reviewer, SRE, ...).
-`--coms` sessions write `<broadcast>` notes onto a shared channel that peers
-read between passes; `--sep` sessions work from first principles. The run prints
-steps/tokens/cost per session and a project-wide total.
+- `--coms` — panes share a rolling `<broadcast>` channel and see each other's
+  conclusions between passes.
+- `--sep` — each pane works from first principles, fully isolated.
+
+Each pane takes a distinct angle (architect, adversarial reviewer, SRE, ...).
+The run prints each pane's steps/tokens/cost plus the whole split's total.
 
 ## Symbol graph backends
 

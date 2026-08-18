@@ -7,7 +7,7 @@ import type { MochiConfig } from './types.js';
 // Resolve the version from package.json when running from source; when Mochi is
 // compiled to a standalone binary there is no package.json next to it, so fall
 // back to the constant (kept in sync with package.json at build time).
-let VERSION = '0.5.4';
+let VERSION = '0.5.5';
 try {
   const pkgPath = resolve(dirname(fileURLToPath(import.meta.url)), '../package.json');
   VERSION = JSON.parse(readFileSync(pkgPath, 'utf8')).version;
@@ -357,20 +357,60 @@ async function main() {
     return;
   }
   if (first === 'termix') {
-    // Baked-in multi-session workbench (a UI command, never auto-launched).
+    // "Split this session into N split windows." No external app, no extra
+    // process, no auto-launch: all panes are in-process agent sessions on the
+    // same configured provider. The user chooses how many splits, then whether
+    // they communicate over a shared channel or stay separate.
     const { termix } = await import('./termix.js');
-    const task = (flags.task ? String(flags.task) : positional.slice(1).join(' ')).trim()
-      || 'Solve the stated objective and report concrete progress.';
-    const mode = String(flags.mode ?? '') as 'communicate' | 'separate';
-    const requested = mode === 'communicate' || mode === 'separate'
-      ? mode
-      : (flags.coms ? 'communicate' : (flags.sep ? 'separate' : 'communicate'));
-    const sessions = flags.sessions ? Number(flags.sessions) : 3;
-    const run = await termix({ mode: requested, sessions, task, config: runtime.config });
-    console.log(`# Termix ${run.mode} run — ${run.sessions} sessions\n`);
+    const isTTY = Boolean(process.stdin.isTTY);
+
+    // Helper: read a single line from stdin (only used when a TTY is present).
+    const ask = (prompt: string, fallback: string): Promise<string> =>
+      new Promise((resolveInput) => {
+        if (!isTTY) return resolveInput(fallback);
+        process.stdout.write(prompt);
+        let acc = '';
+        const onData = (c: Buffer) => {
+          acc += c.toString('utf8');
+          if (acc.includes('\n')) {
+            process.stdin.off('data', onData);
+            process.stdin.pause();
+            resolveInput(acc.trim());
+          }
+        };
+        process.stdin.on('data', onData);
+        process.stdin.resume();
+      });
+
+    let task = (flags.task ? String(flags.task) : positional.slice(1).join(' ')).trim();
+    if (!task) {
+      task = (await ask('Split the current task or enter a new one: ', 'Tackle the goal with parallel angles.')).trim();
+      if (!task) task = 'Tackle the current goal with parallel angles.';
+    }
+
+    const sessions = flags.sessions
+      ? Number(flags.sessions)
+      : Number((await ask('How many split panes? (default 2): ', '2')).trim() || 2);
+
+    const coms = flags.coms === true || flags.mode === 'communicate';
+    const sep = flags.sep === true || flags.mode === 'separate';
+    let mode: 'communicate' | 'separate';
+    if (coms && !sep) mode = 'communicate';
+    else if (sep && !coms) mode = 'separate';
+    else if (!coms && !sep) {
+      const chosen = (await ask('Let the split panes communicate (c) or stay separate (s)? [c/s]: ', 'c')).toLowerCase();
+      mode = chosen.startsWith('s') ? 'separate' : 'communicate';
+    } else {
+      mode = 'communicate';
+    }
+
+    const run = await termix({ mode, sessions, task, config: runtime.config });
+    console.log(`\n# Termix: split into ${run.sessions} panes (${mode})\n`);
     for (const s of run.results) {
-      const status = s.error ? `ERROR: ${s.error}` : 'ok';
-      console.log(`[${s.index}] ${s.role}  steps=${s.steps} tokens=${s.tokensUsed} $${s.costUsd.toFixed(4)} (${s.durationMs}ms) — ${status}`);
+      const status = s.error ? `error: ${s.error}` : 'ok';
+      console.log(`┌─ pane ${s.index + 1} · ${s.role}`);
+      console.log(`│ steps=${s.steps} tokens=${s.tokensUsed} $${s.costUsd.toFixed(4)} (${s.durationMs}ms) — ${status}`);
+      console.log(`└ ${s.output.replace(/\s+/g, ' ').slice(0, 220)}`);
     }
     console.log(`\nTotal: ${run.tokensUsed} tokens, $${run.costUsd.toFixed(4)} (${run.durationMs}ms)`);
     process.exitCode = run.results.some((s) => s.error) ? 1 : 0;
