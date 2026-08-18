@@ -243,6 +243,20 @@ mochi perf --chunks 10000
 
 No high-frequency event causes full-state propagation or full-tree rendering.
 
+### Standalone native binary (no runtime required)
+
+For deployments where even Node/Bun aren't guaranteed, compile Mochi into a single
+self-contained executable with Bun. The binary embeds the runtime and all modules;
+no `node_modules`, `package.json`, or runtime install is needed:
+
+```bash
+npm run build:bin   # produces ./dist/mochi-bin (bun required)
+./dist/mochi-bin --version
+```
+
+The binary is fully functional end to end (agent loop, tools, config, workspaces), so
+it can be dropped onto a low-spec or headless box without a JS runtime.
+
 ### Cold-start / memory footprint
 
 Mochi is a Node 22 TypeScript harness with **zero runtime dependencies**. Cold start and peak

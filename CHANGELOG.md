@@ -1,5 +1,18 @@
 # Mochi Changelog
 
+## 0.5.2
+
+- Adds `npm run build:bin`: compiles the CLI into a standalone native executable
+  (`dist/mochi-bin`) via Bun. No Node, `node_modules`, or `package.json` needed at
+  runtime; the binary is fully functional end to end (agent loop, tools, config,
+  workspaces).
+- `src/cli.ts` no longer depends on reading `package.json` for the version when
+  compiled; it falls back to a baked-in constant so the binary works from any CWD.
+- `bench/efficiency.mjs` now also measures the native binary when present.
+- OpenAI-compatible tool schema payloads are memoized via a `WeakMap`, so the
+  per-request tool schema JSON (+ allocations) is built once per tools array
+  instead of on every streaming call.
+
 ## 0.5.1
 
 Efficiency pass:

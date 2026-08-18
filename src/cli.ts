@@ -1,9 +1,19 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { MochiConfig } from './types.js';
 
-const pkg = JSON.parse(readFileSync(resolve(new URL('.', import.meta.url).pathname, '../package.json'), 'utf8'));
+// Resolve the version from package.json when running from source; when Mochi is
+// compiled to a standalone binary there is no package.json next to it, so fall
+// back to the constant (kept in sync with package.json at build time).
+let VERSION = '0.5.2';
+try {
+  const pkgPath = resolve(dirname(fileURLToPath(import.meta.url)), '../package.json');
+  VERSION = JSON.parse(readFileSync(pkgPath, 'utf8')).version;
+} catch {
+  /* compiled binary: use the baked-in default */
+}
 
 const BOOLEAN_FLAGS = new Set([
   'p', 'print', 'auto', 'quiet', 'q', 'verbose', 'v', 'debug', 'h', 'help', 'version',
@@ -67,7 +77,7 @@ function configFromFlags(flags: Record<string, string | boolean>): Partial<Mochi
 }
 
 function printHelp() {
-  console.log(`Mochi ${pkg.version} — minimal autonomous coding agent
+  console.log(`Mochi ${VERSION} — minimal autonomous coding agent
 
 Usage:
   mochi [options] ["prompt"]
@@ -110,7 +120,7 @@ async function main() {
   const { flags, positional } = parseArgs(process.argv.slice(2));
 
   if (flags.h || flags.help) { printHelp(); return; }
-  if (flags.version) { console.log(pkg.version); return; }
+  if (flags.version) { console.log(VERSION); return; }
 
   const cwd = process.cwd();
   const configOverrides = configFromFlags(flags);

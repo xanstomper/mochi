@@ -1,6 +1,6 @@
 {
   "name": "@mochi/agent",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Minimal, fast, autonomous coding agent for the terminal.",
   "type": "module",
   "bin": {
@@ -16,6 +16,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && chmod +x dist/cli.js",
+    "build:bin": "bun build src/cli.ts --compile --outfile dist/mochi-bin --target=bun",
     "dev": "tsx src/cli.ts",
     "test": "vitest run",
     "bench": "node bench/startup.mjs",

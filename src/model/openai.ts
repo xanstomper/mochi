@@ -23,6 +23,20 @@ function toOpenAITools(tools: ToolDefinition[]) {
   }));
 }
 
+// The tool schema list is stable for a given tools array across an agent run.
+// Memoize the serialized payload so steady-state costs (JSON stringify + alloc)
+// aren't repeated on every streaming request.
+const toolSchemaCache = new WeakMap<ToolDefinition[], ReturnType<typeof toOpenAITools>>();
+
+function openAITools(tools: ToolDefinition[]) {
+  let cached = toolSchemaCache.get(tools);
+  if (!cached) {
+    cached = toOpenAITools(tools);
+    toolSchemaCache.set(tools, cached);
+  }
+  return cached;
+}
+
 export function createOpenAIProvider(config: ProviderConfig) {
   const base = config.baseUrl.replace(/\/$/, '');
   const model = config.model;
@@ -41,7 +55,7 @@ export function createOpenAIProvider(config: ProviderConfig) {
         return { role: m.role, content: m.content ?? '' };
       }),
       stream: true,
-      ...(tools.length ? { tools: toOpenAITools(tools), tool_choice: 'auto' } : {}),
+      ...(tools.length ? { tools: openAITools(tools), tool_choice: 'auto' } : {}),
       ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
       ...(options?.maxTokens !== undefined ? { max_tokens: options.maxTokens } : {}),
     };

@@ -50,7 +50,8 @@ function bench(target) {
   return { label, avgTime, avgMem, ok: times.length > 0 };
 }
 
-// Default targets: Mochi CLI under Node and Bun (when available).
+// Default targets: Mochi CLI under Node and Bun (when available), plus the
+// standalone native binary when it has been built (npm run build:bin).
 const targets = [];
 
 let nodeCmd;
@@ -60,6 +61,11 @@ if (nodeCmd) targets.push({ label: 'mochi (node)', cmd: 'node', args: ['dist/cli
 let bunCmd;
 try { bunCmd = spawnSync('bun', ['--version'], { stdio: ['ignore', 'ignore', 'ignore'] }).status === 0 ? 'bun' : null; } catch { bunCmd = null; }
 if (bunCmd) targets.push({ label: 'mochi (bun)', cmd: 'bun', args: ['dist/cli.js', ...VERSION_ARG] });
+
+// Native binary built by `npm run build:bin`.
+const nativeBin = resolve(root, 'dist/mochi-bin');
+const hasNative = spawnSync('test', ['-x', nativeBin], { stdio: 'ignore' }).status === 0;
+if (hasNative) targets.push({ label: 'mochi (bin)', cmd: nativeBin, args: ['--version'] });
 
 // Optional comparator from env, e.g. MOCHI_COMPARE=.../jcode
 if (process.env.MOCHI_COMPARE) {
