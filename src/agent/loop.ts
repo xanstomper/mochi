@@ -28,6 +28,7 @@ export interface AgentOptions {
   context: ContextEngine;
   budget?: BudgetEngine;
   abortSignal?: AbortSignal;
+  readCache?: ReadCache;
 }
 
 export interface AgentResult {
@@ -67,7 +68,7 @@ export class Agent {
   private fileChanged = false;
   private lastSig = '';
   private sigStreak = 0;
-  private readCache: ReadCache = new Map();
+  private readCache: ReadCache;
 
   constructor(opts: AgentOptions) {
     this.id = opts.id ?? randomUUID();
@@ -79,6 +80,10 @@ export class Agent {
     this.context = opts.context;
     this.budget = opts.budget;
     this.abortSignal = opts.abortSignal;
+    // A shared run-wide cache is preferred so parallel agents that read the same
+    // source file don't each re-read it from disk; the cache is keyed on
+    // (mtime, size) so any edit automatically misses, keeping it safe to share.
+    this.readCache = opts.readCache ?? new Map();
     const profileService = new AgentProfileService(this.workspace.dir);
     this.profile = opts.profile ?? profileService.get(opts.role) ?? profileService.get('coder')!;
     this.tools = buildTools(this.config, this.profile.tools);

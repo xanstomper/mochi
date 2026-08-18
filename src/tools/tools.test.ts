@@ -77,6 +77,27 @@ describe('read cache', () => {
     const afterWrite = await readTool.execute({ path: p }, c);
     expect(afterWrite).toContain('v2 content');
   });
+
+  it('shares one cache across agent contexts so hot files are read once', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-'));
+    const p = resolve(dir, 'shared.ts');
+    writeFileSync(p, 'shared content\n');
+    const shared: ReadCache = new Map();
+
+    // Two different agents (distinct agentId) share the run-wide cache.
+    const agentA = { ...ctx(dir), agentId: 'agent-a', readCache: shared };
+    const agentB = { ...ctx(dir), agentId: 'agent-b', readCache: shared };
+
+    const outA = await readTool.execute({ path: p }, agentA);
+    expect(outA).toContain('shared content');
+    expect(shared.size).toBe(1);
+
+    // Agent B's read of the same unchanged file must hit the shared entry, not
+    // grow the cache (i.e. not re-read the disk) -- cross-agent dedup.
+    const outB = await readTool.execute({ path: p }, agentB);
+    expect(outB).toContain('shared content');
+    expect(shared.size).toBe(1);
+  });
 });
 
 describe('structure-aware search', () => {

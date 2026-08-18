@@ -14,6 +14,7 @@ import { HookManager } from '../hooks.js';
 import { classifyOneShot } from '../one-shot.js';
 import { consolidate } from '../consolidate.js';
 import { resolve } from 'node:path';
+import type { ReadCache } from '../tools/types.js';
 
 export interface GoalResult {
   success: boolean;
@@ -179,6 +180,10 @@ Return ONLY the JSON array, no markdown.`;
     const scheduler = new TaskScheduler(allTasks, this.events);
     const maxConcurrency = this.config.safety.maxConcurrentAgents;
     const abortController = new AbortController();
+    // One read cache shared by every agent in the run (dedup on (mtime,size),
+    // so edits still invalidate). Parallel agents re-reading the same hot
+    // source files now hit memory instead of disk repeatedly.
+    const readCache: ReadCache = new Map();
 
     while (!scheduler.isDone()) {
       const ready = scheduler.readyTasks();
@@ -197,7 +202,7 @@ Return ONLY the JSON array, no markdown.`;
       // neither had been marked running yet. Incremental starting lets a just-
       // started task's scope gate the ones after it (and lets an unscoped task
       // exclude concurrent writers), preventing parallel write-write races.
-      const launched = this.startReadyBatch(scheduler, goal, abortController.signal, budget, extraContext, maxConcurrency, verifier);
+      const launched = this.startReadyBatch(scheduler, goal, abortController.signal, budget, extraContext, maxConcurrency, verifier, readCache);
       if (launched.length === 0) {
         // Nothing could launch (all ready tasks conflict with the running set);
         // wait for an in-flight agent to finish instead of spinning.
@@ -263,6 +268,7 @@ Return ONLY the JSON array, no markdown.`;
     extraContext: string[],
     maxConcurrency: number,
     verifier: VerifierEngine,
+    readCache: ReadCache,
   ): Promise<void>[] {
     const launched: Promise<void>[] = [];
     while (launched.length < maxConcurrency && !scheduler.isDone()) {
@@ -272,7 +278,7 @@ Return ONLY the JSON array, no markdown.`;
       const taskHook = this.hooks.runBefore('before_task', { task: task.id });
       // Start synchronously so the conflict detector sees this task's scope.
       scheduler.start(task.id);
-      launched.push(this.runOne(scheduler, goal, task, abortSignal, budget, extraContext, taskHook, verifier));
+      launched.push(this.runOne(scheduler, goal, task, abortSignal, budget, extraContext, taskHook, verifier, readCache));
     }
     return launched;
   }
@@ -287,13 +293,14 @@ Return ONLY the JSON array, no markdown.`;
     extraContext: string[],
     taskHook: Promise<{ allowed: boolean }>,
     verifier: VerifierEngine,
+    readCache: ReadCache,
   ): Promise<void> {
     const hook = await taskHook;
     if (!hook.allowed) {
       scheduler.fail(task.id, 'Task blocked by before_task hook', this.agentId(task));
       return;
     }
-    const result = await this.runTask(goal, task, abortSignal, budget, extraContext);
+    const result = await this.runTask(goal, task, abortSignal, budget, extraContext, readCache);
     this.goalStats.tokens += result.tokensUsed;
     this.goalStats.duration += result.durationMs;
     if (!result.success) {
@@ -315,7 +322,7 @@ Return ONLY the JSON array, no markdown.`;
     await this.hooks.runAfter('after_task', { task: task.id });
   }
 
-  private async runTask(goal: Goal, task: Task, abortSignal: AbortSignal, budget: BudgetEngine, extraContext: string[] = []) {
+  private async runTask(goal: Goal, task: Task, abortSignal: AbortSignal, budget: BudgetEngine, extraContext: string[] = [], readCache?: ReadCache) {
     const profile = this.profiles.get(task.role) ?? this.profiles.get('coder')!;
     const modelProfile = profile.defaultModel ?? 'coding';
     const context = new ContextEngine(this.config, this.cwd);
@@ -356,6 +363,7 @@ Return ONLY the JSON array, no markdown.`;
       context,
       abortSignal,
       budget,
+      readCache,
     });
 
     const result = await agent.run(task);
