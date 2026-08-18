@@ -86,9 +86,9 @@ Project: `.mochi/config.json`
   },
   "safety": {
     "mode": "ask",
-    "maxIterations": 50,
+    "maxIterations": 8,
     "maxConcurrentAgents": 3,
-    "contextBudgetTokens": 120000,
+    "contextBudgetTokens": 32000,
     "maxTokens": 150000,
     "maxCostUsd": 2,
     "maxModelCalls": 100,

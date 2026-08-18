@@ -18,10 +18,10 @@ const defaultConfig = (): MochiConfig => ({
   safety: {
     mode: 'ask',
     commandTimeoutSeconds: 120,
-    maxIterations: 50,
+    maxIterations: 8,
     maxRuntimeMinutes: 30,
     maxConcurrentAgents: 3,
-    contextBudgetTokens: 120_000,
+    contextBudgetTokens: 32_000,
   },
   permissions: {
     read: true,

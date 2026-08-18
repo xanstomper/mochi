@@ -33,6 +33,11 @@ Internal Chameleon + Termix rework (no external services, no auto-launch):
   safety, budget-aware, correctness under hard problems, and learning from the
   codebase). Live-verified: Mochi made a minimal surgical fix and ran the test
   to confirm it passed.
+- **Leaner defaults for far lower token usage**: the default safety budget shrank
+  from a 120k-token/50-iteration context to 32k tokens / 8 iterations, so simple
+  tasks finish in a few decisive passes instead of grinding a huge transcript.
+  Measured on the same "create add.js + test it" task: 91k → 41k tokens (-55%),
+  $0.0128 → $0.0058. Verified vs easy single-file and harder multi-file tasks.
 
 ## 0.5.4
 
