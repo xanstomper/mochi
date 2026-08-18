@@ -43,11 +43,51 @@ export function stripHtml(text: string): string {
 }
 
 /**
+ * An error carrying HTTP metadata so the retry layer can decide whether (and
+ * how long) to back off. `status` and `retryAfter` are set when the source was
+ * an HTTP response; for thrown/network errors we can infer retryability from the
+ * message.
+ */
+export class ProviderError extends Error {
+  readonly status?: number;
+  readonly retryAfter?: number; // seconds the server asked us to wait
+  readonly retryable: boolean;
+
+  constructor(message: string, opts: { status?: number; retryAfter?: number; retryable?: boolean; cause?: unknown } = {}) {
+    super(message);
+    this.name = 'ProviderError';
+    this.status = opts.status;
+    this.retryAfter = opts.retryAfter;
+    this.retryable = opts.retryable ?? defaultRetryable(opts.status, message);
+    if (opts.cause !== undefined) (this as { cause?: unknown }).cause = opts.cause;
+  }
+}
+
+function defaultRetryable(status: number | undefined, message: string): boolean {
+  if (status !== undefined) return RETRYABLE_STATUS.has(status);
+  return /429|rate.?limit|insufficient_quota|too many requests|throttl|server error|temporar|overloaded|503|502|504/i.test(message);
+}
+
+// We retry only transient conditions: rate limits, 5xx, timeouts, and transport
+// errors. 400/401/403/404 are permanent and must surface immediately.
+const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+
+/** Parse an RFC7231 Retry-After header: seconds or an HTTP date. */
+export function parseRetryAfter(value: string | null | undefined): number | undefined {
+  if (!value) return undefined;
+  const v = value.trim();
+  if (/^\d+$/.test(v)) return Number(v);
+  const asMs = Date.parse(v);
+  if (Number.isFinite(asMs)) return Math.max(0, Math.ceil((asMs - Date.now()) / 1000));
+  return undefined;
+}
+
+/**
  * Build a short, actionable model-request error from a non-OK response.
  * Reveals the JSON `error.message` when available, otherwise strips HTML, and
  * attaches a one-line fix hint for well-known status codes.
  */
-export function describeModelError(status: number, body: string, model: string, provider: string): Error {
+export function describeModelError(status: number, body: string, model: string, provider: string, retryAfter?: number): ProviderError {
   let detail = plainFromJson(body);
   if (!detail || detail.includes('<')) detail = stripHtml(detail);
   detail = (detail || '(no detail)').slice(0, 240);
@@ -56,5 +96,5 @@ export function describeModelError(status: number, body: string, model: string, 
     `${provider} request failed (${status}) for model "${model}".` +
     (hint ? ` ${hint}` : '') +
     `\n${detail}`;
-  return new Error(message.trim());
+  return new ProviderError(message.trim(), { status, retryAfter });
 }

@@ -1,6 +1,12 @@
 import type { ChatMessage, ModelResponse, StreamChunk, ToolDefinition } from '../types.js';
 import type { ProviderConfig } from './router.js';
-import { describeModelError } from '../utils/http-error.js';
+import { ProviderError, describeModelError, parseRetryAfter } from '../utils/http-error.js';
+import { withRetries, classifyError } from './rate-limit.js';
+
+function logBackoff(attempt: number, delayMs: number, err: unknown): void {
+  const detail = err instanceof Error ? err.message.split('\n')[0] : String(err);
+  console.warn(`[rate-limit] model request backoff #${attempt}: sleeping ${Math.round(delayMs)}ms (${detail.slice(0, 80)})`);
+}
 
 export function createAnthropicProvider(config: ProviderConfig) {
   const base = config.baseUrl.replace(/\/$/, '');
@@ -25,15 +31,23 @@ export function createAnthropicProvider(config: ProviderConfig) {
       stream: false,
       ...(tools.length ? { tools: tools.map((t) => ({ name: t.name, description: t.description, input_schema: { type: 'object', properties: Object.fromEntries(t.parameters.map((p) => [p.name, { type: p.type, description: p.description }])), required: t.parameters.filter((x) => x.required).map((x) => x.name) } })) } : {}),
     };
-    const res = await fetch(`${base}/v1/messages`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-api-key': config.apiKey ?? '', 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      throw describeModelError(res.status, text, model, 'Anthropic');
-    }
+    const res = await withRetries(async () => {
+      try {
+        const r = await fetch(`${base}/v1/messages`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-api-key': config.apiKey ?? '', 'anthropic-version': '2023-06-01' },
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) {
+          const text = await r.text();
+          throw describeModelError(r.status, text, model, 'Anthropic', parseRetryAfter(r.headers.get('retry-after')));
+        }
+        return r;
+      } catch (err) {
+        if (err instanceof ProviderError) throw err;
+        throw new ProviderError(err instanceof Error ? err.message : String(err), { retryable: classifyError(err).retryable, cause: err });
+      }
+    }, { maxAttempts: 4, onBackoff: (attempt, delayMs, err) => logBackoff(attempt, delayMs, err) });
     const data: any = await res.json();
     const blocks = data.content ?? [];
     const text = blocks.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('');

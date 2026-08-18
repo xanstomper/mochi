@@ -1,6 +1,12 @@
 import { StreamParser } from '../stream-parser.js';
 import type { ChatMessage, ModelResponse, StreamChunk, ToolDefinition } from '../types.js';
-import { describeModelError } from '../utils/http-error.js';
+import { ProviderError, describeModelError, parseRetryAfter } from '../utils/http-error.js';
+import { withRetries, classifyError } from './rate-limit.js';
+
+function logBackoff(attempt: number, delayMs: number, err: unknown): void {
+  const detail = err instanceof Error ? err.message.split('\n')[0] : String(err);
+  console.warn(`[rate-limit] model request backoff #${attempt}: sleeping ${Math.round(delayMs)}ms (${detail.slice(0, 80)})`);
+}
 
 export interface ProviderConfig {
   baseUrl: string;
@@ -61,22 +67,33 @@ export function createOpenAIProvider(config: ProviderConfig) {
       ...(options?.maxTokens !== undefined ? { max_tokens: options.maxTokens } : {}),
     };
 
-    const res = await fetch(`${base}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-      },
-      body: JSON.stringify(body),
-    });
+    // Rate-limit + transient-failure safe fetch: only the request is retried
+    // (never mid-stream), with exponential backoff honoring Retry-After.
+    const res = await withRetries(async () => {
+      try {
+        const r = await fetch(`${base}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+          },
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) {
+          const text = await r.text().catch(() => '');
+          throw describeModelError(r.status, text, model, 'opencode/OpenAI-compatible', parseRetryAfter(r.headers.get('retry-after')));
+        }
+        if (!r.body) throw new Error('No response body from model');
+        return r;
+      } catch (err) {
+        // Network/transport errors carry no status; let the classifier decide
+        // whether this is transient (retry) or permanent (host refused / bad DNS).
+        if (err instanceof ProviderError) throw err;
+        throw new ProviderError(err instanceof Error ? err.message : String(err), { retryable: classifyError(err).retryable, cause: err });
+      }
+    }, { maxAttempts: 4, onBackoff: (attempt, delayMs, err) => logBackoff(attempt, delayMs, err) });
 
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      throw describeModelError(res.status, body, model, 'opencode/OpenAI-compatible');
-    }
-
-    if (!res.body) throw new Error('No response body from model');
-
+    if (!res.body) throw new ProviderError('No response body from model', { retryable: true });
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
