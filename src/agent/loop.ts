@@ -6,7 +6,7 @@ import type { Workspace } from '../workspace.js';
 import type { ContextEngine } from '../context.js';
 import { createProvider } from '../model/router.js';
 import { executeTool, buildTools } from '../tools/index.js';
-import type { ToolContext } from '../tools/types.js';
+import type { ToolContext, ReadCache } from '../tools/types.js';
 import { detectRepo } from '../repo.js';
 import type { AgentProfile } from '../types.js';
 import { AgentProfileService } from '../agents/profile.js';
@@ -66,6 +66,7 @@ export class Agent {
   private fileChanged = false;
   private lastSig = '';
   private sigStreak = 0;
+  private readCache: ReadCache = new Map();
 
   constructor(opts: AgentOptions) {
     this.id = opts.id ?? randomUUID();
@@ -279,10 +280,38 @@ export class Agent {
         while (n < batch.length && n < 8 && this.isReadOnly(batch[n].function.name)) n++;
         const group = batch.splice(0, Math.max(n, 1));
         await Promise.all(group.map((tc) => this.runMoolCall(tc)));
-      } else {
-        batch.shift();
-        await this.runMoolCall(head);
+        continue;
       }
+
+      // Writes-edits to DISTINCT target files are independent and safe to run in
+      // parallel, which lets the model create/edit several files in one turn
+      // instead of paying a round-trip per file — a real cut to iterations/tokens.
+      if (['write', 'edit', 'delete'].includes(head.function.name)) {
+        const seen = new Set<string>();
+        const group: ToolCall[] = [];
+        const remaining: ToolCall[] = [];
+        for (const tc of batch) {
+          if (['write', 'edit', 'delete'].includes(tc.function.name)) {
+            let path = '';
+            try {
+              path = String(JSON.parse(tc.function.arguments || '{}').path ?? '');
+            } catch { /* treat as independent */ }
+            if (seen.has(path)) { remaining.push(tc); continue; }
+            seen.add(path);
+            group.push(tc);
+          } else {
+            remaining.push(tc);
+          }
+        }
+        batch.length = 0;
+        batch.push(...remaining);
+        await Promise.all(group.map((tc) => this.runMoolCall(tc)));
+        continue;
+      }
+
+      // shell may depend on prior results, so run alone unless clearly read-only.
+      batch.shift();
+      await this.runMoolCall(head);
     }
   }
 
@@ -316,6 +345,7 @@ export class Agent {
       events: this.events,
       agentId: this.id,
       abortSignal: this.abortSignal,
+      readCache: this.readCache,
     };
     const { output, error, durationMs } = await executeTool(tc.function.name, args, ctx, this.tools);
     const result: ToolResult = {

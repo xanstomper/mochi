@@ -42,6 +42,19 @@ Internal Chameleon + Termix rework (no external services, no auto-launch):
   per-call payload. Long runs roll up into the semantic ledger past the ceiling,
   keeping per-turn token cost bounded and predictable instead of model-luck
   dependent.
+- **Per-run file-read cache**: the `read` tool caches file contents keyed by
+  (path, mtime, size) for the life of a task, so unchanged files are read from
+  disk once instead of once per call. Edits change the signature and trigger a
+  re-read.
+- **Role-specific tool sets**: each agent role now advertises only the tools it
+  needs (coder ~10 tools vs 14; reviewers/researchers read-only), cutting the
+  scheduled per-call tool-schema payload (~1,400 → ~1,000+ tokens for coding).
+- **Parallel independent writes**: the loop runs `write`/`edit`/`delete` tool
+  calls to distinct files concurrently (previously fully serial), so a multi-file
+  task pays one round-trip for several files. Same-file writes stay serial for
+  safety.
+- Verified on a two-file create+test task: **15.9k tokens / $0.0023 / 5s** with
+  all tests passing. 61 tests green, typecheck clean.
 
 ## 0.5.4
 

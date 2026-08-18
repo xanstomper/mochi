@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, statSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { readTool } from './read.js';
@@ -8,7 +8,7 @@ import { editTool } from './edit.js';
 import { globTool } from './glob.js';
 import { memoryTool } from './memory.js';
 import { EventBus } from '../events.js';
-import type { ToolContext } from './types.js';
+import type { ToolContext, ReadCache } from './types.js';
 import type { MochiConfig } from '../types.js';
 
 function ctx(cwd: string): ToolContext {
@@ -51,5 +51,29 @@ describe('file tools', () => {
     await memoryTool.execute({ action: 'add', kind: 'decision', title: 'Use Zustand', body: 'State uses Zustand.' }, c);
     const out = await memoryTool.execute({ action: 'read' }, c);
     expect(out).toContain('Use Zustand');
+  });
+});
+
+describe('read cache', () => {
+  it('caches unchanged files and reflects edits via the mtime/size check', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-'));
+    const p = resolve(dir, 'cached.ts');
+    writeFileSync(p, 'v1\n');
+    const cache: ReadCache = new Map();
+    const c = { ...ctx(dir), readCache: cache };
+
+    const first = await readTool.execute({ path: p }, c);
+    expect(first).toContain('v1');
+    expect(cache.size).toBe(1);
+
+    // Second read of the same unchanged file hits the cache.
+    const again = await readTool.execute({ path: p }, c);
+    expect(again).toContain('v1');
+
+    // Mutate the file with a distinct content/length; the signature changes and
+    // the cache must reflect the new content even with the same cache instance.
+    writeFileSync(p, 'v2 content that is longer\n');
+    const afterWrite = await readTool.execute({ path: p }, c);
+    expect(afterWrite).toContain('v2 content');
   });
 });
