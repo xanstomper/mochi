@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Tool } from './types.js';
+import { markMutation } from './fs-signal.js';
 
 function trimIndent(text: string): string {
   const lines = text.split('\n');
@@ -46,6 +47,7 @@ export const editTool: Tool = {
     if (content === original) throw new Error(`oldText was found but replacement did not change ${rawPath}`);
     writeFileSync(fullPath, content);
     ctx.events.emit({ type: 'file:changed', path: fullPath, operation: 'edit', agentId: ctx.agentId });
+    markMutation();
     return `Edited ${rawPath}`;
   },
 };

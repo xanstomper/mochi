@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { resolve, relative } from 'node:path';
 import type { Tool, ToolContext } from './types.js';
+import { mutationGeneration } from './fs-signal.js';
 
 const MAX_TOTAL = 256_000;
 
@@ -69,10 +70,28 @@ function fileOutline(cwd: string, rel: string): string {
 
 /** Per-call query cache: repeat searches for the same (query, glob) within a
  *  task return the prior structured result verbatim, so the model cannot burn
- *  tokens re-fetching identical context. This is a harness-level improvement on
- *  a per-`ctx` basis (keyed by agent session). */
-const queryCache = new Map<string, { result: string; at: number }>();
-const QUERY_CACHE_TTL_MS = 60_000;
+ *  tokens re-fetching identical context. The cache is boundary-keyed by a shared
+ *  *mutation generation* that the write/edit/delete tools bump whenever a file
+ *  changes, so a stale result can never survive a real mutation - dedup cached
+ *  payloads, not cached truth. Computing the key is O(1), so this never
+ *  bottlenecks the loop with a tree re-walk. */
+const queryCache = new Map<string, { result: string; gen: number }>();
+const queryCacheLru: string[] = [];
+const QUERY_CACHE_MAX_ENTRIES = 64;
+
+function putCached(dir: string, key: string, result: string, gen: number) {
+  const k = `${dir}|${key}|${gen}`;
+  queryCache.set(k, { result, gen });
+  queryCacheLru.push(k);
+  if (queryCacheLru.length > QUERY_CACHE_MAX_ENTRIES) {
+    const evict = queryCacheLru.shift();
+    if (evict && evict !== k) queryCache.delete(evict);
+  }
+}
+
+function getCached(dir: string, key: string, gen: number): { result: string; gen: number } | null {
+  return queryCache.get(`${dir}|${key}|${gen}`) ?? null;
+}
 
 interface MatchLine {
   path: string;
@@ -171,10 +190,10 @@ export const searchTool: Tool = {
     const globArg = args.glob ? String(args.glob) : undefined;
     const limit = typeof args.limit === 'number' ? Math.max(1, Math.min(200, Math.floor(args.limit))) : 60;
 
-    const key = `${ctx.cwd}|${cacheKey(query, globArg)}`;
-    const hit = queryCache.get(key);
-    const now = Date.now();
-    if (hit && now - hit.at < QUERY_CACHE_TTL_MS) {
+    const gen = mutationGeneration();
+    const key = cacheKey(query, globArg);
+    const hit = getCached(ctx.cwd, key, gen);
+    if (hit) {
       return hit.result + (hit.result === 'No matches.' ? '' : '\n[query cache hit]');
     }
 
@@ -197,7 +216,7 @@ export const searchTool: Tool = {
     } else {
       result = fallbackSearch(ctx.cwd, query, globArg, limit);
     }
-    queryCache.set(key, { result, at: now });
+    putCached(ctx.cwd, key, result, gen);
     return result;
   },
 };

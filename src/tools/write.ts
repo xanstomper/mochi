@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import type { Tool } from './types.js';
+import { markMutation } from './fs-signal.js';
 
 export const writeTool: Tool = {
   def: {
@@ -26,6 +27,7 @@ export const writeTool: Tool = {
       writeFileSync(fullPath, content);
     }
     ctx.events.emit({ type: 'file:changed', path: fullPath, operation: 'write', agentId: ctx.agentId });
+    markMutation();
     return `Wrote ${content.length} chars to ${rawPath}`;
   },
 };

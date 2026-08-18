@@ -122,4 +122,33 @@ describe('structure-aware search', () => {
     const second = await searchTool.execute({ query: 'target' }, c);
     expect(second).toContain('query cache hit');
   });
+
+  it('invalidates the query cache after a write so results stay truthful', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-search-'));
+    writeFileSync(resolve(dir, 'a.ts'), 'export const alpha = 1;');
+    const c = ctx(dir);
+
+    const first = await searchTool.execute({ query: 'alpha' }, c);
+    expect(first).toContain('alpha');
+    const repeat = await searchTool.execute({ query: 'alpha' }, c);
+    expect(repeat).toContain('[query cache hit]');
+
+    // A write that changes the answer must invalidate the stale cache entry.
+    await writeTool.execute({ path: resolve(dir, 'b.ts'), content: 'export const gamma = 2;' }, c);
+    const fresh = await searchTool.execute({ query: 'gamma' }, c);
+    expect(fresh).toContain('gamma');
+    expect(fresh).not.toContain('[query cache hit]');
+  });
+
+  it('invalidates the query cache after an edit', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-search-'));
+    writeFileSync(resolve(dir, 'c.ts'), 'export const marker = "old";');
+    const c = ctx(dir);
+
+    await searchTool.execute({ query: 'newval' }, c); // no match -> cached
+    await editTool.execute({ path: resolve(dir, 'c.ts'), oldText: 'old', newText: 'newval' }, c);
+    const afterEdit = await searchTool.execute({ query: 'newval' }, c);
+    expect(afterEdit).toContain('newval');
+    expect(afterEdit).not.toContain('[query cache hit]');
+  });
 });

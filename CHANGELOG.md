@@ -62,18 +62,25 @@ Internal Chameleon + Termix rework (no external services, no auto-launch):
   packet. The project overview is always carried. Deterministic, no new
   dependencies, no embedding model required.
 - **Structure-aware, deduped, cached search** (agent-grep style): `search` now
-  groups matches by file, emits a compact per-file declaration outline (so the
-  model can infer a file's layout without a full read), collapses repeated
-  identical match lines while still reporting the true raw match count, caps
-  displayed lines via `limit`, and serves a repeat identical query from a
-  short-TTL per-cwd cache (marked `[query cache hit]`) instead of re-scanning.
+  groups matches by file and emits a compact per-file declaration outline (so
+  the model can infer a file's layout without a full read), collapses repeated
+  identical match lines to one while still reporting the true raw match count,
+  caps displayed lines via `limit`, and serves a repeat identical query from a
+  mutation-invalidated per-cwd cache (marked `[query cache hit]`) instead of
+  re-scanning.
 - **One-shot fast path**: a deterministic classifier
   (`src/one-shot.ts`) recognizes high-confidence answer/summarize tasks and
   injects a "resolve in one turn" nudge so the loop doesn't burn tokens on
   needless tool round-trips. Verification still gates every "done" when files
   changed; the classifier never short-circuits tasks that touch code.
-- 76 tests green (added relevance, search-structure/dedup/cache, and one-shot
-  coverage), typecheck clean.
+- **Mutation-invalidated search cache**: the `search` result cache is now keyed
+  by a shared process-wide mutation generation that the `write`/`edit`/`delete`
+  tools bump on every real file change (`src/tools/fs-signal.ts`). A repeated
+  identical query is deduped, but a write/edit/delete invalidates the stale
+  entry instantly (O(1), no tree re-walk), so the cache can never serve a result
+  that a subsequent edit has already made wrong.
+- 78 tests green (relevance, search-structure/dedup/cache-invalidation, and
+  one-shot coverage), typecheck clean.
 
 ## 0.5.4
 
