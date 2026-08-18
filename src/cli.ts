@@ -16,7 +16,7 @@ try {
 }
 
 const BOOLEAN_FLAGS = new Set([
-  'p', 'print', 'auto', 'quiet', 'q', 'verbose', 'v', 'debug', 'h', 'help', 'version', 'offline', 'enhance', 'install',
+  'p', 'print', 'auto', 'quiet', 'q', 'verbose', 'v', 'debug', 'h', 'help', 'version', 'offline', 'enhance', 'install', 'plan',
 ]);
 
 function parseArgs(argv: string[]): { flags: Record<string, string | boolean>; positional: string[] } {
@@ -73,6 +73,10 @@ function configFromFlags(flags: Record<string, string | boolean>): Partial<Mochi
   if (flags.quiet) overrides.quiet = true;
   if (flags.verbose) overrides.verbose = true;
   if (flags.debug) overrides.debug = true;
+  // Plan-then-act: `--plan` (a dashed boolean; the bare `plan` subcommand
+  // is positional and unaffected) makes every agent in the run research and
+  // return a plan instead of editing files.
+  if (flags.plan) overrides.planMode = true;
   return overrides;
 }
 
@@ -96,6 +100,7 @@ Usage:
   mochi termix ["<task>"] [--coms|--sep] [--sessions N]
   mochi tui
   mochi perf
+  mochi "<prompt>" --plan            # plan-then-act: research + return a plan, no edits
 
 Options:
   -p, --print             Print response and exit

@@ -100,9 +100,40 @@ Project: `.mochi/config.json`
     "shell": true,
     "network": true,
     "gitDestructive": false
-  }
+  },
+  "mcpServers": {
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "env": {}
+    }
+  },
+  "planMode": false
 }
 ```
+
+### MCP servers
+
+`mcpServers` entries are stdio MCP servers. Each is spawned once per agent run,
+handshakes over JSON-RPC, and its tools are registered natively as
+`serverName__toolName` (e.g. `memory__create_entities`) with `network`
+permission, so the model calls them like any built-in tool. Failed servers are
+logged and skipped; a crashed server rejects its pending calls instead of
+hanging the run.
+
+### Plan-then-act mode
+
+Set `"planMode": true` in config or pass `--plan` on any run: every agent
+researches with read-only tools and returns a plan (steps, files, risks,
+verification). Mutating tools (`write`/`edit`/`delete`/`shell`) are vetoed, the
+model is redirected to produce the plan, and no files are changed.
+
+### Subagent delegation
+
+The `subagent` tool lets the model delegate a self-contained subtask to a fresh
+child agent that shares the run's budget, read cache, and workspace, returning a
+summary. Delegation is one level deep (children cannot spawn grandchildren) to
+bound runaway fan-out.
 
 ## Agent profiles
 

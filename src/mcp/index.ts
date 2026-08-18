@@ -56,6 +56,11 @@ export class McpClient {
       if (s) console.warn(`[mcp:${this.label}] ${s.slice(0, 200)}`);
     });
     this.child.on('error', (err) => this.rejectAll(new Error(`mcp:${this.label} spawn failed: ${err.message}`)));
+    // A server that starts and then dies (bad script, crash) never emits
+    // 'error'; without this hook its pending requests would hang forever.
+    this.child.on('exit', (code, signal) => {
+      this.rejectAll(new Error(`mcp:${this.label} server exited (code=${code ?? 'null'} signal=${signal ?? 'none'}) before responding`));
+    });
   }
 
   private handleLine(line: string): void {

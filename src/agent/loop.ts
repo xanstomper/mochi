@@ -34,6 +34,9 @@ export interface AgentOptions {
   extraTools?: Map<string, import('../tools/types.js').Tool>;
   /** When true, the agent plans then waits for approval before editing. */
   planMode?: boolean;
+  /** Depth guard: children spawn with subagentDepth = parent + 1. Subagents
+   *  may not delegate further (depth 1 has no spawnSubagent injected). */
+  subagentDepth?: number;
 }
 
 export interface AgentResult {
@@ -75,6 +78,8 @@ export class Agent {
   private sigStreak = 0;
   private readCache: ReadCache;
   private planMode: boolean;
+  private planVetoes = 0;
+  private subagentDepth: number;
   private mcpClose?: () => void;
 
   constructor(opts: AgentOptions) {
@@ -100,6 +105,7 @@ export class Agent {
       }
     }
     this.planMode = opts.planMode ?? this.config.planMode ?? false;
+    this.subagentDepth = opts.subagentDepth ?? 0;
     this.learning = new LearningStore(this.workspace.dir);
     this.hooks = new HookManager(this.workspace.dir);
     this.toolDefs = [...this.tools.values()].map((t) => t.def);
@@ -260,16 +266,32 @@ export class Agent {
       if (response.toolCalls && response.toolCalls.length > 0) {
         this.context.addMessage({ role: 'assistant', content: response.content ?? '', tool_calls: response.toolCalls });
         // Plan mode: allow read-only research, but veto any mutating tool and
-        // force the model to hand back a plan instead of editing.
+        // steer the model back to producing a plan. Every vetoed call still
+        // gets a tool response (providers reject dangling tool_call_ids), and
+        // the loop continues so the model can hand back its plan text. Only a
+        // model that keeps attempting edits after a veto is stopped outright.
         if (this.planMode) {
-          const mutating = response.toolCalls.some((c) => ['write', 'edit', 'delete', 'shell'].includes(c.function.name));
-          if (mutating) {
-            const planText = (response.content ?? '').trim();
+          const isMutating = (c: ToolCall) => ['write', 'edit', 'delete', 'shell'].includes(c.function.name);
+          if (response.toolCalls.some(isMutating)) {
+            this.planVetoes++;
+            // Mixed batches: run the read-only calls so their ids are answered,
+            // and only veto the mutating ones.
+            const readOnlies = response.toolCalls.filter((c) => !isMutating(c));
+            if (readOnlies.length > 0) await this.executeToolCalls(readOnlies);
+            for (const c of response.toolCalls) {
+              if (!isMutating(c)) continue;
+              this.context.addMessage({ role: 'tool', tool_call_id: c.id, content: 'Blocked: plan mode is active. No file or command changes are permitted while planning.', name: c.function.name });
+            }
+            if (this.planVetoes > 1) {
+              const planText = (response.content ?? '').trim();
+              return this.finish(task, true, planText || this.context['state'].nextAction || 'Planned. No files were changed.');
+            }
             this.context.addMessage({
               role: 'system',
-              content: 'PLAN MODE: you are only planning right now. Do not edit files or run mutating commands. Do not call write/edit/delete/shell. Stop and hand back your plan (steps, files to touch, risks) as the final answer.',
+              content: 'PLAN MODE: you are only planning right now. Do not edit files or run mutating commands. Do not call write/edit/delete/shell again. Hand back your plan (steps, files to change, risks, verification) as the final answer now.',
             });
-            return this.finish(task, true, planText || this.context['state'].nextAction || 'Planned. No files were changed.');
+            this.events.emit({ type: 'agent:log', agentId: this.id, message: '[plan-mode] vetoed mutating tool call; requesting plan' } as never);
+            continue;
           }
         }
         // Loop guard: repeated identical tool calls -> force the model to answer.
@@ -404,6 +426,7 @@ export class Agent {
       budget: this.budget,
       abortSignal: this.abortSignal,
       readCache: this.readCache,
+      subagentDepth: this.subagentDepth + 1,
     });
     const task: Task = {
       id: `sub-${Math.random().toString(36).slice(2, 10)}`,
@@ -452,7 +475,11 @@ export class Agent {
       agentId: this.id,
       abortSignal: this.abortSignal,
       readCache: this.readCache,
-      spawnSubagent: (prompt: string, opts?: { role?: string }) => this.spawnSubagent(prompt, opts?.role),
+      // Only the top-level agent (depth 0) can delegate; children cannot spawn
+      // grandchildren, bounding the delegation tree to one level.
+      ...(this.subagentDepth === 0
+        ? { spawnSubagent: (prompt: string, opts?: { role?: string }) => this.spawnSubagent(prompt, opts?.role) }
+        : {}),
     };
     const { output, error, durationMs } = await executeTool(tc.function.name, args, ctx, this.tools);
     const result: ToolResult = {

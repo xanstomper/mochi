@@ -75,7 +75,7 @@ describe('Agent', () => {
     await fake.close();
   });
 
-  it('plan mode vetoes edits and returns a plan without writing', async () => {
+  it('plan mode vetoes edits, then accepts the plan without writing', async () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-plan-'));
     const fake = await startFakeOpenAI([
       {
@@ -89,6 +89,7 @@ describe('Agent', () => {
         ],
         finishReason: 'tool_calls',
       },
+      { content: 'PLAN:\n1. Create plan.txt\n2. Add a greeting\n3. Verify with read', finishReason: 'stop' },
     ]);
     const config = makeConfig(dir, fake.url);
     const workspace = new Workspace(dir, '.mochi');
@@ -109,8 +110,9 @@ describe('Agent', () => {
     });
 
     const result = await agent.run(task);
-    // Plan mode must not change any file.
+    // Plan mode must not change any file, and the plan must surface in the result.
     expect(result.success).toBe(true);
+    expect(result.summary).toContain('PLAN');
     expect(() => readFileSync(resolve(dir, 'plan.txt'), 'utf8')).toThrow();
     await fake.close();
   });
