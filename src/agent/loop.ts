@@ -119,9 +119,11 @@ export class Agent {
 
       // Compact-first context floor: once the live transcript grows past a
       // fraction of the context budget, roll up old turns so the packet never
-      // balloons. This is measured before building the packet so short runs are
-      // untouched but long runs stay lean regardless of iteration cadence.
-      const floor = this.config.safety.contextBudgetTokens * 0.6;
+      // balloons. The floor is ALSO capped by a fixed ceiling so a huge
+      // configured budget (e.g. 120k+) cannot let the live transcript balloon —
+      // long runs stay lean no matter what the user's safety config says.
+      const ceiling = 32_000;
+      const floor = Math.min(this.config.safety.contextBudgetTokens * 0.6, ceiling);
       if (i > 0 && this.context.estimateTokens() > floor) {
         this.context.compact();
       }

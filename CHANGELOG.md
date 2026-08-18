@@ -36,8 +36,12 @@ Internal Chameleon + Termix rework (no external services, no auto-launch):
 - **Leaner defaults for far lower token usage**: the default safety budget shrank
   from a 120k-token/50-iteration context to 32k tokens / 8 iterations, so simple
   tasks finish in a few decisive passes instead of grinding a huge transcript.
-  Measured on the same "create add.js + test it" task: 91k → 41k tokens (-55%),
-  $0.0128 → $0.0058. Verified vs easy single-file and harder multi-file tasks.
+- **Deterministic transcript ceiling**: the agent loop's compaction floor is now
+  capped at 32k live tokens regardless of the configured context budget, so a
+  user's very large budget (e.g. 120k+) can no longer let old turns balloon the
+  per-call payload. Long runs roll up into the semantic ledger past the ceiling,
+  keeping per-turn token cost bounded and predictable instead of model-luck
+  dependent.
 
 ## 0.5.4
 
