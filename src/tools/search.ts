@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { resolve, relative } from 'node:path';
-import type { Tool } from './types.js';
+import type { Tool, ToolContext } from './types.js';
 
 const MAX_TOTAL = 256_000;
 
@@ -42,13 +42,94 @@ function* walkFiles(root: string, dir: string): Generator<string> {
   }
 }
 
-function fallbackSearch(cwd: string, query: string, glob?: string): string {
+// Best-effort function/class/scoped declaration detection for structure hints.
+// This is light-weight: it avoids a full AST parse on every search. A bare
+// tokenizer is enough to give the model the *outline* it needs to decide which
+// file to open, matching jcode's "add file structure to grep so the agent can
+// infer the file without reading it" idea.
+const DECL_RE =
+  /^\s*(export\s+)?(?:async\s+)?(?:function|class|interface|type|const|let|var|enum)\b.*[({=:]?$/;
+
+function fileOutline(cwd: string, rel: string): string {
+  let content: string;
+  try { content = readFileSync(resolve(cwd, rel), 'utf8'); } catch { return ''; }
+  const decls: string[] = [];
+  let i = 0;
+  for (const line of content.split('\n')) {
+    i++;
+    const t = line.trim();
+    if (!t || t.startsWith('//') || t.startsWith('*') || t.startsWith('/*')) continue;
+    if (t.startsWith('export function') || t.startsWith('function') || DECL_RE.test(t)) {
+      decls.push(`${i}:${t.slice(0, 70)}`);
+      if (decls.length >= 12) break;
+    }
+  }
+  return decls.length ? `  decl: ${decls.join(' | ')}` : '';
+}
+
+/** Per-call query cache: repeat searches for the same (query, glob) within a
+ *  task return the prior structured result verbatim, so the model cannot burn
+ *  tokens re-fetching identical context. This is a harness-level improvement on
+ *  a per-`ctx` basis (keyed by agent session). */
+const queryCache = new Map<string, { result: string; at: number }>();
+const QUERY_CACHE_TTL_MS = 60_000;
+
+interface MatchLine {
+  path: string;
+  line: number;
+  text: string;
+}
+
+interface GroupResult {
+  path: string;
+  total: number; // raw match count before dedup
+  lines: MatchLine[]; // deduped lines to display
+}
+
+function groupMatches(cwd: string, raw: MatchLine[]): GroupResult[] {
+  const totals = new Map<string, number>();
+  for (const m of raw) totals.set(m.path, (totals.get(m.path) ?? 0) + 1);
+  const seen = new Set<string>();
+  const byPath = new Map<string, MatchLine[]>();
+  for (const m of raw) {
+    const k = `${m.path}#${m.text}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    if (!byPath.has(m.path)) byPath.set(m.path, []);
+    byPath.get(m.path)!.push(m);
+  }
+  return [...byPath.entries()].map(([path, lines]) => ({
+    path,
+    total: totals.get(path) ?? lines.length,
+    lines,
+  }));
+}
+
+function buildStructured(cwd: string, groups: GroupResult[], limit: number): string {
+  const parts: string[] = [];
+  let totalShown = 0;
+  for (const group of groups) {
+    if (totalShown >= limit) break;
+    const outline = fileOutline(cwd, group.path);
+    let shown = group.lines;
+    if (shown.length > 1 && totalShown + shown.length > limit) {
+      shown = shown.slice(0, Math.max(1, limit - totalShown));
+    }
+    totalShown += shown.length;
+    const head = `── ${group.path} (${group.total} match${group.total === 1 ? '' : 'es'})${outline ? '\n' + outline : ''}`;
+    const body = shown.map((m) => `${m.line}:${m.text.trim()}`).join('\n');
+    const omitted = group.total - shown.length;
+    parts.push([head, body, omitted > 0 ? `   … ${omitted} more in ${group.path}` : ''].filter(Boolean).join('\n'));
+  }
+  return parts.join('\n') || 'No matches.';
+}
+
+function fallbackSearch(cwd: string, query: string, glob?: string, limit = 60): string {
   const regex = new RegExp(escapeRegex(query), 'i');
-  const results: string[] = [];
+  const matches: MatchLine[] = [];
   for (const full of walkFiles(cwd, cwd)) {
     if (glob) {
       const rel = relative(cwd, full).replace(/\\/g, '/');
-      // naive glob check: pattern like *.ts -> endsWith .ts, **/*.{ts,js} -> splits
       const ok = glob.split(',').some((g) => {
         const ext = g.replace(/\*\//g, '').replace(/\*\*/g, '').replace(/\*/g, '');
         return rel.endsWith(ext);
@@ -60,31 +141,63 @@ function fallbackSearch(cwd: string, query: string, glob?: string): string {
     const lines = content.split('\n');
     for (let i = 0; i < lines.length; i++) {
       if (regex.test(lines[i])) {
-        const rel = relative(cwd, full).replace(/\\/g, '/');
-        results.push(`${rel}:${i + 1}:${lines[i].trim()}`);
-        if (results.join('\n').length > MAX_TOTAL) return results.join('\n') + '\n... [truncated]';
+        matches.push({ path: relative(cwd, full).replace(/\\/g, '/'), line: i + 1, text: lines[i] });
       }
     }
   }
-  return results.length ? results.join('\n') : 'No matches.';
+  // Dedup identical (file, text) pairs so repeated boilerplate lines collapse,
+  // but keep the total raw count so the model still sees how widespread a match.
+  return buildStructured(cwd, groupMatches(cwd, matches), limit);
+}
+
+function cacheKey(query: string, glob?: string): string {
+  return `${query}::${glob ?? ''}`;
 }
 
 export const searchTool: Tool = {
   def: {
     name: 'search',
-    description: 'Search file contents for a literal string. Uses ripgrep when available, with a plain-text fallback.',
+    description: 'Search project files for a literal string and return matches grouped by file with a per-file declaration outline. Repeating the same query returns the cached structured result.',
     parameters: [
       { name: 'query', type: 'string', description: 'Text to search', required: true },
       { name: 'glob', type: 'string', description: 'Optional file glob filter', required: false },
-      { name: 'limit', type: 'integer', description: 'Maximum results', required: false },
+      { name: 'limit', type: 'integer', description: 'Maximum result lines to return', required: false },
     ],
     permission: 'read',
   },
-  async execute(args, ctx) {
+  async execute(args: Record<string, unknown>, ctx: ToolContext) {
     const query = String(args.query ?? '');
     if (!query) throw new Error('No query provided');
-    const rg = await ripgrep(ctx.cwd, query, args.glob ? String(args.glob) : undefined);
-    if (rg) return rg;
-    return fallbackSearch(ctx.cwd, query, args.glob ? String(args.glob) : undefined);
+    const globArg = args.glob ? String(args.glob) : undefined;
+    const limit = typeof args.limit === 'number' ? Math.max(1, Math.min(200, Math.floor(args.limit))) : 60;
+
+    const key = `${ctx.cwd}|${cacheKey(query, globArg)}`;
+    const hit = queryCache.get(key);
+    const now = Date.now();
+    if (hit && now - hit.at < QUERY_CACHE_TTL_MS) {
+      return hit.result + (hit.result === 'No matches.' ? '' : '\n[query cache hit]');
+    }
+
+    const rg = await ripgrep(ctx.cwd, query, globArg);
+    let result: string;
+    if (rg) {
+      const lines = rg.split('\n');
+      const matches: MatchLine[] = [];
+      for (const l of lines) {
+        const idx = l.indexOf(':');
+        if (idx < 0) continue;
+        const path = l.slice(0, idx);
+        const rest = l.slice(idx + 1);
+        const c2 = rest.indexOf(':');
+        if (c2 < 0) continue;
+        const line = Number(rest.slice(0, c2)) || 1;
+        matches.push({ path, line, text: rest.slice(c2 + 1) });
+      }
+      result = buildStructured(ctx.cwd, groupMatches(ctx.cwd, matches), limit);
+    } else {
+      result = fallbackSearch(ctx.cwd, query, globArg, limit);
+    }
+    queryCache.set(key, { result, at: now });
+    return result;
   },
 };

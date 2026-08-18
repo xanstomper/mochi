@@ -1,6 +1,8 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { MemoryStore } from './memory.js';
+import type { MemoryEntry } from './memory.js';
+import { selectRelevant } from './relevance.js';
 import type { ChatMessage, MochiConfig, RepoInfo, Task, ToolDefinition } from './types.js';
 
 const CANDIDATE_RULES = ['MOCHI.md', 'mochi.md', 'AGENTS.md', 'CLAUDE.md'];
@@ -53,6 +55,7 @@ export class ContextEngine {
   private rulesFingerprint = '';
   private memoryCache = '';
   private memoryFingerprint = '';
+  private memoryQuery = '';
 
   constructor(config: MochiConfig, projectRoot: string) {
     this.budget = config.safety.contextBudgetTokens;
@@ -97,13 +100,29 @@ export class ContextEngine {
     return sum;
   }
 
-  private loadMemory(): string {
+  private loadMemory(query = ''): string {
     const fp = fingerprint(resolve(this.projectRoot, '.mochi', 'project.md'));
-    if (fp !== this.memoryFingerprint) {
+    // Re-select only when the underlying memory file or the query changes; a
+    // stable task keeps the same relevant subset without re-reading the disk.
+    if (fp !== this.memoryFingerprint || query !== this.memoryQuery) {
       this.memoryFingerprint = fp;
+      this.memoryQuery = query;
       try {
-        const memory = new MemoryStore(resolve(this.projectRoot, '.mochi')).load();
-        this.memoryCache = memory ? memory.slice(0, 2000) : '';
+        const store = new MemoryStore(resolve(this.projectRoot, '.mochi'));
+        const entries = store.entries().map((e: MemoryEntry) => ({
+          title: e.title,
+          body: e.body,
+          kind: e.kind,
+          source: e.source,
+          always: e.source === 'project.md',
+        }));
+        const relevant = query
+          ? selectRelevant(query, entries, { maxTokens: 2000 })
+          : entries;
+        this.memoryCache = relevant
+          .map((e) => `${e.title}\n${e.body}`)
+          .join('\n\n')
+          .slice(0, 2000);
       } catch {
         this.memoryCache = '';
       }
@@ -126,9 +145,10 @@ export class ContextEngine {
     return this.rulesCache;
   }
 
-  private buildSystemPrompt(tools: ToolDefinition[], repo?: RepoInfo): string {
+  private buildSystemPrompt(tools: ToolDefinition[], repo?: RepoInfo, task?: Task): string {
     const rules = this.loadProjectRules();
-    const memory = this.loadMemory();
+    const query = task ? `${task.title} ${task.description}` : this.state.goal ?? '';
+    const memory = this.loadMemory(query);
     const repoInfo = repo ? `
 Repository:
 - language: ${repo.language ?? 'unknown'}
@@ -205,7 +225,7 @@ ${rules ? rules + '\n' : ''}${memory ? `Project memory:\n${memory}\n` : ''}${rep
   }
 
   buildPacket(tools: ToolDefinition[], task?: Task, repo?: RepoInfo): ContextPacket {
-    const systemPrompt = this.buildSystemPrompt(tools, repo);
+    const systemPrompt = this.buildSystemPrompt(tools, repo, task);
     const statePrompt = this.buildStatePrompt(task);
     const toolPrompt = `## Available Tools\n` + tools.map((t) => `- ${t.name}: ${t.description}`).join('\n');
 

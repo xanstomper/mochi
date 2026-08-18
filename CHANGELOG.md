@@ -55,6 +55,25 @@ Internal Chameleon + Termix rework (no external services, no auto-launch):
   safety.
 - Verified on a two-file create+test task: **15.9k tokens / $0.0023 / 5s** with
   all tests passing. 61 tests green, typecheck clean.
+- **Relevance-scoped memory injection**: project memory is no longer dumped
+  verbatim. Only the entries most relevant to the current task are selected
+  (lexical token overlap over title/body, `src/relevance.ts`) and injected, so
+  a large memory file no longer burns tokens on irrelevant policy in every
+  packet. The project overview is always carried. Deterministic, no new
+  dependencies, no embedding model required.
+- **Structure-aware, deduped, cached search** (agent-grep style): `search` now
+  groups matches by file, emits a compact per-file declaration outline (so the
+  model can infer a file's layout without a full read), collapses repeated
+  identical match lines while still reporting the true raw match count, caps
+  displayed lines via `limit`, and serves a repeat identical query from a
+  short-TTL per-cwd cache (marked `[query cache hit]`) instead of re-scanning.
+- **One-shot fast path**: a deterministic classifier
+  (`src/one-shot.ts`) recognizes high-confidence answer/summarize tasks and
+  injects a "resolve in one turn" nudge so the loop doesn't burn tokens on
+  needless tool round-trips. Verification still gates every "done" when files
+  changed; the classifier never short-circuits tasks that touch code.
+- 76 tests green (added relevance, search-structure/dedup/cache, and one-shot
+  coverage), typecheck clean.
 
 ## 0.5.4
 

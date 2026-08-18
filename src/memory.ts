@@ -72,21 +72,49 @@ export class MemoryStore {
 
   load(kind?: MemoryEntry['kind']): string {
     this.ensure();
+    const entries = this.entries(kind);
+    if (!kind) {
+      // Preserve legacy grouping: `# <kind>s` section headers.
+      const sections: string[] = [];
+      for (const k of Object.keys(this.files) as MemoryEntry['kind'][]) {
+        const group = entries.filter((e) => e.kind === k);
+        if (group.length) sections.push(`# ${k}s\n` + group.map((e) => entryToMarkdown(e)).join('\n').trim());
+      }
+      const project = entries.find((e) => e.source === 'project.md');
+      if (sections.length === 0 && project) sections.unshift(project.body);
+      return sections.join('\n\n');
+    }
+    return entries.map((e) => entryToMarkdown(e)).join('\n').trim();
+  }
+
+  /** Return the individual memory entries (plus the optional project.md blurb).
+   *  Index-based so callers can select a subset of *relevant* entries rather than
+   *  dumping every memory into every packet. */
+  entries(kind?: MemoryEntry['kind']): MemoryEntry[] {
+    this.ensure();
     const kinds = kind ? [kind] : (Object.keys(this.files) as MemoryEntry['kind'][]);
-    const sections = kinds
-      .map((k) => {
-        const file = this.files[k];
-        if (!existsSync(file)) return '';
-        const content = readFileSync(file, 'utf8').trim();
-        return content ? `# ${k}s\n${content}` : '';
-      })
-      .filter(Boolean);
+    const result: MemoryEntry[] = [];
+    for (const k of kinds) {
+      const file = this.files[k];
+      if (!existsSync(file)) continue;
+      const content = readFileSync(file, 'utf8');
+      for (const block of content.split(/^## /m).slice(1)) {
+        const lines = block.split('\n');
+        const header = lines[0].trim();
+        const body = lines.slice(1).filter((l) => !l.startsWith('Updated:')).join('\n').trim();
+        if (!header) continue;
+        result.push({ kind: k, title: header, body, updatedAt: 0 });
+      }
+    }
+    // project.md is not a kind-category entry; emit it as a single "project"
+    // blob (weighted to always be carried) so callers keep the project facts
+    // alongside per-entry memories.
     const projectPath = resolve(this.dir, '..', 'project.md');
     if (!kind && existsSync(projectPath)) {
       const project = readFileSync(projectPath, 'utf8').trim();
-      if (project) sections.unshift(project);
+      if (project) result.unshift({ kind: 'decision', title: 'project overview', body: project, source: 'project.md', updatedAt: 0 });
     }
-    return sections.join('\n\n');
+    return result;
   }
 
   summary(): string {

@@ -14,6 +14,7 @@ import { BudgetEngine } from '../budget.js';
 import { LearningStore, classifyFailure } from '../learning.js';
 import { HookManager } from '../hooks.js';
 import { resolve } from 'node:path';
+import { classifyOneShot } from '../one-shot.js';
 
 export interface AgentOptions {
   id?: string;
@@ -100,6 +101,20 @@ export class Agent {
 
     const maxIterations = this.config.safety.maxIterations;
     const runtimeLimit = this.config.safety.maxRuntimeMinutes * 60 * 1000;
+
+    // One-shot fast path: for high-confidence answer/summarize tasks, bias the
+    // model to resolve in a single direct turn instead of spending tokens on
+    // needless tool round-trips. Verification is still run before "done" is
+    // accepted, so an answer is never trusted without evidence when edits happened.
+    const oneShot = classifyOneShot({
+      title: task.title,
+      description: task.description,
+      acceptanceCriteria: task.acceptanceCriteria ?? [],
+      verificationCommand: task.verificationCommand,
+    });
+    if (oneShot.suggests) {
+      this.context.addMessage({ role: 'system', content: oneShot.suggests });
+    }
 
     for (let i = 0; i < maxIterations; i++) {
       if (this.abortSignal?.aborted) {

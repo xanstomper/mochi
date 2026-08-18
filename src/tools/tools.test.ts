@@ -6,6 +6,7 @@ import { readTool } from './read.js';
 import { writeTool } from './write.js';
 import { editTool } from './edit.js';
 import { globTool } from './glob.js';
+import { searchTool } from './search.js';
 import { memoryTool } from './memory.js';
 import { EventBus } from '../events.js';
 import type { ToolContext, ReadCache } from './types.js';
@@ -75,5 +76,50 @@ describe('read cache', () => {
     writeFileSync(p, 'v2 content that is longer\n');
     const afterWrite = await readTool.execute({ path: p }, c);
     expect(afterWrite).toContain('v2 content');
+  });
+});
+
+describe('structure-aware search', () => {
+  it('groups matches by file with a per-file declaration outline', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-search-'));
+    writeFileSync(resolve(dir, 'math.ts'), 'export function add(a, b) {\n  return a + b;\n}\nexport class Calc {\n  ping() {}\n}');
+    const out = await searchTool.execute({ query: 'add' }, ctx(dir));
+    expect(out).toContain('math.ts');
+    expect(out).toContain('export function add');
+    // structure hint surfaced without printing the whole file
+    expect(out).toContain('function');
+  });
+
+  it('dedups repeated identical match lines', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-search-'));
+    const repeated = 'import { x } from "./y";\n'.repeat(10);
+    writeFileSync(resolve(dir, 'dup.ts'), repeated + 'export const z = 1;');
+    const out = await searchTool.execute({ query: 'x' }, ctx(dir));
+    // 11 raw matches (10 identical imports + 'export'), collapse display to ~2.
+    expect(out).toMatch(/11 matches/);
+    expect(out.match(/import \{ x \}/g)?.length ?? 0).toBeLessThanOrEqual(2);
+  });
+
+  it('caps result lines via limit and marks truncation', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-search-'));
+    let content = '';
+    for (let i = 0; i < 30; i++) content += `export const v${i} = "${i}";\n`;
+    writeFileSync(resolve(dir, 'many.ts'), content);
+    const out = await searchTool.execute({ query: 'const', limit: 3 }, ctx(dir));
+    // body lines are "N:export const v..." at start-of-line (outline is indented)
+    const bodyCount = out.split('\n').filter((l) => /^\d+:\s*export const v\d/.test(l)).length;
+    expect(bodyCount).toBeLessThanOrEqual(3);
+    expect(out).toContain('(30 matches)'); // count intact, display capped
+  });
+
+  it('returns cached results on a repeated identical query', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-search-'));
+    writeFileSync(resolve(dir, 'a.ts'), 'export function target() {}');
+    const c = ctx(dir);
+    const first = await searchTool.execute({ query: 'target' }, c);
+    expect(first).toContain('target');
+    expect(first).not.toContain('query cache hit');
+    const second = await searchTool.execute({ query: 'target' }, c);
+    expect(second).toContain('query cache hit');
   });
 });
