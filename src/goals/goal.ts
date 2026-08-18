@@ -190,36 +190,24 @@ Return ONLY the JSON array, no markdown.`;
         break;
       }
 
-      const toRun = ready.slice(0, maxConcurrency - this.runningCount(scheduler));
-      const promises = toRun.map(async (task) => {
-        const taskHook = await this.hooks.runBefore('before_task', { task: task.id });
-        if (!taskHook.allowed) {
-          scheduler.fail(task.id, 'Task blocked by before_task hook', this.agentId(task));
-          return;
+      // Start tasks ONE at a time, re-scanning readiness after each `start`.
+      // Scheduler readiness includes file-scope conflict checks against what is
+      // already *running*, so batching several starts from a single snapshot
+      // could co-launch two tasks that read as non-conflicting only because
+      // neither had been marked running yet. Incremental starting lets a just-
+      // started task's scope gate the ones after it (and lets an unscoped task
+      // exclude concurrent writers), preventing parallel write-write races.
+      const launched = this.startReadyBatch(scheduler, goal, abortController.signal, budget, extraContext, maxConcurrency, verifier);
+      if (launched.length === 0) {
+        // Nothing could launch (all ready tasks conflict with the running set);
+        // wait for an in-flight agent to finish instead of spinning.
+        if (this.runningCount(scheduler) > 0) {
+          await new Promise((r) => setTimeout(r, 200));
+          continue;
         }
-        scheduler.start(task.id);
-        const result = await this.runTask(goal, task, abortController.signal, budget, extraContext);
-        this.goalStats.tokens += result.tokensUsed;
-        this.goalStats.duration += result.durationMs;
-        if (!result.success) {
-          scheduler.fail(task.id, result.summary, this.agentId(task));
-          await this.hooks.runAfter('after_task', { task: task.id, status: 'failed' });
-          return;
-        }
-        const needsVerification = task.acceptanceCriteria.length > 0 || Boolean(task.verificationCommand);
-        if (needsVerification) {
-          const verification = await verifier.verify(task, result.summary);
-          task.output = verification.summary;
-          if (verification.status !== 'PASS') {
-            scheduler.fail(task.id, verification.summary, this.agentId(task));
-            await this.hooks.runAfter('after_task', { task: task.id, status: 'failed' });
-            return;
-          }
-        }
-        scheduler.complete(task.id, this.agentId(task));
-        await this.hooks.runAfter('after_task', { task: task.id });
-      });
-      await Promise.all(promises);
+        break;
+      }
+      await Promise.all(launched);
 
       goal.progress = scheduler.progress();
       goal.updatedAt = Date.now();
@@ -259,6 +247,72 @@ Return ONLY the JSON array, no markdown.`;
 
   private agentId(task: Task): string {
     return `agent-${task.role}-${task.id.slice(0, 8)}`;
+  }
+
+  /**
+   * Start as many non-conflicting ready tasks as concurrency allows, ONE per
+   * scan so a just-started task's scope is visible to the next decision. Returns
+   * the worker promise for each actually-started task (empty if none could
+   * launch because every ready task conflicts with the running set).
+   */
+  private startReadyBatch(
+    scheduler: TaskScheduler,
+    goal: Goal,
+    abortSignal: AbortSignal,
+    budget: BudgetEngine,
+    extraContext: string[],
+    maxConcurrency: number,
+    verifier: VerifierEngine,
+  ): Promise<void>[] {
+    const launched: Promise<void>[] = [];
+    while (launched.length < maxConcurrency && !scheduler.isDone()) {
+      const ready = scheduler.readyTasks();
+      if (ready.length === 0) break;
+      const task = ready[0];
+      const taskHook = this.hooks.runBefore('before_task', { task: task.id });
+      // Start synchronously so the conflict detector sees this task's scope.
+      scheduler.start(task.id);
+      launched.push(this.runOne(scheduler, goal, task, abortSignal, budget, extraContext, taskHook, verifier));
+    }
+    return launched;
+  }
+
+  /** Drive a single started task to completion: run, verify, mark done/failed. */
+  private async runOne(
+    scheduler: TaskScheduler,
+    goal: Goal,
+    task: Task,
+    abortSignal: AbortSignal,
+    budget: BudgetEngine,
+    extraContext: string[],
+    taskHook: Promise<{ allowed: boolean }>,
+    verifier: VerifierEngine,
+  ): Promise<void> {
+    const hook = await taskHook;
+    if (!hook.allowed) {
+      scheduler.fail(task.id, 'Task blocked by before_task hook', this.agentId(task));
+      return;
+    }
+    const result = await this.runTask(goal, task, abortSignal, budget, extraContext);
+    this.goalStats.tokens += result.tokensUsed;
+    this.goalStats.duration += result.durationMs;
+    if (!result.success) {
+      scheduler.fail(task.id, result.summary, this.agentId(task));
+      await this.hooks.runAfter('after_task', { task: task.id, status: 'failed' });
+      return;
+    }
+    const needsVerification = task.acceptanceCriteria.length > 0 || Boolean(task.verificationCommand);
+    if (needsVerification) {
+      const verification = await verifier.verify(task, result.summary);
+      task.output = verification.summary;
+      if (verification.status !== 'PASS') {
+        scheduler.fail(task.id, verification.summary, this.agentId(task));
+        await this.hooks.runAfter('after_task', { task: task.id, status: 'failed' });
+        return;
+      }
+    }
+    scheduler.complete(task.id, this.agentId(task));
+    await this.hooks.runAfter('after_task', { task: task.id });
   }
 
   private async runTask(goal: Goal, task: Task, abortSignal: AbortSignal, budget: BudgetEngine, extraContext: string[] = []) {
@@ -307,10 +361,10 @@ Return ONLY the JSON array, no markdown.`;
     const result = await agent.run(task);
     await this.hooks.runAfter('after_agent', { agent: this.agentId(task), task: task.id, success: String(result.success) });
 
-    // Update global state with completed task.
-    const state = this.workspace.loadState();
-    state.completedTasks.push(task.title);
-    this.workspace.saveState(state);
+    // Record the task as completed on shared state. This must be atomic: under
+    // parallel agents a load()-push-save() race would drop siblings' entries.
+    // appendCompletedTask serializes the read-modify-write and dedups by title.
+    await this.workspace.appendCompletedTask(task.title);
 
     return result;
   }

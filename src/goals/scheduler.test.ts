@@ -32,6 +32,16 @@ describe('TaskScheduler', () => {
     expect(ready.find((t) => t.title === 'B')).toBeUndefined();
   });
 
+  it('does not run an unscoped task alongside any other running writer', () => {
+    const a = createTask('A', 'scoped', { fileScope: ['src/auth/*'] });
+    const b = createTask('B', 'unscoped');
+    const s = new TaskScheduler([a, b]);
+    // Start the unscoped task first: no other writer is running yet.
+    s.start(b.id);
+    // A scoped task must NOT be ready while an unscoped writer is running.
+    expect(s.readyTasks().map((t) => t.title)).toEqual([]);
+  });
+
   it('calculates progress', () => {
     const a = createTask('A', 'first');
     const b = createTask('B', 'second');

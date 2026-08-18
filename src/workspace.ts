@@ -2,6 +2,26 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { resolve } from 'node:path';
 import type { Goal, Task, AgentState } from './types.js';
 
+// Parallel agents finish at different times but all mutate the same persisted
+// `state/agent.json`. A plain load()-push-save() (the old `runTask` tail) was a
+// read-modify-write race: two agents both read the pre-merge file and each
+// wrote its own version back, silently dropping the OTHER agent's completed
+// task (and re-running already-finished goals could duplicate entries). This
+// chain serializes the mutation to one at a time, re-reads the latest file
+// under the lock, and dedups by title, so concurrent completions collide,
+// merge, and persist every entry exactly once -- good dedup, no data loss.
+export class QueueMutex {
+  private chain: Promise<unknown> = Promise.resolve();
+  run<T>(fn: () => T | Promise<T>): Promise<T> {
+    const next = this.chain.then(fn, fn);
+    this.chain = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
+}
+
 export interface WorkspaceState {
   currentGoalId?: string;
   currentWorkspace?: string;
@@ -16,6 +36,9 @@ export class Workspace {
   checkpointDir: string;
   logDir: string;
   agentDir: string;
+  /** Serializes read-modify-write mutations to shared persisted state so
+   *  parallel agents cannot lose each other's `completedTasks` entries. */
+  private stateLock: QueueMutex = new QueueMutex();
 
   constructor(cwd: string, projectDir = '.mochi') {
     this.root = cwd;
@@ -79,6 +102,22 @@ export class Workspace {
 
   saveState(state: AgentState) {
     this.writeJson('state/agent.json', state);
+  }
+
+  /**
+   * Append a completed task title to persisted state WITHOUT losing sibling
+   * writes from parallel agents. Serialized through `stateLock`, re-reads the
+   * latest file under the lock, and refuses duplicates by title. Returns true
+   * when a new title was actually added (false = already recorded).
+   */
+  async appendCompletedTask(title: string): Promise<boolean> {
+    return this.stateLock.run(() => {
+      const state = this.loadState();
+      if (state.completedTasks.includes(title)) return false;
+      state.completedTasks.push(title);
+      this.saveState(state);
+      return true;
+    });
   }
 
   loadWorkspaceState(): WorkspaceState {

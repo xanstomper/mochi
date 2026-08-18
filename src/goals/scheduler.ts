@@ -37,13 +37,20 @@ export class TaskScheduler {
 
   readyTasks(): Task[] {
     const ready: Task[] = [];
-    const runningScopes = this.collectRunningScopes();
+    const { scopes, unrestrictedRunning, runningCount } = this.collectRunningScopes();
     for (const task of this.tasks.values()) {
       if (task.status !== 'pending') continue;
       const depsDone = task.dependencies.every((d) => this.completed.has(d));
       if (!depsDone) continue;
-      if (task.fileScope && task.fileScope.length > 0) {
-        const conflict = task.fileScope.some((scope) => runningScopes.has(scope));
+      const hasScope = task.fileScope && task.fileScope.length > 0;
+      // A running task with NO fileScope may write anywhere (the model never
+      // labeled what it touches), so NOTHING else that writes may start while
+      // it runs -- scoped or not. Likewise, a pending task with no scope may
+      // touch anything and must not start beside a running writer.
+      if (unrestrictedRunning) continue;
+      if (!hasScope && runningCount > 0) continue;
+      if (hasScope) {
+        const conflict = task.fileScope!.some((scope) => scopes.has(scope));
         if (conflict) continue;
       }
       ready.push(task);
@@ -51,15 +58,23 @@ export class TaskScheduler {
     return ready.sort((a, b) => b.priority - a.priority);
   }
 
-  private collectRunningScopes(): Set<string> {
-    const set = new Set<string>();
+  private collectRunningScopes(): { scopes: Set<string>; unrestrictedRunning: boolean; runningCount: number } {
+    const scopes = new Set<string>();
+    let unrestrictedRunning = false;
+    let runningCount = 0;
     for (const id of this.running) {
       const t = this.tasks.get(id);
-      if (t?.fileScope) {
-        for (const s of t.fileScope) set.add(s);
+      if (!t) continue;
+      runningCount++;
+      if (t.fileScope && t.fileScope.length > 0) {
+        for (const s of t.fileScope) scopes.add(s);
+      } else {
+        // A running task with no declared scope may write anywhere, so treat it
+        // as conflicting with every other writer.
+        unrestrictedRunning = true;
       }
     }
-    return set;
+    return { scopes, unrestrictedRunning, runningCount };
   }
 
   start(id: string, agentId?: string): boolean {
