@@ -8,6 +8,7 @@ export { ContextEngine } from './context.js';
 export { BudgetEngine } from './budget.js';
 export { HookManager } from './hooks.js';
 export { MemoryStore } from './memory.js';
+export { consolidate } from './consolidate.js';
 export { RetrievalEngine } from './retrieval.js';
 export { VerifierEngine } from './verification.js';
 export { SpeculativeEngine } from './speculative.js';

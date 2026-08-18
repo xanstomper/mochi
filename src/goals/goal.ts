@@ -12,6 +12,7 @@ import { BudgetEngine } from '../budget.js';
 import { VerifierEngine } from '../verification.js';
 import { HookManager } from '../hooks.js';
 import { classifyOneShot } from '../one-shot.js';
+import { consolidate } from '../consolidate.js';
 import { resolve } from 'node:path';
 
 export interface GoalResult {
@@ -245,6 +246,10 @@ Return ONLY the JSON array, no markdown.`;
       durationMs: this.goalStats.duration,
     };
     await this.hooks.runAfter('after_goal', { goal: goal.id, status: goal.status });
+    // Persist real run failures into workspace memory so later runs in this
+    // workspace avoid repeating them. Deterministic, zero model calls, never
+    // throws (consolidate swallows its own errors).
+    consolidate(this.workspace.dir, result, this.config.model.model);
     return result;
   }
 
