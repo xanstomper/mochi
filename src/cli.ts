@@ -1,0 +1,383 @@
+#!/usr/bin/env node
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import type { MochiConfig } from './types.js';
+
+const pkg = JSON.parse(readFileSync(resolve(new URL('.', import.meta.url).pathname, '../package.json'), 'utf8'));
+
+const BOOLEAN_FLAGS = new Set([
+  'p', 'print', 'auto', 'quiet', 'q', 'verbose', 'v', 'debug', 'h', 'help', 'version',
+]);
+
+function parseArgs(argv: string[]): { flags: Record<string, string | boolean>; positional: string[] } {
+  const flags: Record<string, string | boolean> = {};
+  const positional: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg.startsWith('--')) {
+      const [key, ...rest] = arg.slice(2).split('=');
+      if (rest.length > 0) {
+        flags[key] = rest.join('=');
+      } else if (BOOLEAN_FLAGS.has(key)) {
+        flags[key] = true;
+      } else if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
+        flags[key] = argv[++i];
+      } else {
+        flags[key] = true;
+      }
+    } else if (arg.startsWith('-')) {
+      const key = arg.slice(1);
+      if (BOOLEAN_FLAGS.has(key)) {
+        flags[key] = true;
+      } else if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
+        flags[key] = argv[++i];
+      } else {
+        flags[key] = true;
+      }
+    } else {
+      positional.push(arg);
+    }
+  }
+  return { flags, positional };
+}
+
+function configFromFlags(flags: Record<string, string | boolean>): Partial<MochiConfig> {
+  const overrides: Partial<MochiConfig> = {};
+  const model: Partial<MochiConfig['model']> = {};
+  if (flags.provider) model.provider = String(flags.provider);
+  if (flags.model) model.model = String(flags.model);
+  if (flags['api-key']) model.apiKey = String(flags['api-key']);
+  if (flags.baseUrl) model.baseUrl = String(flags.baseUrl);
+  if (Object.keys(model).length) overrides.model = model as MochiConfig['model'];
+  if (flags.safety) overrides.safety = { ...({} as MochiConfig['safety']), mode: String(flags.safety) as MochiConfig['safety']['mode'] };
+  if (flags.auto) overrides.safety = { ...({} as MochiConfig['safety']), mode: 'auto' as const };
+  if (flags['max-tokens'] || flags['max-cost'] || flags['max-model-calls'] || flags['max-tool-calls']) {
+    overrides.safety = {
+      ...(overrides.safety ?? ({} as MochiConfig['safety'])),
+      ...(flags['max-tokens'] ? { maxTokens: Number(flags['max-tokens']) } : {}),
+      ...(flags['max-cost'] ? { maxCostUsd: Number(flags['max-cost']) } : {}),
+      ...(flags['max-model-calls'] ? { maxModelCalls: Number(flags['max-model-calls']) } : {}),
+      ...(flags['max-tool-calls'] ? { maxToolCalls: Number(flags['max-tool-calls']) } : {}),
+    };
+  }
+  if (flags.quiet) overrides.quiet = true;
+  if (flags.verbose) overrides.verbose = true;
+  if (flags.debug) overrides.debug = true;
+  return overrides;
+}
+
+function printHelp() {
+  console.log(`Mochi ${pkg.version} — minimal autonomous coding agent
+
+Usage:
+  mochi [options] ["prompt"]
+  mochi goal "..."
+  mochi team "..."
+  mochi plan "..."
+  mochi resume
+  mochi checkpoint
+  mochi rollback
+  mochi workspace create|list|switch <name>
+  mochi profiles
+  mochi memory
+  mochi inspect "<query>"
+  mochi speculate "<question>"
+  mochi tui
+  mochi perf
+
+Options:
+  -p, --print             Print response and exit
+  --auto                  Autonomous mode
+  --provider <name>       Model provider
+  --model <id>            Model ID
+  --api-key <key>         API key
+  --safety safe|ask|auto  Safety mode
+  --max-tokens <n>        Budget limit
+  --max-cost <usd>        Cost limit
+  --max-model-calls <n>   Model call limit
+  --max-tool-calls <n>    Tool call limit
+  --workspace <name>      Use workspace
+  -q, --quiet             Less output
+  -v, --verbose           More output
+  --debug                 Debug output
+  --chunks <n>            Chunk count for mochi perf
+  -h, --help              Show help
+  --version               Show version
+`);
+}
+
+async function main() {
+  const { flags, positional } = parseArgs(process.argv.slice(2));
+
+  if (flags.h || flags.help) { printHelp(); return; }
+  if (flags.version) { console.log(pkg.version); return; }
+
+  const cwd = process.cwd();
+  const configOverrides = configFromFlags(flags);
+  const { Runtime } = await import('./runtime.js');
+  const { status, diff, isRepo } = await import('./git.js');
+  const runtime = Runtime.create({ cwd, config: configOverrides });
+
+  // Subcommands
+  const first = positional[0];
+  if (first === 'goal') {
+    const sub = positional[1];
+    const objective = positional.slice(1).join(' ');
+    if (!objective) { console.error('Usage: mochi goal "<objective>" | list | show <id> | pause <id> | resume <id> | cancel <id> | retry <id>'); process.exit(1); }
+    if (sub === 'list') {
+      const goals = runtime.workspace.listGoals().map((f) => f.replace(/\.json$/, ''));
+      if (goals.length === 0) console.log('No goals yet.');
+      for (const id of goals) {
+        const goal = runtime.workspace.loadGoal(id);
+        if (goal) console.log(`${goal.status.padEnd(10)} ${id.slice(0, 8)}  ${goal.objective}`);
+      }
+      return;
+    }
+    if (['show', 'pause', 'resume', 'cancel', 'retry', 'approve'].includes(sub)) {
+      const id = positional[2];
+      if (!id) { console.error(`Usage: mochi goal ${sub} <id>`); process.exit(1); }
+      const goal = runtime.workspace.loadGoal(id);
+      if (!goal) { console.error('Goal not found'); process.exit(1); }
+      if (sub === 'show') {
+        console.log(JSON.stringify(goal, null, 2));
+        const tasks = runtime.workspace.loadTasks(goal.id);
+        for (const task of tasks) console.log(`${task.status.padEnd(8)} ${task.title}`);
+        return;
+      }
+      if (sub === 'pause') {
+        goal.status = 'paused';
+        runtime.workspace.saveGoal(goal);
+        console.log(`Paused ${goal.id.slice(0, 8)}`);
+        return;
+      }
+      if (sub === 'cancel') {
+        goal.status = 'cancelled';
+        runtime.workspace.saveGoal(goal);
+        console.log(`Cancelled ${goal.id.slice(0, 8)}`);
+        return;
+      }
+      if (sub === 'retry') {
+        const tasks = runtime.workspace.loadTasks(goal.id).map((t) => (t.status === 'failed' ? { ...t, status: 'pending' as const } : t));
+        runtime.workspace.saveTasks(goal.id, tasks);
+        goal.status = 'active';
+        runtime.workspace.saveGoal(goal);
+        const result = await runtime.goals.runGoal(goal, tasks);
+        console.log(result.summary);
+        return;
+      }
+      if (sub === 'resume' || sub === 'approve') {
+        goal.status = 'active';
+        runtime.workspace.saveGoal(goal);
+        const tasks = runtime.workspace.loadTasks(goal.id);
+        const result = await runtime.goals.runGoal(goal, tasks);
+        console.log(result.summary);
+        return;
+      }
+    }
+    console.log(await runtime.goal(objective));
+    return;
+  }
+  if (first === 'team') {
+    const objective = positional.slice(1).join(' ');
+    if (!objective) { console.error('Usage: mochi team "<objective>"'); process.exit(1); }
+    console.log(await runtime.team(objective));
+    return;
+  }
+  if (first === 'plan') {
+    const objective = positional.slice(1).join(' ');
+    if (!objective) { console.error('Usage: mochi plan "<objective>"'); process.exit(1); }
+    console.log(await runtime.plan(objective));
+    return;
+  }
+  if (first === 'resume') {
+    const goals = runtime.workspace.listGoals();
+    if (goals.length === 0) { console.log('No saved goals to resume.'); return; }
+    const latest = goals[goals.length - 1].replace(/\.json$/, '');
+    const goal = runtime.workspace.loadGoal(latest);
+    if (!goal) { console.log('Goal not found.'); return; }
+    const tasks = runtime.workspace.loadTasks(goal.id);
+    console.log(`Resuming goal: ${goal.objective}`);
+    const result = await runtime.goals.runGoal(goal, tasks);
+    console.log(result.summary);
+    return;
+  }
+  if (first === 'checkpoint') {
+    if (!(await isRepo(cwd))) { console.log('Not a git repository.'); return; }
+    const cp = await runtime.checkpoint(positional.slice(1).join(' ') || 'mochi checkpoint');
+    console.log(`Checkpoint created: ${cp.type} ${cp.ref}`);
+    return;
+  }
+  if (first === 'rollback') {
+    if (!(await isRepo(cwd))) { console.log('Not a git repository.'); return; }
+    console.log(await runtime.rollback());
+    return;
+  }
+  if (first === 'workspace') {
+    const sub = positional[1];
+    if (sub === 'list') {
+      const goals = runtime.workspace.listGoals();
+      console.log(goals.join('\n').replace(/\.json/g, '') || 'No workspaces/goals saved yet.');
+    } else if (sub === 'create' || sub === 'switch') {
+      const name = positional[2];
+      if (!name) { console.error('Usage: mochi workspace create|switch <name>'); process.exit(1); }
+      runtime.config.projectDir = `.mochi/${name}`;
+      const ws = new (await import('./workspace.js')).Workspace(cwd, runtime.config.projectDir);
+      ws.ensure();
+      console.log(`Workspace ready: ${ws.dir}`);
+    } else {
+      console.error('Usage: mochi workspace create|list|switch <name>');
+    }
+    return;
+  }
+  if (first === 'status' || first === 'changes') {
+    if (!(await isRepo(cwd))) { console.log('Not a git repository.'); return; }
+    console.log(await status(cwd));
+    return;
+  }
+  if (first === 'diff') {
+    if (!(await isRepo(cwd))) { console.log('Not a git repository.'); return; }
+    console.log(await diff(cwd));
+    return;
+  }
+  if (first === 'tui') {
+    const { launchTui } = await import('./tui/app.js');
+    await launchTui(runtime);
+    return;
+  }
+  if (first === 'perf') {
+    const { benchmarkStream, formatPerfReport } = await import('./perf.js');
+    const count = flags.chunks ? Number(flags.chunks) : 10000;
+    console.log(formatPerfReport(benchmarkStream(count)));
+    return;
+  }
+  if (first === 'config') {
+    console.log(JSON.stringify(runtime.config, null, 2));
+    return;
+  }
+  if (first === 'providers') {
+    const { PROVIDERS } = await import('./providers.js');
+    for (const p of PROVIDERS) console.log(p.id.padEnd(14) + ' ' + p.name);
+    return;
+  }
+  if (first === 'login' || first === 'use') {
+    const { providerById } = await import('./providers.js');
+    const provider = positional[1];
+    const model = positional[2];
+    if (!provider) {
+      console.log('Usage: mochi login <provider> [model]');
+      const { PROVIDERS } = await import('./providers.js');
+      for (const p of PROVIDERS) console.log('  ' + p.id.padEnd(14) + p.name);
+      return;
+    }
+    const p = providerById(provider);
+    if (!p) { console.error('Unknown provider: ' + provider); return; }
+    const key = process.env[p.envKey] || positional.find((x) => x.startsWith('env:'))?.slice(4);
+    if (!key && p.envKey) {
+      console.log(`Set ${p.envKey} or run 'mochi tui' and use /login to input an API key interactively.`);
+      return;
+    }
+    const info = key ? await runtime.loginProvider(p.id, key, model || p.defaultModel) : await runtime.useProvider(p.id, model || p.defaultModel);
+    console.log(info);
+    return;
+  }
+  if (first === 'models') {
+    console.log(runtime.modelList().join('\n') || 'No models listed for ' + runtime.config.model.provider);
+    return;
+  }
+  if (first === 'doctor') {
+    console.log(runtime.providerInfo());
+    return;
+  }
+  if (first === 'run' || first === 'shell') {
+    const cmd = positional.slice(1).join(' ');
+    const { execFile } = await import('node:child_process');
+    execFile('sh', ['-c', cmd], { cwd }, (e, o, er) => {
+      console.log(String(o ?? ''));
+      if (er) { console.error(String(er)); process.exitCode = (e as any)?.code ?? 1; }
+    });
+    return;
+  }
+  if (first === 'test') {
+    const { detectRepo } = await import('./repo.js');
+    const repo = detectRepo(cwd);
+    const cmd = repo.testCommand ?? 'no test command detected';
+    const { execFile } = await import('node:child_process');
+    execFile('sh', ['-c', cmd], { cwd }, (e, _stdout, stderr) => {
+      if (stderr) console.error(String(stderr));
+      if (e) process.exitCode = (e as any)?.code ?? 1;
+    });
+    return;
+  }
+  if (first === 'init') {
+    const { existsSync, writeFileSync } = await import('node:fs');
+    const p = resolve(cwd, 'MOCHI.md');
+    if (existsSync(p)) { console.log('MOCHI.md already exists.'); return; }
+    writeFileSync(p, '# MOCHI.md\n\nProject instructions for the Mochi coding agent.\n');
+    console.log('Created MOCHI.md');
+    return;
+  }
+  if (first === 'branch') {
+    const { execFile } = await import('node:child_process');
+    execFile('git', ['branch', '--show-current'], { cwd }, (e, out) => console.log(String(out ?? '').trim() || 'no branch'));
+    return;
+  }
+  if (first === 'commit') {
+    const { checkpoint } = await import('./git.js');
+    const cp = await checkpoint(cwd, positional.slice(1).join(' ') || 'mochi commit');
+    console.log(`Committed ${cp.type} ${cp.ref}`);
+    return;
+  }
+  if (first === 'usage') { console.log(runtime.usage.summary()); return; }
+  if (first === 'known-good') { console.log(await runtime.recordGood()); return; }
+  if (first === 'check') { console.log(await runtime.knownGood()); return; }
+  if (first === 'speculate') {
+    const question = positional.slice(1).join(' ');
+    if (!question) { console.error('Usage: mochi speculate "<question>"'); process.exit(1); }
+    const result = await runtime.speculate(question);
+    console.log(`Question: ${question}`);
+    console.log(`Strategies:\n${result.candidates.map((c, i) => `${i + 1}. ${c.strategy}`).join('\n')}`);
+    if (result.best) console.log(`Best: ${result.best.strategy}\n${result.best.response}`);
+    else console.log(result.verifierNotes);
+    return;
+  }
+  if (first === 'profiles') {
+    for (const profile of runtime.profiles()) {
+      console.log(`${profile.name} (${profile.role}) model=${profile.defaultModel ?? 'coding'} verification=${profile.verification ?? 'optional'} tools=${profile.tools?.join(',') ?? 'all'}`);
+    }
+    return;
+  }
+  if (first === 'memory') {
+    const memory = runtime.memory();
+    console.log(memory || 'No project memory yet.');
+    return;
+  }
+  if (first === 'inspect') {
+    const query = positional.slice(1).join(' ');
+    if (!query) { console.error('Usage: mochi inspect "<query>"'); process.exit(1); }
+    const result = await runtime.inspect(query);
+    console.log(result.summary);
+    return;
+  }
+
+  const prompt = positional.join(' ');
+  if (prompt) {
+    if (flags.p || flags.print) {
+      console.log(await runtime.runPrompt(prompt));
+    } else {
+      await interactive(runtime, prompt);
+    }
+    return;
+  }
+
+  await interactive(runtime);
+}
+
+async function interactive(runtime: import('./runtime.js').Runtime, initialPrompt?: string) {
+  const { launchTui } = await import('./tui/app.js');
+  await launchTui(runtime, initialPrompt);
+}
+
+main().catch((e) => {
+  console.error('Fatal:', e instanceof Error ? e.message : e);
+  process.exit(1);
+});

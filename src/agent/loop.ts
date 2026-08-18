@@ -1,0 +1,411 @@
+import { performance } from 'node:perf_hooks';
+import { randomUUID } from 'node:crypto';
+import type { Attempt, ChatMessage, MochiConfig, ModelProfile, Task, ToolDefinition, ToolCall, ToolResult } from '../types.js';
+import type { EventBus } from '../events.js';
+import type { Workspace } from '../workspace.js';
+import type { ContextEngine } from '../context.js';
+import { createProvider } from '../model/router.js';
+import { executeTool, buildTools } from '../tools/index.js';
+import type { ToolContext } from '../tools/types.js';
+import { detectRepo } from '../repo.js';
+import type { AgentProfile } from '../types.js';
+import { AgentProfileService } from '../agents/profile.js';
+import { BudgetEngine } from '../budget.js';
+import { LearningStore, classifyFailure } from '../learning.js';
+import { HookManager } from '../hooks.js';
+import { resolve } from 'node:path';
+
+export interface AgentOptions {
+  id?: string;
+  role: string;
+  modelProfile?: ModelProfile;
+  profile?: AgentProfile;
+  config: MochiConfig;
+  workspace: Workspace;
+  events: EventBus;
+  cwd: string;
+  context: ContextEngine;
+  budget?: BudgetEngine;
+  abortSignal?: AbortSignal;
+}
+
+export interface AgentResult {
+  success: boolean;
+  summary: string;
+  filesModified: string[];
+  attempts: number;
+  tokensUsed: number;
+  durationMs: number;
+}
+
+export class Agent {
+  private id: string;
+  private role: string;
+  private profile: AgentProfile;
+  private config: MochiConfig;
+  private workspace: Workspace;
+  private events: EventBus;
+  private cwd: string;
+  private context: ContextEngine;
+  private budget?: BudgetEngine;
+  private abortSignal?: AbortSignal;
+  private tools: Map<string, import('../tools/types.js').Tool>;
+  private toolDefs: ToolDefinition[];
+  private provider: ReturnType<typeof createProvider>;
+  private tokensUsed = 0;
+  private startTime = 0;
+  private errors: string[] = [];
+  private lastStrategy?: string;
+  private strategyRepeats = 0;
+  private learning: LearningStore;
+  private seenPatterns = new Set<string>();
+  private hooks: HookManager;
+  private toolCallsTotal = 0;
+  private verifyCount = 0;
+  private fileChanged = false;
+  private lastSig = '';
+  private sigStreak = 0;
+
+  constructor(opts: AgentOptions) {
+    this.id = opts.id ?? randomUUID();
+    this.role = opts.role;
+    this.config = opts.config;
+    this.workspace = opts.workspace;
+    this.events = opts.events;
+    this.cwd = opts.cwd;
+    this.context = opts.context;
+    this.budget = opts.budget;
+    this.abortSignal = opts.abortSignal;
+    const profileService = new AgentProfileService(this.workspace.dir);
+    this.profile = opts.profile ?? profileService.get(opts.role) ?? profileService.get('coder')!;
+    this.tools = buildTools(this.config, this.profile.tools);
+    this.learning = new LearningStore(this.workspace.dir);
+    this.hooks = new HookManager(this.workspace.dir);
+    this.toolDefs = [...this.tools.values()].map((t) => t.def);
+    this.provider = createProvider(this.config.model, opts.modelProfile ?? this.profile.defaultModel ?? 'coding');
+    this.events.emit({ type: 'agent:spawned', id: this.id, role: opts.role as any, taskId: '' });
+  }
+
+  async run(task: Task): Promise<AgentResult> {
+    this.startTime = performance.now();
+    this.events.emit({ type: 'task:started', task, agentId: this.id });
+    this.context.updateState({ nextAction: `Start task: ${task.title}` });
+    this.context.addMessage({ role: 'system', content: this.profile.systemPrompt });
+
+    const repo = detectRepo(this.cwd);
+    const gitStatus = await this.runShell('git status --short');
+    this.context.addMessage({ role: 'system', content: `Preflight: repo=${repo.language ?? 'unknown'}, git status:\n${gitStatus}` });
+
+    const maxIterations = this.config.safety.maxIterations;
+    const runtimeLimit = this.config.safety.maxRuntimeMinutes * 60 * 1000;
+
+    for (let i = 0; i < maxIterations; i++) {
+      if (this.abortSignal?.aborted) {
+        return this.finish(task, false, 'Aborted by user');
+      }
+      if (performance.now() - this.startTime > runtimeLimit) {
+        return this.finish(task, false, 'Runtime limit exceeded');
+      }
+      if (this.budget) {
+        this.budget.recordAgentStart();
+        if (!this.budget.canMakeModelCall()) {
+          return this.finish(task, false, 'Budget exhausted before model call');
+        }
+        this.budget.recordModelCall();
+      }
+
+      if (i > 0 && i % 8 === 0) this.context.compact();
+
+      const pulse = this.pulse(i, task);
+      if (pulse.abort) {
+        return this.finish(task, false, pulse.reason ?? 'Pulse abort');
+      }
+      if (pulse.message) {
+        this.context.addMessage({ role: 'system', content: pulse.message });
+      }
+
+      const packet = this.context.buildPacket(this.toolDefs, task, repo);
+      // Anti-loop: if it's just gathering context (read/search) without editing, force an answer.
+      if (this.toolCallsTotal >= 6 && !this.fileChanged) {
+        this.context.addMessage({ role: 'system', content: 'You have gathered enough context without modifying any files. Stop using tools and give your final answer directly now.' });
+      }
+      this.emitMessage('system', `Tokens used: ${packet.usedTokens}/${packet.budgetTokens}`);
+
+      const activeProvider = this.budget?.shouldUseCheaperModel() ? createProvider(this.config.model, 'fast') : this.provider;
+      let response;
+      const gatherStream = async (messages: any) => {
+        const chunks: import('../types.js').StreamChunk[] = [];
+        let first = true;
+        for await (const chunk of activeProvider.streamChat(messages, this.toolDefs, { temperature: 0.2 })) {
+          chunks.push(chunk);
+          if (chunk.content) {
+            if (first) {
+              this.emitMessage('assistant', chunk.content);
+              first = false;
+            } else {
+              this.events.emit({ type: 'message:chunk', content: chunk.content, agentId: this.id } as any);
+            }
+          }
+        }
+        const content = chunks.map((c) => c.content).join('');
+        const callsByIndex = new Map<number, any>();
+        for (const chunk of chunks) {
+          if (chunk.toolCalls) {
+            for (const tc of chunk.toolCalls as any[]) {
+              const idx = tc.index ?? 0;
+              const acc = callsByIndex.get(idx) ?? { id: tc.id, name: tc.function.name, args: '' };
+              acc.name = acc.name || tc.function.name;
+              acc.args += tc.function.arguments || '';
+              callsByIndex.set(idx, acc);
+            }
+          }
+        }
+        const tool_calls = [...callsByIndex.values()].map((a) => ({ id: a.id, type: 'function' as const, function: { name: a.name, arguments: a.args } }));
+        return {
+          content,
+          toolCalls: tool_calls.length ? tool_calls : undefined,
+          finishReason: chunks[chunks.length - 1]?.finishReason,
+          usage: chunks[chunks.length - 1]?.usage,
+        };
+      };
+
+      try {
+        response = await gatherStream(packet.messages);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.context.compact();
+        const retryPacket = this.context.buildPacket(this.toolDefs, task, repo);
+        try {
+          response = await gatherStream(retryPacket.messages);
+        } catch {
+          return this.finish(task, false, `Model request failed: ${message}`);
+        }
+      }
+      if (response.usage) {
+        this.tokensUsed += response.usage.totalTokens;
+        this.budget?.recordTokens(response.usage.totalTokens, this.config.model.model);
+      }
+      this.lastStrategy = response.toolCalls?.[0]?.function.name ?? response.content?.slice(0, 60) ?? '';
+
+      if (response.toolCalls && response.toolCalls.length > 0) {
+        this.context.addMessage({ role: 'assistant', content: response.content ?? '', tool_calls: response.toolCalls });
+        // Loop guard: repeated identical tool calls -> force the model to answer.
+        const nowSig = response.toolCalls.map((c) => `${c.function.name}:${c.function.arguments}`).join('|');
+        if (nowSig === this.lastSig) this.sigStreak++;
+        else { this.sigStreak = 1; }
+        this.lastSig = nowSig;
+        if (this.sigStreak >= 3) {
+          this.context.addMessage({ role: 'system', content: 'You are repeating the same tool call. Stop issuing tools and give a final answer now without any tool calls.' });
+          this.sigStreak = 0;
+        }
+        this.toolCallsTotal++;
+        if (this.toolCallsTotal > 24) {
+          return this.finish(task, false, 'Too many tool calls; stopping to avoid an infinite loop.');
+        }
+        await this.executeToolCalls(response.toolCalls);
+        continue;
+      }
+
+      // No tool calls: decide based on whether real edits happened.
+      if (!this.fileChanged) {
+        if (response.content && response.content.trim()) {
+          return this.finish(task, true, response.content);
+        }
+        return this.finish(task, false, 'Model produced no output and no tool calls.');
+      }
+
+      const verification = await this.verify(task, repo);
+      this.verifyCount++;
+      if (verification.passed) {
+        return this.finish(task, true, verification.summary);
+      }
+      if (this.verifyCount > 3) {
+        return this.finish(task, false, 'Verification failed repeatedly:\n' + verification.summary);
+      }
+      this.addAttempt(task, 'verify', [`${repo.testCommand || repo.buildCommand || 'verify'}`], 'failure', verification.summary);
+      this.context.addKnownError(verification.summary);
+      this.context.addMessage({ role: 'user', content: `Verification failed: ${verification.summary}. Continue and fix.` });
+    }
+
+    this.addAttempt(task, 'exhausted', [], 'failure', `Reached maximum iterations (${maxIterations})`);
+    return this.finish(task, false, `Reached maximum iterations (${maxIterations})`);
+  }
+
+  private isReadOnly(name: string): boolean {
+    return ['read', 'search', 'glob', 'inspect', 'get_function', 'find_callers', 'type_hierarchy'].includes(name);
+  }
+
+  private async executeToolCalls(toolCalls: ToolCall[]) {
+    const batch = [...toolCalls];
+    while (batch.length > 0) {
+      if (this.abortSignal?.aborted) return;
+      const head = batch[0];
+      if (this.isReadOnly(head.function.name)) {
+        let n = 0;
+        while (n < batch.length && n < 8 && this.isReadOnly(batch[n].function.name)) n++;
+        const group = batch.splice(0, Math.max(n, 1));
+        await Promise.all(group.map((tc) => this.runMoolCall(tc)));
+      } else {
+        batch.shift();
+        await this.runMoolCall(head);
+      }
+    }
+  }
+
+  private async runMoolCall(tc: ToolCall): Promise<void> {
+    if (this.abortSignal?.aborted) return;
+    if (this.budget) {
+      this.budget.recordToolCall();
+      if (!this.budget.canExecuteTool()) {
+        this.context.addKnownError('Tool budget exhausted');
+        return;
+      }
+    }
+    const before = await this.hooks.runBefore('before_tool', { tool: tc.function.name });
+    if (!before.allowed) {
+      this.context.addKnownError(`before_tool hook vetoed ${tc.function.name}`);
+      return;
+    }
+    if (['edit', 'write', 'delete'].includes(tc.function.name)) {
+      const editHook = await this.hooks.runBefore('before_edit', { tool: tc.function.name });
+      if (!editHook.allowed) return;
+    }
+    if (tc.function.name === 'shell') {
+      const shellHook = await this.hooks.runBefore('before_shell', { tool: tc.function.name });
+      if (!shellHook.allowed) return;
+    }
+    const args = this.parseArgs(tc.function.arguments);
+    const ctx: ToolContext = {
+      cwd: this.cwd,
+      workspace: this.workspace,
+      config: this.config,
+      events: this.events,
+      agentId: this.id,
+      abortSignal: this.abortSignal,
+    };
+    const { output, error, durationMs } = await executeTool(tc.function.name, args, ctx, this.tools);
+    const result: ToolResult = {
+      toolCallId: tc.id,
+      name: tc.function.name,
+      output: error ? `Error: ${error}\n${output}` : output,
+      error,
+      durationMs,
+    };
+    this.context.addMessage({ role: 'tool', tool_call_id: tc.id, content: result.output, name: tc.function.name });
+    this.events.emit({ type: 'tool:completed', tool: tc.function.name, result, agentId: this.id });
+    await this.hooks.runAfter('after_tool', { tool: tc.function.name });
+    if (['edit', 'write', 'delete'].includes(tc.function.name)) {
+      await this.hooks.runAfter('after_edit', { tool: tc.function.name });
+    }
+    if (tc.function.name === 'shell') {
+      await this.hooks.runAfter('after_shell', { tool: tc.function.name });
+    }
+    if (error) {
+      this.errors.push(error);
+      this.context.addKnownError(error);
+      const classified = classifyFailure(error);
+      if (classified) {
+        this.seenPatterns.add(classified.pattern);
+        this.learning.record(classified.pattern, this.lastStrategy ?? 'unclassified', false);
+      }
+    }
+    if (['write', 'edit', 'delete'].includes(tc.function.name)) {
+      this.fileChanged = true;
+      const path = String(args.path ?? '');
+      if (path) this.context.addModifiedFile(resolve(this.cwd, path));
+    }
+  }
+  private parseArgs(raw: string): Record<string, unknown> {
+    if (!raw.trim()) return {};
+    try {
+      return JSON.parse(raw);
+    } catch {
+      // Fallback: treat as string content
+      return { content: raw };
+    }
+  }
+
+  private async verify(task: Task, repo: ReturnType<typeof detectRepo>): Promise<{ passed: boolean; summary: string }> {
+    const checks: string[] = [];
+    if (task.verificationCommand) {
+      checks.push(task.verificationCommand);
+    }
+    if (repo.testCommand) checks.push(repo.testCommand);
+    if (repo.typecheckCommand) checks.push(repo.typecheckCommand);
+    if (repo.lintCommand) checks.push(repo.lintCommand);
+    if (repo.buildCommand) checks.push(repo.buildCommand);
+    if (checks.length === 0) return { passed: true, summary: 'No verification configured.' };
+
+    for (const cmd of checks) {
+      const out = await this.runShell(cmd, 180);
+      if (out.includes('exit_code: 0') || out.trim().endsWith('PASS')) {
+        continue;
+      }
+      return { passed: false, summary: `Check failed: ${cmd}\n${out.slice(0, 1000)}` };
+    }
+    return { passed: true, summary: `All checks passed: ${checks.join(', ')}` };
+  }
+
+  private pulse(iteration: number, task: Task): { abort: boolean; reason?: string; message?: string } {
+    const recentErrors = this.errors.slice(-3);
+    const allSame = recentErrors.length === 3 && new Set(recentErrors).size === 1;
+    if (allSame) {
+      return { abort: false, message: `Pulse: the last 3 errors were the same (${recentErrors[0]}). Try a different strategy or gather more context before retrying.` };
+    }
+    if (iteration > 0 && iteration % 12 === 0) {
+      return { abort: false, message: `Pulse: ${iteration} iterations. Verify progress and switch approach if blocked.` };
+    }
+    if (this.errors.length >= 6) {
+      return { abort: true, reason: `Too many repeated failures (${this.errors.length}). Stopping.` };
+    }
+    this.events.emit({ type: 'pulse', state: this.context.state });
+    return { abort: false };
+  }
+
+  private addAttempt(task: Task, strategy: string, actions: string[], result: Attempt['result'], failureReason?: string) {
+    task.attempts.push({
+      id: randomUUID(),
+      strategy,
+      actions,
+      result,
+      failureReason,
+      timestamp: Date.now(),
+    });
+  }
+
+  private async runShell(command: string, timeout = 60): Promise<string> {
+    const ctx: ToolContext = {
+      cwd: this.cwd,
+      workspace: this.workspace,
+      config: this.config,
+      events: this.events,
+      agentId: this.id,
+    };
+    const { output, error } = await executeTool('shell', { command, timeout }, ctx, this.tools);
+    return error ? `Error: ${error}\n${output}` : output;
+  }
+
+  private emitMessage(role: 'assistant' | 'user' | 'system', content: string) {
+    this.events.emit({ type: 'message', role, content, agentId: this.id });
+  }
+
+  private finish(task: Task, success: boolean, summary: string): AgentResult {
+    this.budget?.recordAgentEnd();
+    if (success) {
+      for (const pattern of this.seenPatterns) {
+        this.learning.record(pattern, this.lastStrategy ?? 'unclassified', true);
+      }
+    }
+    const durationMs = Math.round(performance.now() - this.startTime);
+    this.events.emit({ type: success ? 'task:completed' : 'task:failed', task, agentId: this.id, reason: summary });
+    this.events.emit({ type: 'agent:completed', id: this.id, taskId: task.id });
+    return {
+      success,
+      summary,
+      filesModified: [...new Set(this.context['state'].filesModified)],
+      attempts: this.errors.length + 1,
+      tokensUsed: this.tokensUsed,
+      durationMs,
+    };
+  }
+}

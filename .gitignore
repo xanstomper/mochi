@@ -1,0 +1,5 @@
+node_modules
+dist
+.mochi
+*.log
+.DS_Store

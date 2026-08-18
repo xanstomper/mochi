@@ -1,0 +1,47 @@
+{
+  "name": "@mochi/agent",
+  "version": "0.5.1",
+  "description": "Minimal, fast, autonomous coding agent for the terminal.",
+  "type": "module",
+  "bin": {
+    "mochi": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && chmod +x dist/cli.js",
+    "dev": "tsx src/cli.ts",
+    "test": "vitest run",
+    "bench": "node bench/startup.mjs",
+    "bench:efficiency": "node bench/efficiency.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.9.0",
+    "vitest": "^2.0.0"
+  },
+  "dependencies": {},
+  "optionalDependencies": {
+    "tree-sitter-typescript": "^0.23.2",
+    "web-tree-sitter": "^0.24.5"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "coding-agent",
+    "terminal",
+    "llm"
+  ],
+  "license": "MIT"
+}
