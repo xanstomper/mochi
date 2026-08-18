@@ -71,4 +71,19 @@ describe('GoalEngine', () => {
     expect(readFileSync(resolve(dir, 'generated.txt'), 'utf8')).toBe('mochi goal');
     expect(result.summary).toContain('1 done');
   });
+
+  it('decomposes a one-shot answer objective into a single no-verify task', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-goal-'));
+    const workspace = new Workspace(dir, '.mochi');
+    workspace.ensure();
+    const engine = new GoalEngine(config, workspace, new EventBus(), dir);
+    const goal = await engine.createGoal('Say hello in exactly 3 words.');
+    const tasks = await engine.decompose(goal);
+    // The fast path short-circuits the model decomposition: one bare answer task.
+    expect(tasks.length).toBe(1);
+    expect(tasks[0].acceptanceCriteria.length).toBe(0);
+    expect(tasks[0].verificationCommand).toBeUndefined();
+    // It must not be routed to the heavyweight generate/verify path.
+    expect(tasks[0].title).toContain('Say hello');
+  });
 });

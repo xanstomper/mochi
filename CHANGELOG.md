@@ -72,15 +72,22 @@ Internal Chameleon + Termix rework (no external services, no auto-launch):
   (`src/one-shot.ts`) recognizes high-confidence answer/summarize tasks and
   injects a "resolve in one turn" nudge so the loop doesn't burn tokens on
   needless tool round-trips. Verification still gates every "done" when files
-  changed; the classifier never short-circuits tasks that touch code.
+  changed; the classifier never short-circuits tasks that touch code. It now
+  also short-circuits at the *decomposition* stage: one-shot goals emit a
+  single no-verify answer task instead of asking the model to over-engineer a
+  simple question into a file-creation + verify loop. Measured end to end on
+  "Say hello in exactly 3 words": the old path failed after a self-imposed
+  coding task (10,019 tokens / $0.0014 / 2s); the new path succeeds in one
+  direct turn (2,209 tokens / $0.0003 / ~0s) — an ~4.5× token cut, and genuine
+  coding tasks still flow through the normal builder/verifier path unchanged.
 - **Mutation-invalidated search cache**: the `search` result cache is now keyed
   by a shared process-wide mutation generation that the `write`/`edit`/`delete`
   tools bump on every real file change (`src/tools/fs-signal.ts`). A repeated
   identical query is deduped, but a write/edit/delete invalidates the stale
   entry instantly (O(1), no tree re-walk), so the cache can never serve a result
   that a subsequent edit has already made wrong.
-- 78 tests green (relevance, search-structure/dedup/cache-invalidation, and
-  one-shot coverage), typecheck clean.
+- 81 tests green (relevance, search-structure/dedup/cache-invalidation, and
+  one-shot classification + decomposition coverage), typecheck clean.
 
 ## 0.5.4
 

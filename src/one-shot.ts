@@ -25,7 +25,12 @@ const ANSWER_MARKERS = [
   'difference between', 'compare', 'when should',
 ];
 
-// Editing / verification signals that rule out a one-shot answer.
+// Short direct-utterance commands ("say hello", "reply in 3 words", "return the
+// json") that almost never need to touch the filesystem. Only honoured when the
+// objective is short and carries no edit/work marker, to avoid misrouting a real
+// coding command like "say it by writing a logger".
+const UTTERANCE_MARKERS = ['say ', 'return ', 'respond', 'print ', 'answer', 'reply', 'output ', 'return exactly'];
+
 const WORK_MARKERS = [
   'create', 'write a', 'implement', 'build', 'add ', 'fix', 'refactor', 'change',
   'update', 'migrate', 'test that', 'write tests', 'new file', 'editing',
@@ -54,7 +59,11 @@ export function classifyOneShot(input: ClassifyInput): { kind: OneShotKind; sugg
     return { kind: 'not_one_shot' as const, suggests: null };
   }
 
-  const answered = ANSWER_MARKERS.some((m) => text.includes(m));
+  const hasAnswer = ANSWER_MARKERS.some((m) => text.includes(m));
+  // Trivial short utterance commands ("say hello", "reply in 3 words") are also
+  // one-shot when the objective is compact and clean of work intent.
+  const isShortUtterance = text.length < 90 && UTTERANCE_MARKERS.some((m) => text.includes(m));
+  const answered = hasAnswer || isShortUtterance;
   if (!answered) return { kind: 'not_one_shot' as const, suggests: null };
 
   // 'summarize' may still need a read; route it as a short, single-read task.

@@ -11,6 +11,7 @@ import { AgentProfileService } from '../agents/profile.js';
 import { BudgetEngine } from '../budget.js';
 import { VerifierEngine } from '../verification.js';
 import { HookManager } from '../hooks.js';
+import { classifyOneShot } from '../one-shot.js';
 import { resolve } from 'node:path';
 
 export interface GoalResult {
@@ -63,6 +64,32 @@ export class GoalEngine {
   }
 
   async decompose(goal: Goal): Promise<Task[]> {
+    // One-shot fast path (decomposition level): if the objective is a pure,
+    // self-contained knowledge/summary question, do NOT ask the model to turn
+    // it into a heavyweight coding task with acceptance criteria and a verify
+    // loop. Emit one lightweight answer task with no verification, so the agent
+    // resolves it in a single direct turn. This is the real token win: the
+    // model was previously self-decomposing "say hello" into a file-creation
+    // task that taxed a verifier. Verification is still used for any task that
+    // actually has acceptance criteria or a verification command.
+    const oneShot = classifyOneShot({
+      title: goal.objective,
+      description: goal.objective,
+      acceptanceCriteria: [],
+    });
+    if (oneShot.kind === 'answer' || oneShot.kind === 'summarize') {
+      const task = createTask(goal.objective, goal.objective, {
+        role: 'coder',
+        dependencies: [],
+        acceptanceCriteria: [],
+        // Intentionally no verificationCommand: a direct answer needs no build.
+      });
+      goal.tasks.push(task.id);
+      this.workspace.saveGoal(goal);
+      this.workspace.saveTasks(goal.id, [task]);
+      return [task];
+    }
+
     const provider = createProvider(this.config.model, 'reasoning');
     const ctx = new ContextEngine(this.config, this.cwd);
     ctx.setGoal(goal.objective);

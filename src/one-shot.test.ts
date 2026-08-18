@@ -42,6 +42,25 @@ describe('one-shot fast-path classifier', () => {
     expect(r.kind).toBe('not_one_shot');
   });
 
+  it('routes short utterance commands like "say hello" to a direct answer', () => {
+    const r = classifyOneShot({
+      title: 'Say hello in exactly 3 words',
+      description: 'Say hello in exactly 3 words.',
+      acceptanceCriteria: [],
+    });
+    expect(r.kind).toBe('answer');
+    expect(r.suggests).toContain('one turn');
+  });
+
+  it('does not route a real coding command that mentions creating a file', () => {
+    const r = classifyOneShot({
+      title: 'Create a hello program',
+      description: 'Create a hello file that prints.',
+      acceptanceCriteria: [],
+    });
+    expect(r.kind).toBe('not_one_shot');
+  });
+
   it('refuses neutral tasks that are not questions (no marker)', () => {
     const r = classifyOneShot({
       title: 'Project setup',
