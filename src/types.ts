@@ -73,6 +73,16 @@ export interface Task {
   completedAt?: number;
 }
 
+/** One durable item in the persistent, resumable todo list the model maintains
+ *  mid-run. Kept terse so it is cheap to echo; deduped by title, ordered by
+ *  `order`. Shared across parallel agents for one goal run. */
+export interface TodoItem {
+  title: string;
+  status: 'pending' | 'in_progress' | 'done';
+  order: number;
+  notes?: string;
+}
+
 export interface Goal {
   id: string;
   workspace: string;

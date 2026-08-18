@@ -104,6 +104,27 @@ export class Workspace {
     this.writeJson('state/agent.json', state);
   }
 
+  loadTodos(): import('./types.js').TodoItem[] {
+    return this.readJson<import('./types.js').TodoItem[]>('state/todo.json', []);
+  }
+
+  saveTodos(todos: import('./types.js').TodoItem[]) {
+    this.writeJson('state/todo.json', todos);
+  }
+
+  /** Serialized read-modify-write over the persistent todo list so parallel
+   *  agents can't lose each other's updates. `fn` receives the latest list and
+   *  returns the new list (or null to abort). */
+  async mutateTodos<T>(fn: (todos: import('./types.js').TodoItem[]) => T | null): Promise<T | null> {
+    return this.stateLock.run(() => {
+      const todos = this.loadTodos();
+      const result = fn(todos);
+      if (result === null) return null;
+      this.saveTodos(todos);
+      return result;
+    });
+  }
+
   /**
    * Append a completed task title to persisted state WITHOUT losing sibling
    * writes from parallel agents. Serialized through `stateLock`, re-reads the

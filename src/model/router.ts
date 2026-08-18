@@ -1,8 +1,9 @@
-import type { ModelConfig, ModelProfile } from '../types.js';
+import type { ModelConfig, ModelProfile, StreamChunk, ModelResponse, ChatMessage, ToolDefinition } from '../types.js';
 import { PROVIDERS } from '../providers.js';
 import { createOpenAIProvider, type ProviderConfig } from './openai.js';
 import { createAnthropicProvider } from './anthropic.js';
 import { createGeminiProvider } from './gemini.js';
+import { CapabilityRegistry, providerKey } from './capability.js';
 export type { ProviderConfig } from './openai.js';
 
 const ALIASES: Record<string, { baseUrl: string; defaultModel: string }> = {
@@ -51,7 +52,11 @@ export function selectModel(config: ModelConfig, profile: ModelProfile): string 
 }
 
 export function createProvider(config: ModelConfig, profile?: ModelProfile) {
-  // Resolve aliates
+  const provider = createRawProvider(config, profile);
+  return withCapabilityGate(provider, config, resolveProvider(config));
+}
+
+function createRawProvider(config: ModelConfig, profile?: ModelProfile) {
   const name = config.provider.toLowerCase();
   const kind = kindOf(config.provider);
   const resolved = resolveProvider(config);
@@ -67,4 +72,86 @@ function kindOf(id: string): 'openai' | 'anthropic' | 'gemini' | undefined {
   const fromAlias = ALIAS_KIND[id];
   if (fromAlias) return fromAlias;
   return PROVIDERS.find((p) => p.id === id)?.kind;
+}
+
+interface RawProvider {
+  streamChat(messages: ChatMessage[], tools: ToolDefinition[], options?: { temperature?: number; maxTokens?: number }): AsyncGenerator<StreamChunk>;
+  chat(messages: ChatMessage[], tools: ToolDefinition[], options?: { temperature?: number; maxTokens?: number }): Promise<ModelResponse>;
+}
+
+/**
+ * Wrap a raw provider with a capability gate (see capability.ts). Before each
+ * call we consult the registry for `provider@base`. A provider that is
+ * mid-cooldown or marked dead is reported and SKIPPED fast instead of being
+ * hammered (the exact failure Mochi hit with dead opencode endpoints). On a
+ * permanent transport failure (ECONNREFUSED/ENOTFOUND) the provider is marked
+ * dead; on success we record ok so a healthy provider is trusted immediately.
+ *
+ * Health is kept in-memory for the process by default (no disk pollution, tests
+ * isolated). Set MOCHI_CAPABILITY_DIR to persist provider health across runs.
+ */
+function withCapabilityGate(provider: RawProvider, config: ModelConfig, resolved: ProviderConfig) {
+  const key = providerKey(config.provider, resolved.baseUrl);
+  const gate = function () {
+    // Persistently remember provider health across runs ONLY when the dir is
+    // explicit (MOCHI_CAPABILITY_DIR). Otherwise keep it in-memory for the
+    // process so default runs and tests are never polluted by stale state.
+    const dir = process.env.MOCHI_CAPABILITY_DIR;
+    const reg = dir
+      ? new CapabilityRegistry(dir, true)
+      : (IN_MEMORY_REGISTRY ??= new CapabilityRegistry('', false));
+    const st = reg.status(key);
+    if (st.status === 'dead') {
+      throw new Error(`Provider ${config.provider} is marked dead (${st.record?.lastError ?? 'previous terminal failure'}). Skipping; re-probe after cooldown.`);
+    }
+    if (st.status === 'cooldown') {
+      throw new Error(`Provider ${config.provider} is cooling down after failures. Try again shortly. (${st.record?.lastError ?? ''})`);
+    }
+    return reg;
+  };
+
+  async function* streamChat(messages: ChatMessage[], tools: ToolDefinition[], options?: { temperature?: number; maxTokens?: number }): AsyncGenerator<StreamChunk> {
+    const reg = gate();
+    try {
+      for await (const chunk of provider.streamChat(messages, tools, options)) {
+        yield chunk;
+      }
+      reg.record(key, { ok: true, check: 'chat' });
+    } catch (err) {
+      reg.record(key, { ok: false, error: err instanceof Error ? err.message : String(err), check: 'chat' });
+      if (isPermanent(err)) reg.markDead(key, err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+  }
+
+  async function chat(messages: ChatMessage[], tools: ToolDefinition[], opts?: { temperature?: number; maxTokens?: number }) {
+    const reg = gate();
+    try {
+      const result = await provider.chat(messages, tools, opts);
+      reg.record(key, { ok: true, check: 'chat' });
+      return result;
+    } catch (err) {
+      reg.record(key, { ok: false, error: err instanceof Error ? err.message : String(err), check: 'chat' });
+      if (isPermanent(err)) reg.markDead(key, err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+  }
+
+  return { streamChat, chat };
+}
+
+function isPermanent(err: unknown): boolean {
+  if (err && typeof err === 'object' && 'cause' in err) {
+    const cause = (err as { cause?: unknown }).cause;
+    if (cause && typeof cause === 'object' && 'code' in (cause as object)) {
+      const code = (cause as { code?: string }).code;
+      if (code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'ENETUNREACH') return true;
+    }
+  }
+  return false;
+}
+
+let IN_MEMORY_REGISTRY: CapabilityRegistry | undefined;
+export function resetCapabilityRegistry() {
+  IN_MEMORY_REGISTRY = undefined;
 }
