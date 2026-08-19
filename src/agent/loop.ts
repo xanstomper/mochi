@@ -638,10 +638,19 @@ export class Agent {
     if (task.verificationCommand) {
       checks.push(withCwd(task.verificationCommand, scopeDir));
     }
-    if (repo.testCommand) checks.push(withCwd(repo.testCommand, scopeDir));
-    if (repo.typecheckCommand) checks.push(withCwd(repo.typecheckCommand, scopeDir));
-    if (repo.lintCommand) checks.push(withCwd(repo.lintCommand, scopeDir));
-    if (repo.buildCommand) checks.push(withCwd(repo.buildCommand, scopeDir));
+    // Repo-level commands (testCommand/typecheckCommand/lintCommand/buildCommand)
+    // describe the PROJECT ROOT, not the task's fileScope directory. If the
+    // task has a fileScope, those commands would run inside the scope dir
+    // (e.g. cd <scope> && npm run build) but the package.json there usually
+    // has no `build` script and the check fails for the wrong reason. Skip
+    // them when a fileScope is set; the explicit task.verificationCommand +
+    // the auto-detected runner cover the task's own verification.
+    if (!scopeDir) {
+      if (repo.testCommand) checks.push(repo.testCommand);
+      if (repo.typecheckCommand) checks.push(repo.typecheckCommand);
+      if (repo.lintCommand) checks.push(repo.lintCommand);
+      if (repo.buildCommand) checks.push(repo.buildCommand);
+    }
     // Auto-detected real test runner: only added when the explicit
     // verificationCommand is weak (e.g. `test -f ... && grep ...`) so the
     // mutation check has actual code coverage to evaluate. Skipped when the
