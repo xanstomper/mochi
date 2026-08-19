@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { execSync } from 'node:child_process';
-import { Agent } from './loop.js';
+import { Agent, isPlanShaped } from './loop.js';
 import { ContextEngine } from '../context.js';
 import { EventBus } from '../events.js';
 import { Workspace } from '../workspace.js';
@@ -306,6 +306,89 @@ describe('Agent', () => {
     const failLesson = all.find((l) => l.id.endsWith(':fail'));
     expect(failLesson).toBeDefined();
     expect(failLesson!.lesson).toMatch(/AVOID/);
+    await fake.close();
+  });
+
+  it('isPlanShaped rejects preamble text and accepts structured plans', () => {
+    expect(isPlanShaped("I'll research the codebase first to understand the project structure and")).toBe(false);
+    expect(isPlanShaped('Let me look into this before proposing anything.')).toBe(false);
+    expect(isPlanShaped('ok')).toBe(false);
+    // Numbered steps.
+    expect(isPlanShaped('PLAN:\n1. Create plan.txt\n2. Add a greeting\n3. Verify with read')).toBe(true);
+    expect(isPlanShaped('1) add parser module\n2) wire it into main\n3) test')).toBe(true);
+    // Two or more bullets.
+    expect(isPlanShaped('- add parser.ts\n- write tests\n- run vitest')).toBe(true);
+    // Substantive prose with a plan header.
+    expect(isPlanShaped([
+      'Steps:',
+      '1. Create the module in src/.',
+      '2. Export the public API.',
+      '3. Add unit tests and run them.',
+      'Risks: minimal; the module is new.',
+    ].join('\n'))).toBe(true);
+  });
+
+  it('plan mode nudges a preamble response instead of accepting it as done', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-plan-nudge-'));
+    const fake = await startFakeOpenAI([
+      { content: "I'll research the codebase first to understand the project structure and", finishReason: 'stop' },
+      { content: 'PLAN:\n1. Create plan.txt\n2. Add a greeting\n3. Verify with read', finishReason: 'stop' },
+    ]);
+    const config = makeConfig(dir, fake.url);
+    const workspace = new Workspace(dir, '.mochi');
+    workspace.ensure();
+    const context = new ContextEngine(config, dir);
+    context.setGoal('plan a change');
+    const task = createTask('Plan change', 'Produce a plan to modify plan.txt.');
+
+    const agent = new Agent({
+      id: 'plan-nudge-agent',
+      role: 'coder',
+      config,
+      workspace,
+      events: new EventBus(),
+      cwd: dir,
+      context,
+      planMode: true,
+    });
+
+    const result = await agent.run(task);
+    // The preamble must NOT finish the run; the plan must be the summary.
+    expect(result.success).toBe(true);
+    expect(result.summary).toContain('PLAN');
+    expect(result.summary).toContain('Add a greeting');
+    expect(result.attempts).toBeGreaterThanOrEqual(1);
+    await fake.close();
+  });
+
+  it('plan mode fails when the model never produces a plan (nudge budget exhausted)', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-plan-giveup-'));
+    // The fake replays its last entry forever, so the loop sees preambles on
+    // every iteration and must terminate with a failure, not spin.
+    const fake = await startFakeOpenAI([
+      { content: "I'll research the codebase first shortly", finishReason: 'stop' },
+    ]);
+    const config = makeConfig(dir, fake.url);
+    const workspace = new Workspace(dir, '.mochi');
+    workspace.ensure();
+    const context = new ContextEngine(config, dir);
+    context.setGoal('plan a change');
+    const task = createTask('Plan change', 'Produce a plan.');
+
+    const agent = new Agent({
+      id: 'plan-giveup-agent',
+      role: 'coder',
+      config,
+      workspace,
+      events: new EventBus(),
+      cwd: dir,
+      context,
+      planMode: true,
+    });
+
+    const result = await agent.run(task);
+    expect(result.success).toBe(false);
+    expect(result.summary).toContain('Planner never produced a plan');
     await fake.close();
   });
 });

@@ -43,6 +43,36 @@ import { classifyOneShot } from '../one-shot.js';
 import { buildMcpTools } from '../mcp/tools.js';
 import { preEditSnapshot as gitPreEditSnapshot, rollbackToSnapshot as gitRollback, type CheckpointResult } from '../git.js';
 
+/**
+ * Decide whether a model reply is an actual plan versus a preamble like
+ * "I'll research the codebase first...". Plan mode's deliverable is the plan
+ * text itself, so a non-tool reply must LOOK like a plan (numbered steps,
+ * bullets, or explicitly structured plan language) before the loop accepts it
+ * as done. Without this, a model that answers with delay-preamble text would
+ * "succeed" without ever producing a plan.
+ *
+ * Signals, strongest first:
+ *   - an explicit numbered list (1. / 1) / (1))
+ *   - two or more bullet items
+ *   - generous prose with plan vocabulary (steps, files, verify...) plus
+ *     structure headers, so a one-liner keeps the model on task.
+ */
+export function isPlanShaped(text: string): boolean {
+  const t = text.trim();
+  if (!t) return false;
+  // Numbered list: "1." / "1)" / "1." at a line start (optionally after a header).
+  if (/(?:^|\n)\s*\d+[.)]/.test(t)) return true;
+  // Two or more bullet / checked items.
+  const bullets = (t.match(/(?:^|\n)\s*(?:[-*•]|\d{1,2}\.)\s+/g) ?? []).length;
+  if (bullets >= 2) return true;
+  // No explicit list: require substantial content, plan vocabulary, AND a
+  // structure header so a one-liner preamble stays a nudge, not a success.
+  return (
+    t.length >= 120 &&
+    /(^|\n)\s*(steps|plan|approach|files? to change|risks?|verification|how to verify|outline|summary|tasks?|deliverables)\s*[:.]/i.test(t)
+  );
+}
+
 export interface AgentOptions {
   id?: string;
   role: string;
@@ -113,6 +143,7 @@ export class Agent {
   private readCache: ReadCache;
   private planMode: boolean;
   private planVetoes = 0;
+  private planNudges = 0;
   private subagentDepth: number;
   private mcpClose?: () => void;
 
@@ -359,6 +390,22 @@ export class Agent {
       // No tool calls: decide based on whether real edits happened.
       if (!this.fileChanged) {
         if (response.content && response.content.trim()) {
+          // In plan mode the deliverable is the plan itself: a reply that does
+          // not look like a plan (e.g. "I'll research the codebase first")
+          // is a preamble, not a result. Nudge the model back on task until
+          // it either produces a plan or exhausts the nudge budget.
+          if (this.planMode && !isPlanShaped(response.content)) {
+            this.planNudges++;
+            if (this.planNudges > 3) {
+              return this.finish(task, false, 'Planner never produced a plan. Last reply:\n' + response.content);
+            }
+            this.context.addMessage({
+              role: 'system',
+              content: 'PLAN MODE: that was a preamble, not a plan. Your final message MUST be the actual plan: numbered steps, files to change, risks, and how to verify. Output the plan directly now, no tool calls, no "I will".',
+            });
+            this.events.emit({ type: 'agent:log', agentId: this.id, message: '[plan-mode] non-plan reply; nudging for the plan' });
+            continue;
+          }
           return this.finish(task, true, response.content);
         }
         return this.finish(task, false, 'Model produced no output and no tool calls.');
