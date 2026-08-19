@@ -196,6 +196,7 @@ export class Agent {
   private planMode: boolean;
   private planVetoes = 0;
   private planNudges = 0;
+  private selfReviewCount = 0;
   private subagentDepth: number;
   private mcpClose?: () => void;
 
@@ -474,6 +475,23 @@ export class Agent {
         // refuted states and writes a procedural lesson so the next run has a
         // head start on this kind of failure.
         this.recordSuccess(task, repo);
+        // Verification passing only proves tests ran green; it does not prove
+        // the DIFF is right. A cheap self-review read of the change catches
+        // test-blind holes (accidental deletions, dead code, wrong constants,
+        // pasted hacks) before we declare done. When it finds a real issue we
+        // keep looping so the fix gets verified in the next iteration.
+        if (!this.planMode && this.shouldSelfReview(task)) {
+          const review = await this.selfReview(task, repo);
+          if (review.issue) {
+            this.selfReviewCount++;
+            this.context.addMessage({
+              role: 'system',
+              content: 'SELF-REVIEW found a problem with the change. Fix it before finishing:\n' + review.issue,
+            });
+            this.events.emit({ type: 'agent:log', agentId: this.id, message: `[self-review] ${review.tail}` });
+            continue;
+          }
+        }
         return this.finish(task, true, verification.summary);
       }
       if (this.verifyCount > 3) {
@@ -965,6 +983,54 @@ export class Agent {
     };
     const { output, error } = await executeTool('shell', { command, timeout }, ctx, this.tools);
     return error ? `Error: ${error}\n${output}` : output;
+  }
+
+  /** Self-review only pays off when the agent actually changed files this run.
+   *  Pure answer/research tasks skip it (nothing to review). */
+  private shouldSelfReview(task: Task): boolean {
+    if (!this.fileChanged) return false;
+    // Bound the cost: after two review cycles the model is clearly not going
+    // to move; stop burning tokens on it.
+    return this.selfReviewCount < 2;
+  }
+
+  /** One cheap model call reviewing the working diff. Returns nothing when the
+   *  change looks clean, else a concrete, actionable problem for the loop to
+   *  fix (and re-verify). */
+  private async selfReview(task: Task, repo: ReturnType<typeof detectRepo>): Promise<{ issue?: string; tail: string }> {
+    try {
+      const diff = await this.runShell(`git diff --stat && git diff`, 30);
+      if (!diff.trim() || diff.includes('exit_code: 128')) return { tail: 'no diff' };
+      const packet = this.context.buildPacket([], task, repo);
+      const reviewMsg: ChatMessage[] = [
+        ...packet.messages,
+        {
+          role: 'user',
+          content: [
+            'Review ONLY the diff below for real correctness problems — not style.',
+            'Look specifically for:',
+            '1. deleted lines/code that should remain (accidental removal),',
+            '2. unused imports/declarations introduced, or dead code left behind,',
+            '3. wrong constants / off-by-one / inverted logic vs the task,',
+            '4. placeholder "TODO" or debug leftovers committed as the real fix,',
+            '5. the change being larger or smaller than the task asked for.',
+            'Reply with the single most important real problem (with the file+line),',
+            'or reply with exactly NO_ISSUE if the diff is correct.',
+            '',
+            diff.slice(0, 12_000),
+          ].join('\n'),
+        },
+      ];
+      const response = await this.provider.chat(reviewMsg, []);
+      const text = (response.content ?? '').trim();
+      const tail = text.slice(0, 200);
+      if (/^NO_ISSUE$/i.test(text) || /no issue|cannot identify|looks (correct|good|fine)/i.test(text)) {
+        return { tail };
+      }
+      return { issue: text.slice(0, 800), tail };
+    } catch {
+      return { tail: 'review failed' }; // never block success on review infra
+    }
   }
 
   private emitMessage(role: 'assistant' | 'user' | 'system', content: string) {

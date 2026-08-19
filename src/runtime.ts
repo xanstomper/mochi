@@ -29,6 +29,8 @@ export class Runtime {
   goals: GoalEngine;
   private hooks: HookManager;
   readonly usage: UsageStore;
+  private abortController: AbortController;
+  private abortSignal: AbortSignal;
 
   constructor(opts: RuntimeOptions = {}) {
     this.config = loadConfig(opts.config);
@@ -40,11 +42,37 @@ export class Runtime {
     this.goals = new GoalEngine(this.config, this.workspace, this.events, projectRoot);
     this.hooks = new HookManager(this.workspace.dir);
     this.usage = new UsageStore(this.workspace.dir);
+    // A run-level abort: a user hitting Ctrl-C (or a daemon shutdown) aborts
+    // the active goal cleanly, letting agents stop at their next checkpoint
+    // so subprocesses are not orphaned by a hard SIGKILL.
+    this.abortController = new AbortController();
+    this.abortSignal = this.abortController.signal;
 
     const projectConfig = loadProjectConfig(this.workspace.dir);
     if (Object.keys(projectConfig).length) {
       this.config = loadConfig({ ...projectConfig, ...opts.config });
     }
+  }
+
+  /** Abort the currently-running goal (if any) so the loop stops cleanly. */
+  abort(reason = 'aborted by user'): void {
+    if (!this.abortController.signal.aborted) this.abortController.abort(new Error(reason));
+  }
+
+  /** Register a one-shot interrupt: second signal force-exits. */
+  onInterrupt(handler: () => void): void {
+    let first = true;
+    const onSig = () => {
+      if (first) {
+        first = false;
+        handler();
+        this.abort();
+      } else {
+        process.exit(130);
+      }
+    };
+    process.on('SIGINT', onSig);
+    process.on('SIGTERM', onSig);
   }
 
   static create(opts?: RuntimeOptions): Runtime {
@@ -92,7 +120,7 @@ export class Runtime {
   async goal(objective: string, constraints: string[] = [], opts?: { enhance?: boolean; enhanceMode?: string }): Promise<string> {
     const goal = await this.goals.createGoal(objective, constraints);
     const tasks = await this.goals.decompose(goal);
-    const result = await this.goals.runGoal(goal, tasks, await this.enhancedCtx(objective, opts));
+    const result = await this.goals.runGoal(goal, tasks, await this.enhancedCtx(objective, opts), this.abortSignal);
     this.recordUsage(goal.objective, result);
     // Plan mode: the agents' plan text is the deliverable, so include it in
     // the user-facing summary instead of just "Goal completed".
@@ -127,7 +155,7 @@ export class Runtime {
     if (!pending) return 'No pending plan. Run /plan first.';
     const goal = this.workspace.loadGoal(pending.id) ?? await this.goals.createGoal(pending.objective);
     const tasks = this.workspace.loadTasks(pending.id).length ? this.workspace.loadTasks(pending.id) : await this.goals.decompose(goal);
-    const result = await this.goals.runGoal(goal, tasks);
+    const result = await this.goals.runGoal(goal, tasks, [], this.abortSignal);
     this.recordUsage(pending.objective, result);
     this.workspace.writeJson('state/pending-goal.json', {});
     return result.summary;
@@ -160,7 +188,7 @@ export class Runtime {
     // Single-agent one-shot task.
     const goal = await this.goals.createGoal(prompt);
     const task = (await this.goals.decompose(goal))[0];
-    const result = await this.goals.runGoal(goal, [task]);
+    const result = await this.goals.runGoal(goal, [task], [], this.abortSignal);
     this.recordUsage(prompt, result);
     if (this.config.planMode) {
       const plan = result.completedTasks.map((t) => t.output).filter((o) => o && o.trim()).join('\n\n');

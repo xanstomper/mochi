@@ -142,6 +142,12 @@ async function main() {
   const { status, diff, isRepo } = await import('./git.js');
   const runtime = Runtime.create({ cwd, config: configOverrides });
 
+  // Ctrl-C / SIGTERM aborts the active run cleanly instead of SIGKILLing the
+  // process and orphaning subagents; a second interrupt force-exits.
+  runtime.onInterrupt(() => {
+    console.error('\nInterrupt received; aborting the run cleanly…');
+  });
+
   const first = positional[0];
 
   // `mochi daemon ...` — persistent agent over localhost HTTP.

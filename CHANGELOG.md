@@ -1,5 +1,20 @@
 # Mochi Changelog
 
+## 0.9.6 (unreleased)
+
+- **Clean interrupt handling.** Ctrl-C / SIGTERM now aborts the active goal
+  cleanly instead of SIGKILLing the process and orphaning subagents: Runtime
+  owns an AbortController, GoalEngine.runGoal accepts an external signal, and
+  the CLI registers a one-shot interrupt handler (second interrupt force-
+  exits). The agent loop stops at its next checkpoint and finishes the task
+  as aborted.
+- **Self-review pass.** After verification passes, the agent spends one cheap
+  model call reviewing the working git diff for test-blind correctness
+  problems (accidental deletions, dead code, wrong constants, TODO/debug
+  leftovers, out-of-scope edits). A real issue feeds back into the loop so it
+  is fixed and re-verified (bounded to two review rounds); a clean review
+  confirms done. Skipped for pure answer/research tasks and plan mode.
+
 ## 0.9.5
 
 - **From Horus (xanstomper/Horus).** New `src/security.ts` ports and

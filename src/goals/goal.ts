@@ -164,7 +164,7 @@ Return ONLY the JSON array, no markdown.`;
     return tasks;
   }
 
-  async runGoal(goal: Goal, tasks?: Task[], extraContext: string[] = []): Promise<GoalResult> {
+  async runGoal(goal: Goal, tasks?: Task[], extraContext: string[] = [], signal?: AbortSignal): Promise<GoalResult> {
     const goalHook = await this.hooks.runBefore('before_goal', { goal: goal.id });
     if (!goalHook.allowed) {
       return {
@@ -185,7 +185,12 @@ Return ONLY the JSON array, no markdown.`;
     const allTasks = tasks ?? this.workspace.loadTasks(goal.id);
     const scheduler = new TaskScheduler(allTasks, this.events);
     const maxConcurrency = this.config.safety.maxConcurrentAgents;
+    // Prefer an externally-created signal (user hit Ctrl-C in the CLI or the
+    // daemon is shutting down) so the run aborts cleanly instead of being
+    // SIGKILLed with subagents left running. Falls back to a local controller.
     const abortController = new AbortController();
+    const externalAbort = () => abortController.abort();
+    signal?.addEventListener('abort', externalAbort, { once: true });
     // One read cache shared by every agent in the run (dedup on (mtime,size),
     // so edits still invalidate). Parallel agents re-reading the same hot
     // source files now hit memory instead of disk repeatedly.

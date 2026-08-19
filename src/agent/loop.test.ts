@@ -372,6 +372,43 @@ describe('Agent', () => {
     expect(sanitizeVerifyCommand('cd /tmp/proj && cargo test')).toBe('cd /tmp/proj && cargo test');
   });
 
+  it('self-review catches a real change problem and loops to fix it', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-review-'));
+    execSync('git init -q && git config user.email t@t && git config user.name t && git commit -q --allow-empty -m init', { cwd: dir, shell: '/bin/sh' });
+    writeFileSync(resolve(dir, 'lib.ts'), 'export const answer = 42;\n');
+    execSync('git add -A && git commit -qm base', { cwd: dir });
+
+    const writeCall = (id: string, path: string, content: string) => ({
+      id, type: 'function' as const,
+      function: { name: 'write', arguments: JSON.stringify({ path, content }) },
+    });
+    const fake = await startFakeOpenAI([
+      // 1: write a "fix" that accidentally drops the export.
+      { content: 'Editing.', toolCalls: [writeCall('1', resolve(dir, 'lib.ts'), 'export const answer = 42;\n// TODO: finish')], finishReason: 'tool_calls' },
+      // 2: claim done (this triggers verify which passes trivially).
+      { content: 'Done.', finishReason: 'stop' },
+      // 3: SELF-REVIEW reply — finds the TODO leftover.
+      { content: 'The file lib.ts leaves a TODO comment; remove it before finishing.', finishReason: 'stop' },
+      // 4: after the nudge, fixes the file.
+      { content: 'Fixing the leftover.', toolCalls: [writeCall('2', resolve(dir, 'lib.ts'), 'export const answer = 42;\n')], finishReason: 'tool_calls' },
+      // 5: done again -> verify -> self-review says clean.
+      { content: 'Done.', finishReason: 'stop' },
+      { content: 'NO_ISSUE', finishReason: 'stop' },
+    ]);
+    const config = makeConfig(dir, fake.url);
+    const workspace = new Workspace(dir, '.mochi');
+    workspace.ensure();
+    const context = new ContextEngine(config, dir);
+    context.setGoal('fix');
+    const task = createTask('Fix', 'Make lib.ts export answer = 42.', { fileScope: ['lib.ts'], verificationCommand: 'true' });
+    const agent = new Agent({ id: 'review-agent', role: 'coder', config, workspace, events: new EventBus(), cwd: dir, context });
+    const result = await agent.run(task);
+    expect(result.success).toBe(true);
+    expect(readFileSync(resolve(dir, 'lib.ts'), 'utf8')).not.toContain('TODO');
+    await fake.close();
+    rmSync(dir, { recursive: true, force: true });
+  }, 60_000);
+
   it('plan mode fails when the model never produces a plan (nudge budget exhausted)', async () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-plan-giveup-'));
     // The fake replays its last entry forever, so the loop sees preambles on
