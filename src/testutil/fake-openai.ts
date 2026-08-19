@@ -25,6 +25,10 @@ export interface FakeScriptResponse {
   completionTokens?: number;
 }
 
+function tcIndexed(tc: FakeScriptToolCall, i: number): FakeScriptToolCall & { index: number } {
+  return { ...tc, index: i };
+}
+
 export interface FakeOpenAI {
   /** Base URL to put in model config (http://127.0.0.1:<port>/v1). */
   url: string;
@@ -71,19 +75,24 @@ export async function startFakeOpenAI(script?: FakeScriptResponse[]): Promise<Fa
       const promptTokens = resp.promptTokens ?? 1;
 
       if (resp.toolCalls && resp.toolCalls.length) {
-        for (const tc of resp.toolCalls) {
+        // Emit each tool call as ONE chunk carrying the full arguments. Real
+        // providers slice calls across chunks; our declaration-level emission
+        // is a valid single-chunk encoding as long as each call gets a
+        // DISTINCT `index` — the stream parser keys its accumulator on that
+        // field, so two calls with separate indices stay distinct calls.
+        resp.toolCalls.forEach((tc, i) => {
           out.push(
             toSSEChunk({
               id: chunkId,
               object: 'chat.completion.chunk',
               choices: [{
                 index: 0,
-                delta: { role: 'assistant', tool_calls: [tc] },
+                delta: { role: 'assistant', tool_calls: [tcIndexed(tc, i)] },
                 finish_reason: null,
               }],
             }),
           );
-        }
+        });
       } else if (content) {
         // Emit the content (optionally split across a couple chunks to exercise
         // the stream reassembly).

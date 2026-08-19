@@ -7,7 +7,7 @@ import { ContextEngine } from '../context.js';
 import { createProvider } from '../model/router.js';
 import { executeTool, buildTools } from '../tools/index.js';
 import type { ToolContext, ReadCache } from '../tools/types.js';
-import { detectRepo } from '../repo.js';
+import { detectRepo, languageHint } from '../repo.js';
 import type { AgentProfile } from '../types.js';
 import { AgentProfileService } from '../agents/profile.js';
 import { BudgetEngine } from '../budget.js';
@@ -195,7 +195,11 @@ export class Agent {
 
     const repo = detectRepo(this.cwd);
     const gitStatus = await this.runShell('git status --short');
-    this.context.addMessage({ role: 'system', content: `Preflight: repo=${repo.language ?? 'unknown'}, git status:\n${gitStatus}` });
+    const langHint = languageHint(repo);
+    this.context.addMessage({
+      role: 'system',
+      content: `Preflight: repo=${repo.language ?? 'unknown'}, git status:\n${gitStatus}${langHint ? '\n\n' + langHint : ''}`,
+    });
 
     const maxIterations = this.config.safety.maxIterations;
     const runtimeLimit = this.config.safety.maxRuntimeMinutes * 60 * 1000;

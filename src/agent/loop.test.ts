@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { execSync } from 'node:child_process';
@@ -391,4 +391,74 @@ describe('Agent', () => {
     expect(result.summary).toContain('Planner never produced a plan');
     await fake.close();
   });
+});
+
+// Polyglot E2E: the agent works on a Python repo end to end. Uses the fake
+// model to script the edit, but verification runs a REAL `pytest` subprocess
+// via the loop's verify() path, so this proves repo detection -> test detect
+// -> subprocess verification across languages, not just JS/TS.
+function testPytest(): boolean {
+  try {
+    const out = execSync('python3 -m pytest --version 2>&1', { encoding: 'utf8' });
+    return /pytest/i.test(out);
+  } catch {
+    return false;
+  }
+}
+const pytestSuite = testPytest() ? describe : describe.skip;
+
+pytestSuite('polyglot: python repo end-to-end', () => {
+  it('fixes a python function and verifies with real pytest', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-pyloop-'));
+    // Git repo the preflight runs in.
+    execSync('git init -q', { cwd: dir });
+    execSync('git config user.email t@t && git config user.name t', { cwd: dir });
+    writeFileSync(resolve(dir, 'arith.py'), 'def double(x):\n    return x * 3\n');
+    writeFileSync(resolve(dir, 'pyproject.toml'), '[tool.pytest.ini_options]\n');
+    execSync('git add -A && git commit -qm init', { cwd: dir });
+
+    // Script: write a correct impl + a passing test. The model uses the write
+    // tool twice, then claims done.
+    const writeCall = (id: string, path: string, content: string) => ({
+      id,
+      type: 'function' as const,
+      function: { name: 'write', arguments: JSON.stringify({ path, content }) },
+    });
+    const fake = await startFakeOpenAI([
+      {
+        content: 'Fixing double and adding a test.',
+        toolCalls: [
+          writeCall('1', resolve(dir, 'arith.py'), 'def add(x, y):\n    return x + y\n'),
+          writeCall('2', resolve(dir, 'test_arith.py'), 'from arith import add\n\ndef test_add():\n    assert add(2, 3) == 5\n'),
+        ],
+        finishReason: 'tool_calls',
+      },
+      { content: 'Done, the tests now pass.', finishReason: 'stop' },
+    ]);
+    const config = makeConfig(dir, fake.url);
+    const workspace = new Workspace(dir, '.mochi');
+    workspace.ensure();
+    const context = new ContextEngine(config, dir);
+    context.setGoal('fix python math');
+    const task = createTask('Fix add()', 'Fix arith.py so add(x,y) returns x+y and write test_arith.py asserting add(2,3)==5. Verify with pytest.', {
+      fileScope: ['arith.py', 'test_arith.py'],
+      verificationCommand: 'python3 -m pytest -q',
+    });
+
+    const agent = new Agent({
+      id: 'python-agent',
+      role: 'coder',
+      config,
+      workspace,
+      events: new EventBus(),
+      cwd: dir,
+      context,
+    });
+
+    const result = await agent.run(task);
+    expect(result.success).toBe(true);
+    expect(result.summary).toMatch(/pytest|passed/);
+    await fake.close();
+    rmSync(dir, { recursive: true, force: true });
+  }, 60_000);
 });

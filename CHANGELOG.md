@@ -5,9 +5,12 @@
 - **Polyglot code indexing.** The codegraph previously understood only
   JavaScript/TypeScript files, so pointing Mochi at a Python, Rust, Go,
   Java, or C++ repo produced an empty symbol index. The tree-sitter WASM
-  backend (fast, in-process, no full compiler) is now the DEFAULT and
-  indexes all seven languages; the TypeScript-compiler AST remains as an
-  opt-in fallback (`MOCHI_CPG_BACKEND=tsc`).
+  backend (in-process, no full compiler, same engine across languages) is
+  now the DEFAULT and indexes all seven languages (TS/JS, Python, Rust,
+  Go, Java, C/C++); the TypeScript-compiler AST remains as an opt-in
+  fallback (`MOCHI_CPG_BACKEND=tsc`). Benchmark: cold index of 200 files
+  comes in at ~100ms on either backend, so this is a coverage win, not a
+  measured speedup.
 - **Polyglot test-runner auto-detection.** `autoTestCommand` now emits
   `go test ./...` and `cargo test` for Go/Rust file scopes (plus the
   existing vitest/jest/pytest), and `isWeakVerification` no longer treats
@@ -17,6 +20,23 @@
   finished deliverable. The loop nudges the model up to 3 times to emit an
   actual plan (numbered steps, bullets, or structured plan language) and
   fails with a clear reason if it never does.
+- **Language-aware model guidance.** When the repo is not JS/TS, the
+  preflight system message now tells the model the right tooling directly
+  ("this is a Python repo; use `python -m pytest -q`"), so it stops
+  emitting `npm test` against Rust or Go projects. Real Go/Rust/Python
+  repos get `go test` / `cargo test` / pytest guidance before the loop
+  even runs.
+- **Python typecheck fix.** Repos were assumed to need `mypy` for every
+  pyproject.toml; verification would fail with `mypy: not found` in repos
+  that don't configure it. Only repos with an actual mypy config
+  (mypy.ini / setup.cfg / `[tool.mypy]`) get a typecheck command.
+- **Fake-openai multi-call fix.** The scripted test server emitted every
+  tool_call chunk without an `index`, so the stream parser merged all
+  tool calls in one response into a single mangled call. Each call now
+  carries a distinct `index`, matching the real provider wire format.
+- **Python E2E test.** The full loop now verifies against a REAL `pytest`
+  subprocess for a Python repo (repo detection → polyglot test detect →
+  subprocess verify), proving the polyglot path works end to end.
 
 ## 0.9.2
 
