@@ -27,7 +27,6 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { execSync } from 'node:child_process';
 import type { MochiConfig } from '../types.js';
-
 const HAS_KEY = Boolean(process.env.FREEINFERENCE_API_KEY);
 // describe.skip returns void, so a ternary alias doesn't work in vitest 2.x —
 // use an explicit if/else so the describe function is always called.
@@ -159,3 +158,5 @@ suite('real model: decomposes a multi-step goal into a sensible task list', () =
     expect(allText).toMatch(/greet/);
   }, 120_000);
 });
+
+
