@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node
 import { dirname, resolve } from 'node:path';
 import type { Tool } from './types.js';
 import { markMutation } from './fs-signal.js';
-import { fuzzyFindUnique } from './fuzzy-match.js';
+import { fuzzyFindUniqueNative as fuzzyFindUnique } from './native-match.js';
 
 // Codex-style patch application. The model emits a compact, token-efficient
 // patch format instead of full-file rewrites or fragile exact-match blocks:
