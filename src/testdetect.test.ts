@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { autoTestCommand, isWeakVerification } from './testdetect.js';
+import { autoTestCommand, isWeakVerification, cwdForScope, withCwd } from './testdetect.js';
 
 const dir = mkdtempSync(resolve(tmpdir(), 'mochi-testdetect-'));
 
@@ -64,5 +64,37 @@ describe('isWeakVerification', () => {
   it('treats empty/undefined as weak so the auto-detector kicks in', () => {
     expect(isWeakVerification(undefined)).toBe(true);
     expect(isWeakVerification('')).toBe(true);
+  });
+});
+
+describe('cwdForScope', () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'mochi-cwdscope-'));
+  it('returns the subdirectory when fileScope is consistently under one', () => {
+    const sub = resolve(root, 'pkg');
+    const result = cwdForScope(root, ['pkg/foo.ts', 'pkg/bar.ts']);
+    expect(result).toBe(sub);
+  });
+  it('returns undefined when fileScope is at the project root', () => {
+    expect(cwdForScope(root, ['foo.ts', 'bar.ts'])).toBeUndefined();
+  });
+  it('returns undefined when fileScope spans multiple directories', () => {
+    const r = cwdForScope(root, ['pkg/a.ts', 'other/b.ts']);
+    expect(r).toBeUndefined();
+  });
+  it('returns undefined for empty fileScope', () => {
+    expect(cwdForScope(root, [])).toBeUndefined();
+    expect(cwdForScope(root, undefined)).toBeUndefined();
+  });
+});
+
+describe('withCwd', () => {
+  it('prefixes cd <dir> when no prefix exists', () => {
+    expect(withCwd('npx vitest run', '/tmp/sub')).toBe('cd /tmp/sub && npx vitest run');
+  });
+  it('does not double-prefix when command already starts with cd', () => {
+    expect(withCwd('cd /other && npx vitest run', '/tmp/sub')).toBe('cd /other && npx vitest run');
+  });
+  it('passes through unchanged when dir is undefined', () => {
+    expect(withCwd('npx vitest run', undefined)).toBe('npx vitest run');
   });
 });

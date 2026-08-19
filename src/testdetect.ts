@@ -91,3 +91,33 @@ export function isWeakVerification(command: string | undefined): boolean {
   if (/\bnpm\s+test|\bnpx\s+test|\bpnpm\s+test|\byarn\s+test/.test(c)) return false;
   return true;
 }
+
+/** Resolves the directory the verification command should run from.
+ *  If the task's fileScope points under a subdirectory, return that
+ *  subdirectory so commands like `npx vitest run` work without the model
+ *  having to remember the `cd <dir> && ...` prefix. Returns undefined
+ *  when there is no clear directory (no fileScope, all top-level). */
+export function cwdForScope(cwd: string, fileScope: string[] | undefined): string | undefined {
+  if (!fileScope || fileScope.length === 0) return undefined;
+  // Use the directory of the first non-root path.
+  const dir = dirname(fileScope.map((f) => (isAbsolute(f) ? f : resolve(cwd, f)))[0]);
+  // If the directory equals the project root, no change is needed.
+  if (resolve(dir) === resolve(cwd)) return undefined;
+  // If the directory is the same for every fileScope entry, use it.
+  const sameForAll = fileScope.every((f) => {
+    const d = dirname(isAbsolute(f) ? f : resolve(cwd, f));
+    return resolve(d) === resolve(dir);
+  });
+  if (!sameForAll) return undefined;
+  return dir;
+}
+
+/** Returns a version of `cmd` that runs from the given directory if it does
+ *  not already start with a `cd ... && ...` prefix. */
+export function withCwd(cmd: string, dir: string | undefined): string {
+  if (!dir) return cmd;
+  const trimmed = cmd.trim();
+  if (/^cd\s+\S+/.test(trimmed)) return cmd; // already prefixes itself
+  return `cd ${dir} && ${cmd}`;
+}
+

@@ -172,4 +172,33 @@ describe('VerifierEngine', () => {
     expect(result.status).toBe('PARTIAL');
     expect(result.summary).toContain('Mutation check');
   }, 30_000);
+
+  it('fileScope filters the diff evidence so out-of-scope changes do not poison the judge', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-verify-scope-'));
+    execSync('git init -q', { cwd: dir });
+    execSync('git config user.email t@t && git config user.name t', { cwd: dir });
+    writeFileSync(resolve(dir, 'seed.txt'), 'seed');
+    execSync('git add -A && git commit -qm init', { cwd: dir });
+    // Two changed files: one in-scope (util.ts), one out-of-scope (harness).
+    writeFileSync(resolve(dir, 'util.ts'), 'export const x = 1;');
+    writeFileSync(resolve(dir, 'harness.ts'), 'export const y = 2;');
+    writeFileSync(resolve(dir, 'package.json'), JSON.stringify({ scripts: { test: 'node -e "process.exit(0)"' } }));
+
+    const workspace = new Workspace(dir, '.mochi');
+    workspace.ensure();
+    const verifier = new VerifierEngine({
+      cwd: dir,
+      workspace,
+      config: baseConfig,
+      events: new EventBus(),
+      budget: new BudgetEngine(baseConfig.safety),
+    });
+    // Re-run as a model-judge verification (no mutation, just diff visibility).
+    const inScopeTask = createTask('Add util', 'add util.ts', { acceptanceCriteria: ['util exists'], fileScope: ['util.ts'], verificationCommand: 'node -e "process.exit(0)"' });
+    const result = await verifier.verify(inScopeTask, 'Added util');
+    const diffEvidence = result.evidence.find((e) => e.source === 'diff');
+    expect(diffEvidence).toBeDefined();
+    expect(diffEvidence!.result).toContain('util.ts');
+    expect(diffEvidence!.result).not.toContain('harness.ts');
+  });
 });

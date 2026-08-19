@@ -38,7 +38,7 @@ import {
 } from '../lessons.js';
 import { HookManager } from '../hooks.js';
 import { resolve } from 'node:path';
-import { autoTestCommand, isWeakVerification } from '../testdetect.js';
+import { autoTestCommand, isWeakVerification, cwdForScope, withCwd } from '../testdetect.js';
 import { classifyOneShot } from '../one-shot.js';
 import { buildMcpTools } from '../mcp/tools.js';
 import { preEditSnapshot as gitPreEditSnapshot, rollbackToSnapshot as gitRollback, type CheckpointResult } from '../git.js';
@@ -629,13 +629,19 @@ export class Agent {
 
   private async verify(task: Task, repo: ReturnType<typeof detectRepo>): Promise<{ passed: boolean; summary: string }> {
     const checks: string[] = [];
+    // Run verification commands from the task's fileScope directory when it
+    // is consistent. This lets the model write commands like `npx vitest run`
+    // without having to remember the `cd <dir> &&` prefix, and fixes a class
+    // of "command not found" failures where the runner lives under the
+    // fileScope's package.json but the project root has no test runner.
+    const scopeDir = cwdForScope(this.cwd, task.fileScope);
     if (task.verificationCommand) {
-      checks.push(task.verificationCommand);
+      checks.push(withCwd(task.verificationCommand, scopeDir));
     }
-    if (repo.testCommand) checks.push(repo.testCommand);
-    if (repo.typecheckCommand) checks.push(repo.typecheckCommand);
-    if (repo.lintCommand) checks.push(repo.lintCommand);
-    if (repo.buildCommand) checks.push(repo.buildCommand);
+    if (repo.testCommand) checks.push(withCwd(repo.testCommand, scopeDir));
+    if (repo.typecheckCommand) checks.push(withCwd(repo.typecheckCommand, scopeDir));
+    if (repo.lintCommand) checks.push(withCwd(repo.lintCommand, scopeDir));
+    if (repo.buildCommand) checks.push(withCwd(repo.buildCommand, scopeDir));
     // Auto-detected real test runner: only added when the explicit
     // verificationCommand is weak (e.g. `test -f ... && grep ...`) so the
     // mutation check has actual code coverage to evaluate. Skipped when the

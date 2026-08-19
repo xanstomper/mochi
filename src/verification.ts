@@ -75,7 +75,7 @@ export class VerifierEngine {
 
     const evidence: VerificationEvidence[] = [];
     const repo = detectRepo(this.cwd);
-    const diff = await this.safeGitDiff();
+    const diff = await this.safeGitDiff(task.fileScope);
     evidence.push({ source: 'diff', result: diff ? diff.slice(0, 2000) : 'No git changes detected', passed: true });
     if (diff.length > 0) {
       evidence.push({ source: 'status', result: (await gitStatus(this.cwd)).slice(0, 1000), passed: true });
@@ -220,7 +220,7 @@ export class VerifierEngine {
     return { status, passed, failed, recommendation, evidence, summary };
   }
 
-  private async safeGitDiff(): Promise<string> {
+  private async safeGitDiff(fileScope?: string[]): Promise<string> {
     try {
       const trackedDiff = await gitDiff(this.cwd);
       // `git diff` is empty for UNTRACKED files (new files the agent created
@@ -234,9 +234,38 @@ export class VerifierEngine {
       const untracked = await execFileAsync('git', ['ls-files', '--others', '--exclude-standard'], this.cwd);
       const source: string[] = [];
       const other: string[] = [];
+      // When the task has a fileScope, restrict the diff evidence to files
+      // under that scope. Without this, harness work the user did
+      // concurrently pollutes the evidence and the judge compares the
+      // agent's task to the wrong baseline ("diff shows changes to
+      // src/agent/loop.ts, not the requested file"). The harness's own
+      // modifications are exactly the kind of out-of-scope noise this
+      // filter is designed to ignore.
+      const inScope = (f: string) => !fileScope || fileScope.length === 0 || fileScope.some((s) => f === s || f.startsWith(s + '/'));
+      // Range-based filter: keep the whole diff block (header + body +
+      // trailing newline) for in-scope files, drop the block for out-of-scope.
+      // A block starts at `diff --git a/X b/X` and ends at the next header
+      // (or EOF). Implemented by walking the lines and tracking the current
+      // block's "in-scope" status; keep the header only when in-scope.
+      const filteredTracked = fileScope && fileScope.length > 0
+        ? (() => {
+            const lines = trackedDiff.split('\n');
+            const out: string[] = [];
+            let currentInScope = true; // preamble (before any header) is kept
+            for (const line of lines) {
+              if (line.startsWith('diff --git ')) {
+                const m = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
+                currentInScope = m ? inScope(m[1]) : true;
+              }
+              if (currentInScope) out.push(line);
+            }
+            return out.join('\n');
+          })()
+        : trackedDiff;
       if (untracked.trim()) {
         for (const f of untracked.split('\n').filter(Boolean).slice(0, 50)) {
           if (!f || f.startsWith('.mochi/') || f.startsWith('node_modules/') || f.startsWith('dist/') || f.startsWith('.git/')) continue;
+          if (!inScope(f)) continue;
           const lower = f.toLowerCase();
           const kind = /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|rb|java|json|md|yaml|yml|toml|sh|css|html)$/.test(lower) ? 'source' : 'other';
           const bucket = kind === 'source' ? source : other;
@@ -248,7 +277,7 @@ export class VerifierEngine {
           }
         }
       }
-      return [trackedDiff, ...source, ...other].filter(Boolean).join('\n');
+      return [filteredTracked, ...source, ...other].filter(Boolean).join('\n');
     } catch {
       return '';
     }
