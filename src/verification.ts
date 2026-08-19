@@ -128,7 +128,7 @@ export class VerifierEngine {
     const testCommandRuns = Boolean(testCommand) && testCmdEvidence?.passed === true && testCmdEvidence?.skipped !== true;
     if (testCommand && testCommandRuns && evidence.some((e) => e.passed)) {
       try {
-        mutationCheck = await runMutationCheck(this.cwd, testCommand, async (cmd) => this.exitCode(cmd), async (cmd) => this.captureOutput(cmd));
+        mutationCheck = await runMutationCheck(this.cwd, testCommand, async (cmd) => this.exitCode(cmd), async (cmd) => this.captureOutput(cmd), task.fileScope);
         if (mutationCheck.applied) {
           evidence.push({
             source: 'mutation-check',

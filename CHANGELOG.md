@@ -1,5 +1,25 @@
 # Mochi Changelog
 
+## Unreleased
+
+Observation-driven replanning foundations and a verifier regression found by
+dogfooding:
+
+- **Failure diagnosis + autopsy + procedural memory.** New `src/diagnosis.ts`
+  classifies verification failures into eight kinds (`syntax`, `type`, `logic`,
+  `test_gap`, `env_missing`, `env_runtime`, `concurrency`, `unknown`),
+  generates ordered hypotheses, and evaluates probe results so the next
+  attempt is a *targeted* fix instead of a vague "Continue and fix". `Autopsy`
+  records persist at `<workspace>/autopsies/<taskId>.json` with hypothesis
+  history, evidence, and outcome. `Lessons` records persist at
+  `<workspace>/memory/lessons.json` and are surfaced as prior context on
+  matching failure signatures — Mochi remembers what worked across runs in
+  the same workspace.
+- **Verifier scoped mutation.** The mutation check now operates only inside
+  the task's `fileScope`, so an in-progress edit to the harness itself can
+  no longer produce a meaningless "mutation survived" verdict against logic
+  the verification command does not exercise. Two new tests lock this in.
+
 ## 0.8.0
 
 Provider resilience and verifier accuracy from dogfooding:

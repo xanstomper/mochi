@@ -256,4 +256,48 @@ describe('Agent', () => {
     expect(toolReplies.some((m: any) => String(m.content).includes('before_tool hook vetoed write'))).toBe(true);
     await fake.close();
   });
+
+  it('writes an autopsy record when verification fails repeatedly', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-autopsy-loop-'));
+    // Script: the model claims "done" but verification always fails (exit 1),
+    // forcing a 3-strike rollback. The loop must persist an autopsy with at
+    // least one DebugAttempt describing the diagnostic.
+    const writeCall = (id: string) => ({
+      id,
+      type: 'function' as const,
+      function: { name: 'write', arguments: JSON.stringify({ path: resolve(dir, 'broken.txt'), content: 'broken' }) },
+    });
+    const fake = await startFakeOpenAI([
+      { content: 'Will write.', toolCalls: [writeCall('1')], finishReason: 'tool_calls' },
+      { content: 'Done.', finishReason: 'stop' },
+    ]);
+    const config = makeConfig(dir, fake.url);
+    const workspace = new Workspace(dir, '.mochi');
+    workspace.ensure();
+    const context = new ContextEngine(config, dir);
+    context.setGoal('autopsy test');
+    const task = createTask('Bad edit', 'Will be rolled back', { verificationCommand: 'false' });
+
+    const agent = new Agent({
+      id: 'autopsy-agent',
+      role: 'coder',
+      config,
+      workspace,
+      events: new EventBus(),
+      cwd: dir,
+      context,
+    });
+
+    const result = await agent.run(task);
+    expect(result.success).toBe(false);
+    // Autopsy persisted at <workspace>/autopsies/<taskId>.json with kind + attempts.
+    const auts = await import('../autopsy.js');
+    const autopsyFile = resolve(workspace.dir, 'autopsies', `${task.id}.json`);
+    expect(existsSync(autopsyFile)).toBe(true);
+    const a = auts.loadOrCreateAutopsy(workspace.dir, task.id, 'autopsy-agent', 'Bad edit');
+    expect(['syntax', 'unknown']).toContain(a.failureKind ?? 'unknown'); // 'false' is not classified
+    expect(a.attempts.length).toBeGreaterThan(0);
+    expect(a.outcome).toBe('unresolved');
+    await fake.close();
+  });
 });

@@ -175,9 +175,22 @@ export async function runMutationCheck(
   testCommand: string,
   run: (cmd: string) => Promise<number>,
   capture?: (cmd: string) => Promise<string>,
+  /** If provided, restrict mutation to these files (the task's fileScope). This
+   *  prevents mutating unrelated harness files (e.g. src/agent/loop.ts) whose
+   *  logic is never exercised by the task's verification command, which would
+   *  produce a meaningless "survived" verdict against an implementation the
+   *  tests actually do cover. */
+  fileScope?: string[],
 ): Promise<MutationCheck> {
-  const files = changedSourceFiles(cwd);
-  if (files.length === 0) return { applied: false, note: 'No changed source files to mutate.' };
+  const all = changedSourceFiles(cwd);
+  const files = fileScope && fileScope.length > 0
+    ? all.filter((f) => fileScope.some((s) => f === s || f.endsWith('/' + s) || f.endsWith(s)))
+    : all;
+  if (files.length === 0) {
+    return { applied: false, note: fileScope && fileScope.length > 0
+      ? `No changed source files inside fileScope ${JSON.stringify(fileScope)}.`
+      : 'No changed source files to mutate.' };
+  }
 
   const file = files[0];
   const full = resolve(cwd, file);

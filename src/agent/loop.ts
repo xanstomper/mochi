@@ -11,7 +11,31 @@ import { detectRepo } from '../repo.js';
 import type { AgentProfile } from '../types.js';
 import { AgentProfileService } from '../agents/profile.js';
 import { BudgetEngine } from '../budget.js';
-import { LearningStore, classifyFailure } from '../learning.js';
+import { LearningStore } from '../learning.js';
+import { classifyFailure as classifyErrorPattern } from '../learning.js';
+import {
+  classifyFailure,
+  formInitialHypotheses,
+  rankHypotheses,
+  evaluateProbe,
+  diagnosisToPrompt,
+  type FailureKind,
+  type Hypothesis,
+  type DiagnosisResult,
+} from '../diagnosis.js';
+import {
+  loadOrCreateAutopsy,
+  appendAttempt,
+  finalizeAutopsy,
+  autopsyOneLine,
+  type Autopsy,
+} from '../autopsy.js';
+import {
+  retrieveLessons,
+  recordLesson,
+  lessonsToPrompt,
+  type Lesson,
+} from '../lessons.js';
 import { HookManager } from '../hooks.js';
 import { resolve } from 'node:path';
 import { classifyOneShot } from '../one-shot.js';
@@ -74,6 +98,10 @@ export class Agent {
   private hooks: HookManager;
   private toolCallsTotal = 0;
   private verifyCount = 0;
+  private autopsy: Autopsy | undefined;
+  private hypotheses: Hypothesis[] = [];
+  private diagnosis: DiagnosisResult | undefined;
+  private lastLessons: Lesson[] = [];
   private fileChanged = false;
   /** Checkpoint taken before the first file edit, restored if verification
    *  fails repeatedly so a broken agent run never leaves the tree dirty. */
@@ -123,6 +151,9 @@ export class Agent {
     this.events.emit({ type: 'task:started', task, agentId: this.id });
     this.context.updateState({ nextAction: `Start task: ${task.title}` });
     this.context.addMessage({ role: 'system', content: this.profile.systemPrompt });
+    // Each task gets a fresh autopsy record (idempotent on resume via
+    // loadOrCreateAutopsy) so failure trajectories are durable and inspectable.
+    this.autopsy = loadOrCreateAutopsy(this.workspace.dir, task.id, this.id, task.title);
     if (this.planMode) {
       this.context.addMessage({
         role: 'system',
@@ -335,6 +366,10 @@ export class Agent {
       const verification = await this.verify(task, repo);
       this.verifyCount++;
       if (verification.passed) {
+        // Success after diagnosis turns earlier hypotheses into confirmed or
+        // refuted states and writes a procedural lesson so the next run has a
+        // head start on this kind of failure.
+        this.recordSuccess(task, repo);
         return this.finish(task, true, verification.summary);
       }
       if (this.verifyCount > 3) {
@@ -351,11 +386,17 @@ export class Agent {
           }
           this.preEditCheckpoint = undefined;
         }
+        if (this.autopsy) {
+          this.autopsy = finalizeAutopsy(this.workspace.dir, this.autopsy, { outcome: 'unresolved' });
+        }
         return this.finish(task, false, 'Verification failed repeatedly:\n' + verification.summary + rollbackNote);
       }
       this.addAttempt(task, 'verify', [`${repo.testCommand || repo.buildCommand || 'verify'}`], 'failure', verification.summary);
       this.context.addKnownError(verification.summary);
-      this.context.addMessage({ role: 'user', content: `Verification failed: ${verification.summary}. Continue and fix.` });
+      // Observation-driven retry: classify the failure, retrieve any matching
+      // lessons from procedural memory, and append a structured attempt to
+      // the autopsy record before nudging the model with the next hypothesis.
+      this.observeFailure(task, verification.summary, repo);
     }
 
     this.addAttempt(task, 'exhausted', [], 'failure', `Reached maximum iterations (${maxIterations})`);
@@ -566,7 +607,7 @@ export class Agent {
     if (error) {
       this.errors.push(error);
       this.context.addKnownError(error);
-      const classified = classifyFailure(error);
+      const classified = classifyErrorPattern(error);
       if (classified) {
         this.seenPatterns.add(classified.pattern);
         this.learning.record(classified.pattern, this.lastStrategy ?? 'unclassified', false);
@@ -630,6 +671,121 @@ export class Agent {
       failureReason,
       timestamp: Date.now(),
     });
+  }
+
+  /** Classify the most recent failure, refresh hypotheses, persist an
+   *  attempt to the autopsy, and inject a structured diagnostic prompt
+   *  (including any matching procedural lessons) as the next user turn. */
+  private observeFailure(task: Task, failureText: string, repo: ReturnType<typeof detectRepo>): void {
+    const state = this.context['state'];
+    const filesModified: string[] = (state?.filesModified ?? []) as string[];
+    const { kind, signals } = classifyFailure(failureText);
+    this.diagnosis = {
+      kind,
+      signals,
+      hypotheses: this.hypotheses.length ? this.hypotheses : formInitialHypotheses(kind, filesModified),
+      summary: failureText.slice(0, 600),
+    };
+    // Rank: drop any that the previous probe contradicted badly.
+    this.diagnosis.hypotheses = rankHypotheses(this.diagnosis.hypotheses);
+
+    // If the top hypothesis has a cheap probe, attempt it so the next loop turn
+    // arrives already armed with confirmation (or rejection) and the autopsy
+    // can show concrete evidence per attempt. The probe runs but its output is
+    // only reflected in the lesson+dialogue flow; an exception here would
+    // swallow into an empty probeOutput and mark the hypothesis as neutral.
+    const top = this.diagnosis.hypotheses[0];
+    const probeOutput = top?.probeCommand ? (() => { try { return this.runProbe(top.probeCommand); } catch { return ''; } })() ?? '' : '';
+
+    if (top && probeOutput) {
+      const updated = evaluateProbe(top, probeOutput);
+      this.diagnosis.hypotheses[0] = updated;
+      if (updated.status === 'confirmed') this.diagnosis.hypotheses.forEach((h, i) => { if (i !== 0) h.confidence = Math.max(0.05, h.confidence - 0.2); });
+    }
+
+    // Pull matching procedural lessons for THIS signature/kind so the prompt
+    // can say "last time you saw this, X fixed it" instead of starting cold.
+    this.lastLessons = retrieveLessons(this.workspace.dir, failureText, kind);
+
+    if (this.autopsy) {
+      this.autopsy.failureKind = kind;
+      this.autopsy.signals = signals;
+      const action = top?.probeCommand ? `probed: ${top.probeCommand.slice(0, 80)}` : 'inspection only';
+      this.autopsy = appendAttempt(this.workspace.dir, this.autopsy, {
+        attempt: this.verifyCount,
+        hypothesisId: top?.id ?? 'unknown',
+        hypothesisText: top?.description ?? '(no hypothesis)',
+        confidenceBefore: top?.confidence ?? 0,
+        action,
+        evidence: probeOutput || failureText,
+        outcome: 'still_failing',
+        confidenceAfter: top?.confidence ?? 0,
+        statusAfter: top?.status ?? 'pending',
+        atMs: Date.now(),
+      });
+      this.events.emit({ type: 'agent:log', agentId: this.id, message: `[diagnosis] ${autopsyOneLine(this.autopsy)}` });
+    }
+
+    // Surface the diagnostic to the model. Lessons first (they're the most
+    // actionable), then the hypothesis ordering, then the raw failure text.
+    const parts = ['Verification failed. Treat this as a HYPOTHESIS rather than a generic retry:'];
+    if (this.lastLessons.length) parts.push(lessonsToPrompt(this.lastLessons));
+    parts.push(diagnosisToPrompt(this.diagnosis));
+    parts.push('--- failure evidence ---');
+    parts.push(failureText);
+    parts.push('Pick the most likely hypothesis (or your own), take ONE focused action, then re-run verification. Do not just retry the same edit.');
+    this.context.addMessage({ role: 'user', content: parts.join('\n\n') });
+  }
+
+  /** Fire a small read-only probe and capture its output. Falls back to the
+   *  pre-existing shell runner but uses the same timeout rules as verify. */
+  private runProbe(command: string): string {
+    try {
+      const ctx: { cwd: string; events: EventBus; agentId: string } = {
+        cwd: this.cwd,
+        events: this.events,
+        agentId: this.id,
+      };
+      // The shell tool is registered unless profile overrides removed it.
+      const tools = this.tools;
+      const shellTool = tools.get('shell');
+      if (!shellTool) return '';
+      // Use a short timeout; if the probe hangs it's a signal too.
+      // executeTool is async; the synchronous capture is a best-effort string.
+      // Since the loop is itself async, we leak this intentionally and ignore
+      // the promise here; the next iteration's verify is authoritative.
+      // eslint-disable-next-line @typescript-eslint/no-floating-promises
+      shellTool.execute({ command, timeout: 20 }, { ...ctx, workspace: this.workspace, config: this.config, abortSignal: this.abortSignal, readCache: this.readCache, ...(this.subagentDepth === 0 ? { spawnSubagent: (p: string, o?: { role?: string }) => this.spawnSubagent(p, o?.role) } : {}) });
+      return '(probe running; will appear in next verify)';
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  /** Called when verification finally passed; finalize the autopsy with the
+   *  resolved outcome and write a procedural lesson from the top hypothesis. */
+  private recordSuccess(task: Task, repo: ReturnType<typeof detectRepo>): void {
+    if (this.autopsy) {
+      const confirmed = this.hypotheses.find((h) => h.status === 'confirmed');
+      const fixApplied = (this.context['state']?.filesModified ?? []).slice(-1)[0];
+      this.autopsy = finalizeAutopsy(this.workspace.dir, this.autopsy, {
+        outcome: 'resolved',
+        rootCauseHypothesis: confirmed?.id ?? this.hypotheses[this.hypotheses.length - 1]?.id,
+        fixApplied,
+      });
+    }
+    if (this.diagnosis && this.hypotheses.length) {
+      const top = this.hypotheses[this.hypotheses.length - 1] ?? this.hypotheses[0];
+      if (top) {
+        recordLesson(this.workspace.dir, {
+          id: `${this.diagnosis.kind}:${top.id}`,
+          signature: (this.diagnosis.signals[0] ?? this.diagnosis.kind).slice(0, 80),
+          kind: this.diagnosis.kind,
+          lesson: top.description,
+          sourceAutopsy: this.autopsy?.taskId,
+        });
+      }
+    }
   }
 
   private async runShell(command: string, timeout = 60): Promise<string> {

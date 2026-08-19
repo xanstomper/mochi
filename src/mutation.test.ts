@@ -94,4 +94,36 @@ describe('mutation.runMutationCheck', () => {
     expect(result.applied).toBe(false);
     expect(result.note).toContain('No changed source');
   });
+
+  it('restricts mutation to the task fileScope when provided', async () => {
+    // Two source files in the working tree; only the in-scope one must be
+    // mutated. The out-of-scope file would otherwise get picked first by
+    // changedSourceFiles (alphabetic order) and produce a meaningless
+    // "survived" verdict against logic the verification command does not
+    // exercise.
+    const dir = makeRepo();
+    writeFileSync(resolve(dir, 'a-out-of-scope.js'), 'module.exports = { x: 1 };');
+    writeFileSync(resolve(dir, 'b-in-scope.js'), 'module.exports = { add: (a, b) => a + b };');
+    const cmd = 'node -e "const {add}=require(\'./b-in-scope.js\'); if(add(2,3)!==5) process.exit(1)"';
+    const result = await runMutationCheck(
+      dir,
+      cmd,
+      async (c) => { try { execSync(c, { cwd: dir, shell: '/bin/sh' }); return 0; } catch { return 1; } },
+      async (c) => String(execSync(c, { cwd: dir, shell: '/bin/sh' }) ?? ''),
+      ['b-in-scope.js'],
+    );
+    expect(result.applied).toBe(true);
+    expect(result.file).toBe('b-in-scope.js');
+    expect(result.killed).toBe(true);
+    expect(readFileSync(resolve(dir, 'a-out-of-scope.js'), 'utf8')).toBe('module.exports = { x: 1 };');
+    expect(readFileSync(resolve(dir, 'b-in-scope.js'), 'utf8')).toContain('a + b');
+  });
+
+  it('returns no-mutation when fileScope contains nothing changed', async () => {
+    const dir = makeRepo();
+    writeFileSync(resolve(dir, 'untouched.js'), 'module.exports = 1;');
+    const result = await runMutationCheck(dir, 'test', async () => 1, undefined, ['only-this.js']);
+    expect(result.applied).toBe(false);
+    expect(result.note).toContain('fileScope');
+  });
 });
