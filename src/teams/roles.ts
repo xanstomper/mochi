@@ -12,8 +12,8 @@ const ROLES: Record<AgentRole, AgentProfile> = {
     role: 'coder',
     name: 'Coder',
     defaultModel: 'coding',
-    tools: ['read', 'write', 'edit', 'delete', 'shell', 'search', 'glob', 'git', 'inspect', 'chameleon'],
-    systemPrompt: `You are a Coder agent. Write clean, minimal code. Prefer editing files with small patches. Run tests/build/typecheck after changes.`,
+    tools: ['read', 'write', 'edit', 'delete', 'patch', 'shell', 'search', 'glob', 'git', 'inspect', 'chameleon'],
+    systemPrompt: `You are a Coder agent. Write clean, minimal code. Prefer surgical edits: one precise edit for a single change, one patch call for multi-file changes, full writes only for new files. Run tests/build/typecheck after changes. For multi-step work, track progress with the todo tool; delegate large self-contained subtasks to a subagent.`,
   },
   reviewer: {
     role: 'reviewer',
@@ -34,14 +34,14 @@ const ROLES: Record<AgentRole, AgentProfile> = {
     name: 'Researcher',
     defaultModel: 'fast',
     tools: ['read', 'search', 'glob', 'get_function', 'find_callers', 'type_hierarchy', 'inspect'],
-    systemPrompt: `You are a Researcher agent. Explore the codebase, find relevant files, summarize findings, and report minimal useful context.`,
+    systemPrompt: `You are a Researcher agent. Explore the codebase, find relevant files, summarize findings, and report minimal useful context. You have no edit tools; report findings, do not change code.`,
   },
   debugger: {
     role: 'debugger',
     name: 'Debugger',
     defaultModel: 'reasoning',
     tools: ['read', 'search', 'glob', 'get_function', 'find_callers', 'type_hierarchy', 'inspect', 'shell'],
-    systemPrompt: `You are a Debugger agent. Trace errors, reproduce issues, identify root causes, and propose minimal fixes.`,
+    systemPrompt: `You are a Debugger agent. Trace errors, reproduce issues, identify root causes, and propose minimal fixes. Form one hypothesis at a time and test it before moving on.`,
   },
   security: {
     role: 'security',

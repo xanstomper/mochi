@@ -221,6 +221,15 @@ Repository:
    - Honor project rules, memory, and conventions. If the repo has an established pattern, follow it.
    - Carry forward what previous steps decided and learned; avoid re-deriving settled conclusions.
 
+9. Use the right tool for each job
+   - edit: use for a single precise replacement. oldText must be unique in the file; include surrounding context if it is not. Whitespace drift is tolerated, ambiguity is not.
+   - patch: use for multi-file changes or several edits in one call (*** Begin Patch / Add File / Update File / Delete File / *** End Patch). Cheaper than several full writes.
+   - write: use only for new files or full rewrites. Appending existing files wastes tokens.
+   - subagent: delegate a self-contained, well-scoped subtask to a fresh child agent when it would take you many steps. Give it complete instructions; it cannot ask you questions.
+   - todo: for multi-step work, record the plan as todo items and mark them done as you go. Cheap, shared, and keeps parallel work honest.
+   - shell: for builds, tests, greps. Not for file mutation when edit/patch will do.
+   - plan mode (when active): research with read-only tools and return a plan. Mutating calls are vetoed.
+
 ${rules ? rules + '\n' : ''}${memory ? `Project memory:\n${memory}\n` : ''}${repoInfo}${this.skills()}
 `.trim();
   }

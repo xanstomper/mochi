@@ -207,7 +207,7 @@ export class Agent {
 
       const packet = this.context.buildPacket(this.toolDefs, task, repo);
       // Anti-loop: if it's just gathering context (read/search) without editing, force an answer.
-      if (this.toolCallsTotal >= 6 && !this.fileChanged) {
+      if (this.toolCallsTotal >= 6 && !this.fileChanged && !this.planMode) {
         this.context.addMessage({ role: 'system', content: 'You have gathered enough context without modifying any files. Stop using tools and give your final answer directly now.' });
       }
       this.emitMessage('system', `Tokens used: ${packet.usedTokens}/${packet.budgetTokens}`);
@@ -275,8 +275,10 @@ export class Agent {
         // gets a tool response (providers reject dangling tool_call_ids), and
         // the loop continues so the model can hand back its plan text. Only a
         // model that keeps attempting edits after a veto is stopped outright.
+        // Read-only is an ALLOWLIST: anything not explicitly read-only (shell,
+        // write/edit/delete/patch, git, MCP tools, ...) is vetoed.
         if (this.planMode) {
-          const isMutating = (c: ToolCall) => ['write', 'edit', 'delete', 'shell'].includes(c.function.name);
+          const isMutating = (c: ToolCall) => !this.isReadOnly(c.function.name);
           if (response.toolCalls.some(isMutating)) {
             this.planVetoes++;
             // Mixed batches: run the read-only calls so their ids are answered,
@@ -285,7 +287,7 @@ export class Agent {
             if (readOnlies.length > 0) await this.executeToolCalls(readOnlies);
             for (const c of response.toolCalls) {
               if (!isMutating(c)) continue;
-              this.context.addMessage({ role: 'tool', tool_call_id: c.id, content: 'Blocked: plan mode is active. No file or command changes are permitted while planning.', name: c.function.name });
+              this.vetoToolCall(c, 'plan mode is active. No file or command changes are permitted while planning.');
             }
             if (this.planVetoes > 1) {
               const planText = (response.content ?? '').trim();
@@ -377,7 +379,31 @@ export class Agent {
   }
 
   private isReadOnly(name: string): boolean {
-    return ['read', 'search', 'glob', 'inspect', 'get_function', 'find_callers', 'type_hierarchy'].includes(name);
+    // Allowlist of non-mutating tools. Note: MCP resource tools registered as
+    // <server>__resources_list/read are read-only by construction.
+    return ['read', 'search', 'glob', 'inspect', 'get_function', 'find_callers', 'type_hierarchy', 'todo', 'skill', 'memory', 'chameleon'].includes(name)
+      || /__resources_(list|read)$/.test(name);
+  }
+
+  /** Veto a tool call in plan mode, still answering its tool_call_id so the
+   *  provider never sees a dangling reference. */
+  private vetoToolCall(c: ToolCall, reason: string) {
+    this.context.addMessage({ role: 'tool', tool_call_id: c.id, content: `Blocked: ${reason}`, name: c.function.name });
+  }
+
+  /** Mark a tool result as "file changed" and track the affected paths. */
+  private trackFileChange(name: string, args: Record<string, unknown>, toolResult?: { output?: string }) {
+    if (['write', 'edit', 'delete', 'patch'].includes(name)) {
+      this.fileChanged = true;
+      const path = String(args.path ?? '');
+      if (path) this.context.addModifiedFile(resolve(this.cwd, path));
+    }
+    if (name === 'patch' && toolResult?.output) {
+      for (const line of toolResult.output.split('\n')) {
+        const m = line.match(/^- (?:added|updated|deleted) (.+?)(?: \(\d+ lines\))?$/);
+        if (m) this.context.addModifiedFile(resolve(this.cwd, m[1]));
+      }
+    }
   }
 
   private async executeToolCalls(toolCalls: ToolCall[]) {
@@ -468,17 +494,22 @@ export class Agent {
       this.budget.recordToolCall();
       if (!this.budget.canExecuteTool()) {
         this.context.addKnownError('Tool budget exhausted');
+        this.vetoToolCall(tc, 'Tool budget exhausted. Stop calling tools and give your final answer now.');
         return;
       }
     }
     const before = await this.hooks.runBefore('before_tool', { tool: tc.function.name });
     if (!before.allowed) {
       this.context.addKnownError(`before_tool hook vetoed ${tc.function.name}`);
+      this.vetoToolCall(tc, `before_tool hook vetoed ${tc.function.name}.`);
       return;
     }
-    if (['edit', 'write', 'delete'].includes(tc.function.name)) {
+    if (['edit', 'write', 'delete', 'patch'].includes(tc.function.name)) {
       const editHook = await this.hooks.runBefore('before_edit', { tool: tc.function.name });
-      if (!editHook.allowed) return;
+      if (!editHook.allowed) {
+        this.vetoToolCall(tc, 'before_edit hook vetoed this edit.');
+        return;
+      }
     }
     if (tc.function.name === 'shell') {
       const shellHook = await this.hooks.runBefore('before_shell', { tool: tc.function.name });
@@ -520,7 +551,7 @@ export class Agent {
     this.context.addMessage({ role: 'tool', tool_call_id: tc.id, content: result.output, name: tc.function.name });
     this.events.emit({ type: 'tool:completed', tool: tc.function.name, result, agentId: this.id });
     await this.hooks.runAfter('after_tool', { tool: tc.function.name });
-    if (['edit', 'write', 'delete'].includes(tc.function.name)) {
+    if (['edit', 'write', 'delete', 'patch'].includes(tc.function.name)) {
       await this.hooks.runAfter('after_edit', { tool: tc.function.name });
     }
     if (tc.function.name === 'shell') {
@@ -535,11 +566,7 @@ export class Agent {
         this.learning.record(classified.pattern, this.lastStrategy ?? 'unclassified', false);
       }
     }
-    if (['write', 'edit', 'delete', 'patch'].includes(tc.function.name)) {
-      this.fileChanged = true;
-      const path = String(args.path ?? '');
-      if (path) this.context.addModifiedFile(resolve(this.cwd, path));
-    }
+    this.trackFileChange(tc.function.name, args, { output: result.output });
   }
   private parseArgs(raw: string): Record<string, unknown> {
     if (!raw.trim()) return {};

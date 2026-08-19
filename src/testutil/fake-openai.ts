@@ -32,6 +32,8 @@ export interface FakeOpenAI {
   append(responses: FakeScriptResponse[]): void;
   /** Shut the server down (call in afterAll). */
   close(): Promise<void>;
+  /** Bodies of every /chat/completions request received, in order. */
+  requests: { body: any }[];
 }
 
 function toSSEChunk(payload: Record<string, unknown>): string {
@@ -46,6 +48,7 @@ function toSSEChunk(payload: Record<string, unknown>): string {
  */
 export async function startFakeOpenAI(script?: FakeScriptResponse[]): Promise<FakeOpenAI> {
   const queue: FakeScriptResponse[] = [...(script ?? [])];
+  const requests: { body: any }[] = [];
   const defaultResp: FakeScriptResponse = { content: 'done', finishReason: 'stop', promptTokens: 1, completionTokens: 1 };
 
   const server: Server = createServer((req, res) => {
@@ -58,6 +61,7 @@ export async function startFakeOpenAI(script?: FakeScriptResponse[]): Promise<Fa
         res.end(JSON.stringify({ error: 'not found' }));
         return;
       }
+      requests.push({ body: JSON.parse(body || '{}') });
       const resp = queue.length ? queue.shift()! : { ...defaultResp };
       const content = resp.content ?? '';
       const chunkId = `chatcmpl_${Math.random().toString(36).slice(2, 10)}`;
@@ -123,6 +127,7 @@ export async function startFakeOpenAI(script?: FakeScriptResponse[]): Promise<Fa
 
   return {
     url,
+    requests,
     append(responses: FakeScriptResponse[]) {
       queue.push(...responses);
     },

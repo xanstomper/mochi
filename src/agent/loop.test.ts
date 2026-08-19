@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { execSync } from 'node:child_process';
@@ -166,6 +166,94 @@ describe('Agent', () => {
     const leftover = execSync('git status --porcelain', { cwd: dir, encoding: 'utf8' })
       .split('\n').filter((l) => l.trim() && !l.includes('.mochi'));
     expect(leftover).toEqual([]);
+    await fake.close();
+  });
+
+  it('plan mode vetoes patch and unknown tools (default-deny), not just write/edit/shell', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-plan2-'));
+    const patchText = [
+      '*** Begin Patch',
+      `*** Add File: sneaky.txt`,
+      '+created in plan mode',
+      '*** End Patch',
+    ].join('\n');
+    const fake = await startFakeOpenAI([
+      {
+        content: 'Applying my plan.',
+        toolCalls: [
+          { id: '1', type: 'function', function: { name: 'patch', arguments: JSON.stringify({ patch: patchText }) } },
+          { id: '2', type: 'function', function: { name: 'some_mcp_tool', arguments: '{}' } },
+          { id: '3', type: 'function', function: { name: 'read', arguments: JSON.stringify({ path: resolve(dir, 'notes.md') }) } },
+        ],
+        finishReason: 'tool_calls',
+      },
+      { content: 'PLAN:\n1. Read notes\n2. Sneaky patch is blocked\n3. Ship it after approval', finishReason: 'stop' },
+    ]);
+    const config = makeConfig(dir, fake.url);
+    const workspace = new Workspace(dir, '.mochi');
+    workspace.ensure();
+    const context = new ContextEngine(config, dir);
+    context.setGoal('plan only');
+    const task = createTask('Plan patch', 'Plan changes without applying them.');
+
+    const agent = new Agent({
+      id: 'plan2-agent',
+      role: 'coder',
+      config,
+      workspace,
+      events: new EventBus(),
+      cwd: dir,
+      context,
+      planMode: true,
+    });
+
+    const result = await agent.run(task);
+    expect(result.success).toBe(true);
+    expect(result.summary).toContain('PLAN');
+    expect(existsSync(resolve(dir, 'sneaky.txt'))).toBe(false);
+    await fake.close();
+  });
+
+  it('hook vetoes answer the tool_call_id instead of dangling it', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-hook-'));
+    // File-based hook the real HookManager reads from the workspace dir.
+    // Exit 1 on before_tool vetoes every tool call, like a real policy hook.
+    const workspace = new Workspace(dir, '.mochi');
+    workspace.ensure();
+    writeFileSync(resolve(workspace.dir, 'hooks.json'), JSON.stringify({ before_tool: ['exit 1'] }));
+    const fake = await startFakeOpenAI([
+      {
+        content: 'Writing.',
+        toolCalls: [
+          { id: '1', type: 'function', function: { name: 'write', arguments: JSON.stringify({ path: resolve(dir, 'x.txt'), content: 'nope' }) } },
+        ],
+        finishReason: 'tool_calls',
+      },
+      { content: 'Understood, the edit was blocked, so my final answer is a summary instead.', finishReason: 'stop' },
+    ]);
+    const config = makeConfig(dir, fake.url);
+    const context = new ContextEngine(config, dir);
+    context.setGoal('blocked write');
+    const task = createTask('Blocked write', 'Write x.txt (will be vetoed).');
+
+    const agent = new Agent({
+      id: 'hook-agent',
+      role: 'coder',
+      config,
+      workspace,
+      events: new EventBus(),
+      cwd: dir,
+      context,
+    });
+
+    const result = await agent.run(task);
+    expect(result.success).toBe(true);
+    expect(existsSync(resolve(dir, 'x.txt'))).toBe(false);
+    // The provider must have received a tool-role reply for the vetoed call.
+    const messages = fake.requests.flatMap((r) => r.body?.messages ?? []);
+    const toolReplies = messages.filter((m: any) => m.role === 'tool');
+    expect(toolReplies.length).toBeGreaterThan(0);
+    expect(toolReplies.some((m: any) => String(m.content).includes('before_tool hook vetoed write'))).toBe(true);
     await fake.close();
   });
 });
