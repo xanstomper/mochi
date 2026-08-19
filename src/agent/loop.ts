@@ -1,5 +1,6 @@
 import { performance } from 'node:perf_hooks';
 import { randomUUID } from 'node:crypto';
+import { sortableId, truncateMiddle } from '../util.js';
 import type { Attempt, ChatMessage, MochiConfig, ModelProfile, Task, ToolDefinition, ToolCall, ToolResult } from '../types.js';
 import type { EventBus } from '../events.js';
 import type { Workspace } from '../workspace.js';
@@ -779,7 +780,7 @@ export class Agent {
       if (out.includes('exit_code: 0') || out.trim().endsWith('PASS')) {
         continue;
       }
-      return { passed: false, summary: `Check failed: ${cmd}\n${out.slice(0, 1000)}` };
+      return { passed: false, summary: `Check failed: ${cmd}\n${truncateMiddle(out, 1200)}` };
     }
     return { passed: true, summary: `All checks passed: ${checks.join(', ')}` };
   }
@@ -802,7 +803,9 @@ export class Agent {
 
   private addAttempt(task: Task, strategy: string, actions: string[], result: Attempt['result'], failureReason?: string) {
     task.attempts.push({
-      id: randomUUID(),
+      // Sortable ID (OpenFable Identifier): attempts in the autopsy sort by
+      // when they happened without a separate timestamp column.
+      id: sortableId(),
       strategy,
       actions,
       result,

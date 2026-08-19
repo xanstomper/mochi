@@ -138,6 +138,7 @@ async function main() {
   const cwd = process.cwd();
   const configOverrides = configFromFlags(flags);
   const { Runtime } = await import('./runtime.js');
+  const { randomSlug } = await import('./util.js');
   const { status, diff, isRepo } = await import('./git.js');
   const runtime = Runtime.create({ cwd, config: configOverrides });
 
@@ -321,14 +322,18 @@ async function main() {
       const goals = runtime.workspace.listGoals();
       console.log(goals.join('\n').replace(/\.json/g, '') || 'No workspaces/goals saved yet.');
     } else if (sub === 'create' || sub === 'switch') {
-      const name = positional[2];
-      if (!name) { console.error('Usage: mochi workspace create|switch <name>'); process.exit(1); }
+      // `create` without a name gets a readable random slug (OpenFable Slug),
+      // so concurrent agents don't collide on "default" and names stay
+      // memorable. `switch` still requires an explicit existing name.
+      let name = positional[2];
+      if (!name && sub === 'create') name = randomSlug();
+      if (!name) { console.error('Usage: mochi workspace create [<name>] | switch <name>'); process.exit(1); }
       runtime.config.projectDir = `.mochi/${name}`;
       const ws = new (await import('./workspace.js')).Workspace(cwd, runtime.config.projectDir);
       ws.ensure();
       console.log(`Workspace ready: ${ws.dir}`);
     } else {
-      console.error('Usage: mochi workspace create|list|switch <name>');
+      console.error('Usage: mochi workspace create [<name>] | switch <name>');
     }
     return;
   }

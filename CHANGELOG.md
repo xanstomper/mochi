@@ -18,6 +18,17 @@
   so edits that preserve mtime/size (or land on a coarse-timestamp
   filesystem) can never leave a stale symbol index. Huge files keep the
   cheap mtime fast path.
+- **More from OpenFable (shared util).** New `src/util.ts` ports:
+  - `randomSlug` (Slug): `mochi workspace create` without a name now
+    gets a readable random name like `clever-comet` instead of colliding
+    on "default".
+  - `sortableId` (Identifier): attempts in the autopsy now use
+    lexicographically ascending IDs, so they sort by when they happened.
+  - `binarySearch`/`binaryInsert` for keep-sorted lists.
+  - `lazy` memoizing singleton.
+  - `getFilename`/`getDirectory`/`getFilenameTruncated`/`truncateMiddle`
+    (path utils): verification failures and the daemon job list now show
+    head and tail of long output instead of a blind head-only slice.
 - **Call graph.** The symbol index now records `calls` edges (callee,
   caller, file, line) across all 10 indexed languages, extracted at index
   time from every grammar's call nodes. `find_callers` answers from the

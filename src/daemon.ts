@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { MochiConfig } from './types.js';
 import { Runtime } from './runtime.js';
+import { truncateMiddle } from './util.js';
 
 export interface DaemonInfo {
   port: number;
@@ -203,7 +204,12 @@ async function handleRequest(
         try {
           const g = runtime.workspace.loadGoal(id);
           if (g && typeof g.id === 'string' && typeof g.status === 'string') {
-            jobs.push({ id: g.id.slice(0, 8), status: g.status, objective: g.objective, progress: g.progress });
+            jobs.push({
+              id: g.id.slice(0, 8),
+              status: g.status,
+              objective: truncateMiddle(g.objective ?? '', 60),
+              progress: g.progress,
+            });
           }
         } catch {
           // Non-goal state files (usage, pending-goal, checkpoints) are skipped.
