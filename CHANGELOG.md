@@ -14,11 +14,19 @@ dogfooding:
   history, evidence, and outcome. `Lessons` records persist at
   `<workspace>/memory/lessons.json` and are surfaced as prior context on
   matching failure signatures — Mochi remembers what worked across runs in
-  the same workspace.
+  the same workspace. A `recordFailure` path also writes an `AVOID`-style
+  lesson on retry exhaustion so the next run starts with prior context.
 - **Verifier scoped mutation.** The mutation check now operates only inside
   the task's `fileScope`, so an in-progress edit to the harness itself can
   no longer produce a meaningless "mutation survived" verdict against logic
   the verification command does not exercise. Two new tests lock this in.
+- **Auto-detected test runner.** New `src/testdetect.ts` examines the
+  task's `fileScope` and appends a real runner command (`npx vitest run`,
+  `npx jest`, `pytest -q`) to the verification checks when the explicit
+  `verificationCommand` is weak (file-existence or `grep`/`cat`/`ls`).
+  Fixes a class of silent downgrades where a model's overly-clever
+  verification command "passed" but the mutation check still survived
+  because no test was ever executed.
 
 ## 0.8.0
 

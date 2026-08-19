@@ -38,6 +38,7 @@ import {
 } from '../lessons.js';
 import { HookManager } from '../hooks.js';
 import { resolve } from 'node:path';
+import { autoTestCommand, isWeakVerification } from '../testdetect.js';
 import { classifyOneShot } from '../one-shot.js';
 import { buildMcpTools } from '../mcp/tools.js';
 import { preEditSnapshot as gitPreEditSnapshot, rollbackToSnapshot as gitRollback, type CheckpointResult } from '../git.js';
@@ -635,6 +636,14 @@ export class Agent {
     if (repo.typecheckCommand) checks.push(repo.typecheckCommand);
     if (repo.lintCommand) checks.push(repo.lintCommand);
     if (repo.buildCommand) checks.push(repo.buildCommand);
+    // Auto-detected real test runner: only added when the explicit
+    // verificationCommand is weak (e.g. `test -f ... && grep ...`) so the
+    // mutation check has actual code coverage to evaluate. Skipped when the
+    // command is already a real runner.
+    if (isWeakVerification(task.verificationCommand)) {
+      const auto = autoTestCommand(this.cwd, task.fileScope);
+      if (auto) checks.push(auto);
+    }
     if (checks.length === 0) return { passed: true, summary: 'No verification configured.' };
 
     for (const cmd of checks) {
