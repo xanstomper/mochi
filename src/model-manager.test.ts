@@ -81,12 +81,12 @@ describe('list + describe', () => {
     expect(listModelsForProvider('nope')).toEqual([]);
   });
 
-  it('builds a safe describe string (key masked, never raw)', () => {
+  it('builds a safe describe string (key presence only, never raw or masked)', () => {
     const cfg = setProvider(base(), { provider: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o', apiKey: 'sk-ABCDEFGHIJKLMNOPQRST' });
     const d = describeConfig(cfg);
     expect(d).toContain('provider: openai');
-    expect(d).toContain('sk-A');
-    expect(d).not.toContain('sk-ABCDEFGHIJKLMNOPQRST');
+    expect(d).toContain('apiKey:  set');
+    expect(d).not.toContain('sk-');
   });
 
   it('masks short keys completely', () => {

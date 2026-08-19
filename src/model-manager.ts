@@ -68,7 +68,7 @@ export function describeConfig(config: MochiConfig): string {
     `provider: ${config.model.provider}`,
     `baseUrl: ${config.model.baseUrl}`,
     `model:   ${config.model.model}`,
-    `apiKey:  ${config.model.apiKey ? 'set (' + maskApiKey(config.model.apiKey) + ')' : 'NOT SET'}`,
+    `apiKey:  ${config.model.apiKey ? 'set' : 'NOT SET'}`,
   ].join('\n');
 }
 
