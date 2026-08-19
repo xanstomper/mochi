@@ -99,6 +99,11 @@
   `BarTest.php`), and C# (`FooTests.cs`) naming in addition to the
   existing JS/TS/Python/Go/Rust conventions, so a mutation never
   corrupts a test file in a polyglot repo.
+- **Planning layer speaks polyglot too.** The decomposer's verification
+  guidance and the test-kind focus hint now list the real runner per
+  language (go test, cargo test, dotnet test, rspec, zig build test,
+  phpunit, mvn/gradlew) instead of only `npx vitest/npm test`, so a
+  model planning a Go or C# task picks the right command up front.
 
 ## 0.9.2
 

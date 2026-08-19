@@ -33,7 +33,7 @@ export function kindHint(kind: TaskKind): string {
     case 'refactor':
       return '\n# Focus: refactor\nPreserve behavior. Run the project test suite before AND after the change. If tests are absent, mention this in the next message rather than skipping verification.\n';
     case 'test':
-      return '\n# Focus: testing\nAim for one assertion per behavior. Cover the boundary and the failure path. Use the project\'s existing test runner (vitest, jest, pytest) — do not invent a new one.\n';
+      return '\n# Focus: testing\nAim for one assertion per behavior. Cover the boundary and the failure path. Use the project\'s existing test runner (npm test / vitest / jest for JS, pytest for Python, go test ./..., cargo test for Rust, mvn test or ./gradlew test for Java, dotnet test for C#, rspec for Ruby) — do not invent a new one.\n';
     case 'research':
       return '\n# Focus: research\nRead-only. Do not modify code. Surface concrete findings (paths, line ranges, code excerpts) so the next coder can act on them without re-discovering.\n';
     case 'plan':

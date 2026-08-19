@@ -100,7 +100,7 @@ export class GoalEngine {
       : '';
     const verifyInstruction = this.config.planMode
       ? ''
-      : '\nIMPORTANT: verificationCommand MUST actually run the implementation. Use a real test runner (e.g. `cd <dir> && npx vitest run`, `cd <dir> && npx jest`, `cd <dir> && pytest -q`, `cd <dir> && npm test`) — NOT a string/file check like `test -f` or `grep`. The harness auto-detects a fallback runner if you do not, but a task-specific runner you supply always wins. If the task is pure research/planning, omit verificationCommand entirely.';
+      : '\nIMPORTANT: verificationCommand MUST actually run the implementation using the repo\'s real test runner — NOT a string/file check like `test -f` or `grep`. Pick the runner that matches the repo language: JS/TS → `npm test`/`npx vitest run`/`npx jest`; Python → `python3 -m pytest -q`; Go → `go test ./...`; Rust → `cargo test`; Java → `mvn test`/`./gradlew test`; C# → `dotnet test`; Ruby → `bundle exec rspec`; Zig → `zig build test`; PHP → `vendor/bin/phpunit`; Swift → `swift test`; Dart → `dart test`; Kotlin → `gradle test`; Elixir → `mix test`. The harness auto-detects a fallback runner if you do not, but a task-specific runner you supply always wins. If the task is pure research/planning, omit verificationCommand entirely.';
     const decomposePrompt = `Decompose the goal into a JSON array of tasks. Each task:
 {
   "title": string,

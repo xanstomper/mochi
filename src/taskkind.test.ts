@@ -40,4 +40,9 @@ describe('kindHint', () => {
   it('debugging hint mentions reproducing the failure', () => {
     expect(kindHint('fix')).toMatch(/reproduc/i);
   });
+  it('test hint lists the polyglot runners the agent must pick from', () => {
+    const h = kindHint('test');
+    expect(h).toMatch(/pytest|go test|cargo test|dotnet test/);
+    expect(h.length).toBeGreaterThan(100);
+  });
 });
