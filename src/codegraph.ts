@@ -32,7 +32,7 @@ export function hasSqlite(): boolean {
 // the TypeScript-compiler backend covers .ts/.js only when explicitly chosen
 // (MOCHI_CPG_BACKEND=tsc) or when tree-sitter is unavailable.
 // ---------------------------------------------------------------------------
-export const LANGUAGES = ['typescript', 'javascript', 'python', 'rust', 'go', 'java', 'cpp'] as const;
+export const LANGUAGES = ['typescript', 'javascript', 'python', 'rust', 'go', 'java', 'cpp', 'ruby', 'php', 'csharp'] as const;
 export type LanguageId = (typeof LANGUAGES)[number];
 
 const EXT_LANG: Record<string, LanguageId> = {
@@ -43,6 +43,9 @@ const EXT_LANG: Record<string, LanguageId> = {
   '.go': 'go',
   '.java': 'java',
   '.cpp': 'cpp', '.cc': 'cpp', '.cxx': 'cpp', '.hpp': 'cpp', '.hh': 'cpp', '.h': 'cpp',
+  '.rb': 'ruby', '.rake': 'ruby',
+  '.php': 'php',
+  '.cs': 'csharp',
 };
 
 const langOf = (file: string): LanguageId | undefined => {
@@ -154,6 +157,9 @@ const GRAMMAR_SPECS: Record<string, { pkg: string; file: string }> = {
   go: { pkg: 'tree-sitter-go', file: 'tree-sitter-go.wasm' },
   java: { pkg: 'tree-sitter-java', file: 'tree-sitter-java.wasm' },
   cpp: { pkg: 'tree-sitter-cpp', file: 'tree-sitter-cpp.wasm' },
+  ruby: { pkg: 'tree-sitter-ruby', file: 'tree-sitter-ruby.wasm' },
+  php: { pkg: 'tree-sitter-php', file: 'tree-sitter-php_only.wasm' },
+    csharp: { pkg: 'tree-sitter-c-sharp', file: 'tree-sitter-c_sharp.wasm' },
 };
 
 // Declarator node types per grammar, mapped to the index `kind` column.
@@ -166,6 +172,9 @@ const DECL_KINDS: Record<string, Record<string, string>> = {
   go: { function_declaration: 'function', method_declaration: 'method', type_declaration: 'type', var_declaration: 'var', const_declaration: 'const' },
   java: { class_declaration: 'class', interface_declaration: 'interface', method_declaration: 'method', enum_declaration: 'enum', record_declaration: 'record', type_declaration: 'type' },
   cpp: { class_specifier: 'class', struct_specifier: 'class', function_definition: 'function', namespace_definition: 'namespace' },
+  ruby: { method: 'method', class: 'class', module: 'module', singleton_method: 'method' },
+  php: { function_definition: 'function', class_declaration: 'class', method_declaration: 'method', interface_declaration: 'interface' },
+  csharp: { class_declaration: 'class', method_declaration: 'method', interface_declaration: 'interface', record_declaration: 'class', struct_declaration: 'class' },
 };
 
 // Obtain a declaration's name: most grammars expose a `name` field; Go uses a

@@ -117,6 +117,19 @@ maybeDescribe('codegraph multi-language indexing (tree-sitter default)', () => {
     expect(getFunctionSynapse(cwd, 'Shape')).toContain('class Shape');
     expect(getFunctionSynapse(cwd, 'add')).toContain('int add');
   });
+
+  it('indexes Ruby, PHP, and C# symbols in one repo', async () => {
+    await ensureParserLoaded();
+    writeFileSync(resolve(cwd, 'app.rb'), 'class Greeter\n  def hello\n    "hi"\n  end\nend\ndef top()\n  1\nend\n');
+    writeFileSync(resolve(cwd, 'f.php'), '<?php\nfunction phpfn($x) { return $x * 2; }\nclass PhpCls { function m() {} }\n');
+    writeFileSync(resolve(cwd, 'App.cs'), 'class CsCls {\n  int M() { return 1; }\n}\npublic class CsOther { public int N() => 2; }\n');
+
+    expect(getFunctionSynapse(cwd, 'Greeter')).toContain('class Greeter');
+    expect(getFunctionSynapse(cwd, 'hello')).toContain('def hello');
+    expect(getFunctionSynapse(cwd, 'phpfn')).toContain('function phpfn');
+    expect(getFunctionSynapse(cwd, 'PhpCls')).toContain('class PhpCls');
+    expect(getFunctionSynapse(cwd, 'CsCls')).toContain('class CsCls');
+  });
 });
 
 maybeDescribe('codegraph tsc fallback backend', () => {

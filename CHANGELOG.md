@@ -82,6 +82,13 @@
   file in src/ resolves to the repo root). Real-model dogfood: a broken
   fib in a Zig repo now fixes end to end ("Goal completed. 1 done, 0
   failed").
+- **Code index now 10 languages.** The tree-sitter symbol index adds
+  Ruby, PHP, and C# (grammars ship WASM); the Dart and Elixir npm
+  grammars don't load under the pinned tree-sitter WASM ABI, so their
+  symbol index falls back to "no definition" but registry/verify
+  support remains. `get_function`/`find_callers`/`type_hierarchy` now
+  answer for Ruby classes/methods, PHP functions/classes, and C#
+  classes/methods in the same repo.
 
 ## 0.9.2
 
