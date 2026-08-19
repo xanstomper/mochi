@@ -79,14 +79,29 @@ function isInStringOrComment(source: string, idx: number): boolean {
 /**
  * Find one flippable operator in a source string and return its first match
  * (index, from, to). Deterministic: first candidate, first occurrence that is
- * not inside a string or comment.
+ * not inside a string or comment. Bare '<'/'>' matches that are part of '=>'
+ * arrows or '>=' / '<=' / '<<' / '>>' pairs are skipped (flipping those makes
+ * syntax errors, not logic bugs).
  */
 export function findMutation(source: string): { index: number; from: string; to: string } | null {
+  const isPartOfLargerToken = (idx: number, from: string): boolean => {
+    const prev = source[idx - 1] ?? '';
+    const next = source[idx + from.length] ?? '';
+    // '=>' arrow: the '>' belongs to the arrow token.
+    if (from === '>' && prev === '=') return true;
+    // '>' or '<' adjacent to another comparison/shift char forms a longer token
+    // ('>=', '<=', '<<', '>>', '</', '/>') that a bare flip would corrupt.
+    if ((from === '>' || from === '<') && ['>', '<', '='].includes(next)) return true;
+    if ((from === '>' || from === '<') && ['>', '<'].includes(prev)) return true;
+    // JSX-ish or type-parameter angle brackets usually sit next to identifiers,
+    // but we cannot know cheaply; the tokens above are the dangerous ones.
+    return false;
+  };
   for (const f of FLIPS) {
     let idx = -1;
     let cursor = 0;
     while ((idx = source.indexOf(f.from, cursor)) !== -1) {
-      if (!isInStringOrComment(source, idx)) {
+      if (!isInStringOrComment(source, idx) && !isPartOfLargerToken(idx, f.from)) {
         return { index: idx, from: f.from, to: f.to };
       }
       cursor = idx + 1;
@@ -95,7 +110,11 @@ export function findMutation(source: string): { index: number; from: string; to:
   return null;
 }
 
-/** Working-tree changed source files (added/modified/untracked) we may mutate. */
+/** Working-tree changed source files (added/modified/untracked) we may mutate.
+ *  Test files are EXCLUDED: mutating a test into a syntax error never gets
+ *  exercised by the code under test and produces meaningless "survived"
+ *  verdicts against implementations the tests actually cover. State/config
+ *  dirs like .mochi are also excluded. */
 export function changedSourceFiles(cwd: string): string[] {
   try {
     // `git status --porcelain` lists added (A/??), modified (M) and renamed (R)
@@ -117,12 +136,20 @@ export function changedSourceFiles(cwd: string): string[] {
         // quoted paths are rare; skip decoding quirks and only take plain ones
         if (!path) continue;
       }
+      // Never mutate the harness's own state or dot-directories.
+      if (path.split('/').some((seg) => seg.startsWith('.'))) continue;
+      if (isTestFile(path)) continue;
       if (SOURCE_EXTS.some((e) => path.endsWith(e))) files.push(path);
     }
     return files;
   } catch {
     return [];
   }
+}
+
+function isTestFile(path: string): boolean {
+  const base = path.split('/').pop() ?? path;
+  return /(\.|_|-)(test|spec)\.[cm]?[jt]sx?$/.test(base) || /^test/.test(base);
 }
 
 /**
