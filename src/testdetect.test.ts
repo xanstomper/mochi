@@ -52,6 +52,32 @@ describe('autoTestCommand', () => {
     expect(cmd).toContain('cd ' + resolve(dir, 'rs'));
   });
 
+  it('uses the language registry for a Java repo', () => {
+    mkdirSync(resolve(dir, 'java'), { recursive: true });
+    writeFileSync(resolve(dir, 'java', 'pom.xml'), '<project/>');
+    writeFileSync(resolve(dir, 'java', 'App.java'), 'class App {}');
+    const cmd = autoTestCommand(resolve(dir, 'java'), ['App.java']);
+    expect(cmd).toContain('mvn test');
+    expect(cmd).toContain('cd ' + resolve(dir, 'java'));
+  });
+
+  it('uses the language registry for a C# repo', () => {
+    mkdirSync(resolve(dir, 'cs'), { recursive: true });
+    writeFileSync(resolve(dir, 'cs', 'App.csproj'), '<Project/>');
+    writeFileSync(resolve(dir, 'cs', 'Program.cs'), 'class P {}');
+    const cmd = autoTestCommand(resolve(dir, 'cs'), ['Program.cs']);
+    expect(cmd).toContain('dotnet test');
+  });
+
+  it('uses the language registry for a Zig repo walking up from src/', () => {
+    mkdirSync(resolve(dir, 'zs/src'), { recursive: true });
+    writeFileSync(resolve(dir, 'zs', 'build.zig'), 'const std = @import("std");');
+    writeFileSync(resolve(dir, 'zs/src', 'main.zig'), 'fn main() void {}');
+    const cmd = autoTestCommand(resolve(dir, 'zs/src'), ['main.zig']);
+    expect(cmd).toContain('zig build test');
+    expect(cmd).toContain('cd ' + resolve(dir, 'zs'));
+  });
+
   it('returns null when the fileScope is empty', () => {
     expect(autoTestCommand(dir, [])).toBeNull();
     expect(autoTestCommand(dir, undefined)).toBeNull();

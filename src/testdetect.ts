@@ -10,6 +10,7 @@
 // no test runner installed, it returns null.
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
+import { detectRepo } from './repo.js';
 
 // Project-root markers per language, used by cwdForScope to decide whether a
 // subdirectory is its own project or just a folder under a repo root.
@@ -119,6 +120,24 @@ export function autoTestCommand(cwd: string, fileScope: string[] | undefined): s
     const parent = dirname(cargoProbe);
     if (parent === cargoProbe) break;
     cargoProbe = parent;
+  }
+
+  // Language-registry fallback: the same spec table that powers repo
+  // detection knows test commands for Java, Kotlin, C#, Zig, Ruby, PHP,
+  // Swift, Dart, etc. Detect at `dir`, and at any parent up to the project
+  // root, then use that language's canonical test command. Without this the
+  // fileScope path returned null for every non-JS/TS/Python/Go/Rust task,
+  // so verify() never ran a test for a .java or .cs task even though the
+  // registry knows how.
+  let langProbe: string = dir;
+  for (let i = 0; i < 5; i++) {
+    const repo = detectRepo(langProbe);
+    if (repo.testCommand && repo.language !== 'js' && repo.language !== 'ts') {
+      return `cd ${langProbe} && ${repo.testCommand} 2>&1 | tail -20`;
+    }
+    const parent = dirname(langProbe);
+    if (parent === langProbe) break;
+    langProbe = parent;
   }
 
   return null;
