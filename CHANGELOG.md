@@ -49,6 +49,12 @@
   javac, gcc -fsyntax-only) and skip the probe entirely for unknown
   extensions. Real-model dogfood: the same Rust fix that previously
   failed now completes in ~2s.
+- **Polyglot index walker skips build/cache dirs.** The codegraph
+  walker only ignored JS dirs (node_modules, dist, .next), so indexing
+  a Python repo walked `.venv`/`__pycache__`, Go walked `vendor/`, and
+  Rust walked `target/` — slow and able to shadow real symbols with junk
+  rows. Layer caches and toolchain outputs are now skipped for every
+  language.
 
 ## 0.9.2
 

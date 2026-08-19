@@ -68,6 +68,27 @@ maybeDescribe('codegraph multi-language indexing (tree-sitter default)', () => {
     expect(getFunctionSynapse(cwd, 'dist')).toContain('fn dist');
   });
 
+  it('skips polyglot build/cache dirs when indexing (venv, target, vendor, __pycache__)', async () => {
+    await ensureParserLoaded();
+    // Real source.
+    writeFileSync(resolve(cwd, 'app.py'), 'def real_fn():\n    return 1\n');
+    // The same-looking symbol inside junk dirs must NOT be indexed.
+    mkdirSync(resolve(cwd, '.venv'), { recursive: true });
+    writeFileSync(resolve(cwd, '.venv', 'site.py'), 'def real_fn():\n    return 999\n');
+    mkdirSync(resolve(cwd, '__pycache__'), { recursive: true });
+    writeFileSync(resolve(cwd, '__pycache__', 'app.cpython-312.pyc'), 'def real_fn():\n    return 999\n');
+    mkdirSync(resolve(cwd, 'target'), { recursive: true });
+    writeFileSync(resolve(cwd, 'target', 'lib.rs'), 'fn real_fn() {}\n');
+    mkdirSync(resolve(cwd, 'vendor'), { recursive: true });
+    writeFileSync(resolve(cwd, 'vendor', 'main.go'), 'func real_fn() {}\n');
+
+    const hit = getFunctionSynapse(cwd, 'real_fn');
+    expect(hit).toContain('def real_fn');
+    // If the walker descended into the junk dirs, the pyc/vendor/target rows
+    // could shadow the real one; ensure the real source body wins.
+    expect(hit).not.toContain('return 999');
+  });
+
   it('indexes Go symbols (func, type)', async () => {
     await ensureParserLoaded();
     writeFileSync(resolve(cwd, 'main.go'), [

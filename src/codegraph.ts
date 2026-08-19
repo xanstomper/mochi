@@ -50,11 +50,22 @@ const langOf = (file: string): LanguageId | undefined => {
   return dot === -1 ? undefined : EXT_LANG[file.slice(dot)];
 };
 
+// Directories to skip when walking a tree, keyed by the language they
+// belong to. The old list only understood JS build dirs (node_modules,
+// dist, .next), so indexing a Python repo could walk .venv and __pycache__,
+// a Go repo walked vendor/, and a Rust repo walked target/ -- slow and
+// noisy. Each prefix is skipped wherever it appears in the tree.
+const SKIP_DIRS = new Set([
+  '.git', 'node_modules', '.mochi', 'dist', '.next', 'coverage',
+  '.venv', 'venv', '__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache',
+  'vendor', 'target', '.gradle',
+]);
+
 function* walkFiles(root: string, dir: string): Generator<string> {
   let entries: string[];
   try { entries = readdirSync(dir); } catch { return; }
   for (const e of entries) {
-    if (e === '.git' || e === 'node_modules' || e === '.mochi' || e === 'dist' || e === '.next' || e === 'coverage') continue;
+    if (SKIP_DIRS.has(e)) continue;
     const full = resolve(dir, e);
     let st: ReturnType<typeof statSync>;
     try { st = statSync(full); } catch { continue; }
