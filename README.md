@@ -12,7 +12,9 @@ Implemented:
 - Model-agnostic OpenAI-compatible provider with OpenCode aliases
 - Model routing by capability profile (`fast` / `coding` / `reasoning` / `review`)
 - Budget-aware model fallback
-- Tool bus: `read`, `write`, `edit`, `delete`, `shell`, `search`, `glob`, `git`, `inspect`, `memory`
+- Tool bus: `read`, `write`, `edit`, `delete`, `shell`, `search`, `glob`, `git`, `inspect`, `memory`, `patch`, `todo`, `skill`, `subagent`
+- Codex-style multi-file `patch` tool (`*** Begin Patch` / `Add` / `Update` / `Delete File` sections) with context matching that tolerates whitespace drift
+- `edit` tool falls back to whitespace-insensitive matching (unique anchor required; ambiguity is refused rather than guessing)
 - Permission system (`safe` / `ask` / `auto`)
 - Adaptive context engine with token budget, compaction, project memory, and retrieval
 - Agent runtime loop: preflight → model → tools → verify → recover → pulse

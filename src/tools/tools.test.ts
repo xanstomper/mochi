@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, writeFileSync, statSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, statSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { readTool } from './read.js';
@@ -36,6 +36,28 @@ describe('file tools', () => {
     await editTool.execute({ path: resolve(dir, 'b.ts'), oldText: 'world', newText: 'mochi' }, ctx(dir));
     const content = readTool.execute({ path: resolve(dir, 'b.ts') }, ctx(dir));
     expect(await content).toContain('hello mochi');
+  });
+
+  it('edit falls back to fuzzy matching when whitespace differs', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-'));
+    // File on disk: 4-space indentation. Model remembers 2-space.
+    writeFileSync(resolve(dir, 'c.ts'), 'function a() {\n    if (x) {\n        return 1;\n    }\n}\n');
+    const out = await editTool.execute(
+      { path: resolve(dir, 'c.ts'), oldText: 'if (x) {\n  return 1;\n}', newText: 'if (x) {\n  return 42;\n}' },
+      ctx(dir),
+    );
+    expect(out).toContain('fuzzy match');
+    expect(readFileSync(resolve(dir, 'c.ts'), 'utf8')).toContain('return 42;');
+  });
+
+  it('edit refuses ambiguous fuzzy matches instead of guessing', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-'));
+    writeFileSync(resolve(dir, 'd.ts'), 'const a = 1;\nconst b = 2;\nconst a = 1;\n');
+    await expect(editTool.execute(
+      { path: resolve(dir, 'd.ts'), oldText: 'const a = 1;', newText: 'const a = 9;' },
+      ctx(dir),
+    )).rejects.toThrow();
+    expect(readFileSync(resolve(dir, 'd.ts'), 'utf8')).not.toContain('= 9');
   });
 
   it('glob matches patterns', async () => {
