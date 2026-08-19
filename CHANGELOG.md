@@ -89,6 +89,11 @@
   support remains. `get_function`/`find_callers`/`type_hierarchy` now
   answer for Ruby classes/methods, PHP functions/classes, and C#
   classes/methods in the same repo.
+- **Diagnosis probes cover the new languages.** Syntax/type probes now
+  use `ruby -c`, `php -l`, `dotnet build`, `dart analyze`, `zig build`,
+  and `mix compile` so a retry loop on those repos probes with the
+  real toolchain instead of silently falling through to a read-only
+  hypothesis.
 
 ## 0.9.2
 

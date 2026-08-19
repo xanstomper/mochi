@@ -82,6 +82,12 @@ export function syntaxProbe(file: string): string | undefined {
   if (/\.rs$/.test(file)) return `cargo check 2>&1 | head -30; rustc --crate-type lib --edition 2021 "${file}" 2>&1 | head -15`;
   if (/\.(java)$/.test(file)) return `javac -proc:none -d /tmp "${file}" 2>&1 | head -15`;
   if (/\.(c|cpp|cc|cxx|h|hpp)$/.test(file)) return `gcc -fsyntax-only "${file}" 2>&1 | head -15`;
+  if (/\.rb$/.test(file)) return `ruby -c "${file}" 2>&1 | head -10`;
+  if (/\.php$/.test(file)) return `php -l "${file}" 2>&1 | head -10`;
+  if (/\.cs$/.test(file)) return `dotnet build 2>&1 | tail -20`;
+  if (/\.dart$/.test(file)) return `dart analyze "${file}" 2>&1 | head -15`;
+  if (/\.zig$/.test(file)) return `zig build 2>&1 | tail -15`;
+  if (/\.(ex|exs)$/.test(file)) return `mix compile 2>&1 | tail -15`;
   return undefined;
 }
 
@@ -95,6 +101,11 @@ export function typeProbe(file: string): string | undefined {
   if (/\.go$/.test(file)) return `go vet "${file}" 2>&1 | head -20`;
   if (/\.rs$/.test(file)) return `cargo check 2>&1 | head -30`;
   if (/\.(java)$/.test(file)) return `javac -proc:none -d /tmp "${file}" 2>&1 | head -20`;
+  if (/\.rb$/.test(file)) return `ruby -w -c "${file}" 2>&1 | head -10`;
+  if (/\.php$/.test(file)) return `php -l "${file}" 2>&1 | head -10`;
+  if (/\.cs$/.test(file)) return `dotnet build 2>&1 | tail -20`;
+  if (/\.dart$/.test(file)) return `dart analyze "${file}" 2>&1 | head -15`;
+  if (/\.zig$/.test(file)) return `zig build 2>&1 | tail -15`;
   return undefined;
 }
 

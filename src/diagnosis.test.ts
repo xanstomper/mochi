@@ -65,6 +65,11 @@ describe('syntaxProbe / typeProbe (language-aware)', () => {
     ['/w/lib.py', /py_compile/],
     ['/w/lib.cpp', /gcc/],
     ['/w/lib.java', /javac/],
+    ['/w/lib.rb', /ruby -c/],
+    ['/w/lib.php', /php -l/],
+    ['/w/lib.cs', /dotnet build/],
+    ['/w/lib.dart', /dart analyze/],
+    ['/w/lib.zig', /zig build/],
   ])('syntax probe for %s uses the native checker', (file, pat) => {
     expect(syntaxProbe(file)).toMatch(pat);
   });
