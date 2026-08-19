@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { resolve, relative, dirname } from 'node:path';
+import { createHash } from 'node:crypto';
 import ts from 'typescript';
 import { createRequire } from 'node:module';
 import type { DatabaseSync } from 'node:sqlite';
@@ -324,8 +325,15 @@ const dbCache = new Map<string, CachedDb>();
 
 function fingerprint(full: string): string {
   try {
+    // Content-addressed fingerprint (adapted from OpenFable's content
+    // checksum): hash the file bytes so edits with identical mtime/size (or
+    // fast successive edits) are still seen as changed. Falls back to
+    // mtime+size for huge files to stay fast.
     const st = statSync(full);
-    return `${st.mtimeMs}:${st.size}`;
+    if (st.size > 2_000_000 || st.size === 0) return `${st.mtimeMs}:${st.size}`;
+    const buf = readFileSync(full);
+    const h = createHash('sha1').update(buf).digest('hex');
+    return `${h}:${st.size}`;
   } catch {
     return '';
   }

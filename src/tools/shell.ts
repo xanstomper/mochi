@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import type { Tool } from './types.js';
+import { classifyCommand } from '../security.js';
 
 const MAX_OUTPUT = 256_000;
 
@@ -19,6 +20,17 @@ export const shellTool: Tool = {
   async execute(args, ctx) {
     const command = String(args.command ?? '');
     if (!command) throw new Error('No command provided');
+
+    // Horus-derived command risk gate: in safe mode, destructive or network-
+    // touching commands are blocked outright; in auto/ask they run but the
+    // classification is visible (agents shouldn't silently rm -rf or push).
+    const risk = classifyCommand(command);
+    if (ctx.config.safety.mode === 'safe' && risk !== 'low') {
+      throw new Error(`Blocked by safety: command classified as ${risk} (safe mode). Command: ${command.slice(0, 200)}`);
+    }
+    if (risk !== 'low' && ctx.events) {
+      ctx.events.emit({ type: 'agent:log', agentId: ctx.agentId, message: `[shell:${risk}] ${command.slice(0, 160)}` });
+    }
 
     const cwd = args.cwd ? String(args.cwd) : ctx.cwd;
     const timeoutMs = ((args.timeout ? Number(args.timeout) : ctx.config.safety.commandTimeoutSeconds) ?? 120) * 1000;

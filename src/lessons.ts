@@ -8,6 +8,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { redact } from './security.js';
 
 export interface Lesson {
   id: string;
@@ -40,7 +41,7 @@ export function loadLessons(workspaceDir: string): Lesson[] {
 
 export function saveLessons(workspaceDir: string, lessons: Lesson[]): void {
   mkdirSync(resolve(workspaceDir, 'memory'), { recursive: true });
-  writeFileSync(lessonsPath(workspaceDir), JSON.stringify(lessons, null, 2));
+  writeFileSync(lessonsPath(workspaceDir), redact(JSON.stringify(lessons, null, 2)));
 }
 
 /** Append a lesson if its signature is novel; otherwise increment use counts on

@@ -2,6 +2,22 @@
 
 ## 0.9.5 (unreleased)
 
+- **From Horus (xanstomper/Horus).** New `src/security.ts` ports and
+  extends the Horus security package:
+  - `redact`/`redactObject` scrub API keys, JWTs, bearer tokens, private
+    keys, GitHub/AWS/Slack/GitLab tokens, plus Google/Gemini/OpenAI/
+    Anthropic keys. Wired into every persistent write: autopsies,
+    procedural lessons, and usage records, so raw model output can never
+    leak a key to disk.
+  - `classifyCommand` ranks shell commands `low`/`network`/`destructive`;
+    the shell tool now blocks destructive commands in `safe` mode and
+    logs their risk class in auto mode.
+  - `ApprovalQueue` for tool-approval flows.
+- **From OpenFable (xanstomper/OpenFable).** The codegraph fingerprint
+  is now content-addressed (SHA-1 of file bytes) instead of mtime+size,
+  so edits that preserve mtime/size (or land on a coarse-timestamp
+  filesystem) can never leave a stale symbol index. Huge files keep the
+  cheap mtime fast path.
 - **Call graph.** The symbol index now records `calls` edges (callee,
   caller, file, line) across all 10 indexed languages, extracted at index
   time from every grammar's call nodes. `find_callers` answers from the

@@ -8,6 +8,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { FailureKind, Hypothesis } from './diagnosis.js';
+import { redact } from './security.js';
 
 export interface DebugAttempt {
   attempt: number;          // 1..n, in order of evaluation
@@ -81,7 +82,7 @@ export function appendAttempt(
 ): Autopsy {
   const next: Autopsy = { ...autopsy, attempts: [...autopsy.attempts, attempt] };
   mkdirSync(autopsyDir(workspaceDir), { recursive: true });
-  writeFileSync(autopsyPath(workspaceDir, autopsy.taskId), JSON.stringify(next, null, 2));
+  writeFileSync(autopsyPath(workspaceDir, autopsy.taskId), redact(JSON.stringify(next, null, 2)));
   return next;
 }
 
@@ -93,7 +94,7 @@ export function finalizeAutopsy(
 ): Autopsy {
   const next: Autopsy = { ...autopsy, finalizedAtMs: Date.now(), ...fields };
   mkdirSync(autopsyDir(workspaceDir), { recursive: true });
-  writeFileSync(autopsyPath(workspaceDir, autopsy.taskId), JSON.stringify(next, null, 2));
+  writeFileSync(autopsyPath(workspaceDir, autopsy.taskId), redact(JSON.stringify(next, null, 2)));
   return next;
 }
 

@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { redact } from './security.js';
 import { resolve } from 'node:path';
 import { estimateCostUsd } from './budget.js';
 
@@ -43,7 +44,7 @@ export class UsageStore {
   private save() {
     const dir = resolve(this.path, '..');
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(this.path, JSON.stringify(this.data, null, 2));
+    writeFileSync(this.path, redact(JSON.stringify(this.data, null, 2)));
   }
 
   record(model: string, goal: string, usage: Partial<UsageRecord>): void {
