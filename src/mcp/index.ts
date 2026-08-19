@@ -26,6 +26,13 @@ export interface McpToolInput {
   inputSchema?: { type?: string; properties?: Record<string, unknown>; required?: string[] };
 }
 
+export interface McpResourceInput {
+  uri: string;
+  name?: string;
+  description?: string;
+  mimeType?: string;
+}
+
 interface JsonRpcResponse {
   jsonrpc: '2.0';
   id: number;
@@ -123,6 +130,25 @@ export class McpClient {
     if (!this.initialized) await this.initialize();
     const result = (await this.request('tools/list', {})) as { tools?: McpToolInput[] };
     return result?.tools ?? [];
+  }
+
+  /** List resources the server exposes (optional capability). Servers that do
+   *  not implement resources return an error, which we surface as an empty
+   *  list so callers can treat it as "nothing to read". */
+  async listResources(): Promise<McpResourceInput[]> {
+    if (!this.initialized) await this.initialize();
+    const result = (await this.request('resources/list', {})) as { resources?: McpResourceInput[] };
+    return result?.resources ?? [];
+  }
+
+  /** Read a resource by URI; returns the concatenated text content. */
+  async readResource(uri: string): Promise<string> {
+    if (!this.initialized) await this.initialize();
+    const result = (await this.request('resources/read', { uri })) as {
+      contents?: { uri?: string; text?: string }[];
+    };
+    const parts = (result?.contents ?? []).map((c) => c?.text ?? '').filter(Boolean);
+    return parts.join('\n');
   }
 
   /** Call a tool; returns the concatenated text content of the result. */

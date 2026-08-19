@@ -119,7 +119,9 @@ handshakes over JSON-RPC, and its tools are registered natively as
 `serverName__toolName` (e.g. `memory__create_entities`) with `network`
 permission, so the model calls them like any built-in tool. Failed servers are
 logged and skipped; a crashed server rejects its pending calls instead of
-hanging the run.
+hanging the run. Servers that expose MCP **resources** additionally get
+`serverName__resources_list` and `serverName__resources_read` tools (read
+permission) so the model can pull server-provided context on demand.
 
 ### Plan-then-act mode
 
