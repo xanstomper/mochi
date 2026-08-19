@@ -1,5 +1,18 @@
 # Mochi Changelog
 
+## Unreleased
+
+- **Live integration tests against real freeinference.** New
+  `src/agent/loop.live.test.ts` exercises the real model on a real file
+  system end-to-end (decompose -> plan -> run -> verify). Three tests:
+  writes a requested file, writes a working vitest test, decomposes a
+  multi-step goal. Auto-skipped when `FREEINFERENCE_API_KEY` is missing so
+  CI stays offline. Run explicitly with
+  `FREEINFERENCE_API_KEY=... npx vitest run src/agent/loop.live.test.ts`.
+  These complement (not replace) the scripted fake-openai unit tests: the
+  fake tests cover harness behavior deterministically, the live tests
+  cover what the model actually does with a real prompt.
+
 ## 0.9.1
 
 Three more dogfood-found regressions where the verifier was being too
