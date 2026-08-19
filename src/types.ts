@@ -6,6 +6,11 @@ export interface ModelConfig {
   apiKey?: string;
   model: string;
   profiles?: Record<ModelProfile, string>;
+  /** Backup providers tried in order when the primary errors before producing
+   *  any output. Each entry is a full ModelConfig (provider/baseUrl/apiKey/
+   *  model); profiles fall back to the primary's when unset. Mid-stream
+   *  failures are NOT retried on a fallback (partial output can't be replayed). */
+  failover?: ModelConfig[];
 }
 
 export interface PermissionConfig {

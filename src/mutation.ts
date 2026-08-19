@@ -136,8 +136,10 @@ export function changedSourceFiles(cwd: string): string[] {
         // quoted paths are rare; skip decoding quirks and only take plain ones
         if (!path) continue;
       }
-      // Never mutate the harness's own state or dot-directories.
-      if (path.split('/').some((seg) => seg.startsWith('.'))) continue;
+      // Never mutate the harness's own state, dependencies, or build output.
+      const segs = path.split('/');
+      if (segs.some((seg) => seg.startsWith('.'))) continue;
+      if (segs.includes('node_modules') || segs.includes('dist') || segs.includes('build') || segs.includes('coverage')) continue;
       if (isTestFile(path)) continue;
       if (SOURCE_EXTS.some((e) => path.endsWith(e))) files.push(path);
     }

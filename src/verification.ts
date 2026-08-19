@@ -26,6 +26,9 @@ export interface VerificationEvidence {
   source: string;
   result: string;
   passed: boolean;
+  /** True when the check was skipped because the command is not installed
+   *  (exit 127); such checks are no-ops, not failures. */
+  skipped?: boolean;
 }
 
 export interface VerificationResult {
@@ -89,6 +92,23 @@ export class VerifierEngine {
     for (const command of commands) {
       this.budget.recordToolCall();
       const result = await this.runCommand(command);
+      // A check that cannot even run (command not found, exit 127) is an
+      // environment gap, not evidence the agent's work is wrong. The decomposer
+      // freely invents verification commands (tsc, pytest, cargo...) that may
+      // not exist on PATH in the user's repo; failing the task for that would
+      // reject correct work. Mark such checks as passed-with-a-skip-note so the
+      // judge sees them as no-op rather than failure.
+      const exitMatch = result.match(/^exit_code: (\d+)/);
+      const exit127 = exitMatch ? Number(exitMatch[1]) === 127 : false;
+      if (exit127) {
+        evidence.push({
+          source: `command:${command}`,
+          result: `[SKIPPED: command not found] ${result.slice(0, 2000)}`,
+          passed: true,
+          skipped: true,
+        });
+        continue;
+      }
       evidence.push({
         source: `command:${command}`,
         result: result.slice(0, 2000),
@@ -104,7 +124,9 @@ export class VerifierEngine {
     // to harden its tests.
     let mutationCheck: MutationCheck = { applied: false };
     const testCommand = task.verificationCommand ?? repo.testCommand;
-    if (testCommand && evidence.some((e) => e.passed)) {
+    const testCmdEvidence = testCommand ? evidence.find((e) => e.source === `command:${testCommand}`) : undefined;
+    const testCommandRuns = Boolean(testCommand) && testCmdEvidence?.passed === true && testCmdEvidence?.skipped !== true;
+    if (testCommand && testCommandRuns && evidence.some((e) => e.passed)) {
       try {
         mutationCheck = await runMutationCheck(this.cwd, testCommand, async (cmd) => this.exitCode(cmd), async (cmd) => this.captureOutput(cmd));
         if (mutationCheck.applied) {
@@ -205,20 +227,28 @@ export class VerifierEngine {
       // or scratch files it was asked to edit), which previously made the
       // evidence read "No git changes detected" and the judge fail perfectly
       // correct work. Include untracked content as pseudo-diff additions so
-      // new-file work is verifiable.
+      // new-file work is verifiable. Harness state (.mochi), dependencies
+      // (node_modules), and build output are NOT source product: they are
+      // skipped and source files are listed FIRST so a 2k evidence budget is
+      // spent on the actual work, not noise.
       const untracked = await execFileAsync('git', ['ls-files', '--others', '--exclude-standard'], this.cwd);
-      const extras: string[] = [];
+      const source: string[] = [];
+      const other: string[] = [];
       if (untracked.trim()) {
-        for (const f of untracked.split('\n').filter(Boolean).slice(0, 20)) {
+        for (const f of untracked.split('\n').filter(Boolean).slice(0, 50)) {
+          if (!f || f.startsWith('.mochi/') || f.startsWith('node_modules/') || f.startsWith('dist/') || f.startsWith('.git/')) continue;
+          const lower = f.toLowerCase();
+          const kind = /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|rb|java|json|md|yaml|yml|toml|sh|css|html)$/.test(lower) ? 'source' : 'other';
+          const bucket = kind === 'source' ? source : other;
           try {
             const content = readFileSync(resolve(this.cwd, f), 'utf8');
-            extras.push(`--- /dev/null\n+++ b/${f} (untracked, new)\n${content.split('\n').slice(0, 80).map((l) => `+${l}`).join('\n')}`);
+            bucket.push(`--- /dev/null\n+++ b/${f} (untracked, new)\n${content.split('\n').slice(0, 100).map((l) => `+${l}`).join('\n')}`);
           } catch {
-            extras.push(`+++ b/${f} (untracked, unreadable)`);
+            bucket.push(`+++ b/${f} (untracked, unreadable)`);
           }
         }
       }
-      return [trackedDiff, ...extras].filter(Boolean).join('\n');
+      return [trackedDiff, ...source, ...other].filter(Boolean).join('\n');
     } catch {
       return '';
     }

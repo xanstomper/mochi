@@ -52,8 +52,57 @@ export function selectModel(config: ModelConfig, profile: ModelProfile): string 
 }
 
 export function createProvider(config: ModelConfig, profile?: ModelProfile) {
-  const provider = createRawProvider(config, profile);
-  return withCapabilityGate(provider, config, resolveProvider(config));
+  const chain = [config, ...(config.failover ?? [])].map((c) => {
+    // A failover entry may omit profiles; inherit them from the primary.
+    const merged: ModelConfig = c.profiles ? c : { ...c, profiles: config.profiles };
+    const raw = createRawProvider(merged, profile);
+    return withCapabilityGate(raw, merged, resolveProvider(merged));
+  });
+  if (chain.length === 1) return chain[0];
+  return withFailover(chain, resolveProvider(config).providerName ?? config.provider);
+}
+
+/**
+ * Try providers in order. `streamChat` only falls through when the current
+ * provider errors BEFORE yielding any chunk (dead endpoint, auth failure,
+ * request refused). Once output has started we rethrow: replaying partial
+ * output onto another model would corrupt the tool-call stream. `chat` (the
+ * non-streaming convenience) falls through on any error. Whichever error came
+ * LAST among tried providers is thrown when the chain is exhausted, so the
+ * caller sees the most useful failure.
+ */
+export function withFailover(chain: RawProvider[], primaryName: string): RawProvider {
+  async function* streamChat(messages: ChatMessage[], tools: ToolDefinition[], options?: { temperature?: number; maxTokens?: number }): AsyncGenerator<StreamChunk> {
+    let lastErr: unknown;
+    for (let i = 0; i < chain.length; i++) {
+      let began = false;
+      try {
+        for await (const chunk of chain[i].streamChat(messages, tools, options)) {
+          began = true;
+          yield chunk;
+        }
+        return;
+      } catch (err) {
+        lastErr = err;
+        if (began) throw err; // mid-stream: never replay
+      }
+    }
+    throw lastErr ?? new Error(`All ${chain.length} model providers (${primaryName}${chain.length > 1 ? ' + fallbacks' : ''}) failed.`);
+  }
+
+  async function chat(messages: ChatMessage[], tools: ToolDefinition[], options?: { temperature?: number; maxTokens?: number }): Promise<ModelResponse> {
+    let lastErr: unknown;
+    for (let i = 0; i < chain.length; i++) {
+      try {
+        return await chain[i].chat(messages, tools, options);
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    throw lastErr instanceof Error ? lastErr : new Error(`All model providers failed: ${String(lastErr)}`);
+  }
+
+  return { streamChat, chat };
 }
 
 function createRawProvider(config: ModelConfig, profile?: ModelProfile) {

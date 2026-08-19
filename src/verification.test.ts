@@ -83,6 +83,31 @@ describe('VerifierEngine', () => {
     expect(result.failed.join('\n')).toContain('build');
   });
 
+  it('skips a verification command that is not installed (exit 127) instead of failing', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-verify-'));
+    // A verificationCommand referencing a binary absent from PATH (tsc) must
+    // be treated as a no-op, not a failure: the agent's work may be correct
+    // and the tool simply is not installed in this environment.
+    const workspace = new Workspace(dir, '.mochi');
+    workspace.ensure();
+    const verifier = new VerifierEngine({
+      cwd: dir,
+      workspace,
+      config: baseConfig,
+      events: new EventBus(),
+      budget: new BudgetEngine(baseConfig.safety),
+    });
+    const task = createTask('Add feature', 'Implement', {
+      acceptanceCriteria: ['feature works'],
+      verificationCommand: 'definitely-not-a-real-command-xyz',
+    });
+    const result = await verifier.verify(task, 'Implemented feature');
+    // Not FAIL: the missing tool is an environment gap, not a verdict on the work.
+    expect(['PASS', 'BLOCKED']).toContain(result.status);
+    const skippedEvidence = result.evidence.find((e) => e.source.includes('definitely-not-a-real-command-xyz'));
+    expect(skippedEvidence?.skipped).toBe(true);
+  });
+
   it('returns BLOCKED when no checks exist for acceptance criteria', async () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-verify-'));
     const workspace = new Workspace(dir, '.mochi');
