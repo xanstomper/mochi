@@ -1,5 +1,25 @@
 # Mochi Changelog
 
+## 0.8.0
+
+Provider resilience and verifier accuracy from dogfooding:
+
+- **Multi-provider failover.** `model.failover` accepts a list of backup
+  `ModelConfig`s tried in order when the primary errors before producing any
+  output (dead endpoint, auth failure, refused connection). Mid-stream failures
+  are never replayed onto a fallback. Every provider in the chain keeps its own
+  capability-gate health, and all call sites (agent loop, decompose, verifier
+  judge, chameleon, speculative) inherit failover automatically.
+- **Missing verification tools no longer fail correct work.** A check whose
+  command is not installed (exit 127, e.g. the decomposer guessing
+  `tsc --noEmit x.ts` in a repo without tsc) is recorded as skipped evidence
+  instead of a failure. Mutation verification only runs against a genuinely
+  runnable test command.
+- **Diff evidence shows the work.** `safeGitDiff` excludes `.mochi` state,
+  `node_modules`, `dist` noise and lists real source files first, so the
+  evidence budget is spent on the new `.ts` file the agent wrote. Mutation
+  targets likewise exclude dependency and build directories.
+
 ## 0.7.0
 
 Pipelines, prompts, and hardening found by dogfooding:
