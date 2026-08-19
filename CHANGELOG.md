@@ -2,6 +2,20 @@
 
 ## 0.9.6 (unreleased)
 
+- **Structured stop reasons.** `AgentResult` now carries a `stopReason`
+  (`completed`, `aborted`, `runtime_limit`, `budget`, `pulse_abort`,
+  `max_iterations`, `model_error`, `tool_loop`, `verification_failed`),
+  mirroring modern agent SDKs (LangChain/LangGraph). Every finish path in
+  the loop declares why the run ended, and the reason rides the
+  `task:completed`/`task:failed` events.
+- **Run traces.** New `src/trace.ts` records a durable, deep-redacted
+  JSONL trace of every agent run to `<workspace>/.mochi/traces/
+  <goalId>.jsonl` — tool calls with args, results, errors, agent logs,
+  and a goal summary — the observability layer harnesses ship by default.
+  `mochi trace [<goalId>]` replays the newest (or a named) run as a
+  readable transcript; `mochi trace` with no id lists the latest trace.
+  Secrets inside nested tool args are redacted before they ever touch
+  disk.
 - **Clean interrupt handling.** Ctrl-C / SIGTERM now aborts the active goal
   cleanly instead of SIGKILLing the process and orphaning subagents: Runtime
   owns an AbortController, GoalEngine.runGoal accepts an external signal, and

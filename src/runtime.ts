@@ -120,15 +120,27 @@ export class Runtime {
   async goal(objective: string, constraints: string[] = [], opts?: { enhance?: boolean; enhanceMode?: string }): Promise<string> {
     const goal = await this.goals.createGoal(objective, constraints);
     const tasks = await this.goals.decompose(goal);
-    const result = await this.goals.runGoal(goal, tasks, await this.enhancedCtx(objective, opts), this.abortSignal);
-    this.recordUsage(goal.objective, result);
-    // Plan mode: the agents' plan text is the deliverable, so include it in
-    // the user-facing summary instead of just "Goal completed".
-    if (this.config.planMode) {
-      const plans = result.completedTasks.map((t) => t.output).filter((o) => o && o.trim());
-      if (plans.length) return `Goal ${goal.status}.\n\n${plans.join('\n\n---\n\n')}`;
+    return this.runGoalTraced(goal, tasks, objective, opts);
+  }
+
+  /** Shared execution: records a run trace, then delegates to GoalEngine. */
+  private async runGoalTraced(goal: import('./types.js').Goal, tasks: import('./types.js').Task[], objective: string, opts?: { enhance?: boolean; enhanceMode?: string }, isPlan = this.config.planMode): Promise<string> {
+    const { TraceRecorder } = await import('./trace.js');
+    const recorder = new TraceRecorder(this.workspace.dir, goal.id).attach(this.events);
+    try {
+      const extra = await this.enhancedCtx(objective, opts);
+      const result = await this.goals.runGoal(goal, tasks, extra, this.abortSignal);
+      this.recordUsage(objective, result);
+      recorder.log({ t: Date.now(), kind: 'goal:summary', status: result.goal?.status ?? 'unknown', tokensUsed: result.tokensUsed, costUsd: result.costUsd, durationMs: result.durationMs });
+      // Plan mode: the agents' plan text is the deliverable.
+      if (isPlan) {
+        const plans = result.completedTasks.map((t) => t.output).filter((o) => o && o.trim());
+        if (plans.length) return `Goal ${result.goal?.status ?? ''}.\n\n${plans.join('\n\n---\n\n')}`;
+      }
+      return result.summary;
+    } finally {
+      recorder.close();
     }
-    return result.summary;
   }
 
   async team(objective: string, opts?: { enhance?: boolean; enhanceMode?: string }): Promise<string> {
@@ -188,13 +200,20 @@ export class Runtime {
     // Single-agent one-shot task.
     const goal = await this.goals.createGoal(prompt);
     const task = (await this.goals.decompose(goal))[0];
-    const result = await this.goals.runGoal(goal, [task], [], this.abortSignal);
-    this.recordUsage(prompt, result);
-    if (this.config.planMode) {
-      const plan = result.completedTasks.map((t) => t.output).filter((o) => o && o.trim()).join('\n\n');
-      if (plan) return `Goal ${goal.status}.\n\n${plan}`;
+    const { TraceRecorder } = await import('./trace.js');
+    const recorder = new TraceRecorder(this.workspace.dir, goal.id).attach(this.events);
+    try {
+      const result = await this.goals.runGoal(goal, [task], [], this.abortSignal);
+      this.recordUsage(prompt, result);
+      recorder.log({ t: Date.now(), kind: 'goal:summary', status: goal.status, tokensUsed: result.tokensUsed, costUsd: result.costUsd, durationMs: result.durationMs });
+      if (this.config.planMode) {
+        const plan = result.completedTasks.map((t) => t.output).filter((o) => o && o.trim()).join('\n\n');
+        if (plan) return `Goal ${goal.status}.\n\n${plan}`;
+      }
+      return result.summary;
+    } finally {
+      recorder.close();
     }
-    return result.summary;
   }
 
   private recordUsage(goal: string, result: { tokensUsed: number; costUsd: number; durationMs: number }): void {

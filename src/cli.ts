@@ -95,6 +95,7 @@ Usage:
   mochi profiles
   mochi memory
   mochi inspect "<query>"
+  mochi trace [<goalId>]             # replay the run trace for a goal
   mochi speculate "<question>"
   mochi daemon start [--port <n>] [--token <t>]
   mochi daemon status
@@ -544,6 +545,26 @@ async function main() {
     if (!query) { console.error('Usage: mochi inspect "<query>"'); process.exit(1); }
     const result = await runtime.inspect(query);
     console.log(result.summary);
+    return;
+  }
+
+  if (first === 'trace') {
+    const { readTrace, formatTrace } = await import('./trace.js');
+    const id = positional[1] ?? '';
+    const ids = id ? [id] : [];
+    if (!ids.length) {
+      // No id: list recent trace files and replay the newest one.
+      const { readdirSync } = await import('node:fs');
+      const dir = resolve(runtime.workspace.dir, 'traces');
+      const files = (() => { try { return readdirSync(dir).filter((f) => f.endsWith('.jsonl')).sort(); } catch { return []; } })();
+      if (!files.length) { console.log('No traces yet.'); return; }
+      ids.push(files[files.length - 1].replace(/\.jsonl$/, ''));
+    }
+    for (const gid of ids) {
+      const entries = readTrace(runtime.workspace.dir, gid);
+      if (!entries.length) { console.log(`No trace for ${gid}.`); continue; }
+      console.log(formatTrace(entries));
+    }
     return;
   }
 

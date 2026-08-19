@@ -147,6 +147,17 @@ export interface AgentOptions {
   subagentDepth?: number;
 }
 
+export type AgentStopReason =
+  | 'completed'          // verified + self-review clean (or answer task)
+  | 'aborted'            // user interrupt / external abort
+  | 'runtime_limit'      // maxRuntimeMinutes exceeded
+  | 'budget'             // token/cost/model-call budget exhausted
+  | 'pulse_abort'        // pulse watchdog (repeated identical failures)
+  | 'max_iterations'     // safety.maxIterations hit
+  | 'model_error'        // model request failed twice
+  | 'tool_loop'          // too many tool calls (anti-infinite-loop)
+  | 'verification_failed'; // verify kept failing past the retry budget
+
 export interface AgentResult {
   success: boolean;
   summary: string;
@@ -154,6 +165,8 @@ export interface AgentResult {
   attempts: number;
   tokensUsed: number;
   durationMs: number;
+  /** Why the run ended, mirroring modern agent SDKs (LangChain/LangGraph). */
+  stopReason: AgentStopReason;
 }
 
 export class Agent {
@@ -293,15 +306,15 @@ export class Agent {
 
     for (let i = 0; i < maxIterations; i++) {
       if (this.abortSignal?.aborted) {
-        return this.finish(task, false, 'Aborted by user');
+        return this.finish(task, false, 'Aborted by user', 'aborted');
       }
       if (performance.now() - this.startTime > runtimeLimit) {
-        return this.finish(task, false, 'Runtime limit exceeded');
+        return this.finish(task, false, 'Runtime limit exceeded', 'runtime_limit');
       }
       if (this.budget) {
         this.budget.recordAgentStart();
         if (!this.budget.canMakeModelCall()) {
-          return this.finish(task, false, 'Budget exhausted before model call');
+          return this.finish(task, false, 'Budget exhausted before model call', 'budget');
         }
         this.budget.recordModelCall();
       }
@@ -321,7 +334,7 @@ export class Agent {
 
       const pulse = this.pulse(i, task);
       if (pulse.abort) {
-        return this.finish(task, false, pulse.reason ?? 'Pulse abort');
+        return this.finish(task, false, pulse.reason ?? 'Pulse abort', 'pulse_abort');
       }
       if (pulse.message) {
         this.context.addMessage({ role: 'system', content: pulse.message });
@@ -381,7 +394,7 @@ export class Agent {
         try {
           response = await gatherStream(retryPacket.messages);
         } catch {
-          return this.finish(task, false, `Model request failed: ${message}`);
+          return this.finish(task, false, `Model request failed: ${message}`, 'model_error');
         }
       }
       if (response.usage) {
@@ -417,7 +430,7 @@ export class Agent {
               // assistant message, else an honest placeholder.
               const lastAssistant = [...this.context['messages']].reverse().find((m) => m.role === 'assistant' && typeof m.content === 'string' && m.content.trim());
               const planText = (response.content ?? '').trim() || (lastAssistant?.content as string | undefined)?.trim() || '';
-              return this.finish(task, true, planText || 'Planned. No files were changed.');
+              return this.finish(task, true, planText || 'Planned. No files were changed.', 'completed');
             }
             this.context.addMessage({
               role: 'system',
@@ -438,7 +451,7 @@ export class Agent {
         }
         this.toolCallsTotal++;
         if (this.toolCallsTotal > 24) {
-          return this.finish(task, false, 'Too many tool calls; stopping to avoid an infinite loop.');
+          return this.finish(task, false, 'Too many tool calls; stopping to avoid an infinite loop.', 'tool_loop');
         }
         await this.executeToolCalls(response.toolCalls);
         continue;
@@ -454,7 +467,7 @@ export class Agent {
           if (this.planMode && !isPlanShaped(response.content)) {
             this.planNudges++;
             if (this.planNudges > 3) {
-              return this.finish(task, false, 'Planner never produced a plan. Last reply:\n' + response.content);
+              return this.finish(task, false, 'Planner never produced a plan. Last reply:\n' + response.content, 'max_iterations');
             }
             this.context.addMessage({
               role: 'system',
@@ -463,9 +476,9 @@ export class Agent {
             this.events.emit({ type: 'agent:log', agentId: this.id, message: '[plan-mode] non-plan reply; nudging for the plan' });
             continue;
           }
-          return this.finish(task, true, response.content);
+          return this.finish(task, true, response.content, 'completed');
         }
-        return this.finish(task, false, 'Model produced no output and no tool calls.');
+        return this.finish(task, false, 'Model produced no output and no tool calls.', 'model_error');
       }
 
       const verification = await this.verify(task, repo);
@@ -492,7 +505,7 @@ export class Agent {
             continue;
           }
         }
-        return this.finish(task, true, verification.summary);
+        return this.finish(task, true, verification.summary, 'completed');
       }
       if (this.verifyCount > 3) {
         // Repeated verification failure: roll the repo back to the state before
@@ -512,7 +525,7 @@ export class Agent {
           this.autopsy = finalizeAutopsy(this.workspace.dir, this.autopsy, { outcome: 'unresolved' });
         }
         this.recordFailure(task, verification.summary);
-        return this.finish(task, false, 'Verification failed repeatedly:\n' + verification.summary + rollbackNote);
+        return this.finish(task, false, 'Verification failed repeatedly:\n' + verification.summary + rollbackNote, 'verification_failed');
       }
       this.addAttempt(task, 'verify', [`${repo.testCommand || repo.buildCommand || 'verify'}`], 'failure', verification.summary);
       this.context.addKnownError(verification.summary);
@@ -523,7 +536,7 @@ export class Agent {
     }
 
     this.addAttempt(task, 'exhausted', [], 'failure', `Reached maximum iterations (${maxIterations})`);
-    return this.finish(task, false, `Reached maximum iterations (${maxIterations})`);
+    return this.finish(task, false, `Reached maximum iterations (${maxIterations})`, 'max_iterations');
   }
 
   /**
@@ -1037,7 +1050,7 @@ export class Agent {
     this.events.emit({ type: 'message', role, content, agentId: this.id });
   }
 
-  private finish(task: Task, success: boolean, summary: string): AgentResult {
+  private finish(task: Task, success: boolean, summary: string, stopReason: AgentStopReason = success ? 'completed' : 'aborted'): AgentResult {
     this.mcpClose?.();
     this.mcpClose = undefined;
     this.budget?.recordAgentEnd();
@@ -1047,7 +1060,7 @@ export class Agent {
       }
     }
     const durationMs = Math.round(performance.now() - this.startTime);
-    this.events.emit({ type: success ? 'task:completed' : 'task:failed', task, agentId: this.id, reason: summary });
+    this.events.emit({ type: success ? 'task:completed' : 'task:failed', task, agentId: this.id, reason: summary, stopReason });
     this.events.emit({ type: 'agent:completed', id: this.id, taskId: task.id });
     return {
       success,
@@ -1056,6 +1069,7 @@ export class Agent {
       attempts: this.errors.length + 1,
       tokensUsed: this.tokensUsed,
       durationMs,
+      stopReason,
     };
   }
 }

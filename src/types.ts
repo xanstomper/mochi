@@ -211,8 +211,8 @@ export type MochiEvent =
   | { type: 'task:created'; task: Task }
   | { type: 'task:ready'; task: Task }
   | { type: 'task:started'; task: Task; agentId: string }
-  | { type: 'task:completed'; task: Task; agentId: string }
-  | { type: 'task:failed'; task: Task; agentId: string; reason: string }
+  | { type: 'task:completed'; task: Task; agentId: string; stopReason?: string }
+  | { type: 'task:failed'; task: Task; agentId: string; reason: string; stopReason?: string }
   | { type: 'agent:spawned'; id: string; role: AgentRole; taskId: string }
   | { type: 'agent:completed'; id: string; taskId: string }
   | { type: 'agent:log'; agentId: string; message: string }
