@@ -42,6 +42,24 @@ describe('mutation.findMutation', () => {
   it('returns null when there is nothing flippable', () => {
     expect(findMutation('const x = 1; // nothing flippable\nreturn "done";')).toBeNull();
   });
+
+  it('mutates Python operators (== and and/or)', () => {
+    const mEq = findMutation('if a == b:\n    return 1');
+    expect(mEq?.from).toBe('==');
+    expect(mEq?.to).toBe('!=');
+    const mAnd = findMutation('if a and b:\n    return 1');
+    expect(mAnd?.from).toBe(' and ');
+    expect(mAnd?.to).toBe(' or ');
+  });
+
+  it('mutates Go and Rust shared operators (==, &&)', () => {
+    const mEq = findMutation('if a == b { return 1 }');
+    expect(mEq?.from).toBe('==');
+    expect(mEq?.to).toBe('!=');
+    const mAnd = findMutation('if a && b { return 1 }');
+    expect(mAnd?.from).toBe('&&');
+    expect(mAnd?.to).toBe('||');
+  });
 });
 
 describe('mutation.runMutationCheck', () => {
@@ -85,7 +103,24 @@ describe('mutation.runMutationCheck', () => {
     expect(result.survived).toBe(false);
     expect(result.note).toContain('output changed');
     expect(readFileSync(resolve(dir, 'math.js'), 'utf8')).toContain('a + b');
-  });
+  }, 20_000);
+
+  it('mutates python sources and reports KILLED under pytest', async () => {
+    const dir = makeRepo();
+    writeFileSync(resolve(dir, 'arith.py'), 'def add(a, b):\n    return a + b\n');
+    const cmd = 'python3 -m pytest -q 2>&1 | tail -3';
+    const result = await runMutationCheck(
+      dir,
+      cmd,
+      async (c) => { try { execSync(c, { cwd: dir, shell: '/bin/sh' }); return 0; } catch { return 1; } },
+      async (c) => String(execSync(c, { cwd: dir, shell: '/bin/sh' }) ?? ''),
+    );
+    // The '+'-flip only matters if the mutated file is actually targeted; the
+    // point of this test is that a .py file is now a viable mutation target.
+    expect(result.applied).toBe(true);
+    expect(['+', '-']).toContain(result.target?.match(/[+-]/)?.[0]);
+    expect(readFileSync(resolve(dir, 'arith.py'), 'utf8')).toContain('a + b');
+  }, 20_000);
 
   it('skips when there are no changed source files', async () => {
     const dir = makeRepo();

@@ -30,11 +30,18 @@ export interface MutationCheck {
 }
 
 // Ordered operator flips. Deterministic by first-file/first-match.
+// The JS dialects use ===/!==/&&/||; Python uses ==/!= and the keyword
+// forms and/or; Go/Rust/C++ share ==/!=/&&/||. A bare '=' is never flipped
+// (assignment creates a syntax error, not a logic bug).
 const FLIPS: { from: string; to: string }[] = [
   { from: '===', to: '!==' },
   { from: '!==', to: '===' },
+  { from: '==', to: '!=' },
+  { from: '!=', to: '==' },
   { from: '&&', to: '||' },
   { from: '||', to: '&&' },
+  { from: ' and ', to: ' or ' },
+  { from: ' or ', to: ' and ' },
   { from: '<=', to: '>=' },
   { from: '>=', to: '<=' },
   { from: '<', to: '>' },
@@ -43,7 +50,28 @@ const FLIPS: { from: string; to: string }[] = [
   { from: '-', to: '+' },
 ];
 
-const SOURCE_EXTS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
+const SOURCE_EXTS = [
+  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
+  '.py', '.go', '.rs', '.java', '.rb', '.php',
+  '.c', '.cpp', '.cc', '.cxx', '.h', '.hpp',
+];
+
+/**
+ * Polyglot test-file detector. The old regex only matched *test*.ts/js, so
+ * in a Go or Rust repo a *_test.go / *_test.rs (or pytest's test_*.py) was
+ * treated as a normal source file and could be mutated, producing garbage
+ * verdicts. Mirrors testdetect's notion of a test file per language.
+ */
+function isTestFile(path: string): boolean {
+  const base = path.split('/').pop() ?? path;
+  return (
+    /(\.|_|-)(test|spec)\.[cm]?[jt]sx?$/.test(base) || // JS/TS: foo.test.ts
+    /(^|_)test(_|\.|$)/.test(base) ||                    // Python: test_foo.py
+    /_test\.(go|rs)$/.test(base) ||                      // Go/Rust: foo_test.go / foo_test.rs
+    /(^|.)test(\.|$)/.test(base) ||                      // pytest/JUnit: test.py, FooTest.java
+    /^test/.test(base)
+  );
+}
 
 /**
  * Cheap state scan to avoid mutating inside string literals or comments, where
@@ -147,11 +175,6 @@ export function changedSourceFiles(cwd: string): string[] {
   } catch {
     return [];
   }
-}
-
-function isTestFile(path: string): boolean {
-  const base = path.split('/').pop() ?? path;
-  return /(\.|_|-)(test|spec)\.[cm]?[jt]sx?$/.test(base) || /^test/.test(base);
 }
 
 /**

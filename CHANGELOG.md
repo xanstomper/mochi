@@ -55,6 +55,13 @@
   Rust walked `target/` — slow and able to shadow real symbols with junk
   rows. Layer caches and toolchain outputs are now skipped for every
   language.
+- **Polyglot mutation verification.** `runMutationCheck` only targeted
+  `.ts/.tsx/.js` files and flip a JS-only operator set, so in a
+  Python/Rust/Go repo the adversarial weak-coverage signal silently
+  never fired. Source extensions now cover Python/Rust/Go/Java/Ruby/PHP/
+  C/C++; flips include Python's `==`/`!=` and ` and `/` or `; and the
+  test-file detector recognizes pytest/Go/Rust/JUnit naming so test
+  files are never mutated.
 
 ## 0.9.2
 
