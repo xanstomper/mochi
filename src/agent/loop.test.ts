@@ -298,6 +298,14 @@ describe('Agent', () => {
     expect(['syntax', 'unknown']).toContain(a.failureKind ?? 'unknown'); // 'false' is not classified
     expect(a.attempts.length).toBeGreaterThan(0);
     expect(a.outcome).toBe('unresolved');
+    // recordFailure must have persisted a procedural lesson so the next run
+    // in this workspace starts with prior context.
+    const lessons = await import('../lessons.js');
+    const all = lessons.loadLessons(workspace.dir);
+    expect(all.length).toBeGreaterThan(0);
+    const failLesson = all.find((l) => l.id.endsWith(':fail'));
+    expect(failLesson).toBeDefined();
+    expect(failLesson!.lesson).toMatch(/AVOID/);
     await fake.close();
   });
 });

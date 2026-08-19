@@ -389,6 +389,7 @@ export class Agent {
         if (this.autopsy) {
           this.autopsy = finalizeAutopsy(this.workspace.dir, this.autopsy, { outcome: 'unresolved' });
         }
+        this.recordFailure(task, verification.summary);
         return this.finish(task, false, 'Verification failed repeatedly:\n' + verification.summary + rollbackNote);
       }
       this.addAttempt(task, 'verify', [`${repo.testCommand || repo.buildCommand || 'verify'}`], 'failure', verification.summary);
@@ -782,6 +783,32 @@ export class Agent {
           signature: (this.diagnosis.signals[0] ?? this.diagnosis.kind).slice(0, 80),
           kind: this.diagnosis.kind,
           lesson: top.description,
+          sourceAutopsy: this.autopsy?.taskId,
+        });
+      }
+    }
+  }
+
+  /** Called when verification failed after the retry budget. Capture the
+   *  failure as a procedural lesson so the next run in the same workspace
+   *  starts with "last time I saw this signature, this approach did not
+   *  work". The lesson is the top hypothesis + a short anti-pattern marker
+   *  that the model can recognize. */
+  private recordFailure(task: Task, summary: string): void {
+    if (this.autopsy) {
+      this.autopsy = finalizeAutopsy(this.workspace.dir, this.autopsy, { outcome: 'unresolved' });
+    }
+    if (this.diagnosis && this.diagnosis.hypotheses.length) {
+      const top = this.diagnosis.hypotheses[0];
+      if (top) {
+        const verdict = /PARTIAL|Mutation check: injected logic bug was NOT caught/i.test(summary)
+          ? 'weak-verification (string check, not runtime) lets mutations survive; use a real runner'
+          : 'verify kept failing across attempts; next time pick a different hypothesis sooner';
+        recordLesson(this.workspace.dir, {
+          id: `${this.diagnosis.kind}:${top.id}:fail`,
+          signature: (this.diagnosis.signals[0] ?? this.diagnosis.kind).slice(0, 80),
+          kind: this.diagnosis.kind,
+          lesson: `AVOID: ${top.description}. ${verdict}`,
           sourceAutopsy: this.autopsy?.taskId,
         });
       }
