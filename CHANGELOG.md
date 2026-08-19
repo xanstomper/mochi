@@ -37,6 +37,10 @@
 - **Python E2E test.** The full loop now verifies against a REAL `pytest`
   subprocess for a Python repo (repo detection → polyglot test detect →
   subprocess verify), proving the polyglot path works end to end.
+- **Go and Rust E2E tests.** Same real-subprocess proof for `go test
+  ./...` and `cargo test`: the loop fixes a fibonacci bug in each
+  language and verification passes against the actual toolchain, not a
+  scripted response.
 
 ## 0.9.2
 

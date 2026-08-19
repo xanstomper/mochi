@@ -462,3 +462,96 @@ pytestSuite('polyglot: python repo end-to-end', () => {
     rmSync(dir, { recursive: true, force: true });
   }, 60_000);
 });
+
+function toolAvailable(cmd: string): boolean {
+  try {
+    execSync(`${cmd} 2>&1`, { encoding: 'utf8' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+const goSuite = toolAvailable('go version') ? describe : describe.skip;
+const cargoSuite = toolAvailable('cargo --version') ? describe : describe.skip;
+
+goSuite('polyglot: go repo end-to-end', () => {
+  it('fixes a go function and verifies with real go test', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-goloop-'));
+    execSync('git init -q', { cwd: dir });
+    execSync('git config user.email t@t && git config user.name t', { cwd: dir });
+    writeFileSync(resolve(dir, 'go.mod'), 'module example.com/fib\n\ngo 1.22\n');
+    writeFileSync(resolve(dir, 'fib.go'), 'package fib\n\nfunc Fib(n int) int {\n    if n <= 1 {\n        return n\n    }\n    return Fib(n-1) + Fib(n-2) + 1\n}\n');
+    writeFileSync(resolve(dir, 'fib_test.go'), 'package fib\n\nimport "testing"\n\nfunc TestFib(t *testing.T) {\n    if got := Fib(5); got != 5 {\n        t.Fatalf("Fib(5) = %d, want 5", got)\n    }\n}\n');
+    execSync('git add -A && git commit -qm init', { cwd: dir });
+
+    const writeCall = (id: string, path: string, content: string) => ({
+      id,
+      type: 'function' as const,
+      function: { name: 'write', arguments: JSON.stringify({ path, content }) },
+    });
+    const fake = await startFakeOpenAI([
+      {
+        content: 'Fixing fib.',
+        toolCalls: [writeCall('1', resolve(dir, 'fib.go'), 'package fib\n\nfunc Fib(n int) int {\n    if n <= 1 {\n        return n\n    }\n    return Fib(n-1) + Fib(n-2)\n}\n')],
+        finishReason: 'tool_calls',
+      },
+      { content: 'Done, go tests pass.', finishReason: 'stop' },
+    ]);
+    const config = makeConfig(dir, fake.url);
+    const workspace = new Workspace(dir, '.mochi');
+    workspace.ensure();
+    const context = new ContextEngine(config, dir);
+    context.setGoal('fix go fib');
+    const task = createTask('Fix Fib()', 'Fix fib.go so Fib(n) returns the n-th fibonacci number (0,1,1,2,3,5). Verify with go test ./...', {
+      fileScope: ['fib.go'],
+      verificationCommand: 'go test ./...',
+    });
+    const agent = new Agent({ id: 'go-agent', role: 'coder', config, workspace, events: new EventBus(), cwd: dir, context });
+    const result = await agent.run(task);
+    expect(result.success).toBe(true);
+    expect(result.summary).toMatch(/go test|ok|PASS/i);
+    await fake.close();
+    rmSync(dir, { recursive: true, force: true });
+  }, 120_000);
+});
+
+cargoSuite('polyglot: rust repo end-to-end', () => {
+  it('fixes a rust function and verifies with real cargo test', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-rsloop-'));
+    execSync('git init -q', { cwd: dir });
+    execSync('git config user.email t@t && git config user.name t', { cwd: dir });
+    execSync('mkdir -p src', { cwd: dir });
+    writeFileSync(resolve(dir, 'Cargo.toml'), '[package]\nname = "fib"\nversion = "0.1.0"\nedition = "2021"\n');
+    writeFileSync(resolve(dir, 'src/lib.rs'), 'pub fn fib(n: u32) -> u32 {\n    match n {\n        0 => 0,\n        1 => 1,\n        n => fib(n - 1) + fib(n - 2) + 1,\n    }\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn fib5() {\n        assert_eq!(fib(5), 5);\n    }\n}\n');
+    execSync('git add -A && git commit -qm init', { cwd: dir });
+
+    const writeCall = (id: string, path: string, content: string) => ({
+      id,
+      type: 'function' as const,
+      function: { name: 'write', arguments: JSON.stringify({ path, content }) },
+    });
+    const fake = await startFakeOpenAI([
+      {
+        content: 'Fixing fib.',
+        toolCalls: [writeCall('1', resolve(dir, 'src/lib.rs'), 'pub fn fib(n: u32) -> u32 {\n    match n {\n        0 => 0,\n        1 => 1,\n        n => fib(n - 1) + fib(n - 2),\n    }\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn fib5() {\n        assert_eq!(fib(5), 5);\n    }\n}\n')],
+        finishReason: 'tool_calls',
+      },
+      { content: 'Done, cargo tests pass.', finishReason: 'stop' },
+    ]);
+    const config = makeConfig(dir, fake.url);
+    const workspace = new Workspace(dir, '.mochi');
+    workspace.ensure();
+    const context = new ContextEngine(config, dir);
+    context.setGoal('fix rust fib');
+    const task = createTask('Fix fib()', 'Fix src/lib.rs so fib(5) returns 5. Verify with cargo test.', {
+      fileScope: ['src/lib.rs'],
+      verificationCommand: 'cargo test',
+    });
+    const agent = new Agent({ id: 'rs-agent', role: 'coder', config, workspace, events: new EventBus(), cwd: dir, context });
+    const result = await agent.run(task);
+    expect(result.success).toBe(true);
+    expect(result.summary).toMatch(/cargo test|test result|ok/);
+    await fake.close();
+    rmSync(dir, { recursive: true, force: true });
+  }, 180_000);
+});
