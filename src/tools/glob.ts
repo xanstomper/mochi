@@ -29,7 +29,10 @@ function matches(pattern: string, parts: string[]): boolean {
 }
 
 function matchSegment(pat: string, seg: string): boolean {
-  const regex = '^' + pat.replace(/\./g, '\\.').replace(/\*/g, '[^/]*').replace(/\?/g, '.') + '$';
+  // Escape regex metacharacters first (the glob `*`/`?`/`.` are added back in
+  // deliberately), so a backslash or bracket in the pattern cannot break out.
+  const escaped = pat.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  const regex = '^' + escaped.replace(/\*/g, '[^/]*').replace(/\?/g, '.') + '$';
   return new RegExp(regex).test(seg);
 }
 

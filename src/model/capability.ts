@@ -154,7 +154,10 @@ export class CapabilityRegistry {
 /** Derive a stable registry key from a provider + base URL (normalizes
  *  trailing slash). */
 export function providerKey(provider: string, baseUrl: string): string {
-  return `${provider}\u0000${baseUrl.replace(/\/+$/, '')}`;
+  // Trailing-slash normalization without a regex quantifier (ReDoS-safe).
+  let url = baseUrl;
+  while (url.endsWith('/')) url = url.slice(0, -1);
+  return `${provider}\u0000${url}`;
 }
 
 /** Run a cheap capability probe against a provider and record the outcome.

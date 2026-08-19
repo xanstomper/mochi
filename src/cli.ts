@@ -394,7 +394,8 @@ async function main() {
       return;
     }
     const info = key ? await runtime.loginProvider(p.id, key, model || p.defaultModel) : await runtime.useProvider(p.id, model || p.defaultModel);
-    console.log(info);
+    const { redact } = await import('./security.js');
+    console.log(redact(info));
     return;
   }
   if (first === 'models') {

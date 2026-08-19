@@ -237,7 +237,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       return r?.[1];
     };
     const getRaw = (key: string) => {
-      const r = args.match(new RegExp(`"${key}":\\s*"([\s\S]*?)"(?:,|\\s*\\})`));
+      const r = args.match(new RegExp(`"${key}":\\s*"([\\s\\S]*?)"(?:,|\\s*\\})`));
       return r?.[1]?.replace(/\\n/g, ' ');
     };
     if (name === 'shell') return `shell: ${get('description') ?? get('command') ?? ''}`;

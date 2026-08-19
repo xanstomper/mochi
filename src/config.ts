@@ -123,6 +123,8 @@ if (envKey) {
 
 function merge(target: Record<string, unknown>, source: Record<string, unknown>) {
   for (const key of Object.keys(source)) {
+    // Skip prototype-pollution hazards from untrusted config files.
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
     const sv = source[key];
     const tv = target[key];
     if (sv === undefined) continue;

@@ -90,8 +90,11 @@ function commandAvailable(command: string, cwd: string): boolean {
 export function sanitizeVerifyCommand(cmd: string): string {
   const c = cmd.trim();
   // "cd <project_root> && cargo test" -> "cargo test" (cwd is project root).
-  const withCd = c.match(/^cd\s+<[^>]+>\s*&&\s*(.+)$/);
-  if (withCd) return withCd[1].trim();
+  // Linear scan (no nested quantifiers) so hostile verify strings stay O(n).
+  const amp = c.indexOf('&&');
+  const prefix = amp === -1 ? c : c.slice(0, amp).trim();
+  const m = /^cd\s+<[^>]+>$/.exec(prefix);
+  if (m && amp !== -1) return c.slice(amp + 2).trim();
   return c.replace(/<project_root>|<root>|__PROJECT_ROOT__/g, '.');
 }
 
