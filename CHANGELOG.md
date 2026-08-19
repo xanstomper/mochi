@@ -1,5 +1,41 @@
 # Mochi Changelog
 
+## 0.9.1
+
+Three more dogfood-found regressions where the verifier was being too
+aggressive about a subdirectory-scoped task:
+
+- **Scope-aware verification cwd.** `testdetect.cwdForScope` resolves the
+  directory the verification command should run from (the fileScope's parent
+  when it's consistent). `withCwd` prefixes `cd <dir> && ...` to commands
+  that don't already start with a `cd`. Fixes a class of "Unknown option
+  `--prefix`" failures (vitest doesn't take `--prefix`; that's an npm
+  flag) and "command not found" errors when the runner lives under the
+  task's package.json but not the project root.
+- **Skip repo-level commands under a scope.** When a task has a
+  fileScope, repo-level checks (testCommand/typecheckCommand/lintCommand/
+  buildCommand) no longer run. They describe the PROJECT ROOT and would
+  fail on `Missing script: "build"` for the wrong reason. The
+  auto-detected runner + the explicit verificationCommand cover the
+  task's own verification.
+- **Diff evidence is filtered to the fileScope.** `verification.safeGitDiff`
+  walks the diff block-by-block and drops out-of-scope files entirely.
+  Previously, the model judge received a diff that included harness work
+  the user did concurrently and complained "the diff shows changes to
+  src/agent/loop.ts, not the requested file" even when the agent's work
+  was correct. New test locks this in.
+- **Task-kind-aware system prompts.** `src/taskkind.ts` classifies a
+  task into implement/fix/refactor/test/research/plan/document via
+  title/description/role heuristics, and the system prompt appends a
+  focused hint per kind. Debug tasks get "reproduce first, then
+  localize"; research tasks get "read-only, do not modify"; etc.
+- **Decomposer prompt now requires a real test runner.** When the task
+  is implement (not plan mode), the JSON-shape hint forbids string/file
+  checks (`test -f`, `grep`) and demands `npx vitest run`, `npx jest`,
+  `pytest -q`, or `npm test`.
+
+Tests: 226 passing (was 207).
+
 ## 0.9.0
 
 Observation-driven replanning foundations and a verifier regression found by
