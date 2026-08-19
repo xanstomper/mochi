@@ -1,5 +1,6 @@
 node_modules
 dist
 .mochi
+dogfood
 *.log
 .DS_Store
