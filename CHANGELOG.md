@@ -94,6 +94,11 @@
   and `mix compile` so a retry loop on those repos probes with the
   real toolchain instead of silently falling through to a read-only
   hypothesis.
+- **Mutation skips test files in every language.** `isTestFile` now
+  recognizes RSpec (`foo_spec.rb`), JUnit/PHPUnit (`FooTest.java`,
+  `BarTest.php`), and C# (`FooTests.cs`) naming in addition to the
+  existing JS/TS/Python/Go/Rust conventions, so a mutation never
+  corrupts a test file in a polyglot repo.
 
 ## 0.9.2
 

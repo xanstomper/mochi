@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
-import { findMutation, runMutationCheck } from './mutation.js';
+import { findMutation, runMutationCheck, changedSourceFiles } from './mutation.js';
 import { execSync } from 'node:child_process';
 
 let dirs: string[] = [];
@@ -160,5 +160,29 @@ describe('mutation.runMutationCheck', () => {
     const result = await runMutationCheck(dir, 'test', async () => 1, undefined, ['only-this.js']);
     expect(result.applied).toBe(false);
     expect(result.note).toContain('fileScope');
+  });
+
+  it('excludes test files in every polyglot convention from mutation candidates', async () => {
+    const dir = makeRepo();
+    // Source candidates that WOULD be mutated.
+    writeFileSync(resolve(dir, 'math.py'), 'def add(a,b): return a + b');
+    writeFileSync(resolve(dir, 'util.go'), 'package u');
+    // Test files in polyglot conventions — these must ALL be excluded.
+    writeFileSync(resolve(dir, 'x.test.ts'), 'import test out;');
+    writeFileSync(resolve(dir, 'y_spec.rb'), 'RSpec.describe X do raise "x"; end');
+    writeFileSync(resolve(dir, 'FooTest.java'), 'class FooTest {}');
+    writeFileSync(resolve(dir, 'test_it.py'), 'def test_it(): assert True');
+    writeFileSync(resolve(dir, 'foo_test.go'), 'package t');
+    writeFileSync(resolve(dir, 'fluid_test.rs'), 'pub fn t() {}');
+    writeFileSync(resolve(dir, 'FooTests.cs'), 'class FooTests {}');
+    writeFileSync(resolve(dir, 'BarTest.php'), '<?php class BarTest {}');
+    writeFileSync(resolve(dir, 'widget_spec.rb'), 'RSpec.describe Widget do end');
+
+    const files = changedSourceFiles(dir);
+    expect(files).toContain('math.py');
+    expect(files).toContain('util.go');
+    for (const testFile of ['x.test.ts', 'y_spec.rb', 'FooTest.java', 'test_it.py', 'foo_test.go', 'fluid_test.rs', 'FooTests.cs', 'BarTest.php', 'widget_spec.rb']) {
+      expect(files).not.toContain(testFile);
+    }
   });
 });

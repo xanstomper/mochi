@@ -60,15 +60,26 @@ const SOURCE_EXTS = [
  * Polyglot test-file detector. The old regex only matched *test*.ts/js, so
  * in a Go or Rust repo a *_test.go / *_test.rs (or pytest's test_*.py) was
  * treated as a normal source file and could be mutated, producing garbage
- * verdicts. Mirrors testdetect's notion of a test file per language.
+ * verdicts. Mirrors testdetect's notion of a test file per language:
+ *   - JS/TS:      foo.test.ts, foo.spec.js, foo_test.ts
+ *   - Python:     test_foo.py, foo_test.py
+ *   - Go/Rust:    foo_test.go, foo_test.rs
+ *   - Java:       FooTest.java, FooTests.java (case-insensitive 'Test')
+ *   - Ruby:       foo_spec.rb, foo_test.rb
+ *   - PHP:        FooTest.php
+ *   - C#/F#:      FooTests.cs, FooTest.fs
  */
 function isTestFile(path: string): boolean {
   const base = path.split('/').pop() ?? path;
+  const lower = base.toLowerCase();
+  const name = lower.replace(/\.[^.]+$/, ''); // strip extension
   return (
     /(\.|_|-)(test|spec)\.[cm]?[jt]sx?$/.test(base) || // JS/TS: foo.test.ts
-    /(^|_)test(_|\.|$)/.test(base) ||                    // Python: test_foo.py
-    /_test\.(go|rs)$/.test(base) ||                      // Go/Rust: foo_test.go / foo_test.rs
-    /(^|.)test(\.|$)/.test(base) ||                      // pytest/JUnit: test.py, FooTest.java
+    /(^|_)(test|spec)(_|\.|$)/.test(lower) ||           // Python: test_foo.py / foo_test.py
+    /_test\.(go|rs)$/.test(base) ||                     // Go/Rust: foo_test.go / foo_test.rs
+    name.endsWith('test') ||                            // Java: FooTest.java, PHP: FooTest.php
+    name.endsWith('tests') ||                           // Java/C#: FooTests.cs, FooTests.java
+    name.endsWith('_spec') ||                           // Ruby: foo_spec.rb
     /^test/.test(base)
   );
 }
