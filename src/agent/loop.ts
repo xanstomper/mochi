@@ -126,7 +126,7 @@ export class Agent {
     if (this.planMode) {
       this.context.addMessage({
         role: 'system',
-        content: 'PLAN MODE: Research the codebase, then produce a concrete plan (steps, files to change, risks, verification). Do NOT edit files or run mutating commands. Finish with the plan as your answer.',
+        content: 'PLAN MODE: Research the codebase with read-only tools if needed, then your VERY NEXT message must be the complete plan itself: numbered steps, files to change, risks, and how to verify. Do NOT edit files or run mutating commands. Do NOT say "I will proceed" — output the plan directly.',
       });
     }
 
@@ -147,7 +147,9 @@ export class Agent {
       acceptanceCriteria: task.acceptanceCriteria ?? [],
       verificationCommand: task.verificationCommand,
     });
-    if (oneShot.suggests) {
+    // In plan mode the deliverable is a plan, not a quick answer; the one-shot
+    // "answer now" nudge would contradict the plan-mode instructions.
+    if (oneShot.suggests && !this.planMode) {
       this.context.addMessage({ role: 'system', content: oneShot.suggests });
     }
 
@@ -289,9 +291,13 @@ export class Agent {
               if (!isMutating(c)) continue;
               this.vetoToolCall(c, 'plan mode is active. No file or command changes are permitted while planning.');
             }
-            if (this.planVetoes > 1) {
-              const planText = (response.content ?? '').trim();
-              return this.finish(task, true, planText || this.context['state'].nextAction || 'Planned. No files were changed.');
+            if (this.planVetoes > 2) {
+              // The model will not stop reaching for tools. Finish with whatever
+              // plan-shaped text exists: this turn's content, else the last
+              // assistant message, else an honest placeholder.
+              const lastAssistant = [...this.context['messages']].reverse().find((m) => m.role === 'assistant' && typeof m.content === 'string' && m.content.trim());
+              const planText = (response.content ?? '').trim() || (lastAssistant?.content as string | undefined)?.trim() || '';
+              return this.finish(task, true, planText || 'Planned. No files were changed.');
             }
             this.context.addMessage({
               role: 'system',

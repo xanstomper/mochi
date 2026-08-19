@@ -94,6 +94,12 @@ export class Runtime {
     const tasks = await this.goals.decompose(goal);
     const result = await this.goals.runGoal(goal, tasks, await this.enhancedCtx(objective, opts));
     this.recordUsage(goal.objective, result);
+    // Plan mode: the agents' plan text is the deliverable, so include it in
+    // the user-facing summary instead of just "Goal completed".
+    if (this.config.planMode) {
+      const plans = result.completedTasks.map((t) => t.output).filter((o) => o && o.trim());
+      if (plans.length) return `Goal ${goal.status}.\n\n${plans.join('\n\n---\n\n')}`;
+    }
     return result.summary;
   }
 
@@ -156,6 +162,10 @@ export class Runtime {
     const task = (await this.goals.decompose(goal))[0];
     const result = await this.goals.runGoal(goal, [task]);
     this.recordUsage(prompt, result);
+    if (this.config.planMode) {
+      const plan = result.completedTasks.map((t) => t.output).filter((o) => o && o.trim()).join('\n\n');
+      if (plan) return `Goal ${goal.status}.\n\n${plan}`;
+    }
     return result.summary;
   }
 

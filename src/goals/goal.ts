@@ -95,6 +95,9 @@ export class GoalEngine {
     const provider = createProvider(this.config.model, 'reasoning');
     const ctx = new ContextEngine(this.config, this.cwd);
     ctx.setGoal(goal.objective);
+    const planInstruction = this.config.planMode
+      ? '\nIMPORTANT: The user wants a PLAN ONLY (no changes will be made). Decompose into research/planning steps; every task description must instruct: produce a detailed written plan (steps, files, risks, verification), do NOT modify anything.'
+      : '';
     const decomposePrompt = `Decompose the goal into a JSON array of tasks. Each task:
 {
   "title": string,
@@ -106,7 +109,7 @@ export class GoalEngine {
   "verificationCommand": string (optional)
 }
 Goal: ${goal.objective}
-Constraints: ${goal.constraints.join('; ') || 'none'}
+Constraints: ${goal.constraints.join('; ') || 'none'}${planInstruction}
 
 Return ONLY the JSON array, no markdown.`;
 
@@ -308,7 +311,10 @@ Return ONLY the JSON array, no markdown.`;
       await this.hooks.runAfter('after_task', { task: task.id, status: 'failed' });
       return;
     }
-    const needsVerification = task.acceptanceCriteria.length > 0 || Boolean(task.verificationCommand);
+    // Plan mode intentionally changes nothing, so end-state acceptance checks
+    // ("file exists", verification commands) would always fail. A plan run
+    // succeeds on the agent's own result; the plan text is the deliverable.
+    const needsVerification = !this.config.planMode && (task.acceptanceCriteria.length > 0 || Boolean(task.verificationCommand));
     if (needsVerification) {
       const verification = await verifier.verify(task, result.summary);
       task.output = verification.summary;
@@ -317,6 +323,9 @@ Return ONLY the JSON array, no markdown.`;
         await this.hooks.runAfter('after_task', { task: task.id, status: 'failed' });
         return;
       }
+    } else {
+      // Keep the agent's own answer (in plan mode, the plan itself) on the task.
+      task.output = result.summary;
     }
     scheduler.complete(task.id, this.agentId(task));
     await this.hooks.runAfter('after_task', { task: task.id });
