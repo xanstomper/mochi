@@ -1,5 +1,23 @@
 # Mochi Changelog
 
+## 0.9.3
+
+- **Polyglot code indexing.** The codegraph previously understood only
+  JavaScript/TypeScript files, so pointing Mochi at a Python, Rust, Go,
+  Java, or C++ repo produced an empty symbol index. The tree-sitter WASM
+  backend (fast, in-process, no full compiler) is now the DEFAULT and
+  indexes all seven languages; the TypeScript-compiler AST remains as an
+  opt-in fallback (`MOCHI_CPG_BACKEND=tsc`).
+- **Polyglot test-runner auto-detection.** `autoTestCommand` now emits
+  `go test ./...` and `cargo test` for Go/Rust file scopes (plus the
+  existing vitest/jest/pytest), and `isWeakVerification` no longer treats
+  real Go/Rust/Python runners as weak.
+- **Plan-mode enforcement.** A plan-mode reply that is only a preamble
+  ("I'll research the codebase first") is no longer accepted as the
+  finished deliverable. The loop nudges the model up to 3 times to emit an
+  actual plan (numbered steps, bullets, or structured plan language) and
+  fails with a clear reason if it never does.
+
 ## 0.9.2
 
 - **Live integration tests against real freeinference.** New

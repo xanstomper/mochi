@@ -1,6 +1,6 @@
 {
   "name": "@mochi/agent",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "description": "Minimal, fast, autonomous coding agent for the terminal.",
   "type": "module",
   "bin": {
@@ -33,10 +33,16 @@
     "typescript": "^5.9.0",
     "vitest": "^2.0.0"
   },
-  "dependencies": {},
+  "dependencies": {
+    "tree-sitter-cpp": "^0.23.4",
+    "tree-sitter-go": "^0.25.0",
+    "tree-sitter-java": "^0.23.5",
+    "tree-sitter-python": "^0.25.0",
+    "tree-sitter-rust": "^0.24.0"
+  },
   "optionalDependencies": {
     "tree-sitter-typescript": "^0.23.2",
-    "web-tree-sitter": "^0.24.5"
+    "web-tree-sitter": "^0.26.12"
   },
   "keywords": [
     "ai",

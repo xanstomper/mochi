@@ -25,7 +25,30 @@ export function hasSqlite(): boolean {
   }
 }
 
-const EXT = new Set(['.ts', '.tsx', '.js', '.jsx', '.mts', '.mjs']);
+// ---------------------------------------------------------------------------
+// Polyglot file coverage. The index understands the languages a real agent
+// actually sees: JS/TS plus the major backend systems languages. The tree-
+// sitter WASM backend is the DEFAULT (fast, in-process, no full compiler);
+// the TypeScript-compiler backend covers .ts/.js only when explicitly chosen
+// (MOCHI_CPG_BACKEND=tsc) or when tree-sitter is unavailable.
+// ---------------------------------------------------------------------------
+export const LANGUAGES = ['typescript', 'javascript', 'python', 'rust', 'go', 'java', 'cpp'] as const;
+export type LanguageId = (typeof LANGUAGES)[number];
+
+const EXT_LANG: Record<string, LanguageId> = {
+  '.ts': 'typescript', '.tsx': 'typescript', '.mts': 'typescript',
+  '.js': 'javascript', '.jsx': 'javascript', '.mjs': 'javascript', '.cjs': 'javascript',
+  '.py': 'python',
+  '.rs': 'rust',
+  '.go': 'go',
+  '.java': 'java',
+  '.cpp': 'cpp', '.cc': 'cpp', '.cxx': 'cpp', '.hpp': 'cpp', '.hh': 'cpp', '.h': 'cpp',
+};
+
+const langOf = (file: string): LanguageId | undefined => {
+  const dot = file.lastIndexOf('.');
+  return dot === -1 ? undefined : EXT_LANG[file.slice(dot)];
+};
 
 function* walkFiles(root: string, dir: string): Generator<string> {
   let entries: string[];
@@ -36,10 +59,11 @@ function* walkFiles(root: string, dir: string): Generator<string> {
     let st: ReturnType<typeof statSync>;
     try { st = statSync(full); } catch { continue; }
     if (st.isDirectory()) yield* walkFiles(root, full);
-    else if (EXT.has(full.slice(full.lastIndexOf('.'))) && st.size < 1_500_000) yield full;
+    else if (langOf(full) && st.size < 1_500_000) yield full;
   }
 }
 
+// ---------------------------- tsc backend ----------------------------------
 const scriptKind = (f: string): ts.ScriptKind =>
   f.endsWith('.tsx') ? ts.ScriptKind.TSX : f.endsWith('.jsx') ? ts.ScriptKind.JSX
     : f.endsWith('.js') || f.endsWith('.mjs') ? ts.ScriptKind.JS
@@ -97,50 +121,100 @@ function indexFile(file: string, rel: string, database: DatabaseSync): void {
   visit(sf);
 }
 
+// ---------------------------------------------------------------------------
+// Tree-sitter backend (default). web-tree-sitter is WASM: fast, no native
+// compile steps, and the SAME engine indexes every language. Grammars are
+// loaded once, eagerly, behind a promise (the sync indexer never awaits).
+// ---------------------------------------------------------------------------
 export type ParserBackend = 'tsc' | 'tree-sitter';
 
-// Optional Tree-sitter (WASM) backend behind a feature flag. Selecting it
-// (MOCHI_CPG_BACKEND=tree-sitter) loads `web-tree-sitter` plus the
-// `tree-sitter-typescript` grammar, then indexes declarations via a shallow
-// CST walk. If the optional packages cannot be loaded it falls back to the
-// TS-AST backend, so nothing breaks.
+let _Parser: any = null;              // web-tree-sitter Parser class (post-init)
+const _languages = new Map<LanguageId, any>(); // LanguageId -> Parser.Language
+let _tsInitError = '';
+let _tsReady = false;
 
-let _Parser: any = null;    // web-tree-sitter Parser class (post-init)
-let _grammar: any = null;   // Parser.Language (typescript + tsx)
-let _tsError = '';
+// Grammar -> npm package / wasm filename. Package names match the npm
+// tree-sitter-<lang> WASM distributions.
+const GRAMMAR_SPECS: Record<string, { pkg: string; file: string }> = {
+  typescript: { pkg: 'tree-sitter-typescript', file: 'tree-sitter-typescript.wasm' },
+  javascript: { pkg: 'tree-sitter-javascript', file: 'tree-sitter-javascript.wasm' },
+  python: { pkg: 'tree-sitter-python', file: 'tree-sitter-python.wasm' },
+  rust: { pkg: 'tree-sitter-rust', file: 'tree-sitter-rust.wasm' },
+  go: { pkg: 'tree-sitter-go', file: 'tree-sitter-go.wasm' },
+  java: { pkg: 'tree-sitter-java', file: 'tree-sitter-java.wasm' },
+  cpp: { pkg: 'tree-sitter-cpp', file: 'tree-sitter-cpp.wasm' },
+};
 
-// web-tree-sitter's static init is async; we run it once eagerly so the
-// (synchronous) indexer can use the parser without awaiting on each file.
+// Declarator node types per grammar, mapped to the index `kind` column.
+// The tree-sitter grammars name these nodes differently per language.
+const DECL_KINDS: Record<string, Record<string, string>> = {
+  typescript: { function_declaration: 'function', class_declaration: 'class', interface_declaration: 'interface', type_alias_declaration: 'type', method_definition: 'method' },
+  javascript: { function_definition: 'function', class_declaration: 'class', method_definition: 'method' },
+  python: { function_definition: 'function', class_definition: 'class' },
+  rust: { function_item: 'function', struct_item: 'class', enum_item: 'class', trait_item: 'interface', type_item: 'type', impl_item: 'impl' },
+  go: { function_declaration: 'function', method_declaration: 'method', type_declaration: 'type', var_declaration: 'var', const_declaration: 'const' },
+  java: { class_declaration: 'class', interface_declaration: 'interface', method_declaration: 'method', enum_declaration: 'enum', record_declaration: 'record', type_declaration: 'type' },
+  cpp: { class_specifier: 'class', struct_specifier: 'class', function_definition: 'function', namespace_definition: 'namespace' },
+};
+
+// Obtain a declaration's name: most grammars expose a `name` field; Go uses a
+// `name` field on type_spec / var_spec / const_spec children of the *_declaration
+// nodes. We handle both by scanning the node's named children for a `name`.
+function nameOf(node: any): string | undefined {
+  const direct = node.childForFieldName?.('name')?.text;
+  if (direct && direct.trim()) return direct.trim();
+  for (const c of node.namedChildren ?? []) {
+    if (c.type === 'type_spec' || c.type === 'var_spec' || c.type === 'const_spec' || c.type === 'type_identifier' || c.type === 'identifier') {
+      const childName = c.childForFieldName?.('name')?.text ?? (c.text && c.type === 'type_identifier' ? c.text : undefined);
+      if (childName && childName.trim()) return childName.trim();
+    }
+  }
+  return undefined;
+}
+
 const _initPromise: Promise<boolean> = (async () => {
-  if (process.env.MOCHI_CPG_BACKEND !== 'tree-sitter') return false;
+  if (process.env.MOCHI_CPG_BACKEND === 'tsc') return false;
   const _req = createRequire(import.meta.url);
   try {
-    const init = (await import('web-tree-sitter/tree-sitter.js' as any)).default as any;
-    const Parser = init as any;
-    const wasmPath = _req.resolve('web-tree-sitter/tree-sitter.wasm');
-    await Parser.init(wasmPath);
-    const gpkg = _req.resolve('tree-sitter-typescript/package.json');
-    const gdir = resolve(dirname(gpkg), 'tree-sitter-typescript.wasm');
-    const grammarBuf = readFileSync(gdir);
-    const grammar = await Parser.Language.load(grammarBuf);
+    const mod = await import('web-tree-sitter' as any);
+    const Parser = mod.Parser as any;
+    const wasmPath = _req.resolve('web-tree-sitter/web-tree-sitter.wasm');
+    await Parser.init({ locateFile: () => wasmPath });
     _Parser = Parser;
-    _grammar = grammar;
-    return true;
+    for (const lang of LANGUAGES) {
+      const spec = GRAMMAR_SPECS[lang];
+      if (!spec) continue;
+      try {
+        const pkgJson = _req.resolve(`${spec.pkg}/package.json`);
+        const wasmFile = resolve(dirname(pkgJson), spec.file);
+        const grammarBuf = readFileSync(wasmFile);
+        const grammar = await mod.Language.load(grammarBuf);
+        _languages.set(lang, grammar);
+      } catch (e) {
+        // Individual grammar load failure only disables that language.
+        const msg = (e as Error)?.message || String(e);
+        _tsInitError += `[${lang}] ${msg}; `;
+      }
+    }
+    return _languages.size > 0;
   } catch (e) {
-    _tsError = (e as Error)?.message || String(e);
+    _tsInitError += String((e as Error)?.message ?? e);
     return false;
   }
 })();
 
 export function loadTreeSitter(): { ok: boolean; message: string } {
-  return _Parser && _grammar
-    ? { ok: true, message: 'loaded' }
-    : { ok: false, message: _tsError || 'tree-sitter backend unavailable (npm i web-tree-sitter tree-sitter-typescript)' };
+  if (_Parser && _languages.size > 0) {
+    const langs = [..._languages.keys()].join(', ');
+    return { ok: true, message: `loaded (${langs})` };
+  }
+  return { ok: false, message: _tsInitError || 'tree-sitter backend unavailable (npm i web-tree-sitter + tree-sitter-<lang>)' };
 }
 
 export function getParserBackend(): ParserBackend {
-  if (process.env.MOCHI_CPG_BACKEND === 'tree-sitter') return 'tree-sitter';
-  return 'tsc';
+  // Explicit opt-in to the tsc backend wins; else default is tree-sitter.
+  if (process.env.MOCHI_CPG_BACKEND === 'tsc') return 'tsc';
+  return _Parser && _languages.size > 0 ? 'tree-sitter' : 'tsc';
 }
 
 // Wait for the async init to settle so backend checks are correct.
@@ -152,45 +226,40 @@ function namedChildren(node: any): any[] {
 
 // Symbol index using the Tree-sitter backend. Emits rows into the same schema
 // as `indexFile`, so the read paths (getFunctionSynapse/findCallers/…,
-// SQLite-backed) are backend-agnostic.
+// SQLite-backed) are backend-agnostic. Works for every language we have a
+// grammar for; a per-file error only skips that file.
 function tsIndexFile(file: string, rel: string, database: DatabaseSync): void {
-  if (!_Parser || !_grammar) return;
+  const lang = langOf(file);
+  if (!lang) return;
+  const grammar = _languages.get(lang);
+  if (!grammar) return;
   let text: string;
   try { text = readFileSync(file, 'utf8'); } catch { return; }
   try {
     const parser = new _Parser();
-    parser.setLanguage(_grammar);
+    parser.setLanguage(grammar);
     const tree = parser.parse(String(text));
     const ins = database.prepare('INSERT INTO symbols(name,line,kind,file,rel,body) VALUES (?,?,?,?,?,?)');
+    const kinds = DECL_KINDS[lang] ?? {};
     const walk = (node: any): void => {
-      const kind = node.type;
-      if (kind.endsWith('_declaration') || kind === 'method_definition' ||
-          kind === 'variable_declarator' || kind === 'lexical_declaration') {
-        // Named function/class/interface/alias declarations carry a `name` field.
-        const name = node.childForFieldName?.('name')?.text;
-        const declKind =
-          kind === 'class_declaration' || kind === 'interface_declaration' ? 'class'
-            : kind === 'method_definition' ? 'method'
-              : kind === 'type_alias_declaration' ? 'type'
-                : kind === 'import_declaration' ? 'import'
-                  : 'function';
+      const kind = kinds[node.type];
+      if (kind) {
+        const name = nameOf(node);
         if (name) {
-          // Skip anonymous arrow-function assignments — those have no name field.
-          ins.run(name, node.startPosition.row + 1, declKind, file, rel, node.text.slice(0, 3000));
+          ins.run(name, node.startPosition.row + 1, kind, file, rel, node.text.slice(0, 3000));
         }
       }
       for (const c of namedChildren(node)) walk(c);
     };
     walk(tree.rootNode);
-  } catch { /* per-file error: skip; tsc backend still works */ }
+  } catch { /* per-file error: skip; tsc backend (JS/TS) still works */ }
 }
 
 // Per-cwd in-memory SQLite databases (symbol/relation tables) kept fresh via a
 // generation fence: any write/edit/delete bumps the workspace mutation
 // generation (see tools/fs-signal.ts), and here we re-index only the files whose
-// (mtime,size) fingerprint changed — never the whole tree. So read tools
-// (`get_function`, `find_callers`, `type_hierarchy`) always reflect the latest
-// edits without a full O(repo) re-walk on every symbol read.
+// (mtime,size) fingerprint changed -- never the whole tree. So read tools
+// always reflect the latest edits without a full O(repo) re-walk.
 interface CachedDb {
   database: DatabaseSync;
   gen: number;
@@ -235,8 +304,7 @@ function db(cwd: string): DatabaseSync {
       prevRels.delete(full); // unchanged and still present
       continue;
     }
-    // Changed or new file: drop any stale rows and re-index just this one.
-    prevRels.delete(full); // it is present -- do not let it be purged below
+    prevRels.delete(full); // present -- do not purge below
     files.delete(full);
     if (cached) { delSym.run(full); delRel.run(full); }
     if (fp) {
@@ -246,7 +314,6 @@ function db(cwd: string): DatabaseSync {
       files.set(full, fp);
     }
   }
-  // Files that existed in the cache but no longer walk: purge their rows.
   for (const gone of prevRels) {
     if (cached) { delSym.run(gone); delRel.run(gone); }
     files.delete(gone);
@@ -267,7 +334,7 @@ export function getFunctionSynapse(cwd: string, name: string): string {
 }
 
 export function findCallers(cwd: string, name: string): string {
-  if (!hasSqlite()) return `Code index unavailable on this Node runtime (needs node:sqlite, Node >= 22.5).`;
+  if (!hasSqlite()) return `Code index unavailable on this machine (needs node:sqlite, Node >= 22.5).`;
   const database = db(cwd);
   const q = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
   const declSet = new Set<string>();
@@ -277,7 +344,6 @@ export function findCallers(cwd: string, name: string): string {
   const hits: string[] = [];
   const seen = new Set<string>();
   for (const full of walkFiles(cwd, cwd)) {
-    if (!EXT.has(full.slice(full.lastIndexOf('.')))) continue;
     let lines: string[];
     try { lines = readFileSync(full, 'utf8').split('\n'); } catch { continue; }
     for (let i = 0; i < lines.length; i++) {
@@ -292,7 +358,7 @@ export function findCallers(cwd: string, name: string): string {
 }
 
 export function typeHierarchy(cwd: string, name: string): string {
-  if (!hasSqlite()) return `Code index unavailable on this Node runtime (needs node:sqlite, Node >= 22.5).`;
+  if (!hasSqlite()) return `Code index unavailable on this machine (needs node:sqlite, Node >= 22.5).`;
   const database = db(cwd);
   const up = database.prepare('SELECT dst FROM relations WHERE src=? AND kind=?').all(name, 'extends') as any[];
   const down = database.prepare('SELECT src FROM relations WHERE dst=? AND kind=?').all(name, 'extends') as any[];

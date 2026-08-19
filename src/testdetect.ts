@@ -68,8 +68,19 @@ export function autoTestCommand(cwd: string, fileScope: string[] | undefined): s
   }
 
   // Python fallback
-  if (existsSync(resolve(dir, 'pytest.ini')) || existsSync(resolve(dir, 'pyproject.toml'))) {
-    return `cd ${dir} && (python -m pytest -q || pytest -q) 2>&1 | tail -20`;
+  if (existsSync(resolve(dir, 'pytest.ini')) || existsSync(resolve(dir, 'pyproject.toml')) || existsSync(resolve(dir, 'setup.py'))) {
+    return `cd ${dir} && (python -m pytest -q || python3 -m pytest -q || pytest -q) 2>&1 | tail -20`;
+  }
+
+  // Go: any in-scope file with path ending in _test.go or a go.mod nearby.
+  if (existsSync(resolve(dir, 'go.mod')) || fileScope.some((f) => f.endsWith('_test.go'))) {
+    return `cd ${dir} && go test ./... 2>&1 | tail -20`;
+  }
+
+  // Rust: Cargo.toml present, or the file lives under src/ (rust tests ship
+  // inline in lib.rs or in tests/).
+  if (existsSync(resolve(dir, 'Cargo.toml'))) {
+    return `cd ${dir} && cargo test 2>&1 | tail -20`;
   }
 
   return null;
@@ -89,6 +100,8 @@ export function isWeakVerification(command: string | undefined): boolean {
   if (/\bvitest\b|\bjest\b|\bpytest\b|\bmocha\b|\btap\b|\bnode\s+-e\b|\bnode\s+\S+\.test/i.test(c)) return false;
   if (/\bnode\b|\btsx\b|\bts-node\b|\bdeno\b|\bbun\b/.test(c)) return false;
   if (/\bnpm\s+test|\bnpx\s+test|\bpnpm\s+test|\byarn\s+test/.test(c)) return false;
+  // Polyglot runners (Go, Rust, Python module) are real evidence too.
+  if (/\bgo\s+test\b|\bcargo\s+test\b|\bpython(\d)?\s+-m\s+(pytest|unittest)\b|\bstretchr\/testify/.test(c)) return false;
   return true;
 }
 
