@@ -164,9 +164,10 @@ async function main() {
       }
       const port = Number(flags.port ?? (flags['port'] as string | undefined) ?? 9470);
       const token = typeof flags.token === 'string' && flags.token ? flags.token : undefined;
-      const r = await startDaemon({ cwd, port, token, config: configOverrides });
+      const host = typeof flags.host === 'string' && flags.host ? flags.host : undefined;
+      const r = await startDaemon({ cwd, port, token, host, config: configOverrides });
       if (r.ok) {
-        console.log(`Daemon started on 127.0.0.1:${r.port}. Info: ${daemonInfoPath(wsDir)}`);
+        console.log(`Daemon started on ${host ?? '127.0.0.1'}:${r.port}. Info: ${daemonInfoPath(wsDir)}`);
       } else {
         console.error(`Daemon failed to start: ${r.error}`);
         process.exit(1);

@@ -82,13 +82,15 @@ export async function startDaemon(opts: {
   port?: number;
   config?: Partial<MochiConfig>;
   token?: string;
+  host?: string;
 }): Promise<{ ok: boolean; port: number; token: string; error?: string }> {
   const port = opts.port ?? 9470;
+  const host = opts.host ?? '127.0.0.1';
   const token = opts.token ?? randomBytes(24).toString('hex');
   const wsDir = resolve(opts.cwd, '.mochi');
   const { spawn } = await import('node:child_process');
   const serverModule = resolve(here, '..', 'dist', 'daemon-server.js');
-  const child = spawn(process.execPath, [serverModule, String(port), token, opts.cwd], {
+  const child = spawn(process.execPath, [serverModule, String(port), token, opts.cwd, host], {
     detached: true,
     stdio: 'ignore',
     env: { ...process.env, FORCE_COLOR: '0' },
@@ -271,15 +273,15 @@ async function handleRequest(
 
 /** The detached child entry. argv: child, module, <port> <token> <cwd> */
 export async function serverMain(argv: string[]): Promise<void> {
-  const [, , port, token, cwd] = argv;
+  const [, , port, token, cwd, host = '127.0.0.1'] = argv;
   if (!port || !token || !cwd) {
-    throw new Error('daemon-server <port> <token> <cwd>');
+    throw new Error('daemon-server <port> <token> <cwd> [host]');
   }
   const rt = Runtime.create({ cwd, config: {} });
   const server = createServer(async (req, res) => {
     await handleRequest(req, res, token, rt);
   });
-  server.listen(Number(port), '127.0.0.1', () => {
+  server.listen(Number(port), host, () => {
     const addr = server.address() as { port: number };
     writeInfo(resolve(cwd, '.mochi'), { port: addr.port, token, pid: process.pid, startedAt: new Date().toISOString() });
   });
