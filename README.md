@@ -31,6 +31,10 @@ Implemented:
 - Git checkpoint / rollback
 - Interactive terminal UI with rounded input, transcript, command palette, and status bar
 - Multiple workspaces
+- Persistent daemon over HTTP: `start/status/jobs/send/approve/resume/stop`
+- Durable run traces with deep redaction (`mochi trace [<goalId>]`)
+- Mid-stream cancellation: Ctrl-C aborts the model request on the wire
+- Structured stop reasons (`completed`/`aborted`/`runtime_limit`/`budget`/`model_error`/) on every `AgentResult`
 - Unit and integration tests
 
 ## Quick start
@@ -299,15 +303,44 @@ RSS are measured by `bench/efficiency.mjs` (`npm run bench:efficiency`), and the
 unmodified under Bun for a lower footprint (useful on low-RAM, hardware-friendly boxes):
 
 ```text
-mochi (node)  ~55ms / ~47MB
-mochi (bun)   ~50ms / ~41MB
+mochi (node)  ~84ms / ~47MB
+mochi (bun)   ~78ms / ~42MB
 ```
 
 Long agent runs also avoid repeated disk work: project rules and project memory are
 fingerprint-cached per iteration (see `src/context.ts`), so a multi-hundred-iteration task
 isn't re-reading `MOCHI.md`/`AGENTS.md`/memory from disk on every model call.
 
+## Daemon (persistent agent over HTTP)
+
+Run Mochi as a background service and drive it from any tool (scripts, phone, Discord gateway):
+
+```bash
+mochi daemon start --port 8642 --token sekret   # serve on localhost:8642
+mochi daemon status                            # is it up? jobs running?
+mochi daemon jobs                             # list persisted goals + status
+mochi daemon send "finish the auth flow"      # enqueue a goal
+mochi daemon approve                         # approve queued shell commands (safe mode)
+mochi daemon stop
+```
+
+HTTP surface (auth via `Authorization: Bearer <token>` header):
+`POST /api/goal {objective}`, `POST /api/status`, `POST /api/jobs`, `POST /api/plan`,
+`POST /api/approve`, `POST /api/resume {goalId}`, `POST /api/inspect {query}`. Goals persist across daemon restarts; a goal
+created by one instance can be resumed by a fresh one via `/api/resume`,
+so interrupted or failed work survives daemon shutdown.
+
+## Run traces
+
+Every agent run writes a durable, deep-redacted JSONL trace (secrets scrubbed):
+
+```bash
+mochi trace               # list traces
+mochi trace <goalId>      # replay a goal run: prompts, tool calls, results, stop reason
+```
+
 ## Integrations
+
 
 ### Chameleon (internal synthetic-parameter reasoning)
 
