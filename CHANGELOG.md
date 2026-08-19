@@ -1,6 +1,6 @@
 # Mochi Changelog
 
-## 0.9.5 (unreleased)
+## 0.9.5
 
 - **From Horus (xanstomper/Horus).** New `src/security.ts` ports and
   extends the Horus security package:
