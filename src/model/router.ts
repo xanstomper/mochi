@@ -72,7 +72,7 @@ export function createProvider(config: ModelConfig, profile?: ModelProfile) {
  * caller sees the most useful failure.
  */
 export function withFailover(chain: RawProvider[], primaryName: string): RawProvider {
-  async function* streamChat(messages: ChatMessage[], tools: ToolDefinition[], options?: { temperature?: number; maxTokens?: number }): AsyncGenerator<StreamChunk> {
+  async function* streamChat(messages: ChatMessage[], tools: ToolDefinition[], options?: { temperature?: number; maxTokens?: number; signal?: AbortSignal }): AsyncGenerator<StreamChunk> {
     let lastErr: unknown;
     for (let i = 0; i < chain.length; i++) {
       let began = false;
@@ -90,7 +90,7 @@ export function withFailover(chain: RawProvider[], primaryName: string): RawProv
     throw lastErr ?? new Error(`All ${chain.length} model providers (${primaryName}${chain.length > 1 ? ' + fallbacks' : ''}) failed.`);
   }
 
-  async function chat(messages: ChatMessage[], tools: ToolDefinition[], options?: { temperature?: number; maxTokens?: number }): Promise<ModelResponse> {
+  async function chat(messages: ChatMessage[], tools: ToolDefinition[], options?: { temperature?: number; maxTokens?: number; signal?: AbortSignal }): Promise<ModelResponse> {
     let lastErr: unknown;
     for (let i = 0; i < chain.length; i++) {
       try {
@@ -124,8 +124,8 @@ function kindOf(id: string): 'openai' | 'anthropic' | 'gemini' | undefined {
 }
 
 interface RawProvider {
-  streamChat(messages: ChatMessage[], tools: ToolDefinition[], options?: { temperature?: number; maxTokens?: number }): AsyncGenerator<StreamChunk>;
-  chat(messages: ChatMessage[], tools: ToolDefinition[], options?: { temperature?: number; maxTokens?: number }): Promise<ModelResponse>;
+  streamChat(messages: ChatMessage[], tools: ToolDefinition[], options?: { temperature?: number; maxTokens?: number; signal?: AbortSignal }): AsyncGenerator<StreamChunk>;
+  chat(messages: ChatMessage[], tools: ToolDefinition[], options?: { temperature?: number; maxTokens?: number; signal?: AbortSignal }): Promise<ModelResponse>;
 }
 
 /**
@@ -159,7 +159,7 @@ function withCapabilityGate(provider: RawProvider, config: ModelConfig, resolved
     return reg;
   };
 
-  async function* streamChat(messages: ChatMessage[], tools: ToolDefinition[], options?: { temperature?: number; maxTokens?: number }): AsyncGenerator<StreamChunk> {
+  async function* streamChat(messages: ChatMessage[], tools: ToolDefinition[], options?: { temperature?: number; maxTokens?: number; signal?: AbortSignal }): AsyncGenerator<StreamChunk> {
     const reg = gate();
     try {
       for await (const chunk of provider.streamChat(messages, tools, options)) {

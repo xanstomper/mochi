@@ -144,8 +144,20 @@ export class Runtime {
   }
 
   async team(objective: string, opts?: { enhance?: boolean; enhanceMode?: string }): Promise<string> {
-    // For now, team mode is a goal with multiple concurrent agents handled by the scheduler.
-    return this.goal(objective, [], opts);
+    // Real team run: decompose, assign specialist roles (coder/tester/
+    // reviewer/...), and execute through the scheduler concurrently.
+    const { runTeam } = await import('./teams/team.js');
+    const { TraceRecorder } = await import('./trace.js');
+    const goal = await this.goals.createGoal(objective);
+    const recorder = new TraceRecorder(this.workspace.dir, goal.id).attach(this.events);
+    try {
+      const extra = await this.enhancedCtx(objective, opts);
+      const { summary, status } = await runTeam(this.goals, goal, { signal: this.abortSignal, extras: extra });
+      recorder.log({ t: Date.now(), kind: 'team:summary', status, summary: summary.slice(0, 500) });
+      return summary;
+    } finally {
+      recorder.close();
+    }
   }
 
   async plan(objective: string): Promise<string> {
@@ -171,6 +183,28 @@ export class Runtime {
     this.recordUsage(pending.objective, result);
     this.workspace.writeJson('state/pending-goal.json', {});
     return result.summary;
+  }
+
+  /** Resume a persisted goal by id (failed, active, or pending) over any
+   *  entrypoint (CLI or daemon). Re-runs the goal's tasks through the same
+   *  traced path as a new goal so the run trace is continuous per goal. */
+  async resumeGoal(goalId: string): Promise<string> {
+    const goal = this.workspace.loadGoal(goalId);
+    if (!goal) return `Goal not found: ${goalId}`;
+    const tasks = this.workspace.loadTasks(goalId);
+    if (!tasks.length) return `Goal ${goalId.slice(0, 8)} has no tasks to resume.`;
+    goal.status = 'active';
+    this.workspace.saveGoal(goal);
+    const { TraceRecorder } = await import('./trace.js');
+    const recorder = new TraceRecorder(this.workspace.dir, goal.id).attach(this.events);
+    try {
+      const result = await this.goals.runGoal(goal, tasks, [], this.abortSignal);
+      this.recordUsage(goal.objective, result);
+      recorder.log({ t: Date.now(), kind: 'goal:summary', status: goal.status, tokensUsed: result.tokensUsed, costUsd: result.costUsd, durationMs: result.durationMs });
+      return result.summary;
+    } finally {
+      recorder.close();
+    }
   }
 
   /** When the caller opts into it (or config has enhance enabled), generate

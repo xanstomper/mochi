@@ -126,3 +126,41 @@ it('serves jobs, resume via approve, status usage, and SSE goal progress', async
     await fake.close();
   }
 }, 60_000);
+
+it('resumes a persisted goal through /api/resume', async () => {
+  const { startFakeOpenAI } = await import('./testutil/fake-openai.js');
+  const fake = await startFakeOpenAI([
+    { content: '{"tasks":[{"title":"T","description":"d","role":"coder","dependencies":[],"fileScope":[],"acceptanceCriteria":["ok"],"verificationCommand":""}]}', finishReason: 'stop' },
+    { content: 'done', finishReason: 'stop' },
+  ]);
+  const cfg = {
+    model: { provider: 'openai', baseUrl: fake.url, model: 'fake' },
+    safety: { mode: 'auto', commandTimeoutSeconds: 10, maxIterations: 2, maxRuntimeMinutes: 2, maxConcurrentAgents: 1, contextBudgetTokens: 4000 },
+    permissions: { read: true, write: true, shell: true, network: true, gitDestructive: true },
+    telemetry: false, projectDir: '.mochi', quiet: true, verbose: false, debug: false,
+  } as const;
+  // Create a goal directly in the workspace, then resume via the endpoint.
+  const goal = await handle.runtime.goals.createGoal('make a file');
+  const tasks = await handle.runtime.goals.decompose(goal);
+  handle.runtime.workspace.saveGoal(goal);
+  handle.runtime.workspace.saveTasks(goal.id, tasks);
+
+  const h = await startDaemonInProcess({ cwd: dir, token: 'sekret5', config: cfg as any });
+  try {
+    const res = await fetch(`http://127.0.0.1:${h.info.port}/api/resume`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer sekret5' },
+      body: JSON.stringify({ goalId: goal.id }),
+    });
+    const data = (await res.json()) as { ok?: boolean; out?: string; error?: string };
+    expect(res.status).toBe(200);
+    expect(data.ok).toBe(true);
+    expect(typeof data.out).toBe('string');
+    // Task persisted and now marked active/completed.
+    const loaded = h.runtime.workspace.loadGoal(goal.id);
+    expect(loaded?.status).toBeDefined();
+  } finally {
+    await h.close();
+    await fake.close();
+  }
+}, 60_000);

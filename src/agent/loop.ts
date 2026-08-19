@@ -352,7 +352,7 @@ export class Agent {
       const gatherStream = async (messages: any) => {
         const chunks: import('../types.js').StreamChunk[] = [];
         let first = true;
-        for await (const chunk of activeProvider.streamChat(messages, this.toolDefs, { temperature: 0.2 })) {
+        for await (const chunk of activeProvider.streamChat(messages, this.toolDefs, { temperature: 0.2, signal: this.abortSignal })) {
           chunks.push(chunk);
           if (chunk.content) {
             if (first) {
@@ -1034,7 +1034,7 @@ export class Agent {
           ].join('\n'),
         },
       ];
-      const response = await this.provider.chat(reviewMsg, []);
+      const response = await this.provider.chat(reviewMsg, [], { signal: this.abortSignal });
       const text = (response.content ?? '').trim();
       const tail = text.slice(0, 200);
       if (/^NO_ISSUE$/i.test(text) || /no issue|cannot identify|looks (correct|good|fine)/i.test(text)) {

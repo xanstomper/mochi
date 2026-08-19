@@ -225,6 +225,11 @@ async function handleRequest(
     } else if (path === '/api/approve') {
       const out = await runtime.approvePlan();
       send(200, { ok: true, out });
+    } else if (path === '/api/resume') {
+      const goalId = String(body.goalId ?? '');
+      if (!goalId) { send(400, { ok: false, error: 'goalId required' }); return; }
+      const out = await runtime.resumeGoal(goalId);
+      send(200, { ok: true, out });
     } else if (path === '/api/goal') {
       const objective = String(body.objective ?? '');
       const wantsStream = String(req.headers.accept ?? '').includes('text/event-stream');

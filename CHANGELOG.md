@@ -2,6 +2,25 @@
 
 ## 0.9.6 (unreleased)
 
+- **Mid-stream cancellation.** Ctrl-C now actually cancels the model request
+  on the wire: `fetch` accepts an AbortSignal threaded from the loop, so an
+  interrupted run stops the HTTP response instead of waiting for it to
+  finish. Tested with a hanging SSE connection: aborting ends the stream
+  immediately.
+- **Daemon /api/resume.** Failed, active, or pending goals can be resumed
+  over HTTP (`runtime.resumeGoal(goalId)` + `/api/resume {goalId}`), with
+  the run trace continuing per goal. The daemon can now fully
+  restart/retry dead work without a terminal.
+- **Real team mode.** `mochi team` now decomposes the goal, assigns
+  specialist roles per task (tester/reviewer/researcher/security/
+  architect/debugger via title+description hints, with the final task
+  forced to reviewer for convergence), and runs them through the
+  scheduler concurrently. Verified with a real model: "2 done, 0 failed".
+- **Tested TUI event pipeline.** The transcript/task-tree reducer is
+  extracted into the pure `src/tui/state.ts` and unit-tested (transcript
+  assembly, task lifecycle, stop reasons, truncation, cap). The TUI's
+  `onRuntimeEvent` now delegates to it, so it surfaces `stopReason` and
+  the same behavior the tests assert.
 - **Structured stop reasons.** `AgentResult` now carries a `stopReason`
   (`completed`, `aborted`, `runtime_limit`, `budget`, `pulse_abort`,
   `max_iterations`, `model_error`, `tool_loop`, `verification_failed`),

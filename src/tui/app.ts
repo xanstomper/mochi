@@ -4,6 +4,7 @@ import { findProjectRoot } from '../repo.js';
 import type { Runtime } from '../runtime.js';
 import type { MochiEvent } from '../types.js';
 import { PROVIDERS, providerById, providerByName } from '../providers.js';
+import { reduceEvent } from './state.js';
 import pkg from '../../package.json' with { type: 'json' };
 
 const HIDE = '\x1b[?25l';
@@ -112,6 +113,8 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     currentTool: '' as string,
     currentTask: '' as string,
     lastStatus: '' as string,
+    chatVer: 0 as number,
+    limit: 500 as number,
   };
 
   let pendingResolver: ((v: string) => void) | undefined;
@@ -121,7 +124,6 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
 
   let schedulerTimer: NodeJS.Timeout | undefined;
   let renderQueued = false;
-  let chatVer = 0;
   let lastRenderAt = 0;
   let exited = false;
   let spinnerTimer: NodeJS.Timeout | undefined;
@@ -133,8 +135,8 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
 
   const push = (kind: LineKind, text: string) => {
     state.lines.push({ kind, text });
-    chatVer++;
-    if (state.lines.length > 500) state.lines.splice(0, state.lines.length - 500);
+    state.chatVer++;
+    if (state.lines.length > state.limit) state.lines.splice(0, state.lines.length - state.limit);
     state.scroll = 0;
     scheduleRender();
   };
@@ -452,8 +454,8 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     const contentH = Math.max(1, contentBottom - contentTop + 1);
 
     const chatMw = mainW - 2;
-    if (!chatCache || chatCache.ver !== chatVer || chatCache.mw !== chatMw) {
-      chatCache = { ver: chatVer, mw: chatMw, lines: renderChat(chatMw) };
+    if (!chatCache || chatCache.ver !== state.chatVer || chatCache.mw !== chatMw) {
+      chatCache = { ver: state.chatVer, mw: chatMw, lines: renderChat(chatMw) };
     }
     const chatLines = chatCache.lines;
     const visible = chatLines.slice(Math.max(0, chatLines.length - contentH - state.scroll), Math.max(0, chatLines.length - state.scroll));
@@ -992,63 +994,12 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   }
 
   function onRuntimeEvent(event: MochiEvent) {
-    switch (event.type) {
-      case 'message':
-        if (event.role === 'assistant' && event.content) push('assistant', event.content);
-        else if (event.role === 'system' && event.content) push('system', event.content);
-        break;
-      case 'message:chunk':
-        if (state.lines.length > 0 && state.lines[state.lines.length - 1].kind === 'assistant') {
-          state.lines[state.lines.length - 1].text += (event as any).content;
-        } else {
-          chatVer++;
-          state.lines.push({ kind: 'assistant', text: (event as any).content });
-          if (state.lines.length > 500) state.lines.splice(0, state.lines.length - 500);
-        }
-        chatVer++;
-        scheduleRender();
-        break;
-      case 'tool:called':
-        state.currentTool = event.tool;
-        let argsStr = typeof event.args === 'string' ? event.args : JSON.stringify(event.args);
-        if (argsStr.length > 200) argsStr = argsStr.slice(0, 200) + '...';
-        push('tool', `${event.tool}(${argsStr})`);
-        break;
-      case 'tool:completed':
-        state.currentTool = '';
-        break;
-      case 'tool:failed':
-        push('error', `${event.tool}: ${event.error}`);
-        break;
-      case 'goal:created':
-        push('goal', event.goal.objective);
-        break;
-      case 'task:created':
-        state.tasks.set(event.task.id, { id: event.task.id, title: event.task.title, role: event.task.role, status: event.task.status });
-        break;
-      case 'task:started':
-        state.currentTask = event.task.title;
-        if (state.tasks.has(event.task.id)) state.tasks.get(event.task.id)!.status = 'running';
-        else state.tasks.set(event.task.id, { id: event.task.id, title: event.task.title, role: event.task.role, status: 'running' });
-        break;
-      case 'task:completed':
-        if (state.currentTask === event.task.title) state.currentTask = '';
-        if (state.tasks.has(event.task.id)) state.tasks.get(event.task.id)!.status = 'done';
-        else state.tasks.set(event.task.id, { id: event.task.id, title: event.task.title, role: event.task.role, status: 'done' });
-        if (event.task.output) push('assistant', `✓ ${event.task.title}: ${event.task.output}`);
-        break;
-      case 'task:failed':
-        if (state.currentTask === event.task.title) state.currentTask = '';
-        if (state.tasks.has(event.task.id)) state.tasks.get(event.task.id)!.status = 'failed';
-        else state.tasks.set(event.task.id, { id: event.task.id, title: event.task.title, role: event.task.role, status: 'failed' });
-        if (event.reason) push('error', `✗ ${event.task.title}: ${event.reason}`);
-        break;
-      case 'file:changed':
-        push('system', `${event.operation} ${event.path}`);
-        break;
-      case 'error':
-        push('error', event.error);
-        break;
+    // Delegate to the pure, tested reducer (src/tui/state.ts): it maintains
+    // the transcript, task tree, current tool, and stop reasons exactly as the
+    // tests assert. Non-rendering events return false and skip the redraw.
+    if (reduceEvent(state, event as unknown as Record<string, unknown>)) {
+      state.scroll = 0;
+      scheduleRender();
     }
   }
 

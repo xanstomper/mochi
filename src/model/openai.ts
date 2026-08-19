@@ -49,7 +49,7 @@ export function createOpenAIProvider(config: ProviderConfig) {
   const model = config.model;
   const apiKey = config.apiKey;
 
-  async function* streamChat(messages: ChatMessage[], tools: ToolDefinition[], options?: { temperature?: number; maxTokens?: number }): AsyncGenerator<StreamChunk> {
+  async function* streamChat(messages: ChatMessage[], tools: ToolDefinition[], options?: { temperature?: number; maxTokens?: number; signal?: AbortSignal }): AsyncGenerator<StreamChunk> {
     const body: Record<string, unknown> = {
       model,
       messages: messages.map((m) => {
@@ -78,6 +78,7 @@ export function createOpenAIProvider(config: ProviderConfig) {
             ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
           },
           body: JSON.stringify(body),
+          signal: options?.signal,
         });
         if (!r.ok) {
           const text = await r.text().catch(() => '');
@@ -148,7 +149,7 @@ export function createOpenAIProvider(config: ProviderConfig) {
     }
   }
 
-  async function chat(messages: ChatMessage[], tools: ToolDefinition[], options?: { temperature?: number; maxTokens?: number }): Promise<ModelResponse> {
+  async function chat(messages: ChatMessage[], tools: ToolDefinition[], options?: { temperature?: number; maxTokens?: number; signal?: AbortSignal }): Promise<ModelResponse> {
     const chunks: StreamChunk[] = [];
     for await (const chunk of streamChat(messages, tools, options)) {
       chunks.push(chunk);
