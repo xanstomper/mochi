@@ -1,5 +1,39 @@
 # Mochi Changelog
 
+## 0.7.0
+
+Pipelines, prompts, and hardening found by dogfooding:
+
+- **CI pipeline.** `.github/workflows/ci.yml`: typecheck + vitest + build +
+  CLI smoke on Node 20 and 22. `package-lock.json` was out of sync with
+  `package.json` (`npm ci` failed); regenerated. Node 20 compatibility:
+  `node:sqlite` (22.5+) users degrade gracefully (`hasSqlite()`), and the
+  codegraph tests skip on runtimes without it.
+- **Plan mode is actually safe and useful.** Mutating-tool veto switched to a
+  read-only allowlist (`patch`, `git`, `subagent`, and arbitrary MCP tools are
+  now vetoed, not just write/edit/delete/shell). Plan-mode runs skip end-state
+  acceptance verification (a plan intentionally changes nothing), the
+  decomposer is told to emit plan-only tasks, and the plan text is surfaced to
+  the user instead of a bare "Goal completed".
+- **No dangling tool_call_ids.** `before_tool`/`before_edit` hook vetoes and
+  tool-budget exhaustion now answer the call with a `Blocked:` tool message;
+  previously they silently dropped it, which providers reject with 400s.
+- **Mutation check targets real code.** Test files and dot-directories
+  (`.mochi/` state) are excluded from mutation targets, and flips inside
+  larger tokens (`=>`, `>=`, `<<`) are skipped. Before: a run writing correct
+  `greet.ts` + `greet.test.ts` got downgraded to PARTIAL because the checker
+  mutated the *test file's* arrow into a syntax error the verification command
+  never even imported.
+- **MCP prompts.** `listPrompts()` / `getPrompt()` on the client, exposed as
+  `<server>__prompts_list` / `<server>__prompts_get` tools (rendered messages
+  as text). MCP JSON-RPC requests now time out after 10s so a server that
+  silently ignores optional capabilities can't hang the harness.
+- **System prompt guidance.** New "use the right tool" section (edit vs patch
+  vs write, subagent delegation, todo tracking, plan-mode behavior); builtin
+  role prompts enriched (coder gains `patch`/`todo`/`subagent`).
+- **patch tool integration.** Fires `before_edit`/`after_edit` hooks like the
+  other edit tools, and its per-file results are tracked into state.
+
 ## 0.6.1
 
 Mutation verification understands print-style checks:

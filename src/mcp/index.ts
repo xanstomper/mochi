@@ -33,6 +33,17 @@ export interface McpResourceInput {
   mimeType?: string;
 }
 
+export interface McpPromptInput {
+  name: string;
+  description?: string;
+  arguments?: { name: string; description?: string; required?: boolean }[];
+}
+
+export interface McpPromptMessage {
+  role?: string;
+  content?: { type?: string; text?: string };
+}
+
 interface JsonRpcResponse {
   jsonrpc: '2.0';
   id: number;
@@ -96,11 +107,23 @@ export class McpClient {
   private request(method: string, params: unknown): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const id = this.nextId++;
-      this.requests.set(id, { resolve, reject });
+      // A server that silently ignores a method (not an error response — just
+      // no response at all) must not hang the caller forever. Optional
+      // capabilities (resources/prompts) are probed, so servers implementing
+      // only tools may hit this; the caller treats it as "absent".
+      const timer = setTimeout(() => {
+        this.requests.delete(id);
+        reject(new Error(`'${method}' timed out after 10s (server may not implement it)`));
+      }, 10_000);
+      this.requests.set(id, {
+        resolve: (r) => { clearTimeout(timer); resolve(r); },
+        reject: (e) => { clearTimeout(timer); reject(e); },
+      });
       const body = JSON.stringify({ jsonrpc: '2.0', id, method, params });
       try {
         this.child.stdin.write(body + '\n');
       } catch (err) {
+        clearTimeout(timer);
         this.requests.delete(id);
         reject(err instanceof Error ? err : new Error(String(err)));
       }
@@ -149,6 +172,24 @@ export class McpClient {
     };
     const parts = (result?.contents ?? []).map((c) => c?.text ?? '').filter(Boolean);
     return parts.join('\n');
+  }
+
+  /** List prompts the server exposes (optional capability). Servers that do
+   *  not implement prompts return an error, which we surface as an empty
+   *  list so callers can treat it as "no prompts". */
+  async listPrompts(): Promise<McpPromptInput[]> {
+    if (!this.initialized) await this.initialize();
+    const result = (await this.request('prompts/list', {})) as { prompts?: McpPromptInput[] };
+    return result?.prompts ?? [];
+  }
+
+  /** Get a prompt by name; returns its rendered messages. */
+  async getPrompt(name: string, args: Record<string, string> = {}): Promise<McpPromptMessage[]> {
+    if (!this.initialized) await this.initialize();
+    const result = (await this.request('prompts/get', { name, arguments: args })) as {
+      messages?: McpPromptMessage[];
+    };
+    return result?.messages ?? [];
   }
 
   /** Call a tool; returns the concatenated text content of the result. */

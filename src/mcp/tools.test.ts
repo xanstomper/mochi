@@ -16,11 +16,15 @@ const RESOURCES = [
   { uri: 'mochi://guide', name: 'Guide', description: 'How to use this server', mimeType: 'text/plain' },
   { uri: 'mochi://notes', name: 'Notes', mimeType: 'text/plain' },
 ];
+const PROMPTS = [
+  { name: 'review', description: 'Review code for a language', arguments: [{ name: 'language', description: 'Programming language', required: true }] },
+  { name: 'greet', description: 'Simple greeting prompt' },
+];
 rl.on('line', (line) => {
   if (!line.trim()) return;
   let body; try { body = JSON.parse(line); } catch { return; }
   if (body.method === 'initialize') {
-    process.stdout.write(JSON.stringify({ jsonrpc:'2.0', id: body.id, result: { protocolVersion:'2024-11-05', capabilities:{tools:{},resources:{}}, serverInfo:{name:'mini',version:'1'} } }) + '\\n');
+    process.stdout.write(JSON.stringify({ jsonrpc:'2.0', id: body.id, result: { protocolVersion:'2024-11-05', capabilities:{tools:{},resources:{},prompts:{}}, serverInfo:{name:'mini',version:'1'} } }) + '\\n');
   } else if (body.method === 'notifications/initialized') {
     return;
   } else if (body.method === 'tools/list') {
@@ -36,6 +40,15 @@ rl.on('line', (line) => {
     const found = RESOURCES.find((r) => r.uri === uri);
     const text = found ? \`Content of \${uri}: hello from the resource store\` : '';
     process.stdout.write(JSON.stringify({ jsonrpc:'2.0', id: body.id, result: { contents: [{ uri, text }] } }) + '\\n');
+  } else if (body.method === 'prompts/list') {
+    process.stdout.write(JSON.stringify({ jsonrpc:'2.0', id: body.id, result: { prompts: PROMPTS } }) + '\\n');
+  } else if (body.method === 'prompts/get') {
+    const name = body.params.name || '';
+    const args = body.params.arguments || {};
+    const text = name === 'review'
+      ? \`Please review this \${args.language || 'code'} carefully.\`
+      : name === 'greet' ? 'Hello from a prompt template!' : '';
+    process.stdout.write(JSON.stringify({ jsonrpc:'2.0', id: body.id, result: { messages: [{ role: 'user', content: { type: 'text', text } }] } }) + '\\n');
   }
 });
 setTimeout(() => {}, 30_000);
@@ -66,7 +79,7 @@ describe('buildMcpTools (real subprocess)', () => {
     const built = await buildMcpTools({ mini: { command: process.execPath, args: [serverPath] } }, (m) => logs.push(m));
     try {
       expect(built.errors).toEqual([]);
-      expect(built.tools.size).toBe(3); // uppercase + resources_list + resources_read
+      expect(built.tools.size).toBe(5); // uppercase + resources list/read + prompts list/get
       const tool = built.tools.get('mini__uppercase');
       expect(tool).toBeDefined();
       expect(tool!.def.name).toBe('mini__uppercase');
@@ -107,6 +120,37 @@ describe('buildMcpTools (real subprocess)', () => {
       expect(content).toContain('hello from the resource store');
 
       await expect(readTool!.execute({ uri: '' }, ctxArgs)).rejects.toThrow('non-empty uri');
+    } finally {
+      built.close();
+    }
+  });
+
+  it('exposes prompts as list + get tools', async () => {
+    const built = await buildMcpTools({ mini: { command: process.execPath, args: [serverPath] } });
+    try {
+      expect(built.promptCounts.mini).toBe(2);
+      const listTool = built.tools.get('mini__prompts_list');
+      const getTool = built.tools.get('mini__prompts_get');
+      expect(listTool).toBeDefined();
+      expect(getTool).toBeDefined();
+      expect(listTool!.def.permission).toBe('read');
+      expect(getTool!.def.permission).toBe('read');
+
+      const { events } = fakeCtx();
+      const ctxArgs = { cwd: dir, workspace: {} as never, config: {} as never, events, agentId: 't' };
+      const listing = await listTool!.execute({}, ctxArgs);
+      expect(listing).toContain('review');
+      expect(listing).toContain('language (required)');
+
+      const rendered = await getTool!.execute({ name: 'review', args: '{"language":"TypeScript"}' }, ctxArgs);
+      expect(rendered).toContain('Please review this TypeScript carefully.');
+      expect(rendered).toContain('[user]');
+
+      const plain = await getTool!.execute({ name: 'greet' }, ctxArgs);
+      expect(plain).toContain('Hello from a prompt template!');
+
+      await expect(getTool!.execute({ name: '' }, ctxArgs)).rejects.toThrow('non-empty prompt name');
+      await expect(getTool!.execute({ name: 'review', args: 'not-json' }, ctxArgs)).rejects.toThrow('JSON object');
     } finally {
       built.close();
     }

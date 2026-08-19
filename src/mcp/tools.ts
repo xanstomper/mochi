@@ -13,6 +13,7 @@ export interface McpToolMap {
   errors: string[];
   /** Number of resources discovered per server (resources are optional). */
   resourceCounts: Record<string, number>;
+  promptCounts: Record<string, number>;
 }
 
 type McpServerSpec = Record<string, McpServerConfig>;
@@ -34,8 +35,9 @@ export async function buildMcpTools(
   const tools = new Map<string, Tool>();
   const errors: string[] = [];
   const resourceCounts: Record<string, number> = {};
+  const promptCounts: Record<string, number> = {};
   const clients = new Map<string, McpClient>();
-  if (!servers) return { tools, close: () => void 0, errors, resourceCounts };
+  if (!servers) return { tools, close: () => void 0, errors, resourceCounts, promptCounts };
 
   const normalized = normalizeServerConfig(servers);
   for (const [name, cfg] of Object.entries(normalized)) {
@@ -108,6 +110,69 @@ export async function buildMcpTools(
         resourceCounts[name] = 0;
         log(`[mcp] server '${name}' exposes no resources (${resErr instanceof Error ? resErr.message : String(resErr)})`);
       }
+
+      // Prompts (optional MCP capability): expose list + get as native tools.
+      // A rendered prompt returns structured messages the model can use
+      // directly (role + text). A server without prompts yields zero entries.
+      try {
+        const prompts = await client.listPrompts();
+        promptCounts[name] = prompts.length;
+        if (prompts.length > 0) {
+          const listName = `${name}__prompts_list`;
+          if (!tools.has(listName)) {
+            tools.set(listName, {
+              def: {
+                name: listName,
+                description: `List prompt templates exposed by the '${name}' MCP server (names, descriptions, arguments).`,
+                parameters: [],
+                permission: 'read',
+              },
+              async execute() {
+                const ps = await client.listPrompts();
+                return ps.map((p) => {
+                  const argList = (p.arguments ?? []).map((a) => `${a.name}${a.required ? ' (required)' : ''}`).join(', ');
+                  return `- ${p.name}${argList ? ` [args: ${argList}]` : ''}${p.description ? ` — ${p.description}` : ''}`;
+                }).join('\n') || 'No prompts.';
+              },
+            });
+          }
+          const getName = `${name}__prompts_get`;
+          if (!tools.has(getName)) {
+            tools.set(getName, {
+              def: {
+                name: getName,
+                description: `Render one prompt from the '${name}' MCP server by name (use ${listName} to discover names and arguments). Pass arguments as a JSON object string.`,
+                parameters: [
+                  { name: 'name', type: 'string', description: 'Prompt name', required: true },
+                  { name: 'args', type: 'string', description: 'JSON object of prompt arguments, e.g. "{\"topic\":\"testing\"}"', required: false },
+                ],
+                permission: 'read',
+              },
+              async execute(args) {
+                const pname = String(args.name ?? '').trim();
+                if (!pname) throw new Error('A non-empty prompt name is required');
+                let parsed: Record<string, string> = {};
+                const raw = String(args.args ?? '').trim();
+                if (raw) {
+                  try {
+                    parsed = JSON.parse(raw);
+                  } catch {
+                    throw new Error('args must be a JSON object string, e.g. "{\"topic\":\"testing\"}"');
+                  }
+                }
+                const msgs = await client.getPrompt(pname, parsed);
+                const rendered = msgs.map((m) => `[${m.role ?? 'user'}] ${m.content?.text ?? ''}`.trim()).filter(Boolean).join('\n');
+                return rendered || '(empty prompt)';
+              },
+            });
+          }
+          log(`[mcp] registered ${prompts.length} prompt(s) from server '${name}' (list + get tools)`);
+        }
+      } catch (promptErr) {
+        // Prompts are optional; a server rejecting prompts/* is normal.
+        promptCounts[name] = 0;
+        log(`[mcp] server '${name}' exposes no prompts (${promptErr instanceof Error ? promptErr.message : String(promptErr)})`);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       errors.push(`MCP server '${name}' failed: ${msg}`);
@@ -125,5 +190,6 @@ export async function buildMcpTools(
     },
     errors,
     resourceCounts,
+    promptCounts,
   };
 }
