@@ -208,25 +208,26 @@ async function main() {
       console.log('Daemon stopped.');
       return;
     }
-    if (action === 'send' || action === 'approve') {
+    if (action === 'send' || action === 'approve' || action === 'resume') {
       const serverUrl = `http://127.0.0.1:${info?.port}`;
       if (!info || !daemonRunning(wsDir)) {
-        console.error(`Usage: mochi daemon ${action} "<goal>" (requires a running daemon).`);
+        console.error(`Usage: mochi daemon ${action} "<goal-or-goalId>" (requires a running daemon).`);
         process.exit(1);
       }
       const objective = positional.slice(2).join(' ');
-      const path = action === 'approve' ? '/api/approve' : '/api/goal';
+      const path = action === 'approve' ? '/api/approve' : action === 'resume' ? '/api/resume' : '/api/goal';
+      const body = action === 'resume' ? { goalId: objective } : { objective };
       const res = await fetch(serverUrl + path, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${info.token}` },
-        body: JSON.stringify({ objective }),
+        body: JSON.stringify(body),
       });
       const data = (await res.json()) as { out?: string; error?: string; ok?: boolean };
       if (res.ok) console.log(data.out ?? 'Goal accepted.');
       else { console.error(data.error ?? 'Daemon error'); process.exit(1); }
       return;
     }
-    console.error('Usage: mochi daemon start|status|jobs|send|approve|stop');
+    console.error('Usage: mochi daemon start|status|jobs|send|approve|resume|stop');
     process.exit(1);
   }
 
