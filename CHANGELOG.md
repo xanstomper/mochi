@@ -1,6 +1,19 @@
 # Mochi Changelog
 
+## 0.9.4 (unreleased)
+
+- **Persistent agent daemon.** `mochi daemon start|status|send|stop` runs
+  a Runtime over localhost HTTP so a phone, dashboard, or script can hand
+  Mochi goals without a TTY. Binds to 127.0.0.1 only; every request needs
+  a per-workspace bearer token written to `~/.mochi/daemon/info.json`
+  (0600) along with the live port and pid. Endpoints: `/api/status`,
+  `/api/inspect`, `/api/plan`, `/api/goal`. Verified end to end with a
+  real model: `daemon send` created `answer.ts` correctly. In-process and
+  detached-spawn paths are both tested.
+
 ## 0.9.3
+
+- **Live integration tests against real freeinference.**
 
 - **Polyglot code indexing.** The codegraph previously understood only
   JavaScript/TypeScript files, so pointing Mochi at a Python, Rust, Go,

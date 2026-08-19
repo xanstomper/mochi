@@ -96,6 +96,10 @@ Usage:
   mochi memory
   mochi inspect "<query>"
   mochi speculate "<question>"
+  mochi daemon start [--port <n>]
+  mochi daemon status
+  mochi daemon send "<goal>"
+  mochi daemon stop
   mochi enhance "<task>" [--mode <mode>]
   mochi termix ["<task>"] [--coms|--sep] [--sessions N]
   mochi tui
@@ -135,8 +139,72 @@ async function main() {
   const { status, diff, isRepo } = await import('./git.js');
   const runtime = Runtime.create({ cwd, config: configOverrides });
 
-  // Subcommands
   const first = positional[0];
+
+  // `mochi daemon ...` — persistent agent over localhost HTTP.
+  if (first === 'daemon') {
+    const action = positional[1];
+    const { startDaemon, daemonRunning, readDaemonInfo, daemonInfoPath } = await import('./daemon.js');
+    const wsDir = runtime.workspace.dir;
+    const info = readDaemonInfo(wsDir);
+    if (action === 'start') {
+      if (daemonRunning(wsDir)) {
+        console.log(`Daemon already running on 127.0.0.1:${info?.port} (pid ${info?.pid}).`);
+        return;
+      }
+      const port = Number(flags.port ?? (flags['port'] as string | undefined) ?? 9470);
+      const r = await startDaemon({ cwd, port, config: configOverrides });
+      if (r.ok) {
+        console.log(`Daemon started on 127.0.0.1:${r.port}. Info: ${daemonInfoPath(wsDir)}`);
+      } else {
+        console.error(`Daemon failed to start: ${r.error}`);
+        process.exit(1);
+      }
+      return;
+    }
+    if (action === 'status') {
+      if (!daemonRunning(wsDir)) {
+        console.log('No daemon running for this workspace.');
+        return;
+      }
+      console.log(`Daemon running on 127.0.0.1:${info?.port} (pid ${info?.pid}, started ${info?.startedAt}).`);
+      return;
+    }
+    if (action === 'stop') {
+      if (!info || !daemonRunning(wsDir)) {
+        console.log('No daemon running for this workspace.');
+        return;
+      }
+      const res = await fetch(`http://127.0.0.1:${info.port}/api/status`, {
+        method: 'POST', headers: { authorization: `Bearer ${info.token}` },
+      });
+      await res.text();
+      // Best-effort: kill the recorded pid after telling it to exit.
+      try { process.kill(info.pid, 'SIGTERM'); } catch { /* already gone */ }
+      console.log('Daemon stopped.');
+      return;
+    }
+    if (action === 'send') {
+      const objective = positional.slice(2).join(' ');
+      if (!objective || !info || !daemonRunning(wsDir)) {
+        console.error('Usage: mochi daemon send "<goal>" (requires a running daemon).');
+        process.exit(1);
+      }
+      const res = await fetch(`http://127.0.0.1:${info.port}/api/goal`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${info.token}` },
+        body: JSON.stringify({ objective }),
+      });
+      const data = (await res.json()) as { out?: string; error?: string; ok?: boolean };
+      if (res.ok) console.log(data.out ?? 'Goal accepted.');
+      else { console.error(data.error ?? 'Daemon error'); process.exit(1); }
+      return;
+    }
+    console.error('Usage: mochi daemon start|status|send|stop');
+    process.exit(1);
+  }
+
+  // Subcommands
   if (first === 'goal') {
     const sub = positional[1];
     const objective = positional.slice(1).join(' ');
