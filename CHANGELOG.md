@@ -1,5 +1,34 @@
 # Mochi Changelog
 
+## 0.6.0
+
+Six capability milestones, plus the surrounding hardening:
+
+- **Todo planning tool.** Persistent, editable work list in
+  `state/todo.json` (deduped by title, ordered, concurrency-safe across
+  parallel agents). The model plans and tracks its own checklist mid-run.
+- **Provider capability registry.** Live per-provider health tracking:
+  `ok` / `cooldown` / `dead` states with probe-driven recovery, mirroring
+  jcode's on-demand retry gates. The router skips dead providers fast and
+  retries transients with backoff instead of failing the run.
+- **Agent Skills.** Full agentskills.io spec: frontmatter parsing, discovery
+  from `.mochi/skills/`, prompt injection when a goal matches a skill, and a
+  `skill` tool so the model can load one mid-run.
+- **MCP support.** Minimal stdio MCP client (JSON-RPC 2.0, initialize
+  handshake, tools/list + tools/call) plus `buildMcpTools()`, which wraps each
+  remote tool as a native namespaced tool (`serverName__toolName`) with
+  `network` permission. Servers are spawned once per run, closed on finish, and
+  a server that dies rejects its pending calls instead of hanging the agent.
+- **Plan-then-act mode.** `planMode` (config or `--plan`) disables
+  `write`/`edit`/`delete`/`shell`, vetoes violation attempts with a proper tool
+  response, and steers the model to return a plan (steps, files, risks,
+  verification). No files are changed.
+- **Subagent delegation.** The `subagent` tool runs a fresh child agent on a
+  well-scoped subtask, sharing the run's budget, read cache, and workspace, and
+  returns the child's summary. Delegation is depth-guarded to one level so a
+  child cannot spawn runaway grandchildren.
+- **`agent:log` event + 3 new test files.** 147 tests total; typecheck clean.
+
 ## 0.5.5
 
 Internal Chameleon + Termix rework (no external services, no auto-launch):

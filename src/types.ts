@@ -210,6 +210,7 @@ export type MochiEvent =
   | { type: 'task:failed'; task: Task; agentId: string; reason: string }
   | { type: 'agent:spawned'; id: string; role: AgentRole; taskId: string }
   | { type: 'agent:completed'; id: string; taskId: string }
+  | { type: 'agent:log'; agentId: string; message: string }
   | { type: 'tool:called'; tool: string; args: unknown; agentId: string }
   | { type: 'tool:completed'; tool: string; result: ToolResult; agentId: string }
   | { type: 'tool:failed'; tool: string; error: string; agentId: string }

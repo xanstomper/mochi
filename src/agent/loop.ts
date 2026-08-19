@@ -150,7 +150,7 @@ export class Agent {
     // when the run finishes (see finish()), so subprocesses don't leak.
     if (this.config.mcpServers) {
       const log = (m: string): undefined => {
-        this.events.emit({ type: 'agent:log', agentId: this.id, message: m } as never);
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: m });
         return undefined;
       };
       const connected = await buildMcpTools(this.config.mcpServers, log);
@@ -290,7 +290,7 @@ export class Agent {
               role: 'system',
               content: 'PLAN MODE: you are only planning right now. Do not edit files or run mutating commands. Do not call write/edit/delete/shell again. Hand back your plan (steps, files to change, risks, verification) as the final answer now.',
             });
-            this.events.emit({ type: 'agent:log', agentId: this.id, message: '[plan-mode] vetoed mutating tool call; requesting plan' } as never);
+            this.events.emit({ type: 'agent:log', agentId: this.id, message: '[plan-mode] vetoed mutating tool call; requesting plan' });
             continue;
           }
         }
