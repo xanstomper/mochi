@@ -4,6 +4,7 @@ import { MemoryStore } from './memory.js';
 import type { MemoryEntry } from './memory.js';
 import { selectRelevant } from './relevance.js';
 import { loadProjectSkills, formatSkillsForPrompt } from './skills.js';
+import { classifyTaskKind, kindHint } from './taskkind.js';
 import type { ChatMessage, MochiConfig, RepoInfo, Task, ToolDefinition } from './types.js';
 
 const CANDIDATE_RULES = ['MOCHI.md', 'mochi.md', 'AGENTS.md', 'CLAUDE.md'];
@@ -230,7 +231,7 @@ Repository:
    - shell: for builds, tests, greps. Not for file mutation when edit/patch will do.
    - plan mode (when active): research with read-only tools and return a plan. Mutating calls are vetoed.
 
-${rules ? rules + '\n' : ''}${memory ? `Project memory:\n${memory}\n` : ''}${repoInfo}${this.skills()}
+${rules ? rules + '\n' : ''}${memory ? `Project memory:\n${memory}\n` : ''}${repoInfo}${this.skills()}${task ? kindHint(classifyTaskKind(task)) : ''}
 `.trim();
   }
 

@@ -98,6 +98,9 @@ export class GoalEngine {
     const planInstruction = this.config.planMode
       ? '\nIMPORTANT: The user wants a PLAN ONLY (no changes will be made). Decompose into research/planning steps; every task description must instruct: produce a detailed written plan (steps, files, risks, verification), do NOT modify anything.'
       : '';
+    const verifyInstruction = this.config.planMode
+      ? ''
+      : '\nIMPORTANT: verificationCommand MUST actually run the implementation. Use a real test runner (e.g. `cd <dir> && npx vitest run`, `cd <dir> && npx jest`, `cd <dir> && pytest -q`, `cd <dir> && npm test`) — NOT a string/file check like `test -f` or `grep`. The harness auto-detects a fallback runner if you do not, but a task-specific runner you supply always wins. If the task is pure research/planning, omit verificationCommand entirely.';
     const decomposePrompt = `Decompose the goal into a JSON array of tasks. Each task:
 {
   "title": string,
@@ -109,7 +112,7 @@ export class GoalEngine {
   "verificationCommand": string (optional)
 }
 Goal: ${goal.objective}
-Constraints: ${goal.constraints.join('; ') || 'none'}${planInstruction}
+Constraints: ${goal.constraints.join('; ') || 'none'}${planInstruction}${verifyInstruction}
 
 Return ONLY the JSON array, no markdown.`;
 

@@ -52,3 +52,31 @@ describe('ContextEngine project-rule + memory caching', () => {
     expect(after).toBeGreaterThan(0);
   });
 });
+
+describe('ContextEngine task-kind hints', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mochi-ctx-kind-'));
+  const engine = new ContextEngine(cfg(), dir);
+  it('injects a debug-focused hint when the task title says fix', () => {
+    const p = engine.buildPacket(NO_TOOLS, {
+      id: 't1', title: 'Fix the login crash', description: 'reproduces on every load',
+      role: 'coder', status: 'pending', priority: 1, dependencies: [], fileScope: [], acceptanceCriteria: [], attempts: [],
+    });
+    expect(p.systemPrompt).toContain('Focus: debugging');
+    expect(p.systemPrompt).toContain('reproduc');
+  });
+  it('injects a research hint for "investigate" tasks', () => {
+    const p = engine.buildPacket(NO_TOOLS, {
+      id: 't2', title: 'Investigate the auth flow', description: 'how does session live?',
+      role: 'coder', status: 'pending', priority: 1, dependencies: [], fileScope: [], acceptanceCriteria: [], attempts: [],
+    });
+    expect(p.systemPrompt).toContain('Focus: research');
+    expect(p.systemPrompt).toContain('read-only');
+  });
+  it('falls back to implementation hint for plain tasks', () => {
+    const p = engine.buildPacket(NO_TOOLS, {
+      id: 't3', title: 'Add export to foo', description: 'export const x = 1',
+      role: 'coder', status: 'pending', priority: 1, dependencies: [], fileScope: [], acceptanceCriteria: [], attempts: [],
+    });
+    expect(p.systemPrompt).toContain('Focus: implementation');
+  });
+});
