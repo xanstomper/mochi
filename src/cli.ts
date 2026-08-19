@@ -7,7 +7,7 @@ import type { MochiConfig } from './types.js';
 // Resolve the version from package.json when running from source; when Mochi is
 // compiled to a standalone binary there is no package.json next to it, so fall
 // back to the constant (kept in sync with package.json at build time).
-let VERSION = '0.9.3';
+let VERSION = '0.9.4';
 try {
   const pkgPath = resolve(dirname(fileURLToPath(import.meta.url)), '../package.json');
   VERSION = JSON.parse(readFileSync(pkgPath, 'utf8')).version;

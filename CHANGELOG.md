@@ -1,6 +1,6 @@
 # Mochi Changelog
 
-## 0.9.4 (unreleased)
+## 0.9.4
 
 - **Persistent agent daemon.** `mochi daemon start|status|send|stop` runs
   a Runtime over localhost HTTP so a phone, dashboard, or script can hand

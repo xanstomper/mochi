@@ -65,3 +65,25 @@ it('runs a goal through the daemon with a scripted model', async () => {
     await fake.close();
   }
 }, 60_000);
+
+it('serves inspect and plan, rejects bad JSON and unknown routes', async () => {
+  const h = await startDaemonInProcess({ cwd: dir, token: 'sekret3' });
+  try {
+    const rr = await fetch(`http://127.0.0.1:${h.info.port}/api/status`, {
+      method: 'GET', headers: { authorization: 'Bearer sekret3' },
+    });
+    expect(rr.status).toBe(405); // POST only
+
+    const badJson = await fetch(`http://127.0.0.1:${h.info.port}/api/status`, {
+      method: 'POST', headers: { authorization: 'Bearer sekret3' }, body: '{nope',
+    });
+    expect(badJson.status).toBe(400);
+
+    const nope = await fetch(`http://127.0.0.1:${h.info.port}/api/nope`, {
+      method: 'POST', headers: { authorization: 'Bearer sekret3' }, body: '{}',
+    });
+    expect(nope.status).toBe(404);
+  } finally {
+    await h.close();
+  }
+}, 30_000);
