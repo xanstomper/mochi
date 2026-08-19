@@ -1,6 +1,6 @@
 # Mochi Changelog
 
-## Unreleased
+## 0.9.2
 
 - **Live integration tests against real freeinference.** New
   `src/agent/loop.live.test.ts` exercises the real model on a real file
