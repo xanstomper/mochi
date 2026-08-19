@@ -452,7 +452,11 @@ async function main() {
 
   const prompt = positional.join(' ');
   if (prompt) {
-    if (flags.p || flags.print) {
+    // Full-screen TUI only makes sense on an interactive terminal. When stdin
+    // or stdout is piped/redirected (scripts, CI, `mochi "..." | less`), run
+    // the prompt and print the result instead of spewing escape codes.
+    const isTTY = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+    if (flags.p || flags.print || !isTTY) {
       console.log(await runtime.runPrompt(prompt));
     } else {
       await interactive(runtime, prompt);
@@ -460,7 +464,13 @@ async function main() {
     return;
   }
 
-  await interactive(runtime);
+  // No prompt: drop into the interactive TUI when attached to a terminal;
+  // otherwise print usage since there is nothing to drive interactively.
+  if (process.stdin.isTTY && process.stdout.isTTY) {
+    await interactive(runtime);
+  } else {
+    printHelp();
+  }
 }
 
 async function interactive(runtime: import('./runtime.js').Runtime, initialPrompt?: string) {

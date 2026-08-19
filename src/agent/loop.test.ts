@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
+import { execSync } from 'node:child_process';
 import { Agent } from './loop.js';
 import { ContextEngine } from '../context.js';
 import { EventBus } from '../events.js';
@@ -114,6 +115,57 @@ describe('Agent', () => {
     expect(result.success).toBe(true);
     expect(result.summary).toContain('PLAN');
     expect(() => readFileSync(resolve(dir, 'plan.txt'), 'utf8')).toThrow();
+    await fake.close();
+  });
+
+  it('rolls the repo back when verification fails repeatedly', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-rollback-'));
+    // Clean git repo so the pre-edit snapshot engages.
+    execSync('git init -q', { cwd: dir });
+    execSync('git config user.email t@t && git config user.name t', { cwd: dir });
+    execSync('git commit --allow-empty -m init', { cwd: dir });
+
+    // Script: write a file, then keep claiming "done" so verification runs and
+    // fails (the verification command always exits 1). Each retry loop needs a
+    // write or claim; the fake repeats its last response when exhausted.
+    const writeCall = (id: string, path: string) => ({
+      id,
+      type: 'function' as const,
+      function: { name: 'write', arguments: JSON.stringify({ path, content: 'broken' }) },
+    });
+    const fake = await startFakeOpenAI([
+      { content: 'Writing now.', toolCalls: [writeCall('1', resolve(dir, 'out.txt'))], finishReason: 'tool_calls' },
+      { content: 'Done, the change is complete.', finishReason: 'stop' },
+    ]);
+    const config = makeConfig(dir, fake.url);
+    const workspace = new Workspace(dir, '.mochi');
+    workspace.ensure();
+    const context = new ContextEngine(config, dir);
+    context.setGoal('rollback check');
+    const task = createTask('Break things', 'Write out.txt; verification always fails.', {
+      verificationCommand: 'false',
+    });
+
+    const agent = new Agent({
+      id: 'rollback-agent',
+      role: 'coder',
+      config,
+      workspace,
+      events: new EventBus(),
+      cwd: dir,
+      context,
+    });
+
+    const result = await agent.run(task);
+    expect(result.success).toBe(false);
+    expect(result.summary).toContain('Verification failed repeatedly');
+    expect(result.summary).toContain('Rolled back to pre-edit state');
+    // The agent's edit was rolled back and the tree is clean again (the
+    // harness's own .mochi state dir intentionally survives).
+    expect(existsSync(resolve(dir, 'out.txt'))).toBe(false);
+    const leftover = execSync('git status --porcelain', { cwd: dir, encoding: 'utf8' })
+      .split('\n').filter((l) => l.trim() && !l.includes('.mochi'));
+    expect(leftover).toEqual([]);
     await fake.close();
   });
 });

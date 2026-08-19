@@ -73,3 +73,42 @@ export async function restore(cwd: string, checkpoint: CheckpointResult): Promis
   await run(cwd, ['stash', 'pop', checkpoint.ref]);
   return `Restored stash ${checkpoint.ref}`;
 }
+
+/**
+ * Pre-edit rollback point: an empty commit on a CLEAN tree. Unlike
+ * `checkpoint()`, this never moves or stashes working-tree changes, so the
+ * agent keeps editing exactly what it saw. Restoring later (`reset --hard` +
+ * bounded `clean`) discards everything the agent did after the snapshot while
+ * preserving the state the run started from. The harness's own state dir
+ * (default `.mochi`) is invisible to both the cleanliness check and the
+ * restore, so agent bookkeeping never blocks a snapshot or gets wiped.
+ * Returns null when the tree is dirty (can't safely snapshot without touching
+ * the user's changes) or not a repo.
+ */
+export async function preEditSnapshot(cwd: string, message = 'mochi pre-edit', stateDir = '.mochi'): Promise<CheckpointResult | null> {
+  if (!(await isRepo(cwd))) return null;
+  const statusOut = await status(cwd);
+  const dirty = statusOut
+    .split('\n')
+    .filter((l) => l.trim() && !l.slice(3).trim().startsWith(`${stateDir}/`) && !l.slice(3).trim().startsWith(`"${stateDir}/`));
+  if (dirty.length > 0) return null; // dirty: refuse rather than stash user work
+  const ref = randomUUID().slice(0, 8);
+  const fullMessage = `${message} [${ref}]`;
+  await run(cwd, ['commit', '--allow-empty', '-m', fullMessage]);
+  const head = (await run(cwd, ['rev-parse', 'HEAD'])).split('\n')[0];
+  return { ref: head, type: 'commit', message: fullMessage };
+}
+
+/**
+ * Undo everything after a pre-edit snapshot. `reset --hard` alone leaves the
+ * agent's NEW files behind (untracked); because the snapshot only exists on a
+ * tree that was clean (modulo the state dir), every untracked file at this
+ * point was created by the run, so `clean -fd` restores the exact starting
+ * state. The state dir is excluded so harness bookkeeping survives, and
+ * ignored files are never touched (no -x).
+ */
+export async function rollbackToSnapshot(cwd: string, cp: CheckpointResult, stateDir = '.mochi'): Promise<string> {
+  await run(cwd, ['reset', '--hard', cp.ref]);
+  await run(cwd, ['clean', '-fd', `-e`, stateDir]);
+  return `Rolled back to pre-edit state ${cp.ref.slice(0, 8)} (agent edits discarded)`;
+}

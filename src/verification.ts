@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { diff as gitDiff, status as gitStatus } from './git.js';
 import { detectRepo } from './repo.js';
 import { createProvider } from './model/router.js';
@@ -8,6 +10,15 @@ import type { MochiConfig, Task } from './types.js';
 import type { Workspace } from './workspace.js';
 import { BudgetEngine } from './budget.js';
 import { runMutationCheck, type MutationCheck } from './mutation.js';
+
+function execFileAsync(cmd: string, args: string[], cwd: string): Promise<string> {
+  return new Promise((res, rej) => {
+    execFile(cmd, args, { cwd, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+      if (err) rej(err instanceof Error ? err : new Error(String(err)));
+      else res(String(stdout ?? ''));
+    });
+  });
+}
 
 export type VerificationStatus = 'PASS' | 'FAIL' | 'PARTIAL' | 'BLOCKED';
 
@@ -189,7 +200,25 @@ export class VerifierEngine {
 
   private async safeGitDiff(): Promise<string> {
     try {
-      return await gitDiff(this.cwd);
+      const trackedDiff = await gitDiff(this.cwd);
+      // `git diff` is empty for UNTRACKED files (new files the agent created
+      // or scratch files it was asked to edit), which previously made the
+      // evidence read "No git changes detected" and the judge fail perfectly
+      // correct work. Include untracked content as pseudo-diff additions so
+      // new-file work is verifiable.
+      const untracked = await execFileAsync('git', ['ls-files', '--others', '--exclude-standard'], this.cwd);
+      const extras: string[] = [];
+      if (untracked.trim()) {
+        for (const f of untracked.split('\n').filter(Boolean).slice(0, 20)) {
+          try {
+            const content = readFileSync(resolve(this.cwd, f), 'utf8');
+            extras.push(`--- /dev/null\n+++ b/${f} (untracked, new)\n${content.split('\n').slice(0, 80).map((l) => `+${l}`).join('\n')}`);
+          } catch {
+            extras.push(`+++ b/${f} (untracked, unreadable)`);
+          }
+        }
+      }
+      return [trackedDiff, ...extras].filter(Boolean).join('\n');
     } catch {
       return '';
     }

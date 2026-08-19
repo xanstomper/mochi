@@ -16,6 +16,7 @@ import { HookManager } from '../hooks.js';
 import { resolve } from 'node:path';
 import { classifyOneShot } from '../one-shot.js';
 import { buildMcpTools } from '../mcp/tools.js';
+import { preEditSnapshot as gitPreEditSnapshot, rollbackToSnapshot as gitRollback, type CheckpointResult } from '../git.js';
 
 export interface AgentOptions {
   id?: string;
@@ -74,6 +75,10 @@ export class Agent {
   private toolCallsTotal = 0;
   private verifyCount = 0;
   private fileChanged = false;
+  /** Checkpoint taken before the first file edit, restored if verification
+   *  fails repeatedly so a broken agent run never leaves the tree dirty. */
+  private preEditCheckpoint?: CheckpointResult;
+  private checkpointFailed = false;
   private lastSig = '';
   private sigStreak = 0;
   private readCache: ReadCache;
@@ -325,7 +330,20 @@ export class Agent {
         return this.finish(task, true, verification.summary);
       }
       if (this.verifyCount > 3) {
-        return this.finish(task, false, 'Verification failed repeatedly:\n' + verification.summary);
+        // Repeated verification failure: roll the repo back to the state before
+        // this agent's edits rather than leaving broken work on disk for the
+        // next task (or the user) to inherit.
+        let rollbackNote = '';
+        if (this.preEditCheckpoint) {
+          try {
+            rollbackNote = '\n' + await gitRollback(this.cwd, this.preEditCheckpoint);
+            this.events.emit({ type: 'agent:log', agentId: this.id, message: rollbackNote.trim() });
+          } catch (err) {
+            rollbackNote = `\n(Rollback failed: ${err instanceof Error ? err.message : String(err)})`;
+          }
+          this.preEditCheckpoint = undefined;
+        }
+        return this.finish(task, false, 'Verification failed repeatedly:\n' + verification.summary + rollbackNote);
       }
       this.addAttempt(task, 'verify', [`${repo.testCommand || repo.buildCommand || 'verify'}`], 'failure', verification.summary);
       this.context.addKnownError(verification.summary);
@@ -467,6 +485,16 @@ export class Agent {
       if (!shellHook.allowed) return;
     }
     const args = this.parseArgs(tc.function.arguments);
+    // Pre-execution snapshot: take it BEFORE the first mutating tool runs so
+    // the restore point predates the agent's own edits. Only on a CLEAN tree
+    // (a dirty tree has user work we must never stash or reset away).
+    if (['write', 'edit', 'delete', 'patch'].includes(tc.function.name) && !this.preEditCheckpoint && !this.checkpointFailed) {
+      try {
+        this.preEditCheckpoint = (await gitPreEditSnapshot(this.cwd, `mochi pre-edit [${this.id}]`)) ?? undefined;
+      } catch {
+        this.checkpointFailed = true;
+      }
+    }
     const ctx: ToolContext = {
       cwd: this.cwd,
       workspace: this.workspace,
@@ -507,7 +535,7 @@ export class Agent {
         this.learning.record(classified.pattern, this.lastStrategy ?? 'unclassified', false);
       }
     }
-    if (['write', 'edit', 'delete'].includes(tc.function.name)) {
+    if (['write', 'edit', 'delete', 'patch'].includes(tc.function.name)) {
       this.fileChanged = true;
       const path = String(args.path ?? '');
       if (path) this.context.addModifiedFile(resolve(this.cwd, path));
