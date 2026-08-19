@@ -1,5 +1,17 @@
 # Mochi Changelog
 
+## 0.6.1
+
+Mutation verification understands print-style checks:
+
+- **Output-diff mutation detection.** A mutation is now killed when the test
+  command's output changes (not just when it exits non-zero). Print-style
+  verification commands (`node -e "console.log(add(2,3))"`) exercise the
+  mutated logic but always exit 0, so exit-code-only detection wrongly declared
+  every such task weakly-covered and downgraded correct work to PARTIAL. The
+  verifier captures stdout/stderr before and after the mutation and counts a
+  diff as a kill, with the reason surfaced in the evidence note.
+
 ## 0.6.0
 
 Six capability milestones, plus the surrounding hardening:

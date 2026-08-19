@@ -95,7 +95,7 @@ export class VerifierEngine {
     const testCommand = task.verificationCommand ?? repo.testCommand;
     if (testCommand && evidence.some((e) => e.passed)) {
       try {
-        mutationCheck = await runMutationCheck(this.cwd, testCommand, async (cmd) => this.exitCode(cmd));
+        mutationCheck = await runMutationCheck(this.cwd, testCommand, async (cmd) => this.exitCode(cmd), async (cmd) => this.captureOutput(cmd));
         if (mutationCheck.applied) {
           evidence.push({
             source: 'mutation-check',
@@ -209,5 +209,11 @@ export class VerifierEngine {
     const out = await this.runCommand(command, 120);
     const m = out.match(/^exit_code: (\d+)/);
     return m ? Number(m[1]) : 1;
+  }
+
+  /** Same runner, but return stdout+stderr text for mutation output-diffing. */
+  private async captureOutput(command: string): Promise<string> {
+    const out = await this.runCommand(command, 120);
+    return out.replace(/^exit_code: \d+\n/, '');
   }
 }

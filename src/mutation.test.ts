@@ -67,6 +67,26 @@ describe('mutation.runMutationCheck', () => {
     expect(readFileSync(resolve(dir, 'util.ts'), 'utf8')).toContain('answer = 42');
   });
 
+  it('reports KILLED when a print-style check still exits 0 but output changes', async () => {
+    const dir = makeRepo();
+    writeFileSync(resolve(dir, 'math.js'), 'module.exports = { add: (a, b) => a + b };');
+    // Real print path: baseline prints 5, the mutated file prints 2 (the '+'
+    // flips to '-') but EXITS 0 both times. Exit-code-only detection would call
+    // this survived; output-diff must call it killed.
+    const cmd = 'node -e "const {add}=require(\'./math.js\'); process.stdout.write(String(add(2,3)))"';
+    const result = await runMutationCheck(
+      dir,
+      cmd,
+      async (c) => { try { execSync(c, { cwd: dir, shell: '/bin/sh' }); return 0; } catch { return 1; } },
+      async (c) => String(execSync(c, { cwd: dir, shell: '/bin/sh' }) ?? ''),
+    );
+    expect(result.applied).toBe(true);
+    expect(result.killed).toBe(true);
+    expect(result.survived).toBe(false);
+    expect(result.note).toContain('output changed');
+    expect(readFileSync(resolve(dir, 'math.js'), 'utf8')).toContain('a + b');
+  });
+
   it('skips when there are no changed source files', async () => {
     const dir = makeRepo();
     // no uncommitted source changes

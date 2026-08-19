@@ -129,6 +129,13 @@ export function changedSourceFiles(cwd: string): string[] {
  * Apply one adversarial mutation to a changed source file and re-run the test
  * command. The file is restored to its exact prior bytes in ALL cases.
  *
+ * A mutation is "killed" when the command fails OR when its output changes:
+ * many small tasks verify with a print command (e.g. `node -e
+ * "console.log(add(2,3))"`) that always exits 0, so exit-code-only detection
+ * would declare every such suite weakly-covering even when it demonstrably
+ * exercises the mutated logic. Comparing stdout+stderr before/after makes the
+ * check meaningful for both assert-style and print-style verification.
+ *
  * @param run A function that executes a command and returns its exit code (0 =
  *            pass). Kept as a parameter so the verifier can reuse its shell
  *            runner and so tests can present a fake runner without invoking a
@@ -138,6 +145,7 @@ export async function runMutationCheck(
   cwd: string,
   testCommand: string,
   run: (cmd: string) => Promise<number>,
+  capture?: (cmd: string) => Promise<string>,
 ): Promise<MutationCheck> {
   const files = changedSourceFiles(cwd);
   if (files.length === 0) return { applied: false, note: 'No changed source files to mutate.' };
@@ -156,16 +164,40 @@ export async function runMutationCheck(
   }
   const mutated = original.slice(0, target.index) + target.to + original.slice(target.index + target.from.length);
 
+  // Baseline output (unmutated) for output-diff detection.
+  let baseline = '';
+  if (capture) {
+    try {
+      baseline = await capture(testCommand);
+    } catch {
+      baseline = '';
+    }
+  }
+
   writeFileSync(full, mutated);
   let exit = 1;
+  let mutatedOut = '';
   try {
     exit = await run(testCommand);
+    if (capture) {
+      try {
+        mutatedOut = await capture(testCommand);
+      } catch {
+        mutatedOut = '';
+      }
+    }
   } finally {
     // Always restore: the repo must never be left in a mutated state.
     writeFileSync(full, original);
   }
 
-  const killed = exit !== 0;
+  const outputChanged = !!capture && baseline !== '' && mutatedOut !== baseline;
+  const killed = exit !== 0 || outputChanged;
+  const howKilled = exit !== 0 && outputChanged
+    ? 'exit code and output changed'
+    : exit !== 0
+      ? 'exit code changed'
+      : 'output changed (print-style check caught the mutation)';
   return {
     applied: true,
     file,
@@ -173,7 +205,7 @@ export async function runMutationCheck(
     killed,
     survived: !killed,
     note: killed
-      ? `Mutation ${target.from}->${target.to} in ${file} was KILLED: the test suite caught the injected bug.`
+      ? `Mutation ${target.from}->${target.to} in ${file} was KILLED: ${howKilled}, so the verification command exercises this logic.`
       : `Mutation ${target.from}->${target.to} in ${file} SURVIVED: tests passed with the injected bug, coverage on this path is weak.`,
   };
 }
