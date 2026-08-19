@@ -1,6 +1,6 @@
 # Mochi Changelog
 
-## Unreleased
+## 0.9.0
 
 Observation-driven replanning foundations and a verifier regression found by
 dogfooding:
