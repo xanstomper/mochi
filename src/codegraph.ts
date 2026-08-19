@@ -14,6 +14,17 @@ const makeDb = (): typeof DatabaseSync => {
 };
 const DatabaseSyncType = makeDb;
 
+/** True when this runtime has node:sqlite (Node >= 22.5). On older runtimes
+ *  the codegraph degrades to "no symbol index" instead of throwing. */
+export function hasSqlite(): boolean {
+  try {
+    DatabaseSyncType();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const EXT = new Set(['.ts', '.tsx', '.js', '.jsx', '.mts', '.mjs']);
 
 function* walkFiles(root: string, dir: string): Generator<string> {
@@ -246,6 +257,7 @@ function db(cwd: string): DatabaseSync {
 }
 
 export function getFunctionSynapse(cwd: string, name: string): string {
+  if (!hasSqlite()) return `Code index unavailable on this Node runtime (needs node:sqlite, Node >= 22.5).`;
   const database = db(cwd);
   const rows = database.prepare('SELECT * FROM symbols WHERE name=? ORDER BY line').all(name) as unknown as Sym[];
   if (rows.length === 0) return `No definition found for "${name}".`;
@@ -255,6 +267,7 @@ export function getFunctionSynapse(cwd: string, name: string): string {
 }
 
 export function findCallers(cwd: string, name: string): string {
+  if (!hasSqlite()) return `Code index unavailable on this Node runtime (needs node:sqlite, Node >= 22.5).`;
   const database = db(cwd);
   const q = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
   const declSet = new Set<string>();
@@ -279,6 +292,7 @@ export function findCallers(cwd: string, name: string): string {
 }
 
 export function typeHierarchy(cwd: string, name: string): string {
+  if (!hasSqlite()) return `Code index unavailable on this Node runtime (needs node:sqlite, Node >= 22.5).`;
   const database = db(cwd);
   const up = database.prepare('SELECT dst FROM relations WHERE src=? AND kind=?').all(name, 'extends') as any[];
   const down = database.prepare('SELECT src FROM relations WHERE dst=? AND kind=?').all(name, 'extends') as any[];

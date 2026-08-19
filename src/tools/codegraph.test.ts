@@ -1,9 +1,13 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { getFunctionSynapse, findCallers } from '../codegraph.js';
+import { getFunctionSynapse, findCallers, hasSqlite } from '../codegraph.js';
 import { writeTool } from './write.js';
 import type { ToolContext } from './types.js';
+
+// node:sqlite exists only on Node >= 22.5; on older runtimes the codegraph
+// degrades to "index unavailable" and these tests cannot assert anything.
+const maybeDescribe = hasSqlite() ? describe : describe.skip;
 
 // Some filesystems have sub-second mtime granularity; force the mtime forward so
 // the fingerprint always differs between the original file and the edit.
@@ -21,7 +25,7 @@ function makeCtx(cwd: string): ToolContext {
   } as unknown as ToolContext;
 }
 
-describe('codegraph incremental revalidation', () => {
+maybeDescribe('codegraph incremental revalidation', () => {
   let cwd: string;
 
   beforeEach(() => {
