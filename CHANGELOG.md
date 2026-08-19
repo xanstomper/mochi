@@ -41,6 +41,14 @@
   ./...` and `cargo test`: the loop fixes a fibonacci bug in each
   language and verification passes against the actual toolchain, not a
   scripted response.
+- **Language-aware failure probes.** The diagnosis engine probed every
+  changed file with `node --check` + `npx tsc` regardless of language,
+  so a Rust/Go/Python fix that passed its real toolchain was endlessly
+  re-diagnosed as a "syntax error". Syntax and type hypotheses now use
+  the native checker per language (`cargo check`, `go vet`, py_compile,
+  javac, gcc -fsyntax-only) and skip the probe entirely for unknown
+  extensions. Real-model dogfood: the same Rust fix that previously
+  failed now completes in ~2s.
 
 ## 0.9.2
 

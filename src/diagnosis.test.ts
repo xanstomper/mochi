@@ -5,6 +5,8 @@ import {
   evaluateProbe,
   rankHypotheses,
   diagnosisToPrompt,
+  syntaxProbe,
+  typeProbe,
 } from './diagnosis.js';
 
 describe('classifyFailure', () => {
@@ -53,6 +55,36 @@ describe('formInitialHypotheses', () => {
     const h = formInitialHypotheses('test_gap', []);
     expect(h[0].id).toBe('gap_add_assert');
     expect(h[0].confidence).toBeGreaterThan(0.5);
+  });
+});
+
+describe('syntaxProbe / typeProbe (language-aware)', () => {
+  it.each([
+    ['/w/lib.rs', /cargo check/],
+    ['/w/lib.go', /go vet/],
+    ['/w/lib.py', /py_compile/],
+    ['/w/lib.cpp', /gcc/],
+    ['/w/lib.java', /javac/],
+  ])('syntax probe for %s uses the native checker', (file, pat) => {
+    expect(syntaxProbe(file)).toMatch(pat);
+  });
+
+  it('keeps node/tsc probes for JS/TS files', () => {
+    expect(syntaxProbe('/w/x.ts')).toContain('node --check');
+    expect(typeProbe('/w/x.ts')).toContain('tsc');
+  });
+
+  it('never probes an unknown extension (avoids node --check on rust!)', () => {
+    expect(syntaxProbe('/w/lib.rs')).not.toContain('node --check');
+    expect(syntaxProbe('/w/main.go')).not.toContain('node --check');
+    expect(syntaxProbe('/w/f.xyz')).toBeUndefined();
+    expect(typeProbe('/w/f.xyz')).toBeUndefined();
+  });
+
+  it('syntax hypotheses anchor changed .rs files to cargo check', () => {
+    const h = formInitialHypotheses('syntax', ['src/lib.rs']);
+    const changed = h.find((x) => x.id === 'syntax_in_changed_file');
+    expect(changed?.probeCommand).toContain('cargo check');
   });
 });
 

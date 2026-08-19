@@ -66,6 +66,38 @@ export function rankHypotheses(h: Hypothesis[]): Hypothesis[] {
   return [...h].sort((a, b) => b.confidence - a.confidence);
 }
 
+/**
+ * Pick a syntax-check command for a changed file based on its language. The
+ * old probe hard-coded `node --check` + `npx tsc`, which ALWAYS fails on a
+ * .rs / .go / .py file and poisons the retry loop with a false "syntax error"
+ * even when the real toolchain passes it. Each language gets a cheap
+ * read-only single-file check; unknown extensions get `undefined` (no probe).
+ */
+export function syntaxProbe(file: string): string | undefined {
+  if (/\.(ts|tsx|mts|js|jsx|mjs|cjs)$/.test(file)) {
+    return `node --check "${file}" 2>&1 || npx tsc --noEmit --pretty false "${file}" 2>&1`;
+  }
+  if (/\.py$/.test(file)) return `python3 -m py_compile "${file}" && echo OK 2>&1`;
+  if (/\.go$/.test(file)) return `go vet "${file}" 2>&1 || gofmt -e "${file}" 2>&1`;
+  if (/\.rs$/.test(file)) return `cargo check 2>&1 | head -30; rustc --crate-type lib --edition 2021 "${file}" 2>&1 | head -15`;
+  if (/\.(java)$/.test(file)) return `javac -proc:none -d /tmp "${file}" 2>&1 | head -15`;
+  if (/\.(c|cpp|cc|cxx|h|hpp)$/.test(file)) return `gcc -fsyntax-only "${file}" 2>&1 | head -15`;
+  return undefined;
+}
+
+/** Cheap type-check probe per language; undefined when no single-file type
+ *  check is practical (fall back to the model re-reading the code). */
+export function typeProbe(file: string): string | undefined {
+  if (/\.(ts|tsx|mts|js|jsx|mjs|cjs)$/.test(file)) {
+    return `npx tsc --noEmit --pretty false 2>&1 | head -40`;
+  }
+  if (/\.py$/.test(file)) return `python3 -m mypy "${file}" 2>&1 | head -20 || python3 -m py_compile "${file}" && echo "type probe done" 2>&1`;
+  if (/\.go$/.test(file)) return `go vet "${file}" 2>&1 | head -20`;
+  if (/\.rs$/.test(file)) return `cargo check 2>&1 | head -30`;
+  if (/\.(java)$/.test(file)) return `javac -proc:none -d /tmp "${file}" 2>&1 | head -20`;
+  return undefined;
+}
+
 /** Build an initial hypothesis set appropriate for the failure kind and the
  *  files the agent has been editing. Each hypothesis has a probe command the
  *  agent can run to gather evidence quickly (mostly read-only). */
@@ -79,7 +111,7 @@ export function formInitialHypotheses(
     case 'syntax':
       return codeFiles.length
         ? [
-            { id: 'syntax_in_changed_file', description: `Syntax error is in the recently changed file`, probeCommand: codeFiles[0] ? `node --check "${codeFiles[0]}" 2>&1 || npx tsc --noEmit --pretty false "${codeFiles[0]}" 2>&1` : undefined, confidence: 0.6, status: 'pending' },
+            { id: 'syntax_in_changed_file', description: `Syntax error is in the recently changed file`, probeCommand: codeFiles[0] ? syntaxProbe(codeFiles[0]) : undefined, confidence: 0.6, status: 'pending' },
             { id: 'syntax_brackets',     description: 'Mismatched brackets / quotes in recent edits', confidence: 0.35, status: 'pending' },
             { id: 'syntax_import',       description: 'Import syntax wrong (named/default typo)', confidence: 0.2, status: 'pending' },
           ]
@@ -87,7 +119,7 @@ export function formInitialHypotheses(
     case 'type':
       return codeFiles.length
         ? [
-            { id: 'type_changed_func', description: `Type error in changed file: ${codeFiles[0]}`, probeCommand: codeFiles[0] ? `npx tsc --noEmit --pretty false 2>&1 | head -40` : undefined, confidence: 0.7, status: 'pending' },
+            { id: 'type_changed_func', description: `Type error in changed file: ${codeFiles[0]}`, probeCommand: codeFiles[0] ? typeProbe(codeFiles[0]) : undefined, confidence: 0.7, status: 'pending' },
             { id: 'type_import_path', description: 'Missing/typoed import path (need .js extension under NodeNext)', confidence: 0.3, status: 'pending' },
             { id: 'type_signature',  description: 'Caller passes a wrong type after the edit', confidence: 0.2, status: 'pending' },
           ]
