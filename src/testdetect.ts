@@ -77,10 +77,16 @@ export function autoTestCommand(cwd: string, fileScope: string[] | undefined): s
     return `cd ${dir} && go test ./... 2>&1 | tail -20`;
   }
 
-  // Rust: Cargo.toml present, or the file lives under src/ (rust tests ship
-  // inline in lib.rs or in tests/).
-  if (existsSync(resolve(dir, 'Cargo.toml'))) {
-    return `cd ${dir} && cargo test 2>&1 | tail -20`;
+  // Rust: Cargo.toml anywhere between dir and the project root (src/lib.rs
+  // lives one level below a workspace-root Cargo.toml).
+  let cargoProbe: string = dir;
+  for (let i = 0; i < 4; i++) {
+    if (existsSync(resolve(cargoProbe, 'Cargo.toml'))) {
+      return `cd ${cargoProbe} && cargo test 2>&1 | tail -20`;
+    }
+    const parent = dirname(cargoProbe);
+    if (parent === cargoProbe) break;
+    cargoProbe = parent;
   }
 
   return null;

@@ -34,6 +34,24 @@ describe('autoTestCommand', () => {
     expect(cmd).toContain('pytest');
   });
 
+  it('returns go test for a Go directory with go.mod', () => {
+    mkdirSync(resolve(dir, 'go'), { recursive: true });
+    writeFileSync(resolve(dir, 'go', 'go.mod'), 'module example.com/x\n');
+    const cmd = autoTestCommand(dir, ['go/main.go']);
+    expect(cmd).toContain('go test ./...');
+    // A _test.go in scope also triggers it even without go.mod adjacent.
+    expect(autoTestCommand(dir, ['go/main_test.go'])).toContain('go test');
+  });
+
+  it('returns cargo test walking up to the workspace root Cargo.toml', () => {
+    mkdirSync(resolve(dir, 'rs/src'), { recursive: true });
+    writeFileSync(resolve(dir, 'rs', 'Cargo.toml'), '[package]\nname = "x"');
+    writeFileSync(resolve(dir, 'rs/src', 'lib.rs'), 'pub fn f() {}\n');
+    const cmd = autoTestCommand(resolve(dir, 'rs/src'), ['lib.rs']);
+    expect(cmd).toContain('cargo test');
+    expect(cmd).toContain('cd ' + resolve(dir, 'rs'));
+  });
+
   it('returns null when the fileScope is empty', () => {
     expect(autoTestCommand(dir, [])).toBeNull();
     expect(autoTestCommand(dir, undefined)).toBeNull();
