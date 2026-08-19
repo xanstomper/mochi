@@ -1,5 +1,22 @@
 # Mochi Changelog
 
+## 0.9.5 (unreleased)
+
+- **Call graph.** The symbol index now records `calls` edges (callee,
+  caller, file, line) across all 10 indexed languages, extracted at index
+  time from every grammar's call nodes. `find_callers` answers from the
+  graph first — attributing each call site to its enclosing function
+  symbol — then falls back to the line scan only for symbols the grammar
+  didn't index. Cross-file callers are now exact in TS and Python (and
+  every other indexed language).
+- **Daemon streaming, jobs, resume, usage, auth.** `/api/goal` accepts
+  SSE (`Accept: text/event-stream`) and streams `task:*`/`log` progress
+  before the final result; `/api/jobs` lists workspace goals; `/api/plan`
+  + `/api/approve` give the phone/dashboard plan-then-act flow; `/api/
+  status` reports usage totals (calls, tokens, cost, duration). Auth is
+  now a constant-time bearer-token compare. CLI: `daemon start --token`,
+  `daemon jobs`, `daemon approve`.
+
 ## 0.9.4
 
 - **Persistent agent daemon.** `mochi daemon start|status|send|stop` runs

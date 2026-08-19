@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import {
   getFunctionSynapse,
+  findCallers,
   hasSqlite,
   ensureParserLoaded,
   loadTreeSitter,
@@ -129,6 +130,29 @@ maybeDescribe('codegraph multi-language indexing (tree-sitter default)', () => {
     expect(getFunctionSynapse(cwd, 'phpfn')).toContain('function phpfn');
     expect(getFunctionSynapse(cwd, 'PhpCls')).toContain('class PhpCls');
     expect(getFunctionSynapse(cwd, 'CsCls')).toContain('class CsCls');
+  });
+
+  it('records call edges and resolves cross-file callers from the graph', async () => {
+    await ensureParserLoaded();
+    writeFileSync(resolve(cwd, 'dep.ts'), 'export function dep() { return 1; }\n');
+    writeFileSync(resolve(cwd, 'a.ts'), 'import { dep } from "./dep";\nexport function callerA() { dep(); }\n');
+    writeFileSync(resolve(cwd, 'b.ts'), 'import { dep } from "./dep";\nexport function callerB() { dep(); dep(); }\n');
+
+    const callers = findCallers(cwd, 'dep');
+    // Graph edges attribute the call site with its enclosing caller symbol.
+    expect(callers).toMatch(/called from callerA/);
+    expect(callers).toMatch(/called from callerB/);
+    // And the plain file:line fallback is still present.
+    expect(callers).toMatch(/a\.ts:\d/);
+  });
+
+  it('resolves cross-file callers in python via the graph', async () => {
+    await ensureParserLoaded();
+    writeFileSync(resolve(cwd, 'lib.py'), 'def util():\n    return 1\n');
+    writeFileSync(resolve(cwd, 'main.py'), 'from lib import util\ndef run():\n    util()\n');
+    const callers = findCallers(cwd, 'util');
+    expect(callers).toMatch(/called from run/);
+    expect(callers).toMatch(/main\.py:\d/);
   });
 });
 

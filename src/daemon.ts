@@ -11,7 +11,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, chmodSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { MochiConfig } from './types.js';
 import { Runtime } from './runtime.js';
 
@@ -45,6 +45,14 @@ function pidAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+/** Constant-time token comparison so auth timing doesn't leak the token. */
+function timingSafeEqualStr(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
 }
 
 /** True when a daemon is running for this workspace (info file + live pid). */
@@ -147,7 +155,7 @@ async function handleRequest(
     res.end(JSON.stringify(body));
   };
 
-  if ((req.headers.authorization ?? '') !== `Bearer ${token}`) {
+  if (!timingSafeEqualStr(req.headers.authorization ?? '', `Bearer ${token}`)) {
     send(401, { error: 'unauthorized' });
     return;
   }
@@ -169,16 +177,79 @@ async function handleRequest(
   const path = req.url ?? '';
   try {
     if (path === '/api/status') {
-      send(200, { ok: true, pid: process.pid, cwd: runtime.cwd });
+      const usage = runtime.usage?.total?.() as
+        | { modelCalls: number; tokensIn: number; tokensOut: number; costUsd: number; toolCalls: number; durationMs: number }
+        | undefined;
+      send(200, {
+        ok: true,
+        pid: process.pid,
+        cwd: runtime.cwd,
+        usage: usage
+          ? {
+              modelCalls: usage.modelCalls,
+              tokensIn: usage.tokensIn,
+              tokensOut: usage.tokensOut,
+              costUsd: usage.costUsd,
+              toolCalls: usage.toolCalls,
+              durationMs: usage.durationMs,
+            }
+          : undefined,
+      });
+    } else if (path === '/api/jobs') {
+      const ids = runtime.workspace.listGoals();
+      const jobs: Array<{ id: string; status: string; objective?: string; progress?: number }> = [];
+      for (const f of ids.slice(-20)) {
+        const id = f.replace(/\.json$/, '');
+        try {
+          const g = runtime.workspace.loadGoal(id);
+          if (g && typeof g.id === 'string' && typeof g.status === 'string') {
+            jobs.push({ id: g.id.slice(0, 8), status: g.status, objective: g.objective, progress: g.progress });
+          }
+        } catch {
+          // Non-goal state files (usage, pending-goal, checkpoints) are skipped.
+        }
+      }
+      send(200, { ok: true, jobs });
     } else if (path === '/api/inspect') {
       const out = await runtime.inspect(String(body.query ?? ''));
       send(200, { ok: true, out });
     } else if (path === '/api/plan') {
       const out = await runtime.plan(String(body.objective ?? ''));
+      send(200, { ok: true, out, pending: true });
+    } else if (path === '/api/approve') {
+      const out = await runtime.approvePlan();
       send(200, { ok: true, out });
     } else if (path === '/api/goal') {
-      const out = await runtime.goal(String(body.objective ?? ''));
-      send(200, { ok: true, out });
+      const objective = String(body.objective ?? '');
+      const wantsStream = String(req.headers.accept ?? '').includes('text/event-stream');
+      if (wantsStream) {
+        res.writeHead(200, {
+          'content-type': 'text/event-stream',
+          'cache-control': 'no-cache',
+          connection: 'keep-alive',
+        });
+        const sse = (event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+        const off = runtime.events.onAll((e: any) => {
+          if (e.type === 'task:started') sse('task:started', { task: e.task?.title, agentId: e.agentId });
+          else if (e.type === 'task:completed') sse('task:completed', { task: e.task?.title, status: e.task?.status, agentId: e.agentId });
+          else if (e.type === 'agent:log') sse('log', { agentId: e.agentId, message: e.message });
+        });
+        const onAbort = () => off();
+        req.on('close', onAbort);
+        try {
+          const out = await runtime.goal(objective);
+          sse('done', { ok: true, out });
+        } catch (e) {
+          sse('error', { ok: false, error: (e as Error).message });
+        } finally {
+          off();
+          req.off('close', onAbort);
+          res.end();
+        }
+      } else {
+        const out = await runtime.goal(objective);
+        send(200, { ok: true, out });
+      }
     } else {
       send(404, { error: 'not found' });
     }

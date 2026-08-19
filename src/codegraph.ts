@@ -248,6 +248,11 @@ function namedChildren(node: any): any[] {
 // as `indexFile`, so the read paths (getFunctionSynapse/findCallers/…,
 // SQLite-backed) are backend-agnostic. Works for every language we have a
 // grammar for; a per-file error only skips that file.
+//
+// Beyond declarations we also record CALL edges: each call node becomes a row
+// in the `calls` table (caller <callee, file, line). findCallers then answers
+// from the graph instead of re-grepping every file, which makes cross-file and
+// cross-language call resolution exact and fast.
 function tsIndexFile(file: string, rel: string, database: DatabaseSync): void {
   const lang = langOf(file);
   if (!lang) return;
@@ -260,19 +265,49 @@ function tsIndexFile(file: string, rel: string, database: DatabaseSync): void {
     parser.setLanguage(grammar);
     const tree = parser.parse(String(text));
     const ins = database.prepare('INSERT INTO symbols(name,line,kind,file,rel,body) VALUES (?,?,?,?,?,?)');
+    const callIns = database.prepare('INSERT INTO calls(callee,caller,kind,file,rel,line) VALUES (?,?,?,?,?,?)');
     const kinds = DECL_KINDS[lang] ?? {};
+    // Track the enclosing declaration name as we descend so a call row can
+    // name its caller (helps findCallers attribute the call site).
+    const callerStack: string[] = [];
     const walk = (node: any): void => {
       const kind = kinds[node.type];
       if (kind) {
         const name = nameOf(node);
         if (name) {
           ins.run(name, node.startPosition.row + 1, kind, file, rel, node.text.slice(0, 3000));
+          callerStack.push(name);
+        }
+      }
+      // Call node -> callee edge. Most grammars expose `function`/`name`/
+      // `method` fields on the call node itself.
+      if (node.type.endsWith('call_expression') || node.type === 'call' || node.type.endsWith('method_invocation') || node.type.endsWith('invocation_expression') || node.type.endsWith('function_call_expression') || node.type === 'scoped_call') {
+        const callee = callName(node);
+        if (callee) {
+          const caller = callerStack[callerStack.length - 1] ?? '';
+          callIns.run(callee, caller, 'calls', file, rel, node.startPosition.row + 1);
         }
       }
       for (const c of namedChildren(node)) walk(c);
+      if (kind && callerStack.length) callerStack.pop();
     };
     walk(tree.rootNode);
   } catch { /* per-file error: skip; tsc backend (JS/TS) still works */ }
+}
+
+/** Extract the callee identifier from a call node across grammars. */
+function callName(node: any): string | undefined {
+  const field =
+    node.childForFieldName?.('function')?.text ??
+    node.childForFieldName?.('name')?.text ??
+    node.childForFieldName?.('method')?.text;
+  if (!field) return undefined;
+  // "obj.method()" -> "method"; "a.b.c()" -> "c". Keep the last identifier.
+  const last = field.trim().split(/\.|::|->|\\|\(/).filter(Boolean).pop();
+  if (!last) return undefined;
+  // Skip obvious builtins / punctuation.
+  if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(last)) return last;
+  return undefined;
 }
 
 // Per-cwd in-memory SQLite databases (symbol/relation tables) kept fresh via a
@@ -309,6 +344,9 @@ function db(cwd: string): DatabaseSync {
     db.exec('CREATE TABLE IF NOT EXISTS relations(src TEXT,dst TEXT,kind TEXT,file TEXT);');
     db.exec('CREATE INDEX IF NOT EXISTS idx_rel_src ON relations(src);');
     db.exec('CREATE INDEX IF NOT EXISTS idx_rel_dst ON relations(dst);');
+    db.exec('CREATE TABLE IF NOT EXISTS calls(callee TEXT,caller TEXT,kind TEXT,file TEXT,rel TEXT,line INTEGER);');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_call_callee ON calls(callee);');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_call_caller ON calls(caller);');
     return db;
   })();
 
@@ -356,13 +394,29 @@ export function getFunctionSynapse(cwd: string, name: string): string {
 export function findCallers(cwd: string, name: string): string {
   if (!hasSqlite()) return `Code index unavailable on this machine (needs node:sqlite, Node >= 22.5).`;
   const database = db(cwd);
+
+  // Graph answer first: exact call edges recorded at index time. This catches
+  // cross-file and cross-language calls with the caller's enclosing symbol,
+  // which a line grep cannot attribute.
+  const edges = database.prepare('SELECT caller,rel,line FROM calls WHERE callee=? ORDER BY rel,line').all(name) as any[];
+  const graphHits: string[] = [];
+  if (edges.length > 0) {
+    for (const e of edges.slice(0, 12)) {
+      const where = e.caller ? ` called from ${e.caller}` : '';
+      graphHits.push(`${e.rel}:${e.line}${where}`);
+    }
+  }
+
+  // Fallback: line-grep any file still missing from the graph (functions the
+  // grammar didn't index, or when tree-sitter isn't available). Exclude the
+  // declaration itself so the answer shows call SITES only.
   const q = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
   const declSet = new Set<string>();
   for (const r of database.prepare('SELECT file,line FROM symbols WHERE name=?').all(name) as any[]) {
     declSet.add(`${r.file}:${r.line}`);
   }
-  const hits: string[] = [];
-  const seen = new Set<string>();
+  const hits: string[] = graphHits;
+  const seen = new Set<string>(graphHits);
   for (const full of walkFiles(cwd, cwd)) {
     let lines: string[];
     try { lines = readFileSync(full, 'utf8').split('\n'); } catch { continue; }
@@ -370,11 +424,11 @@ export function findCallers(cwd: string, name: string): string {
       if (q.test(lines[i])) {
         const hit = `${relative(cwd, full).replace(/\\/g, '/')}:${i + 1}: ${lines[i].trim()}`;
         if (!declSet.has(`${full}:${i + 1}`) && !seen.has(hit)) { seen.add(hit); hits.push(hit); }
-        if (hits.length >= 12) return hits.join('\n');
+        if (hits.length >= 12) return [...new Set(hits)].join('\n');
       }
     }
   }
-  return hits.length ? hits.join('\n') : `No references to "${name}" found.`;
+  return hits.length ? [...new Set(hits)].join('\n') : `No references to "${name}" found.`;
 }
 
 export function typeHierarchy(cwd: string, name: string): string {

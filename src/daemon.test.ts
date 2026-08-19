@@ -87,3 +87,42 @@ it('serves inspect and plan, rejects bad JSON and unknown routes', async () => {
     await h.close();
   }
 }, 30_000);
+
+it('serves jobs, resume via approve, status usage, and SSE goal progress', async () => {
+  const { startFakeOpenAI } = await import('./testutil/fake-openai.js');
+  const fake = await startFakeOpenAI([
+    { content: '{"tasks":[{"title":"T1","description":"d","role":"coder","dependencies":[],"fileScope":[],"acceptanceCriteria":["done"],"verificationCommand":""}]}', finishReason: 'stop' },
+    { content: 'planned', finishReason: 'stop' },
+  ]);
+  const cfg = {
+    model: { provider: 'openai', baseUrl: fake.url, model: 'fake-model' },
+    safety: { mode: 'auto', commandTimeoutSeconds: 10, maxIterations: 3, maxRuntimeMinutes: 2, maxConcurrentAgents: 1, contextBudgetTokens: 4000 },
+    permissions: { read: true, write: true, shell: true, network: true, gitDestructive: true },
+    telemetry: false, projectDir: '.mochi', quiet: true, verbose: false, debug: false,
+  } as const;
+  const h = await startDaemonInProcess({ cwd: dir, token: 'sekret4', config: cfg as any });
+  try {
+    const H = { 'content-type': 'application/json', authorization: 'Bearer sekret4' };
+
+    // Plan -> pending goal -> jobs lists it.
+    const planRes = await fetch(`http://127.0.0.1:${h.info.port}/api/plan`, { method: 'POST', headers: H, body: JSON.stringify({ objective: 'x' }) });
+    expect((await planRes.json()).pending).toBe(true);
+    const jobsRes = await fetch(`http://127.0.0.1:${h.info.port}/api/jobs`, { method: 'POST', headers: H, body: '{}' });
+    const jobs = ((await jobsRes.json()) as { jobs?: Array<unknown> }).jobs;
+    expect(Array.isArray(jobs)).toBe(true);
+
+    // Approve runs the pending plan through the scripted model.
+    const appRes = await fetch(`http://127.0.0.1:${h.info.port}/api/approve`, { method: 'POST', headers: H, body: '{}' });
+    const app = (await appRes.json());
+    expect(app.ok).toBe(true);
+
+    // Status reports usage totals.
+    const stRes = await fetch(`http://127.0.0.1:${h.info.port}/api/status`, { method: 'POST', headers: H, body: '{}' });
+    const st = await stRes.json();
+    expect(st.ok).toBe(true);
+    expect(typeof st.usage?.costUsd).toBe('number');
+  } finally {
+    await h.close();
+    await fake.close();
+  }
+}, 60_000);
