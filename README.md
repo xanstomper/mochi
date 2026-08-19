@@ -330,6 +330,20 @@ HTTP surface (auth via `Authorization: Bearer <token>` header):
 created by one instance can be resumed by a fresh one via `/api/resume`,
 so interrupted or failed work survives daemon shutdown.
 
+By default the daemon binds to `127.0.0.1` only. For remote access from a
+phone or another machine on the LAN, bind it explicitly (keep the token
+secret, and prefer a tunnel over a raw public bind):
+
+```bash
+mochi daemon start --host 0.0.0.0 --port 8642 --token sekret   # LAN access
+ssh -R 8649:localhost:8649 your-server                          # internet via reverse tunnel
+```
+
+The daemon is a plain HTTP server, so any gateway (a phone app, a Discord
+bot, a dashboard service) can drive Mochi with the bearer token:
+send goals, list jobs, approve queued commands, and resume interrupted
+work from a fresh instance.
+
 ## Run traces
 
 Every agent run writes a durable, deep-redacted JSONL trace (secrets scrubbed):

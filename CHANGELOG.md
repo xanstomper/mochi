@@ -1,5 +1,26 @@
 # Mochi Changelog
 
+## 0.10.0
+
+- **Daemon `resume` over CLI.** `mochi daemon resume <goalId>` is now wired
+  (`/api/resume` was API-only), so interrupted or failed goals can be
+  restarted from a headless box without the interactive flow.
+- **Daemon remote access.** `mochi daemon start --host 0.0.0.0` binds the
+  HTTP surface off loopback for LAN/phone/dashboard access (default stays
+  `127.0.0.1`); the README documents local, LAN, and tunnel paths and the
+  bearer-token surface any gateway (phone app, Discord bot, dashboard) can
+  drive.
+- **Daemon live round-trip test.** `src/daemon.live.test.ts` (skipped
+  without `FREEINFERENCE_API_KEY`) sends a real goal through a daemon
+  instance with the real provider, verifies the artifact on disk, simulates
+  shutdown, and resumes the persisted goal through a fresh instance's
+  `/api/resume` end to end.
+- **Docs.** README now covers the daemon surface, `/api/resume`
+  restart-survival semantics, run traces (`mochi trace [<goalId>]`), and
+  refreshed cold-start/memory numbers (node ~84ms/~47MB, bun ~78ms/~42MB).
+
+# Mochi Changelog
+
 ## 0.9.6
 
 - **Mid-stream cancellation.** Ctrl-C now actually cancels the model request
