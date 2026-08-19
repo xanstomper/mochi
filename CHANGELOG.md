@@ -1,6 +1,6 @@
 # Mochi Changelog
 
-## 0.9.6 (unreleased)
+## 0.9.6
 
 - **Mid-stream cancellation.** Ctrl-C now actually cancels the model request
   on the wire: `fetch` accepts an AbortSignal threaded from the loop, so an

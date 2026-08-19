@@ -164,3 +164,43 @@ it('resumes a persisted goal through /api/resume', async () => {
     await fake.close();
   }
 }, 60_000);
+
+it('resumes a goal after a daemon restart (shutdown -> new daemon -> /api/resume)', async () => {
+  const { startFakeOpenAI } = await import('./testutil/fake-openai.js');
+  const fake = await startFakeOpenAI([
+    { content: '[{"title":"Create f","description":"make f.ts","role":"coder","dependencies":[],"acceptanceCriteria":["x"],"verificationCommand":""}]', finishReason: 'stop' },
+    { content: 'result', finishReason: 'stop' },
+  ]);
+  const cfg = {
+    model: { provider: 'openai', baseUrl: fake.url, model: 'fake' },
+    safety: { mode: 'auto', commandTimeoutSeconds: 10, maxIterations: 2, maxRuntimeMinutes: 2, maxConcurrentAgents: 1, contextBudgetTokens: 4000 },
+    permissions: { read: true, write: true, shell: true, network: true, gitDestructive: true },
+    telemetry: false, projectDir: '.mochi', quiet: true, verbose: false, debug: false,
+  } as const;
+
+  // Create + persist a goal with the FIRST daemon instance.
+  const h1 = await startDaemonInProcess({ cwd: dir, token: 'sekretA', config: cfg as any });
+  const g = await h1.runtime.goals.createGoal('make f.ts');
+  const tasks = await h1.runtime.goals.decompose(g);
+  h1.runtime.workspace.saveGoal(g);
+  h1.runtime.workspace.saveTasks(g.id, tasks);
+  await h1.close(); // "shutdown" — info file removed, goal stays on disk.
+
+  // Fresh daemon on the SAME workspace resumes from disk.
+  const h2 = await startDaemonInProcess({ cwd: dir, token: 'sekretB', config: cfg as any });
+  try {
+    const res = await fetch(`http://127.0.0.1:${h2.info.port}/api/resume`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer sekretB' },
+      body: JSON.stringify({ goalId: g.id }),
+    });
+    const data = (await res.json()) as { ok?: boolean; out?: string; error?: string };
+    expect(res.status).toBe(200);
+    expect(data.ok).toBe(true);
+    expect(typeof data.out).toBe('string');
+    expect(data.error).toBeUndefined();
+  } finally {
+    await h2.close();
+    await fake.close();
+  }
+}, 60_000);
