@@ -139,9 +139,12 @@ it('resumes a persisted goal through /api/resume', async () => {
     permissions: { read: true, write: true, shell: true, network: true, gitDestructive: true },
     telemetry: false, projectDir: '.mochi', quiet: true, verbose: false, debug: false,
   } as const;
-  // Create a goal directly in the workspace, then resume via the endpoint.
+  // Create a goal directly in the workspace (no real provider: tasks are
+  // constructed here, not decomposed by a live model), then resume via the
+  // endpoint. This keeps the test hermetic in CI.
+  const { createTask } = await import('./goals/task.js');
   const goal = await handle.runtime.goals.createGoal('make a file');
-  const tasks = await handle.runtime.goals.decompose(goal);
+  const tasks = [createTask('write math.ts', 'emit the file', { acceptanceCriteria: ['file exists'] })];
   handle.runtime.workspace.saveGoal(goal);
   handle.runtime.workspace.saveTasks(goal.id, tasks);
 
