@@ -38,10 +38,61 @@ import {
 } from '../lessons.js';
 import { HookManager } from '../hooks.js';
 import { resolve } from 'node:path';
+import { statSync } from 'node:fs';
 import { autoTestCommand, isWeakVerification, cwdForScope, withCwd } from '../testdetect.js';
 import { classifyOneShot } from '../one-shot.js';
 import { buildMcpTools } from '../mcp/tools.js';
 import { preEditSnapshot as gitPreEditSnapshot, rollbackToSnapshot as gitRollback, type CheckpointResult } from '../git.js';
+
+/** True if the leading binary of a shell command exists on PATH (or as a
+ *  relative ./ wrapper). Used to skip optional repo checks (lint/typecheck/
+ *  build) whose tool isn't installed, rather than failing a run for reasons
+ *  that have nothing to do with the task's code. */
+function commandAvailable(command: string, cwd: string): boolean {
+  const trimmed = command.trim();
+  if (!trimmed) return false;
+  // "npx X", "python3 -m Y", "./gradlew", "cd /x && cmd" — extract the actual
+  // program name to probe for.
+  const first = trimmed.split(/\s+/)[0] ?? '';
+  let bin = first;
+  if (bin === 'npx') bin = 'npm'; // npx comes with npm
+  if (bin === 'cd') {
+    const m = trimmed.match(/cd\s+(\S+)\s*&&\s*(\S+)/);
+    bin = m?.[2] ?? '';
+  }
+  if (!bin) return false;
+  if (bin.startsWith('./') || bin.startsWith('/')) {
+    try {
+      const path = resolve(cwd, bin);
+      const st = statSync(path);
+      return st.isFile();
+    } catch {
+      return false;
+    }
+  }
+  const dirs = (process.env.PATH ?? '').split(':');
+  return dirs.some((d) => {
+    try {
+      const st = statSync(resolve(d, bin));
+      return st.isFile();
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** Replace unfilled template hints in a verification command. Models writing
+ *  `cd <project_root> && cargo test` persist the placeholder literally; the
+ *  `<...>` is shell-redirect syntax that breaks sh -c. Strip the placeholder
+ *  cd and replace remaining tokens with '.' since the shell already runs in
+ *  the project root. */
+export function sanitizeVerifyCommand(cmd: string): string {
+  const c = cmd.trim();
+  // "cd <project_root> && cargo test" -> "cargo test" (cwd is project root).
+  const withCd = c.match(/^cd\s+<[^>]+>\s*&&\s*(.+)$/);
+  if (withCd) return withCd[1].trim();
+  return c.replace(/<project_root>|<root>|__PROJECT_ROOT__/g, '.');
+}
 
 /**
  * Decide whether a model reply is an actual plan versus a preamble like
@@ -678,6 +729,12 @@ export class Agent {
     }
   }
 
+  /** Replace unfilled hints in a verification command (models sometimes write
+   *  `cd <project_root> && zig build test`; the `<...>` is shell-redirect
+   *  syntax and would blow up sh). Strip a leading `<project_root>`/`<root>`
+   *  cd so the command runs from the agent already-fixed cwd. */
+  private sanitizeVerify(cmd: string): string { return sanitizeVerifyCommand(cmd); }
+
   private async verify(task: Task, repo: ReturnType<typeof detectRepo>): Promise<{ passed: boolean; summary: string }> {
     const checks: string[] = [];
     // Run verification commands from the task's fileScope directory when it
@@ -687,7 +744,8 @@ export class Agent {
     // fileScope's package.json but the project root has no test runner.
     const scopeDir = cwdForScope(this.cwd, task.fileScope);
     if (task.verificationCommand) {
-      checks.push(withCwd(task.verificationCommand, scopeDir));
+      const cmd = this.sanitizeVerify(task.verificationCommand);
+      checks.push(withCwd(cmd, scopeDir));
     }
     // Repo-level commands (testCommand/typecheckCommand/lintCommand/buildCommand)
     // describe the PROJECT ROOT, not the task's fileScope directory. If the
@@ -698,9 +756,13 @@ export class Agent {
     // the auto-detected runner cover the task's own verification.
     if (!scopeDir) {
       if (repo.testCommand) checks.push(repo.testCommand);
-      if (repo.typecheckCommand) checks.push(repo.typecheckCommand);
-      if (repo.lintCommand) checks.push(repo.lintCommand);
-      if (repo.buildCommand) checks.push(repo.buildCommand);
+      // Optional checks (typecheck/lint) only when the tool is installed:
+      // the registry now knows `python3 -m ruff check .`, `cargo clippy`,
+      // `go vet`, etc. for every repo, but verification must not FAIL a run
+      // because the lint tool isn't on this machine.
+      if (repo.typecheckCommand && commandAvailable(repo.typecheckCommand, this.cwd)) checks.push(repo.typecheckCommand);
+      if (repo.lintCommand && commandAvailable(repo.lintCommand, this.cwd)) checks.push(repo.lintCommand);
+      if (repo.buildCommand && commandAvailable(repo.buildCommand, this.cwd)) checks.push(repo.buildCommand);
     }
     // Auto-detected real test runner: only added when the explicit
     // verificationCommand is weak (e.g. `test -f ... && grep ...`) so the

@@ -62,6 +62,26 @@
   C/C++; flips include Python's `==`/`!=` and ` and `/` or `; and the
   test-file detector recognizes pytest/Go/Rust/JUnit naming so test
   files are never mutated.
+- **Language registry (15+ languages).** `detectRepo` is now data-driven
+  with a per-language table: markers, build/test/lint/typecheck
+  commands, package managers, and entrypoints for TS/JS, Python, Go,
+  Rust, Java, C/C++, C#, Zig, Ruby, PHP, Swift, Kotlin, Elixir,
+  Haskell, Scala, Dart, Lua. The loop's verify() uses the registry's
+  commands, and optional checks run only when the tool is actually
+  installed.
+- **Native accelerators (Rust + C++).** Mochi now ships real native
+  code: a dependency-free fuzzy line matcher in both `native/rust/fuzzy.rs`
+  and `native/cpp/fuzzy.cpp`, built by `npm run build:native`, used by
+  the edit tool's hot path with a transparent fallback to the
+  TypeScript matcher. Both binaries are parity-tested against TS.
+- **Verification fixes from the Zig dogfood.** Models persisting
+  `cd <project_root> && cargo test` had it run verbatim through sh -c,
+  where `<project_root>` is redirect syntax that fails every check.
+  Sanitize now strips the placeholder, and `cwdForScope` only scopes
+  into a subdirectory that carries its own project marker (a Rust/Zig
+  file in src/ resolves to the repo root). Real-model dogfood: a broken
+  fib in a Zig repo now fixes end to end ("Goal completed. 1 done, 0
+  failed").
 
 ## 0.9.2
 

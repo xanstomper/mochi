@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { autoTestCommand, isWeakVerification, cwdForScope, withCwd } from './testdetect.js';
@@ -102,6 +102,24 @@ describe('cwdForScope', () => {
   it('returns undefined for empty fileScope', () => {
     expect(cwdForScope(root, [])).toBeUndefined();
     expect(cwdForScope(root, undefined)).toBeUndefined();
+  });
+
+  it('walks up to the project root when the scope dir has no marker (zig/rust in src/)', () => {
+    const repo = mkdtempSync(resolve(tmpdir(), 'mochi-cwdup-'));
+    mkdirSync(resolve(repo, 'src'), { recursive: true });
+    writeFileSync(resolve(repo, 'build.zig'), '');
+    const scoped = cwdForScope(repo, ['src/main.zig']);
+    expect(scoped).toBe(resolve(repo)); // parent root, not src/
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  it('keeps a real sub-project root as the scope dir (src has its own go.mod)', () => {
+    const repo = mkdtempSync(resolve(tmpdir(), 'mochi-cwdsub-'));
+    mkdirSync(resolve(repo, 'srv'), { recursive: true });
+    writeFileSync(resolve(repo, 'srv', 'go.mod'), 'module x');
+    const scoped = cwdForScope(repo, ['srv/main.go']);
+    expect(scoped).toBe(resolve(repo, 'srv'));
+    rmSync(repo, { recursive: true, force: true });
   });
 });
 

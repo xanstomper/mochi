@@ -10,7 +10,7 @@ describe('detectRepo', () => {
     writeFileSync(resolve(dir, 'pyproject.toml'), '[tool.pytest.ini_options]\n');
     const repo = detectRepo(dir);
     expect(repo.language).toBe('python');
-    expect(repo.testCommand).toBe('pytest');
+    expect(repo.testCommand).toContain('pytest');
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -26,6 +26,30 @@ describe('detectRepo', () => {
     expect(detectRepo(rs).language).toBe('rust');
     expect(detectRepo(rs).testCommand).toBe('cargo test');
     rmSync(rs, { recursive: true, force: true });
+  });
+
+  // New languages from the registry: markers -> detected language + commands.
+  it.each([
+    ['csharp', 'app.csproj', 'dotnet test'],
+    ['zig', 'build.zig', 'zig build test'],
+    ['java', 'pom.xml', 'mvn test'],
+    ['cpp', 'CMakeLists.txt', 'ctest'],
+    ['ruby', 'Gemfile', 'bundle exec rspec'],
+    ['php', 'composer.json', 'vendor/bin/phpunit'],
+    ['swift', 'Package.swift', 'swift test'],
+    ['kotlin', 'build.gradle.kts', 'gradle test'],
+    ['elixir', 'mix.exs', 'mix test'],
+    ['haskell', 'stack.yaml', 'stack test'],
+    ['scala', 'build.sbt', 'sbt test'],
+    ['dart', 'pubspec.yaml', 'dart test'],
+    ['lua', 'x-1.0-1.rockspec', 'busted'],
+  ])('detects %s repos and their test command', (lang, marker, cmd) => {
+    const d = mkdtempSync(resolve(tmpdir(), `mochi-repo-${lang}-`));
+    writeFileSync(resolve(d, marker), 'x');
+    const repo = detectRepo(d);
+    expect(repo.language).toBe(lang);
+    expect(repo.testCommand).toBe(cmd);
+    rmSync(d, { recursive: true, force: true });
   });
 
   it('finds the project root upward through polyglot markers', () => {
@@ -59,7 +83,7 @@ describe('languageHint', () => {
     const h = hintFor((d) => writeFileSync(resolve(d, 'pyproject.toml'), ''));
     expect(h).toMatch(/Python/);
     expect(h).toMatch(/pytest/);
-    expect(h).toContain('python -m pytest');
+    expect(h).toContain('python3 -m pytest');
   });
 
   it('guides the model to go test for Go repos', () => {

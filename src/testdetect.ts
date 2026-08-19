@@ -8,8 +8,40 @@
 // fileScope and returns a real test runner command (vitest, jest, pytest,
 // etc.) that the loop can run as additional evidence. If the directory has
 // no test runner installed, it returns null.
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
+
+// Project-root markers per language, used by cwdForScope to decide whether a
+// subdirectory is its own project or just a folder under a repo root.
+const PROJECT_MARKERS = [
+  'package.json', 'tsconfig.json',
+  'pyproject.toml', 'setup.py', 'requirements.txt', 'Pipfile',
+  'go.mod', 'Cargo.toml', 'build.zig', 'pom.xml', 'build.gradle',
+  'CMakeLists.txt', 'Makefile', 'Gemfile', 'composer.json', 'mix.exs',
+  'pubspec.yaml', 'build.sbt', 'stack.yaml', '*.csproj', '*.sln',
+];
+
+function hasProjectMarker(dir: string): boolean {
+  return PROJECT_MARKERS.some((m) => {
+    if (m.includes('*')) {
+      try {
+        return readdirSync(dir).some((e) => new RegExp('^' + m.replace(/\*/g, '.*') + '$').test(e));
+      } catch {
+        return false;
+      }
+    }
+    return existsSync(resolve(dir, m));
+  });
+}
+
+function nearestProjectRoot(dir: string): string | undefined {
+  let probe = dir;
+  for (let i = 0; i < 8 && probe !== dirname(probe); i++) {
+    if (hasProjectMarker(probe)) return probe;
+    probe = dirname(probe);
+  }
+  return undefined;
+}
 
 export function autoTestCommand(cwd: string, fileScope: string[] | undefined): string | null {
   if (!fileScope || fileScope.length === 0) return null;
@@ -128,7 +160,14 @@ export function cwdForScope(cwd: string, fileScope: string[] | undefined): strin
     return resolve(d) === resolve(dir);
   });
   if (!sameForAll) return undefined;
-  return dir;
+  // Only scope into a subdirectory when it actually is its own project root:
+  // cargo/zig/rust lived in src/ but their Cargo.toml/build.zig sits at the
+  // repo root, and `cd src && cargo test`/`zig build test` would fail there.
+  // Walk up to the nearest marker (the workspace root) and return THAT.
+  const markerHere = hasProjectMarker(dir);
+  if (markerHere) return dir;
+  const root = nearestProjectRoot(dir);
+  return root ? root : dir;
 }
 
 /** Returns a version of `cmd` that runs from the given directory if it does

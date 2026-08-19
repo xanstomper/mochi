@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from 'no
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { execSync } from 'node:child_process';
-import { Agent, isPlanShaped } from './loop.js';
+import { Agent, isPlanShaped, sanitizeVerifyCommand } from './loop.js';
 import { ContextEngine } from '../context.js';
 import { EventBus } from '../events.js';
 import { Workspace } from '../workspace.js';
@@ -361,6 +361,17 @@ describe('Agent', () => {
     await fake.close();
   });
 
+  it('sanitizeVerifyCommand strips template placeholders that would break sh', () => {
+    expect(sanitizeVerifyCommand('cd <project_root> && zig build test')).toBe('zig build test');
+    expect(sanitizeVerifyCommand('cd <project_root> && cargo test')).toBe('cargo test');
+    expect(sanitizeVerifyCommand('python3 -m pytest -q')).toBe('python3 -m pytest -q');
+    expect(sanitizeVerifyCommand('go test ./... <root>')).toBe('go test ./... .');
+  });
+
+  it('sanitizeVerifyCommand leaves real cd prefixes intact', () => {
+    expect(sanitizeVerifyCommand('cd /tmp/proj && cargo test')).toBe('cd /tmp/proj && cargo test');
+  });
+
   it('plan mode fails when the model never produces a plan (nudge budget exhausted)', async () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-plan-giveup-'));
     // The fake replays its last entry forever, so the loop sees preambles on
@@ -554,4 +565,85 @@ cargoSuite('polyglot: rust repo end-to-end', () => {
     await fake.close();
     rmSync(dir, { recursive: true, force: true });
   }, 180_000);
+});
+
+const zigSuite = toolAvailable('zig version') ? describe : describe.skip;
+
+zigSuite('polyglot: zig repo end-to-end', () => {
+  it('fixes a zig function and verifies with real zig build test', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-zigloop-'));
+    execSync('git init -q', { cwd: dir });
+    execSync('git config user.email t@t && git config user.name t', { cwd: dir });
+    execSync('mkdir -p src', { cwd: dir });
+    writeFileSync(resolve(dir, 'build.zig'), [
+      'const std = @import("std");',
+      'pub fn build(b: *std.Build) void {',
+      '    const target = b.standardTargetOptions(.{});',
+      '    const exe = b.addExecutable(.{ .name = "fib", .root_module = b.createModule(.{ .root_source_file = b.path("src/main.zig"), .target = target, .optimize = .Debug }) });',
+      '    b.installArtifact(exe);',
+      '    const run = b.addRunArtifact(exe);',
+      '    const test_step = b.step("test", "Run unit tests");',
+      '    test_step.dependOn(&run.step);',
+      '}',
+    ].join('\n'));
+    writeFileSync(resolve(dir, 'src/main.zig'), [
+      'const std = @import("std");',
+      'fn fib(n: u32) u32 {',
+      '    if (n <= 1) return n;',
+      '    return fib(n - 1) + fib(n - 2) + 1;',
+      '}',
+      'pub fn main() void {',
+      '    std.debug.print("fib(5)={d}\\n", .{fib(5)});',
+      '    if (fib(5) != 5) std.process.exit(1);',
+      '}',
+      '',
+      'test "fib" {',
+      '    try std.testing.expectEqual(@as(u32, 5), fib(5));',
+      '}',
+    ].join('\n'));
+    execSync('git add -A && git commit -qm init', { cwd: dir });
+
+    const writeCall = (id: string, path: string, content: string) => ({
+      id,
+      type: 'function' as const,
+      function: { name: 'write', arguments: JSON.stringify({ path, content }) },
+    });
+    const fake = await startFakeOpenAI([
+      {
+        content: 'Fixing fib.',
+        toolCalls: [writeCall('1', resolve(dir, 'src/main.zig'), [
+          'const std = @import("std");',
+          'fn fib(n: u32) u32 {',
+          '    if (n <= 1) return n;',
+          '    return fib(n - 1) + fib(n - 2);',
+          '}',
+          'pub fn main() void {',
+          '    std.debug.print("fib(5)={d}\\n", .{fib(5)});',
+          '    if (fib(5) != 5) std.process.exit(1);',
+          '}',
+          '',
+          'test "fib" {',
+          '    try std.testing.expectEqual(@as(u32, 5), fib(5));',
+          '}',
+        ].join('\n'))],
+        finishReason: 'tool_calls',
+      },
+      { content: 'Done, zig tests pass.', finishReason: 'stop' },
+    ]);
+    const config = makeConfig(dir, fake.url);
+    const workspace = new Workspace(dir, '.mochi');
+    workspace.ensure();
+    const context = new ContextEngine(config, dir);
+    context.setGoal('fix zig fib');
+    const task = createTask('Fix fib()', 'Fix src/main.zig so fib(5) returns 5. Verify with zig build test.', {
+      fileScope: ['src/main.zig', 'build.zig'],
+      verificationCommand: 'zig build test',
+    });
+    const agent = new Agent({ id: 'zig-agent', role: 'coder', config, workspace, events: new EventBus(), cwd: dir, context });
+    const result = await agent.run(task);
+    expect(result.success).toBe(true);
+    expect(result.summary).toMatch(/zig|ok|pass/i);
+    await fake.close();
+    rmSync(dir, { recursive: true, force: true });
+  }, 120_000);
 });

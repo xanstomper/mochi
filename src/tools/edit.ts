@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Tool } from './types.js';
 import { markMutation } from './fs-signal.js';
-import { fuzzyFindUnique } from './fuzzy-match.js';
+import { fuzzyFindUniqueNative as fuzzyFindUnique } from './native-match.js';
 
 function trimIndent(text: string): string {
   const lines = text.split('\n');
