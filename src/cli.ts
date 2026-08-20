@@ -18,6 +18,7 @@ try {
 const BOOLEAN_FLAGS = new Set([
   'p', 'print', 'auto', 'quiet', 'q', 'verbose', 'v', 'debug', 'h', 'help', 'version', 'offline', 'enhance', 'install', 'plan',
   'y', 'yolo', 'dangerously-skip-permissions', 'force', 'user',
+  'strict', 'json', 'diff-only', 'auto-commit',
 ]);
 
 function parseArgs(argv: string[]): { flags: Record<string, string | boolean>; positional: string[] } {
@@ -106,6 +107,10 @@ Usage:
   mochi session list                 # list past sessions
   mochi session search "<text>"       # full-text search past transcripts
   mochi speculate "<question>"
+  mochi mode <normal|spec|security|codemod|chaos>  # set execution mode
+  mochi plugin add <dir>|remove <name>|list        # spec 12-E plugin registry
+  mochi review [--strict] [--json] [--diff-only]   # git diff | mochi review
+  mochi fix [--auto-commit]                        # cat crash.log | mochi fix
   mochi acp                          # editor-native stdio server (Agent Client Protocol)
   mochi daemon start [--port <n>] [--token <t>]
   mochi daemon status
@@ -537,6 +542,57 @@ async function main() {
       return;
     }
     console.log('Usage: mochi plugin <add <dir>|remove <name>|list>');
+    return;
+  }
+  if (first === 'review') {
+    // spec Pillar 2: git diff | mochi review [--strict] [--json] [--diff-only]
+    const { readStdin, loadDiff, parseFindings, findingsToNdjson, renderFindings, countBySeverity } = await import('./pipeline.js');
+    let input: string;
+    if (flags['diff-only']) {
+      input = loadDiff(positional.slice(1), cwd);
+      console.log(input || '(no diff)');
+      return;
+    }
+    const piped = await readStdin();
+    input = piped.trim() ? piped : loadDiff(positional.slice(1), cwd);
+    if (!input.trim()) { console.log('Nothing to review. Pipe a diff or log: git diff | mochi review'); return; }
+    const summary = await runtime.review(input);
+    const findings = parseFindings(summary);
+    if (flags.json) {
+      // JSON summary line first (for CI) then the findings NDJSON.
+      const counts = countBySeverity(findings);
+      console.log(JSON.stringify({ summary: summary.slice(0, 2000), highs: counts.HIGH, mediums: counts.MEDIUM, lows: counts.LOW, infos: counts.INFO }));
+      if (findings.length) console.log(findingsToNdjson(findings));
+    } else if (findings.length) {
+      console.log(renderFindings(findings));
+      const counts = countBySeverity(findings);
+      console.log(`\n${counts.HIGH} HIGH, ${counts.MEDIUM} MEDIUM, ${counts.LOW} LOW, ${counts.INFO} INFO.`);
+    } else {
+      console.log(summary);
+    }
+    // --strict: exit nonzero when any HIGH/MEDIUM finding is present (CI gate).
+    if (flags.strict) {
+      const severe = findings.filter((f) => f.severity === 'HIGH' || f.severity === 'MEDIUM').length;
+      process.exitCode = severe > 0 ? 1 : 0;
+    }
+    return;
+  }
+  if (first === 'fix') {
+    // spec Pillar 2: cat crash.log | mochi fix [--auto-commit]
+    const { readStdin } = await import('./pipeline.js');
+    const piped = await readStdin();
+    const explicit = positional.slice(1).join(' ');
+    if (!piped.trim() && !explicit) {
+      console.log('Usage: cat crash.log | mochi fix [--auto-commit]\n       mochi fix "describe the issue"');
+      return;
+    }
+    const summary = await runtime.fix(piped.trim() ? piped : explicit);
+    console.log(summary);
+    if (flags['auto-commit'] || flags.commit) {
+      const { checkpoint } = await import('./git.js');
+      const cp = await checkpoint(cwd, 'mochi fix');
+      console.log(`Auto-commit: ${cp.ref} (${cp.type})`);
+    }
     return;
   }
   if (first === 'ask') {

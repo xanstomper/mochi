@@ -294,6 +294,47 @@ export class Runtime {
     }
   }
 
+  /**
+   * Review piped input (a git diff, crash log, or code snippet) with the
+   * read-only Reviewer role. Returns the raw reviewer summary; the caller
+   * parses structured findings with pipeline.parseFindings.
+   */
+  async review(input: string): Promise<string> {
+    const { createTask } = await import('./goals/task.js');
+    const goal = await this.goals.createGoal('Review the provided input and report issues.');
+    const task = createTask(
+      'Review input',
+      `Review the following input (a diff, crash log, or code snippet) for correctness, security, and regressions. Respond with structured findings, one per line: [SEVERITY] file:line message, where SEVERITY is HIGH, MEDIUM, LOW, or INFO. Be specific and cite the file (or '(unknown)' when no file applies).\n\nINPUT:\n${input.slice(0, 120_000)}`,
+      { role: 'reviewer', acceptanceCriteria: [], dependencies: [] },
+    );
+    const { TraceRecorder } = await import('./trace.js');
+    const recorder = new TraceRecorder(this.workspace.dir, goal.id).attach(this.events);
+    try {
+      const result = await this.goals.runGoal(goal, [task], [], this.abortSignal);
+      this.recordUsage('review', result);
+      const output = result.completedTasks.map((t) => t.output).filter((o) => o && o.trim()).join('\n');
+      return output || result.summary || '(no findings)';
+    } finally {
+      recorder.close();
+    }
+  }
+
+  /** Run a fix task over piped input (crash log / failing test output). */
+  async fix(input: string): Promise<string> {
+    const goal = await this.goals.createGoal('Fix the issue described by the provided input.');
+    const task = (await this.goals.decompose(goal))[0];
+    task.description = `${task.description}\n\nCONTEXT FROM PIPE:\n${input.slice(0, 120_000)}`;
+    const { TraceRecorder } = await import('./trace.js');
+    const recorder = new TraceRecorder(this.workspace.dir, goal.id).attach(this.events);
+    try {
+      const result = await this.goals.runGoal(goal, [task], [], this.abortSignal);
+      this.recordUsage(input.slice(0, 100), result);
+      return result.summary;
+    } finally {
+      recorder.close();
+    }
+  }
+
   private recordUsage(goal: string, result: { tokensUsed: number; costUsd: number; durationMs: number }): void {
     this.usage.record(this.config.model.model, goal, {
       tokensOut: result.tokensUsed,

@@ -1,14 +1,34 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { execSync } from 'node:child_process';
 import { Runtime } from './runtime.js';
+import { startFakeOpenAI, type FakeOpenAI } from './testutil/fake-openai.js';
+import type { MochiConfig } from './types.js';
 
 function makeRepo(): string {
   const dir = mkdtempSync(resolve(tmpdir(), 'mochi-runtime-'));
   execSync('git init -q && git config user.email d@d && git config user.name d && git commit -q --allow-empty -m init', { cwd: dir, shell: '/bin/sh' });
   return dir;
+}
+
+function baseConfig(): MochiConfig {
+  return {
+    model: { provider: 'openai', baseUrl: 'http://x', model: 'fake' },
+    safety: {
+      mode: 'auto', commandTimeoutSeconds: 10, maxIterations: 10, maxRuntimeMinutes: 5,
+      maxConcurrentAgents: 1, contextBudgetTokens: 4000,
+    },
+    permissions: { read: true, write: true, shell: true, network: true, gitDestructive: true },
+    telemetry: false, projectDir: '.mochi', configDir: '/tmp', quiet: true, verbose: false, debug: false,
+  } as unknown as MochiConfig;
+}
+
+async function fakeServer(): Promise<FakeOpenAI> {
+  return startFakeOpenAI([
+    { content: '[HIGH] src/auth.ts:9 SQL injection\n[MEDIUM] src/util.ts:12 no rate limit', finishReason: 'stop', completionTokens: 20 },
+  ]);
 }
 
 describe('Runtime setMode', () => {
@@ -34,6 +54,51 @@ describe('Runtime setMode', () => {
     rt.setMode('codemod');
     expect(rt.config.planMode).toBe(true);
     rmSync(rt.cwd, { recursive: true, force: true });
+  });
+});
+
+describe('Runtime review/fix (pipe composability)', () => {
+  it('runtime.review returns a reviewer summary over piped input', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-rt-review-'));
+    execSync('git init -q && git config user.email d@d && git config user.name d && git commit -q --allow-empty -m init', { cwd: dir, shell: '/bin/sh' });
+    writeFileSync(resolve(dir, 'package.json'), JSON.stringify({ scripts: { test: 'node -e "process.exit(0)"' } }));
+    const fake = await fakeServer();
+    const rt = new Runtime({
+      cwd: dir,
+      config: {
+        ...baseConfig(),
+        model: { provider: 'openai', baseUrl: fake.url, model: 'fake-model' },
+      } as any,
+    });
+    // Reviewer is read-only: fake returns a findings block.
+    const summary = await rt.review('[HIGH] src/auth.ts:9 SQL injection\n[MEDIUM] src/util.ts:12 no rate limit\n');
+    expect(summary).toBeTruthy();
+    expect(summary).toContain('[HIGH]');
+    // Fake server observed the input in the user message.
+    const inputs = fake.requests.map((r: any) => JSON.stringify(r.body ?? '')).join('\n');
+    expect(inputs).toContain('auth.ts');
+    await fake.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('runtime.fix runs a fix task with piped context', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-rt-fix-'));
+    execSync('git init -q && git config user.email d@d && git config user.name d && git commit -q --allow-empty -m init', { cwd: dir, shell: '/bin/sh' });
+    writeFileSync(resolve(dir, 'package.json'), JSON.stringify({ scripts: { test: 'node -e "process.exit(0)"' } }));
+    const fake = await fakeServer();
+    const rt = new Runtime({
+      cwd: dir,
+      config: {
+        ...baseConfig(),
+        model: { provider: 'openai', baseUrl: fake.url, model: 'fake-model' },
+      } as any,
+    });
+    const summary = await rt.fix('TypeError: Cannot read properties of undefined (reading "map") at src/index.ts:12');
+    expect(summary).toBeTruthy();
+    const inputs = fake.requests.map((r: any) => JSON.stringify(r.body ?? '')).join('\n');
+    expect(inputs).toContain('src/index.ts:12');
+    await fake.close();
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 
