@@ -1,5 +1,23 @@
 # Mochi Changelog
 
+## 0.10.4
+
+- **ACP editor adapter.** `mochi acp` speaks the Agent Client Protocol v1 over
+  JSON-RPC stdio, so editors (VS Code, Zed, JetBrains) can drive the full
+  harness: `initialize`, `session/new`, `session/resume`, `session/prompt`,
+  `session/close`, `shutdown`. Shapes verified against the spec:
+  `agentCapabilities` in initialize, `ContentBlock[]` prompts, and
+  `stopReason` responses.
+- **`mochi daemon restart`.** Stop + start a fresh daemon on the same
+  port/token. Cron jobs, sessions, and goal state persist across restarts
+  (`.mochi/cron.json` plus the SQLite session store).
+- **Cron result delivery.** Jobs accept `--notify <url|cmd>`: webhooks get a
+  POST of `{job,prompt,summary,ts}` and shell commands receive the summary as
+  `MOCHI_JOB_SUMMARY` + stdin after each scheduled run.
+- **`mochi doctor`.** Health self-inspection across subsystems: model/key,
+  node:sqlite, codegraph index, FTS5 sessions, daemon status, and toolchain
+  detection, with an actionable problems list.
+
 ## 0.10.3
 
 - **Credential pool + rotation.** A single `$PROVIDER_API_KEY` was a single point

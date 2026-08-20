@@ -370,9 +370,28 @@ bot, a dashboard service) can drive Mochi with the bearer token:
 send goals, list jobs, approve queued commands, and resume interrupted
 work from a fresh instance.
 
+## Editor integration (ACP)
+
+`mochi acp` starts an Agent Client Protocol v1 server over JSON-RPC stdio, so
+ACP-capable editors (VS Code, Zed, JetBrains) can drive Mochi natively:
+
+```bash
+mochi acp   # spawn as an editor subprocess; speaks ACP v1 on stdin/stdout
+```
+
+Supported methods: `initialize`, `session/new`, `session/resume`,
+`session/prompt`, `session/close`, `shutdown`. Prompts accept ACP
+`ContentBlock[]` payloads; each run returns a `stopReason`.
+
+## Health (`mochi doctor`)
+
+`mochi doctor` self-inspects the full harness: model/key state, `node:sqlite`,
+codegraph symbol index, FTS5 session store, daemon status, and toolchain
+detection (TypeScript/Python), ending with an actionable problems list.
+
 ## Run traces
 
-Every agent run writes a durable, deep-redacted JSONL trace (secrets scrubbed):
+Every project run writes a durable, deep-redacted JSONL trace (secrets scrubbed):
 
 ```bash
 mochi trace               # list traces
