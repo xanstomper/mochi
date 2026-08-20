@@ -53,6 +53,8 @@ export interface AcpSession {
   goalId?: string;
   /** When loaded from a persisted goal (session/load), the goal id + tasks. */
   loadedGoal?: { goalId: string; objective: string };
+  /** Additional client workspace roots (ACP session/new). */
+  additionalDirectories?: string[];
 }
 
 export interface RpcCall {
@@ -119,7 +121,7 @@ export async function handleRpc(
             protocolVersion: ACP_PROTOCOL_VERSION,
             agentCapabilities: {
               loadSession: true,
-              sessionCapabilities: { list: {}, delete: {}, resume: {}, close: {} },
+              sessionCapabilities: { list: {}, delete: {}, additionalDirectories: {}, resume: {}, close: {} },
               promptCapabilities: { image: false, audio: false, embeddedContext: true },
               mcpCapabilities: { http: true, sse: true },
             },
@@ -129,8 +131,11 @@ export async function handleRpc(
       case 'session/new': {
         const sid = randomUUID();
         const sessionCwd = typeof params.cwd === 'string' && params.cwd ? resolve(params.cwd) : cwd;
+        const additionalDirectories = Array.isArray(params.additionalDirectories)
+          ? params.additionalDirectories.map((d: unknown) => String(d))
+          : [];
         const runtime = Runtime.create({ cwd: sessionCwd });
-        sessions.set(sid, { id: sid, cwd: sessionCwd, runtime });
+        sessions.set(sid, { id: sid, cwd: sessionCwd, runtime, additionalDirectories });
         return { id, result: { sessionId: sid, modes: SESSION_MODES, configOptions: SESSION_CONFIG_OPTIONS } };
       }
       case 'session/prompt': {
