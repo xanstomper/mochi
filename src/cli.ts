@@ -437,6 +437,23 @@ async function main() {
     await launchTui(runtime);
     return;
   }
+  if (first === 'ambient') {
+    // mochi ambient [--watch] — run repo checks once (or watch), draft proposals
+    const { checkOnce, startAmbient } = await import('./ambient.js');
+    if (flags.watch) {
+      console.log(`Ambient watch started (Ctrl-C to stop). Proposals: ${resolve(cwd, '.mochi', 'ambient')}`);
+      const stop = startAmbient({
+        cwd,
+        onFailure: (r) => console.log(`[ambient] FAIL ${r.command} (exit ${r.exitCode}) -> ${r.proposalPath ?? '(none)'}`),
+      });
+      process.on('SIGINT', () => { stop(); process.exit(0); });
+      await new Promise(() => {}); // run until interrupt
+      return;
+    }
+    const reports = await checkOnce({ cwd, onFailure: (r) => console.log(`[ambient] FAIL ${r.command} (exit ${r.exitCode}) -> ${r.proposalPath ?? '(none)'}`) });
+    console.log(reports.length ? reports.length + ' failing check(s) — proposals in .mochi/ambient' : 'All checks pass.');
+    return;
+  }
   if (first === 'issue') {
     // mochi issue <n> — start an issue-to-PR flow: fetch, branch, and print how
     // to implement + open the PR (the agent fix is a normal `mochi` run in the
