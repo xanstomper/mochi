@@ -139,14 +139,17 @@ it('resumes a persisted goal through /api/resume', async () => {
     permissions: { read: true, write: true, shell: true, network: true, gitDestructive: true },
     telemetry: false, projectDir: '.mochi', quiet: true, verbose: false, debug: false,
   } as const;
-  // Create a goal directly in the workspace (no real provider: tasks are
-  // constructed here, not decomposed by a live model), then resume via the
-  // endpoint. This keeps the test hermetic in CI.
+  // Own workspace + goal (no real provider; tasks built here, not decomposed
+  // by a live model), then resume via the endpoint. Self-contained so the test
+  // runs hermetically whether or not earlier tests ran in this process.
+  const dir = mkdtempSync(resolve(tmpdir(), 'mochi-daemon-resume-'));
   const { createTask } = await import('./goals/task.js');
-  const goal = await handle.runtime.goals.createGoal('make a file');
+  const h0 = await startDaemonInProcess({ cwd: dir, token: 'sekret0', config: cfg as any });
+  const goal = await h0.runtime.goals.createGoal('make a file');
   const tasks = [createTask('write math.ts', 'emit the file', { acceptanceCriteria: ['file exists'] })];
-  handle.runtime.workspace.saveGoal(goal);
-  handle.runtime.workspace.saveTasks(goal.id, tasks);
+  h0.runtime.workspace.saveGoal(goal);
+  h0.runtime.workspace.saveTasks(goal.id, tasks);
+  await h0.close();
 
   const h = await startDaemonInProcess({ cwd: dir, token: 'sekret5', config: cfg as any });
   try {
@@ -165,6 +168,7 @@ it('resumes a persisted goal through /api/resume', async () => {
   } finally {
     await h.close();
     await fake.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 }, 60_000);
 
@@ -179,9 +183,12 @@ it('resumes a goal after a daemon restart (shutdown -> new daemon -> /api/resume
     safety: { mode: 'auto', commandTimeoutSeconds: 10, maxIterations: 2, maxRuntimeMinutes: 2, maxConcurrentAgents: 1, contextBudgetTokens: 4000 },
     permissions: { read: true, write: true, shell: true, network: true, gitDestructive: true },
     telemetry: false, projectDir: '.mochi', quiet: true, verbose: false, debug: false,
-  } as const;
+    } as const;
 
-  // Create + persist a goal with the FIRST daemon instance.
+  // Own workspace so the test is self-contained (does not depend on the
+  // dir started by the first test). Create + persist a goal with the FIRST
+  // daemon instance on that workspace.
+  const dir = mkdtempSync(resolve(tmpdir(), 'mochi-daemon-restart-'));
   const h1 = await startDaemonInProcess({ cwd: dir, token: 'sekretA', config: cfg as any });
   const g = await h1.runtime.goals.createGoal('make f.ts');
   const tasks = await h1.runtime.goals.decompose(g);
@@ -205,5 +212,6 @@ it('resumes a goal after a daemon restart (shutdown -> new daemon -> /api/resume
   } finally {
     await h2.close();
     await fake.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 }, 60_000);

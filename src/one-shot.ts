@@ -1,3 +1,4 @@
+import { isWeakVerification } from './testdetect.js';
 // One-shot fast path: classify trivial, self-contained tasks that do not need
 // a codebase-exploration loop so the harness can lean on first-turn answers
 // instead of spending tokens on redundant read/search round-trips.
@@ -75,4 +76,31 @@ export function classifyOneShot(input: ClassifyInput): { kind: OneShotKind; sugg
       : 'Summarize the relevant source directly and concisely. Avoid recomputing the same reads; finish with a compact answer in this same turn.';
 
   return { kind, suggests: nudge };
+}
+
+/** File extensions whose content has no executable behavior for a repo's
+ *  test suite to exercise. Editing them cannot break code paths. */
+const CONTENT_ONLY_EXTENSIONS = [
+  '.md', '.txt', '.rst', '.adoc', 'README', 'CHANGELOG', 'LICENSE',
+  '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.env.example',
+  '.csv', '.tsv', '.svg', '.png', '.jpg', '.jpeg', '.gif', '.webp',
+];
+
+/** Classify a task as CONTENT-ONLY: the deliverable is file content with no
+ *  behavior change (docs, config, data, plain text). Such tasks must not run
+ *  repo-wide test suites or builds: suites exercise code, not content, and a
+ *  pre-existing failure would burn tokens and fail correct work. */
+export function classifyContentOnly(input: ClassifyInput): boolean {
+  const text = `${input.title} ${input.description}`.toLowerCase();
+  // Behavior-changing verbs mean code, regardless of extensions mentioned.
+  const behaviorMarkers = ['implement', 'fix', 'refactor', 'function', 'method',
+    'class ', 'api', 'endpoint', 'logic', 'bug', 'compile', 'typecheck', 'lint'];
+  if (behaviorMarkers.some((m) => text.includes(m))) return false;
+  // A verificationCommand that runs a real test runner implies behavior to
+  // exercise; a direct content check (test -f / grep / cat) does not — it IS
+  // the proportionate verification for a content-only deliverable.
+  if (input.verificationCommand && !isWeakVerification(input.verificationCommand)) return false;
+  // Mention of a content-only extension or artifact type.
+  return CONTENT_ONLY_EXTENSIONS.some((ext) => text.includes(ext.toLowerCase()))
+    || /\b(doc|docs|documentation|note|notes|readme|changelog|config|data file|text file|content)\b/.test(text);
 }

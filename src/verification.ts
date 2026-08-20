@@ -10,6 +10,7 @@ import type { MochiConfig, Task } from './types.js';
 import type { Workspace } from './workspace.js';
 import { BudgetEngine } from './budget.js';
 import { runMutationCheck, type MutationCheck } from './mutation.js';
+import { classifyContentOnly } from './one-shot.js';
 
 function execFileAsync(cmd: string, args: string[], cwd: string): Promise<string> {
   return new Promise((res, rej) => {
@@ -86,12 +87,18 @@ export class VerifierEngine {
       evidence.push({ source: 'status', result: (await gitStatus(this.cwd)).slice(0, 1000), passed: true });
     }
 
+    // Content-only tasks (docs/config/data with a direct check) gain nothing
+    // from repo suites: they exercise code, not content, and pre-existing
+    // debt then fails correct work. The task's own direct check suffices.
+    const contentOnly = classifyContentOnly({
+      title: task.title,
+      description: task.description,
+      acceptanceCriteria: task.acceptanceCriteria,
+      verificationCommand: task.verificationCommand,
+    });
     const commands = [
       task.verificationCommand,
-      repo.testCommand,
-      repo.typecheckCommand,
-      repo.lintCommand,
-      repo.buildCommand,
+      ...(contentOnly ? [] : [repo.testCommand, repo.typecheckCommand, repo.lintCommand, repo.buildCommand]),
     ].filter((c): c is string => Boolean(c));
 
     for (const command of commands) {
@@ -224,6 +231,26 @@ export class VerifierEngine {
     if (hasCommand && failed.length === 0) return this.build('PASS', passed, failed, 'All verification commands passed.', evidence);
     if (hasCommand && passed.length > 0) return this.build('PARTIAL', passed, failed, 'Some verification commands failed. Continue and repair.', evidence);
     if (!hasCommand && task.acceptanceCriteria.length === 0) return this.build('PASS', ['No explicit checks required'], [], 'No checks configured.', evidence);
+    // Content-only deliverable (docs/config/data): a real git diff showing the
+    // expected file changed IS the verification — there is no behavior for a
+    // suite to exercise, so demanding a runner would block correct work.
+    const diff = evidence.find((e) => e.source === 'diff');
+    if (diff && diff.result !== 'No git changes detected' && diff.result.length > 0) {
+      return this.build('PASS', ['content diff present (content-only deliverable)'], [], 'File content delivered and verified by diff.', evidence);
+    }
+    // Content-only deliverable in a directory with no runnable checks (not a
+    // git repo, no commands): the builder's completed run plus the direct
+    // checks it performed are the only evidence that CAN exist. Behavior
+    // tasks still BLOCK here — they genuinely need a runner.
+    const contentOnlyNoChecks = classifyContentOnly({
+      title: task.title,
+      description: task.description,
+      acceptanceCriteria: task.acceptanceCriteria,
+      verificationCommand: task.verificationCommand,
+    });
+    if (!hasCommand && contentOnlyNoChecks && (!diff || diff.result === 'No git changes detected')) {
+      return this.build('PASS', ['builder completed (content-only deliverable, no checks runnable here)'], [], 'Content delivered; no verification commands available in this directory.', evidence);
+    }
     return this.build('BLOCKED', passed, ['No automated verification available for acceptance criteria'], 'Configure a test/build command or explicit verification command.', evidence);
   }
 

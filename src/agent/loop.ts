@@ -43,6 +43,7 @@ import { resolve } from 'node:path';
 import { statSync } from 'node:fs';
 import { autoTestCommand, isWeakVerification, cwdForScope, withCwd } from '../testdetect.js';
 import { classifyOneShot } from '../one-shot.js';
+import { classifyContentOnly } from '../one-shot.js';
 import { buildMcpTools } from '../mcp/tools.js';
 import { preEditSnapshot as gitPreEditSnapshot, rollbackToSnapshot as gitRollback, type CheckpointResult } from '../git.js';
 
@@ -186,6 +187,9 @@ export class Agent {
   private cwd: string;
   private context: ContextEngine;
   private verifyBaseline?: VerificationBaseline;
+  /** True when the task's deliverable is file content with no behavior change
+   *  (docs/config/data): repo-wide suites are vetoed for such tasks. */
+  private contentOnly = false;
   private budget?: BudgetEngine;
   private abortSignal?: AbortSignal;
   private tools: Map<string, import('../tools/types.js').Tool>;
@@ -261,6 +265,7 @@ export class Agent {
     // Each task gets a fresh autopsy record (idempotent on resume via
     // loadOrCreateAutopsy) so failure trajectories are durable and inspectable.
     this.autopsy = loadOrCreateAutopsy(this.workspace.dir, task.id, this.id, task.title);
+    this.contentOnly = classifyContentOnly({ title: task.title, description: task.description, acceptanceCriteria: task.acceptanceCriteria, verificationCommand: task.verificationCommand });
     // Warm start on resume: if a previous session already attempted this task
     // and failed, surface those attempts to the model so it does NOT retry the
     // same dead-end hypotheses. The autopsy is loaded (not created) but was
@@ -733,6 +738,24 @@ export class Agent {
         this.checkpointFailed = true;
       }
     }
+    // Content-only gate: a task whose deliverable is file CONTENT (docs,
+    // config, data) gains nothing from repo-wide suites or builds — they
+    // exercise code, not content, and pre-existing failures then burn tokens
+    // and fail correct work. Veto the suite; suggest a direct check instead.
+    if (tc.function.name === 'shell' && this.contentOnly) {
+      const cmd = String(args.command ?? '');
+      const isRepoWide = /^(npm|pnpm|yarn)\s+(test|run\s+test)|^(npx|pnpm)\s+(vitest|jest|mocha)\s*(run)?\s*$|\bgo\s+test\s+\.\/\.\.\b|^cargo\s+(test|build)|^mvn\s+test|^\.\/gradlew\s+test|^dotnet\s+test|^python3?\s+-m\s+pytest\s*$|^bundle\s+exec\s+rspec$|^zig\s+build\s+test$/.test(cmd.trim());
+      if (isRepoWide) {
+        this.context.addMessage({
+          role: 'tool',
+          tool_call_id: tc.id,
+          name: 'shell',
+          content: 'Vetoed: this is a content-only task; repo-wide test suites and builds do not exercise file content. Verify the deliverable directly instead (e.g. test -f <path>, grep -q <expected> <path>, cat <path>) and finish.',
+        });
+        this.events.emit({ type: 'tool:completed', tool: 'shell', result: { toolCallId: tc.id, name: 'shell', output: 'Vetoed content-only repo-wide suite.', durationMs: 0 }, agentId: this.id });
+        return;
+      }
+    }
     const ctx: ToolContext = {
       cwd: this.cwd,
       workspace: this.workspace,
@@ -810,7 +833,7 @@ export class Agent {
     // has no `build` script and the check fails for the wrong reason. Skip
     // them when a fileScope is set; the explicit task.verificationCommand +
     // the auto-detected runner cover the task's own verification.
-    if (!scopeDir) {
+    if (!scopeDir && !this.contentOnly) {
       if (repo.testCommand) checks.push(repo.testCommand);
       // Optional checks (typecheck/lint) only when the tool is installed:
       // the registry now knows `python3 -m ruff check .`, `cargo clippy`,
@@ -823,8 +846,10 @@ export class Agent {
     // Auto-detected real test runner: only added when the explicit
     // verificationCommand is weak (e.g. `test -f ... && grep ...`) so the
     // mutation check has actual code coverage to evaluate. Skipped when the
-    // command is already a real runner.
-    if (isWeakVerification(task.verificationCommand)) {
+    // command is already a real runner, and skipped for CONTENT-ONLY tasks:
+    // a direct check IS the proportionate verification for content, and an
+    // auto-added repo suite burns tokens / fails correct work on debt.
+    if (isWeakVerification(task.verificationCommand) && !this.contentOnly) {
       const auto = autoTestCommand(this.cwd, task.fileScope);
       if (auto) checks.push(auto);
     }

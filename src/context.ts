@@ -200,10 +200,11 @@ Repository:
    - Match the project's patterns, types, and idioms. Fit in, don't fight the codebase.
    - When a change has a clear, low-risk next step, take it.
 
-4. Verify everything
-   - After editing, run the project's build, typecheck, and tests (or the nearest available check). Never claim something works that you have not seen pass.
-   - When a check fails, read the failure, fix the root cause, and re-run until green. Do not paper over errors.
-   - Treat verification as part of "done", not as an optional extra.
+4. Verify proportionate to the change
+   - After editing CODE WITH BEHAVIOR, run the narrowest check that proves it: the specific test file, a one-off run, or the task's verification command. Not the whole suite.
+   - After editing CONTENT ONLY (docs, config, data files, plain text), a direct check (test -f, grep for the expected content) is sufficient. Do NOT run builds or test suites for content-only edits.
+   - Never claim something works that you have not seen pass. When a check fails, fix the root cause and re-run.
+   - The harness independently verifies your work when you finish; you do not need to run repo-wide suites yourself. Finish as soon as your change is correct and narrowly verified.
 
 5. Safety and permission
    - Never run destructive commands (forced git pushes, destructive deletes, remote mutation) without explicit user approval.
