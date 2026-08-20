@@ -102,7 +102,7 @@ export class GoalEngine {
       : '';
     const verifyInstruction = this.config.planMode
       ? ''
-      : '\nIMPORTANT: verificationCommand MUST actually run the implementation using the repo\'s real test runner — NOT a string/file check like `test -f` or `grep`. Pick the runner that matches the repo language: JS/TS → `npm test`/`npx vitest run`/`npx jest`; Python → `python3 -m pytest -q`; Go → `go test ./...`; Rust → `cargo test`; Java → `mvn test`/`./gradlew test`; C# → `dotnet test`; Ruby → `bundle exec rspec`; Zig → `zig build test`; PHP → `vendor/bin/phpunit`; Swift → `swift test`; Dart → `dart test`; Kotlin → `gradle test`; Elixir → `mix test`. The harness auto-detects a fallback runner if you do not, but a task-specific runner you supply always wins. If the task is pure research/planning, omit verificationCommand entirely.';
+      : '\nIMPORTANT: verification must match the task\'s SCOPE. If the task changes code with existing tests, verificationCommand should run ONLY the relevant subset (e.g. `npx vitest run src/foo.test.ts`, `python3 -m pytest tests/test_foo.py -q`), NOT the repo-wide suite. If the task only creates/edits a file with no behavior change (docs, config, data, simple scripts), use a cheap direct check like `test -f <path>` or `grep -q <expected> <path>` and keep acceptanceCriteria minimal. If the task is pure research/planning, omit verificationCommand entirely. Repo-wide runners are for tasks that intentionally change broad behavior; the harness also baseline-guards against pre-existing failures.';
     const decomposePrompt = `Decompose the goal into a JSON array of tasks. Each task:
 {
   "title": string,
