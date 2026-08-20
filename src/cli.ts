@@ -437,6 +437,23 @@ async function main() {
     await launchTui(runtime);
     return;
   }
+  if (first === 'ask') {
+    // Interactive clarification (spec 12-B): mochi ask "<title>" --choices "a;b;c" [--default a] [--recommended c]
+    const { askUserChoice, renderMenu } = await import('./clarify.js');
+    const title = positional.slice(1).join(' ');
+    const choicesRaw = String(flags.choices ?? flags.options ?? '');
+    if (!title || !choicesRaw) {
+      console.log('Usage: mochi ask "<title>" --choices "pick A|pick B|pick C" [--default "<idx-or-id>"]');
+      return;
+    }
+    const opts = choicesRaw.split('|').map((x) => x.trim()).filter(Boolean);
+    const choices = opts.map((label, i) => ({ id: String(i + 1), label }));
+    const dv = typeof flags['default'] === 'string' && flags['default'] ? flags['default'] : undefined;
+    const q = { title, choices: choices.length ? choices : [{ id: '1', label: opts[0] ?? '' }], ...(dv ? { defaultValue: dv } : {}) };
+    const out = await askUserChoice(q);
+    console.log('→ ' + (out.choice?.label ?? '(none)') + (out.usedDefault ? ' (default)' : ''));
+    return;
+  }
   if (first === 'docs') {
     const { queryDocs, generateAdr } = await import('./dox.js');
     const sub = positional[1];
