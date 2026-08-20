@@ -6,6 +6,7 @@ import type { EventBus } from '../events.js';
 import type { Workspace } from '../workspace.js';
 import { ContextEngine } from '../context.js';
 import { createProvider } from '../model/router.js';
+import { isMode, modeInstruction } from '../modes.js';
 import { executeTool, buildTools } from '../tools/index.js';
 import type { ToolContext, ReadCache } from '../tools/types.js';
 import { detectRepo, languageHint } from '../repo.js';
@@ -263,6 +264,12 @@ export class Agent {
     this.events.emit({ type: 'task:started', task, agentId: this.id });
     this.context.updateState({ nextAction: `Start task: ${task.title}` });
     this.context.addMessage({ role: 'system', content: this.profile.systemPrompt });
+    // Active execution mode (modeInstruction from modes.ts) is injected here so
+    // spec/security/codemod/chaos directives reach the model every turn.
+    if (this.config.mode && isMode(this.config.mode)) {
+      const modeBlurb = modeInstruction(this.config.mode);
+      if (modeBlurb) this.context.addMessage({ role: 'system', content: modeBlurb });
+    }
     // Each task gets a fresh autopsy record (idempotent on resume via
     // loadOrCreateAutopsy) so failure trajectories are durable and inspectable.
     this.autopsy = loadOrCreateAutopsy(this.workspace.dir, task.id, this.id, task.title);

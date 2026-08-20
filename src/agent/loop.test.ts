@@ -76,6 +76,41 @@ describe('Agent', () => {
     await fake.close();
   });
 
+  it('injects the active mode instruction into the system context', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-mode-'));
+    const fake = await startFakeOpenAI([
+      { content: 'Audit done.', finishReason: 'stop' },
+    ]);
+    const config = makeConfig(dir, fake.url);
+    config.mode = 'security';
+    const workspace = new Workspace(dir, '.mochi');
+    workspace.ensure();
+    const context = new ContextEngine(config, dir);
+    context.setGoal('audit the repo');
+    const task = createTask('Audit', 'Scan for hardcoded secrets.');
+
+    const agent = new Agent({
+      id: 'test-agent',
+      role: 'reviewer',
+      config,
+      workspace,
+      events: new EventBus(),
+      cwd: dir,
+      context,
+    });
+
+    const result = await agent.run(task);
+    expect(result.success).toBe(true);
+    const systemMessages = fake.requests
+      .flatMap((r: any) => r.body?.messages ?? [])
+      .filter((m: any) => m.role === 'system')
+      .map((m: any) => m.content)
+      .join('\n');
+    expect(systemMessages).toContain('ACTIVE MODE: SECURITY');
+    expect(systemMessages).toContain('Scan statically for injection');
+    await fake.close();
+  });
+
   it('plan mode vetoes edits, then accepts the plan without writing', async () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-plan-'));
     const fake = await startFakeOpenAI([

@@ -11,6 +11,32 @@ function makeRepo(): string {
   return dir;
 }
 
+describe('Runtime setMode', () => {
+  it('sets config.mode and returns the instruction for non-normal modes', () => {
+    const rt = Runtime.create({ cwd: makeRepo() });
+    const out = rt.setMode('spec');
+    expect(out).toContain('SPEC MODE');
+    expect(rt.config.mode).toBe('spec');
+    rmSync(rt.cwd, { recursive: true, force: true });
+  });
+
+  it('rejects unknown modes with the allowed list', () => {
+    const rt = Runtime.create({ cwd: makeRepo() });
+    const out = rt.setMode('banana');
+    expect(out).toMatch(/Unknown mode/);
+    expect(out).toContain('spec');
+    rmSync(rt.cwd, { recursive: true, force: true });
+  });
+
+  it('returns normal for normal mode and applies planMode from codemod', () => {
+    const rt = Runtime.create({ cwd: makeRepo() });
+    expect(rt.setMode('normal')).toBe('normal');
+    rt.setMode('codemod');
+    expect(rt.config.planMode).toBe(true);
+    rmSync(rt.cwd, { recursive: true, force: true });
+  });
+});
+
 describe('Runtime abort + interrupt', () => {
   it('aborts before the goal starts and does not hang on an aborted signal', async () => {
     const rt = Runtime.create({ cwd: makeRepo() });

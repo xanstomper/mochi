@@ -43,6 +43,8 @@ export interface MochiConfig {
   mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string> }>;
   /** Plan-then-act: in plan mode the agent produces a plan instead of editing. */
   planMode?: boolean;
+  /** Active execution mode: normal | spec | security | codemod | chaos. */
+  mode?: string;
   telemetry: boolean;
   projectDir: string;
   configDir: string;

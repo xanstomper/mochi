@@ -83,7 +83,7 @@ export function isMode(s: string): s is AgentMode {
 /** Apply a mode to a config, returning the modified copy (pure). */
 export function applyMode(config: MochiConfig, mode: AgentMode): MochiConfig {
   const spec = modeSpec(mode);
-  const next = { ...config, planMode: spec.planMode ?? config.planMode };
+  const next = { ...config, mode, planMode: spec.planMode ?? config.planMode };
   if (spec.safetyMode) {
     next.safety = { ...config.safety, mode: spec.safetyMode };
   }
