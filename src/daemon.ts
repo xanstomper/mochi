@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { MochiConfig } from './types.js';
 import { Runtime } from './runtime.js';
+import { addJob, listJobs, removeJob, dueJobs, bumpJob } from './cron.js';
 import { truncateMiddle } from './util.js';
 
 export interface DaemonInfo {
@@ -134,9 +135,32 @@ export async function startDaemonInProcess(opts: {
   };
   writeInfo(wsDir, info);
 
+  // Cron ticker: run any due recurring jobs serially (never overlapping), so
+  // a scheduled prompt is executed by the same goal engine over HTTP.
+  let processing = false;
+  let ticker: ReturnType<typeof setInterval> | undefined;
+  const cwd = opts.cwd;
+  const runDue = async () => {
+    if (processing) return;
+    processing = true;
+    try {
+      const due = await dueJobs(cwd);
+      for (const job of due) {
+        try {
+          await runtime.goal(job.prompt);
+        } catch { /* job failures are non-fatal */ }
+        bumpJob(job);
+      }
+    } finally {
+      processing = false;
+    }
+  };
+  ticker = setInterval(runDue, 10_000);
+
   return {
     info,
     close: async () => {
+      if (ticker) clearInterval(ticker);
       server.close();
       const p = daemonInfoPath(wsDir);
       if (existsSync(p)) {
@@ -227,6 +251,30 @@ async function handleRequest(
     } else if (path === '/api/approve') {
       const out = await runtime.approvePlan();
       send(200, { ok: true, out });
+    } else if (path === '/api/cron') {
+      const action = String(body.action ?? '');
+      const cwd = runtime.cwd || runtime.workspace.dir;
+      if (action === 'add') {
+        const prompt = String(body.prompt ?? '');
+        const schedule = String(body.schedule ?? '');
+        if (!prompt || !schedule) { send(400, { ok: false, error: 'prompt and schedule required' }); return; }
+        const r = addJob(cwd, prompt, schedule);
+        send(r.error ? 400 : 200, r.error ? { ok: false, error: r.error } : { ok: true, id: r.id });
+        return;
+      }
+      if (action === 'listed-up') {
+        const jobs = listJobs(cwd).map((j) => ({ id: j.id, prompt: j.prompt, schedule: j.schedule, enabled: j.enabled, runs: j.runs, lastRun: j.lastRun, nextRun: j.nextRun }));
+        send(200, { ok: true, jobs });
+        return;
+      }
+      if (action === 'remove') {
+        const id = String(body.id ?? '');
+        removeJob(cwd, id);
+        send(200, { ok: true });
+        return;
+      }
+      send(400, { ok: false, error: 'action must be added|listed-up|remove' });
+      return;
     } else if (path === '/api/resume') {
       const goalId = String(body.goalId ?? '');
       if (!goalId) { send(400, { ok: false, error: 'goalId required' }); return; }
@@ -281,6 +329,19 @@ export async function serverMain(argv: string[]): Promise<void> {
   const server = createServer(async (req, res) => {
     await handleRequest(req, res, token, rt);
   });
+  // Cron ticker for the detached server too.
+  let processing = false;
+  setInterval(async () => {
+    if (processing) return;
+    processing = true;
+    try {
+      const due = await dueJobs(cwd);
+      for (const job of due) {
+        try { await rt.goal(job.prompt); } catch { /* best-effort */ }
+        bumpJob(job);
+      }
+    } finally { processing = false; }
+  }, 10_000);
   server.listen(Number(port), host, () => {
     const addr = server.address() as { port: number };
     writeInfo(resolve(cwd, '.mochi'), { port: addr.port, token, pid: process.pid, startedAt: new Date().toISOString() });
