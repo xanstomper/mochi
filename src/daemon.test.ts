@@ -5,6 +5,18 @@ import { resolve } from 'node:path';
 import { execSync } from 'node:child_process';
 import { startDaemonInProcess, daemonInfoPath, daemonRunning } from './daemon.js';
 
+/** Poll `fn` every 250ms until it returns non-undefined or `timeout` elapses. */
+async function retryUntil<T>(fn: () => T | undefined, timeout: number): Promise<T> {
+  const start = Date.now();
+  let v = fn();
+  while (v === undefined && Date.now() - start < timeout) {
+    await new Promise((r) => setTimeout(r, 250));
+    v = fn();
+  }
+  if (v === undefined) throw new Error(`retryUntil timed out after ${timeout}ms`);
+  return v;
+}
+
 let dir: string;
 let handle: { info: any; close: () => Promise<void>; runtime: any } | undefined;
 
@@ -244,10 +256,12 @@ it('runs and persists a scheduled cron job through the daemon', async () => {
     const fs = await import('node:fs');
     fs.writeFileSync(resolve(d, '.mochi', 'cron.json'), JSON.stringify([due], null, 2));
 
-    // Ticker runs every 10s; wait for one tick.
-    await new Promise((r) => setTimeout(r, 12_000));
-    const after = listJobs(d)[0];
-    // After firing, nextRun must have advanced past now and runs incremented.
+    // Ticker runs every 10s; poll until the job fires and persists (nextRun
+    // advances past now and runs increments), up to ~20s.
+    const after = await retryUntil(() => {
+      const j = listJobs(d)[0];
+      return j && j.runs >= 1 && j.nextRun > Date.now() ? j : undefined;
+    }, 20_000);
     expect(after.runs).toBeGreaterThanOrEqual(1);
     expect(after.nextRun).toBeGreaterThan(Date.now());
   } finally {
