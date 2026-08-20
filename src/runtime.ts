@@ -16,6 +16,7 @@ import { BudgetEngine } from './budget.js';
 import { setProvider, currentConfig, login as doLogin, selectProviderById, describeConfig, listModelsForProvider } from './model-manager.js';
 import { UsageStore } from './usage.js';
 import { buildTools } from './tools/index.js';
+import { applyMode, modeInstruction, MODE_IDS, isMode } from './modes.js';
 
 export interface RuntimeOptions {
   cwd?: string;
@@ -30,6 +31,7 @@ export class Runtime {
   goals: GoalEngine;
   private hooks: HookManager;
   readonly usage: UsageStore;
+  private mode = 'normal';
   private abortController: AbortController;
   private abortSignal: AbortSignal;
 
@@ -120,6 +122,14 @@ export class Runtime {
 
   profiles() {
     return new AgentProfileService(this.workspace.dir).list();
+  }
+
+  /** Set the active execution mode (spec/security/codemod/chaos/normal). */
+  setMode(mode: string): string {
+    if (!isMode(mode)) return `Unknown mode "${mode}". Modes: ${MODE_IDS.join(', ')}`;
+    this.config = applyMode(this.config, mode);
+    this.mode = mode;
+    return modeInstruction(mode) || 'normal';
   }
 
   /** List all tools available in this runtime, returning lightweight metadata. */

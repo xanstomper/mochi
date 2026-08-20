@@ -437,6 +437,14 @@ async function main() {
     await launchTui(runtime);
     return;
   }
+  if (first === 'mode') {
+    const { MODE_IDS } = await import('./modes.js');
+    const m = positional[1];
+    if (!m) { console.log('Usage: mochi mode <normal|spec|security|codemod|chaos>'); return; }
+    const out = runtime.setMode(m);
+    console.log(out && out !== 'normal' ? `Mode set: ${m}` : `Mode set: ${m} (no extra instruction)`);
+    return;
+  }
   if (first === 'ambient') {
     // mochi ambient [--watch] — run repo checks once (or watch), draft proposals
     const { checkOnce, startAmbient } = await import('./ambient.js');
