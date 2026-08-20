@@ -524,7 +524,10 @@ export class Agent {
           }
           return this.finish(task, true, response.content, 'completed');
         }
-        return this.finish(task, false, 'Model produced no output and no tool calls.', 'model_error');
+        // Ensure at least a placeholder assistant message when no output
+        this.context.addMessage({ role: 'assistant', content: '(no output)' });
+        // Continue the loop to retry model response instead of finishing with error
+        continue;
       }
 
       const verification = await this.verify(task, repo);
