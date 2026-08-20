@@ -230,7 +230,45 @@ async function main() {
       else { console.error(data.error ?? 'Daemon error'); process.exit(1); }
       return;
     }
-    console.error('Usage: mochi daemon start|status|jobs|send|approve|resume|stop');
+    if (action === 'cron') {
+      const sub = positional[2];
+      const serverUrl = `http://127.0.0.1:${info?.port}`;
+      if (!info || !daemonRunning(wsDir)) { console.error('Daemon not running.'); process.exit(1); }
+      const post = async (action2: string, extra: Record<string, unknown> = {}) => {
+        const res = await fetch(serverUrl + '/api/cron', {
+          method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${info.token}` },
+          body: JSON.stringify({ action: action2, ...extra }),
+        });
+        return (await res.json()) as { ok?: boolean; error?: string; id?: string; jobs?: Array<{ id: string; prompt: string; schedule: string; enabled: boolean; runs: number; lastRun?: number; nextRun?: number }> };
+      };
+      if (sub === 'add') {
+        const prompt = positional.slice(3).join(' ');
+        const schedule = flags.schedule ?? flags.every;
+        if (!prompt || !schedule) { console.error('Usage: mochi daemon cron add "<prompt>" --schedule "every 30m"'); process.exit(1); }
+        const r = await post('add', { prompt, schedule });
+        if (r.error) { console.error(r.error); process.exit(1); }
+        console.log(`Cron job added: ${r.id}`);
+        return;
+      }
+      if (sub === 'list' || sub === 'listed-up') {
+        const r = await post('listed-up');
+        for (const j of r.jobs ?? []) {
+          const next = j.nextRun ? new Date(j.nextRun).toISOString() : '-';
+          console.log(`${j.id}  ${j.enabled ? 'on ' : 'off'}  runs=${j.runs}  next=${next}  "${j.prompt.slice(0, 50)}"`);
+        }
+        return;
+      }
+      if (sub === 'remove') {
+        const id = positional[3];
+        if (!id) { console.error('Usage: mochi daemon cron remove <id>'); process.exit(1); }
+        await post('remove', { id });
+        console.log(`Removed ${id}`);
+        return;
+      }
+      console.error('Usage: mochi daemon cron add <prompt> --schedule <every Xm|cron> | list | remove <id>');
+      process.exit(1);
+    }
+    console.error('Usage: mochi daemon start|status|jobs|send|approve|resume|cron|stop');
     process.exit(1);
   }
 
