@@ -4,9 +4,12 @@ import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { replaceSymbol } from './replace-symbol.js';
-import { getFunctionSynapse, ensureParserLoaded } from '../codegraph.js';
+import { getFunctionSynapse, ensureParserLoaded, hasSqlite } from '../codegraph.js';
 
-describe('replaceSymbol', () => {
+// The symbol index needs node:sqlite (Node >= 22.5); CI also runs Node 20.
+const maybeDescribe = hasSqlite() ? describe : describe.skip;
+
+maybeDescribe('replaceSymbol', () => {
   it('replaces a function by name, keeping the rest of the file identical', async () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-rs-'));
     writeFileSync(resolve(dir, 'sample.ts'), [
