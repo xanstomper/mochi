@@ -219,15 +219,24 @@ export type SkillContext = { skill: Skill; body: string };
  *  here are always discoverable unless a project/user skill shadows the name.
  *  Works in both source (tsx) and compiled (dist) layouts. */
 export function bundledSkillsDir(): string | null {
+  const candidates: string[] = [];
+  // 1) Module-relative (source or compiled layout): .../src or .../dist -> root/skills
   try {
     const { fileURLToPath } = require('node:url') as typeof import('node:url');
     const here = fileURLToPath(import.meta.url);
-    const root = dirname(dirname(here)); // .../src or .../dist -> repo root
-    const candidate = join(root, 'skills');
-    return existsSync(candidate) ? candidate : null;
-  } catch {
-    return null;
+    candidates.push(join(dirname(dirname(here)), 'skills'));
+  } catch { /* no import.meta (bundled) */ }
+  // 2) CWD-relative: look upward for the repo root that contains skills/
+  const start = process.cwd();
+  let d = start;
+  for (let i = 0; i < 6; i++) {
+    candidates.push(join(d, 'skills'));
+    const parent = dirname(d);
+    if (parent === d) break;
+    d = parent;
   }
+  for (const c of candidates) if (existsSync(c)) return c;
+  return null;
 }
 
 /** loadProjectSkills plus the bundled catalog appended last (so project and
