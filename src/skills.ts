@@ -214,3 +214,41 @@ export function readSkillBody(skill: Skill, projectDir: string): string {
 
 // type helper preserved for tool context handoff
 export type SkillContext = { skill: Skill; body: string };
+
+/** Path to the repo-bundled skills catalog (shipped with the package). Skills
+ *  here are always discoverable unless a project/user skill shadows the name.
+ *  Works in both source (tsx) and compiled (dist) layouts. */
+export function bundledSkillsDir(): string | null {
+  try {
+    const { fileURLToPath } = require('node:url') as typeof import('node:url');
+    const here = fileURLToPath(import.meta.url);
+    const root = dirname(dirname(here)); // .../src or .../dist -> repo root
+    const candidate = join(root, 'skills');
+    return existsSync(candidate) ? candidate : null;
+  } catch {
+    return null;
+  }
+}
+
+/** loadProjectSkills plus the bundled catalog appended last (so project and
+ *  user skills shadow bundled ones by name). */
+export function loadAllSkills(projectDir: string, userDir?: string): { skills: Skill[]; diagnostics: string[] } {
+  // Correct precedence: bundled (lowest) < project < user (highest). loadAll
+  const map = new Map<string, Skill>();
+  const seen = new Set<string>();
+  const diagnostics: string[] = [];
+  const add = (d: string) => {
+    const r = discoverSkills(d);
+    diagnostics.push(...r.diagnostics);
+    for (const s of r.skills) {
+      if (seen.has(s.path)) continue;
+      seen.add(s.path);
+      map.set(s.name, s); // later add() calls overwrite by name
+    }
+  };
+  const bundled = bundledSkillsDir();
+  if (bundled) add(bundled);      // lowest precedence
+  add(join(projectDir, '.mochi', 'skills'));
+  if (userDir) add(userDir);      // highest precedence
+  return { skills: [...map.values()], diagnostics };
+}

@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { MemoryStore } from './memory.js';
 import type { MemoryEntry } from './memory.js';
 import { selectRelevant } from './relevance.js';
-import { loadProjectSkills, formatSkillsForPrompt } from './skills.js';
+import { loadAllSkills, formatSkillsForPrompt } from './skills.js';
 import { classifyTaskKind, kindHint } from './taskkind.js';
 import type { ChatMessage, MochiConfig, RepoInfo, Task, ToolDefinition } from './types.js';
 
@@ -157,7 +157,9 @@ export class ContextEngine {
     if (fp === '' || fp === this.skillsFingerprint) return this.skillsCache;
     try {
       this.skillsFingerprint = fp;
-      const { skills } = loadProjectSkills(this.projectRoot);
+      const { homedir } = require('node:os') as typeof import('node:os');
+      const userSkills = resolve(homedir(), '.mochi', 'skills');
+      const { skills } = loadAllSkills(this.projectRoot, userSkills);
       this.skillsCache = formatSkillsForPrompt(skills);
     } catch {
       this.skillsCache = '';

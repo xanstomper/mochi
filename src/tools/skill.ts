@@ -1,5 +1,5 @@
 import type { Tool } from './types.js';
-import { loadProjectSkills, readSkillBody } from '../skills.js';
+import { loadAllSkills, readSkillBody } from '../skills.js';
 import type { Skill } from '../skills.js';
 
 // The `skill` tool lets the model load a reusable, task-specific instruction
@@ -9,7 +9,7 @@ import type { Skill } from '../skills.js';
 // targeted context for the current task.
 
 function findSkill(projectDir: string, name: string): Skill | undefined {
-  const { skills } = loadProjectSkills(projectDir);
+  const { skills } = loadAllSkills(projectDir);
   return skills.find((s) => s.name === name);
 }
 
@@ -26,7 +26,7 @@ export const skillTool: Tool = {
   async execute(args, ctx) {
     const name = String(args.name ?? '').trim();
     if (name === '' || name === 'list') {
-      const { skills } = loadProjectSkills(ctx.cwd);
+      const { skills } = loadAllSkills(ctx.cwd);
       if (skills.length === 0) return '(no skills found)';
       return skills.map((s) => `${s.name}${s.disableModelInvocation ? ' (explicit only)' : ''}: ${s.description}`).join('\n');
     }

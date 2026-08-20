@@ -437,6 +437,25 @@ async function main() {
     await launchTui(runtime);
     return;
   }
+  if (first === 'skills') {
+    const { loadAllSkills, readSkillBody } = await import('./skills.js');
+    const { skills } = loadAllSkills(cwd);
+    const sub = positional[1];
+    if (sub === 'list' || !sub) {
+      if (!skills.length) { console.log('No skills available.'); return; }
+      for (const sk of skills) {
+        console.log(`${sk.name.padEnd(20)} ${sk.description.slice(0, 72)}`);
+      }
+      return;
+    }
+    // mochi skills show <name>
+    const sk = skills.find((x) => x.name === sub);
+    if (!sk) { console.log(`No skill "${sub}".`); return; }
+    const { readFileSync } = await import('node:fs');
+    try { console.log(readFileSync(sk.path, 'utf8').slice(0, 4000)); }
+    catch (e) { console.error(`Failed to read skill: ${(e as Error).message}`); }
+    return;
+  }
   if (first === 'ask') {
     // Interactive clarification (spec 12-B): mochi ask "<title>" --choices "a;b;c" [--default a] [--recommended c]
     const { askUserChoice, renderMenu } = await import('./clarify.js');
