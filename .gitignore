@@ -5,3 +5,4 @@ dogfood
 *.log
 .DS_Store
 native/bin
+skills/skills.json
