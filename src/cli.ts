@@ -7,7 +7,7 @@ import type { MochiConfig } from './types.js';
 // Resolve the version from package.json when running from source; when Mochi is
 // compiled to a standalone binary there is no package.json next to it, so fall
 // back to the constant (kept in sync with package.json at build time).
-let VERSION = '0.10.1';
+let VERSION = '0.10.2';
 try {
   const pkgPath = resolve(dirname(fileURLToPath(import.meta.url)), '../package.json');
   VERSION = JSON.parse(readFileSync(pkgPath, 'utf8')).version;
@@ -96,6 +96,8 @@ Usage:
   mochi memory
   mochi inspect "<query>"
   mochi trace [<goalId>]             # replay the run trace for a goal
+  mochi session list                 # list past sessions
+  mochi session search "<text>"       # full-text search past transcripts
   mochi speculate "<question>"
   mochi daemon start [--port <n>] [--token <t>]
   mochi daemon status
@@ -548,6 +550,39 @@ async function main() {
     if (!query) { console.error('Usage: mochi inspect "<query>"'); process.exit(1); }
     const result = await runtime.inspect(query);
     console.log(result.summary);
+    return;
+  }
+
+
+  if (first === 'session') {
+    const { SessionStore, hasSqlite } = await import('./session-store.js');
+    if (!hasSqlite()) { console.log('Session store needs node:sqlite (Node >= 22.5).'); return; }
+    const store = new SessionStore(runtime.workspace.dir);
+    try {
+      const sub = positional[1];
+      if (sub === 'search') {
+        const q = positional.slice(2).join(' ');
+        if (!q) { console.log('Usage: mochi session search "<text>"'); return; }
+        const hits = store.search(q);
+        if (!hits.length) { console.log(`No session content matches "${q}".`); return; }
+        for (const h of hits.slice(0, 10)) {
+          console.log(`[${h.sessionId.slice(0, 8)} ${h.role}] ${h.content.slice(0, 140)}`);
+        }
+        return;
+      }
+      if (sub === 'list') {
+        const rows = store.list(20);
+        if (!rows.length) { console.log('No sessions yet.'); return; }
+        for (const r of rows) {
+          const obj = r.objective ? r.objective.slice(0, 60) : '(no objective)';
+          console.log(`${r.id.slice(0, 8)}  ${r.status.padEnd(9)} ${obj}`);
+        }
+        return;
+      }
+      console.log('Usage: mochi session list\n       mochi session search "<text>"');
+    } finally {
+      store.close();
+    }
     return;
   }
 

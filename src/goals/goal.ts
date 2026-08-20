@@ -10,6 +10,7 @@ import { Agent } from '../agent/loop.js';
 import { AgentProfileService } from '../agents/profile.js';
 import { BudgetEngine } from '../budget.js';
 import { VerifierEngine, captureBaseline, type VerificationBaseline } from '../verification.js';
+import { SessionStore, hasSqlite } from '../session-store.js';
 import { HookManager } from '../hooks.js';
 import { classifyOneShot } from '../one-shot.js';
 import { consolidate } from '../consolidate.js';
@@ -35,6 +36,8 @@ export class GoalEngine {
   private goalStats = { tokens: 0, duration: 0 };
   /** Baseline for the in-flight run (undefined outside runGoal). */
   private runBaseline: VerificationBaseline | undefined;
+  /** Lazy-initialized Hermes-style session store for transcript search. */
+  private sessionStoreInstance: SessionStore | undefined;
   private hooks: HookManager;
   private profiles: AgentProfileService;
 
@@ -279,6 +282,28 @@ Return ONLY the JSON array, no markdown.`;
     return result;
   }
 
+  private get store(): SessionStore {
+    if (!this.sessionStoreInstance) this.sessionStoreInstance = new SessionStore(this.cwd);
+    return this.sessionStoreInstance;
+  }
+
+  private recordSave(goal: Goal, task: Task, result: { summary: string }, context: ContextEngine): void {
+    try {
+      const sid = this.store.begin({ goalId: goal.id, role: task.role, objective: task.title });
+      const goalText = goal.objective;
+      const taskDesc = task.description;
+      this.store.append(sid, 'user', 'Goal: ' + goalText + '\nTask: ' + task.title + '\n' + taskDesc);
+      if (result.summary) this.store.append(sid, 'assistant', result.summary);
+      // surface non-tool (user/assistant/system) message content
+      const msgs = (context as unknown as { messages: Array<{ role: string; content?: string }> }).messages ?? [];
+      for (const m of msgs) {
+        if (m.role === 'tool') continue;
+        if (m.content) this.store.append(sid, m.role, m.content);
+      }
+      this.store.markCompleted(sid, 'completed');
+    } catch { /* session persistence is best-effort */ }
+  }
+
   private runningCount(scheduler: TaskScheduler): number {
     return scheduler.all().filter((t) => t.status === 'running').length;
   }
@@ -407,6 +432,10 @@ Return ONLY the JSON array, no markdown.`;
     });
 
     const result = await agent.run(task);
+    // Persist the conversation to the searchable session store so
+    // `mochi session search` finds past work and a resume can reconstruct
+    // the exact prior conversation (Hermes insight).
+    if (hasSqlite()) { this.recordSave(goal, task, result, context); }
     await this.hooks.runAfter('after_agent', { agent: this.agentId(task), task: task.id, success: String(result.success) });
 
     // Record the task as completed on shared state. This must be atomic: under
