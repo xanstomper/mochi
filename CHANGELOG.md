@@ -1,5 +1,44 @@
 # Mochi Changelog
 
+## 0.10.2
+
+- **Proportionate verification.** Content-only tasks (e.g. "write OK to a file")
+  no longer trigger the repo's full `npm test` / `tsc` / lint / build suite and
+  get charged for pre-existing failures in untouched code. Verification is now
+  scoped by task: relevant test subset for behavior changes, the task's direct
+  check for content deliverables, and none for research. `autoTestCommand`,
+  `Agent.verify`, and the `VerifierEngine` all gate repo-wide suites behind the
+  content-only classifier; in-loop repo-wide runners on content-only tasks are
+  vetoed with guidance.
+- **Baseline-aware verification.** `Agent.verify` captures the repo's green
+  baseline once (`baseline.json`) and no longer fails correct work for
+  pre-existing red — a task is only blocked when it *transitions* the suite.
+- **Diagnostics fallback.** When the edited project has no importable TypeScript
+  API, `src/diagnostics.ts` falls back to `npx tsc` (bounded by timeout) so
+  in-file diagnostics still work in repos that only have `tsc` via npx.
+- **Tool: `replace_symbol`.** Add a name-addressed whole-symbol replacement tool
+  with signature/type matching, used by the codegen loop.
+- **Daemon `resume` test hardening.** The hermetic `/api/resume` test
+  (`src/daemon.test.ts`) is now fully self-contained per test (dedicated
+  workspace + daemon, no module-level shared `handle`/`dir`), so it passes in
+  isolation and in group runs.
+- **Instant per-file diagnostics.** After every write/edit/patch, the edited
+  file is type/syntax-checked in the same turn (TS LanguageService with a
+  cached host: 32ms warm; Python via py_compile) and errors are appended to the
+  tool result with a FIX-BEFORE-CONTINUING instruction.
+- **Background tasks.** `shell` takes `background: true`; long suites/builds
+  return a task id immediately and the loop injects results when they finish
+  (`bg list` / `bg status <id>`).
+- **Prompt-stability tiers.** Task-dependent memory/kind-hint moved out of the
+  system prompt into the per-turn state tier for provider prefix-cache hits.
+- **Session history.** SQLite + FTS5 transcript store (`src/session-store.ts`)
+  persists every task conversation; `mochi session search "<text>"` and
+  `mochi session list` inspect past work. Hermes-style searchable memory.
+- **Warm-start resume.** Resumed goals surface prior failed attempts as
+  `PRIOR SESSION CONTEXT` ("do not repeat").
+- Verified green end to end: content-only write completes in ~6s (was ~5min /
+  47k tokens / failed). 384 tests / 71 files pass, typecheck clean.
+
 ## 0.10.1
 
 - **Code-scan cleanup.** 10 real findings addressed (ReDoS in
