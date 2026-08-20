@@ -153,3 +153,36 @@ describe('ACP session/list + delete + mode', () => {
   });
 });
 
+describe('ACP session/load', () => {
+  it('restores a persisted goal and resumes its tasks', async () => {
+    const { startFakeOpenAI } = await import('./testutil/fake-openai.js');
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { resolve } = await import('node:path');
+    const { Runtime } = await import('./runtime.js');
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-acp-load-'));
+    writeFileSync(resolve(dir, 'package.json'), JSON.stringify({ name: 'x', scripts: { test: 'node -e "process.exit(0)"' } }));
+    const fake = await startFakeOpenAI([
+      { content: '{"tasks":[{"title":"Say hi","description":"say hi","role":"coder","dependencies":[],"acceptanceCriteria":[],"verificationCommand":""}]}', finishReason: 'stop' },
+      { content: 'done', finishReason: 'stop', completionTokens: 4 },
+    ]);
+    const cfg = { model: { provider: 'openai', baseUrl: fake.url, model: 'fake-model' }, safety: { mode: 'auto', commandTimeoutSeconds: 10, maxIterations: 3, maxRuntimeMinutes: 2, maxConcurrentAgents: 1, contextBudgetTokens: 4000 }, permissions: { read: true, write: true, shell: true, network: true, gitDestructive: true }, telemetry: false, projectDir: '.mochi', quiet: true, verbose: false, debug: false } as any;
+    // Create a persisted goal in the workspace.
+    const runtime = Runtime.create({ cwd: dir, config: cfg });
+    const goal = await runtime.goals.createGoal('say hi');
+    const tasks = await runtime.goals.decompose(goal);
+    runtime.workspace.saveTasks(goal.id, tasks);
+    runtime.goals.runGoal(goal, tasks, [], runtime.signal).catch(() => {});
+    // Load it through ACP.
+    const sessions = new Map<string, AcpSession>();
+    const created = await handleRpc({ id: 1, method: 'session/new', params: { cwd: dir } }, sessions, process.cwd());
+    const sid = (created.result as any).sessionId;
+    sessions.set(sid, { id: sid, cwd: dir, runtime: Runtime.create({ cwd: dir, config: cfg }) });
+    const loaded = await handleRpc({ id: 2, method: 'session/load', params: { sessionId: sid, goalId: goal.id } }, sessions, process.cwd());
+    expect(loaded.error).toBeUndefined();
+    expect(sessions.get(sid)!.loadedGoal?.goalId).toBe(goal.id);
+    await fake.close();
+    rmSync(dir, { recursive: true, force: true });
+  }, 60_000);
+});
+

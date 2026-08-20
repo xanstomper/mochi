@@ -51,6 +51,8 @@ export interface AcpSession {
   runtime: Runtime;
   title?: string;
   goalId?: string;
+  /** When loaded from a persisted goal (session/load), the goal id + tasks. */
+  loadedGoal?: { goalId: string; objective: string };
 }
 
 export interface RpcCall {
@@ -173,7 +175,19 @@ export async function handleRpc(
         const off = session.runtime.events.onAll(handleEvent);
         let stopReason = 'end_turn';
         try {
-          await session.runtime.goal(text, constraints);
+          if (session.loadedGoal) {
+            // Resume a loaded goal (session/load): reuse its persisted task
+            // decomposition so the work continues, not restarts.
+            const goal = session.runtime.workspace.loadGoal(session.loadedGoal.goalId);
+            const tasks = session.runtime.workspace.loadTasks(session.loadedGoal.goalId);
+            if (goal && tasks.length > 0) {
+              await session.runtime.goals.runGoal(goal, tasks, [], session.runtime.signal);
+            } else {
+              await session.runtime.goal(text, constraints);
+            }
+          } else {
+            await session.runtime.goal(text, constraints);
+          }
           onNotify(sid, { sessionUpdate: 'usage_update', used: 0, size: session.runtime.workspace.dir.length, cost: null });
         } catch (err) {
           if (session.runtime.aborted) stopReason = 'cancelled';
@@ -192,6 +206,16 @@ export async function handleRpc(
         const sid = String(params.sessionId ?? '');
         const session = sessions.get(sid);
         if (!session) return { id, error: { code: -32602, message: `Unknown session ${sid}` } };
+        const goalId = String(params.goalId ?? '');
+        if (goalId) {
+          const goal = session.runtime.workspace.loadGoal(goalId);
+          if (goal) {
+            session.loadedGoal = { goalId: goal.id, objective: goal.objective };
+            session.goalId = goal.id;
+            return { id, result: { modes: SESSION_MODES, configOptions: SESSION_CONFIG_OPTIONS, goalId } };
+          }
+          return { id, result: { modes: SESSION_MODES, configOptions: SESSION_CONFIG_OPTIONS } };
+        }
         return { id, result: { modes: SESSION_MODES, configOptions: SESSION_CONFIG_OPTIONS } };
       }
       case 'session/list': {
