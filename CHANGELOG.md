@@ -28,6 +28,10 @@
   the code symbol index (no whitespace matching).
 - **Prompt-stability tiers.** Task-dependent memory/kind hint moved out of the
   system prompt into the per-turn state tier for provider prefix caching.
+- **Cron persistence fix.** The daemon ticker now saves `bumpJob`'s advance
+  (`updateJob`) so a due job fires once per interval instead of re-firing on
+  every 10s poll. Covered by a new daemon integration test (`/api/cron` add ->
+  tick fires -> `nextRun` advances).
 - **State cleanup.** Stale failed goal `3f5cb725` (a dogfood fixture whose
   `broken.ts` never existed) and its trace were removed; the spurious
   `completedTasks` entry and the matching `failures.md` block were cleared.
