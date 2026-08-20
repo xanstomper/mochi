@@ -49,6 +49,8 @@ const COMMANDS = [
   { name: '/login', hint: 'Set up a model provider' },
   { name: '/providers', hint: 'List providers' },
   { name: '/model', hint: 'Show / change model' },
+  { name: '/mode', hint: 'Set execution mode (spec|security|codemod|chaos|normal)' },
+  { name: '/modes', hint: 'List execution modes' },
   { name: '/goal', hint: 'Create goal' },
   { name: '/team', hint: 'Run team mode' },
   { name: '/plan', hint: 'Plan only' },
@@ -580,6 +582,26 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     if (line === '/status' || line === '/changes') { await run(async () => (await import('../git.js')).status(projectRoot)); return; }
     if (line === '/diff') { await run(async () => (await import('../git.js')).diff(projectRoot)); return; }
     if (line === '/model') { push('system', `${runtime.config.model.provider}/${runtime.config.model.model}`); return; }
+    if (line === '/mode' || line.startsWith('/mode ')) {
+      const specific = line.startsWith('/mode ') ? line.slice(6).trim() : '';
+      if (!specific) {
+        const { formatModes } = await import('../modes.js');
+        push('system', `${formatModes((runtime.config.mode as any) ?? 'normal')}\n\nUsage: /mode <name>`);
+        return;
+      }
+      await run(async () => {
+        const res = runtime.setMode(specific);
+        return res.startsWith('Unknown')
+          ? res
+          : `Mode set: ${specific}${res === 'normal' ? '' : `\n${res.trim()}`}`;
+      });
+      return;
+    }
+    if (line === '/modes') {
+      const { formatModes } = await import('../modes.js');
+      push('system', formatModes((runtime.config.mode as any) ?? 'normal'));
+      return;
+    }
     if (line === '/profiles') { await run(async () => runtime.profiles().map(p => `${p.name} (${p.role}) model=${p.defaultModel ?? 'coding'} verification=${p.verification ?? 'optional'}`).join('\n')); return; }
     if (line === '/memory') { await run(async () => runtime.memory() || 'No project memory yet.'); return; }
     if (line === '/tasks') { await run(async () => listTasks()); return; }
