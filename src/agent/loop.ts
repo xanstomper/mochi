@@ -261,6 +261,21 @@ export class Agent {
     // Each task gets a fresh autopsy record (idempotent on resume via
     // loadOrCreateAutopsy) so failure trajectories are durable and inspectable.
     this.autopsy = loadOrCreateAutopsy(this.workspace.dir, task.id, this.id, task.title);
+    // Warm start on resume: if a previous session already attempted this task
+    // and failed, surface those attempts to the model so it does NOT retry the
+    // same dead-end hypotheses. The autopsy is loaded (not created) but was
+    // previously write-only from the model's perspective.
+    const priorAttempts = this.autopsy.attempts.filter((a) => a.outcome === 'still_failing' || a.statusAfter === 'refuted');
+    if (priorAttempts.length > 0) {
+      const lines = priorAttempts.slice(-6).map((a, i) => {
+        const verdict = a.statusAfter === 'refuted' || a.outcome === 'still_failing' ? 'DID NOT FIX' : a.outcome;
+        return `${i + 1}. Tried: ${a.hypothesisText} (${a.action}). Result: ${verdict}. Evidence: ${String(a.evidence).slice(0, 200)}`;
+      });
+      this.context.addMessage({
+        role: 'system',
+        content: `PRIOR SESSION CONTEXT (resume): ${priorAttempts.length} earlier attempt(s) on this task already failed. Do NOT repeat them:\n${lines.join('\n')}\nStart from a different hypothesis.`,
+      });
+    }
     if (this.planMode) {
       this.context.addMessage({
         role: 'system',
