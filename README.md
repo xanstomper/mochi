@@ -1,8 +1,26 @@
 # Mochi
 
-> Minimal, fast, autonomous coding agent for the terminal.
+> Minimal, fast, autonomous coding agent for the terminal. Goals, task DAGs, teams,
+> a persistent daemon, and deep run traces in a single TypeScript harness.
 
-Mochi is a from-scratch re-imagining of the terminal coding-agent harness. It keeps the best ideas from Pi (tools, sessions, context files, minimal TUI) and adds first-class support for goals, task DAGs, teams, persistent state, checkpoints, verification, recovery, budgets, hooks, retrieval, memory, and local harness learning.
+Mochi is a from-scratch re-imagining of the terminal coding-agent harness. It keeps the
+best ideas from Pi (tools, sessions, context files, minimal TUI) and adds first-class
+support for goals, task DAGs, teams, persistent state, checkpoints, verification,
+recovery, budgets, hooks, retrieval, memory, and local harness learning.
+
+```bash
+npm install && npm run build
+mochi "add a rate limiter to the auth service"   # one-shot agent run
+mochi daemon start --host 0.0.0.0                 # persistent agent over HTTP
+mochi daemon send "finish the auth flow"          # drive it from anywhere
+mochi team "ship the payments refactor"           # role-diverse agent team
+mochi trace <goalId>                               # replay any run end to end
+```
+
+Zero runtime dependencies; runs under Node 22 or Bun, and ships a standalone native
+binary (`npm run build:bin`) that needs no runtime at all. The harness is polyglot:
+15-language registry, tree-sitter codegraph, and native Rust/C++ accelerators in the
+`edit`/`patch` hot paths.
 
 ## Status
 

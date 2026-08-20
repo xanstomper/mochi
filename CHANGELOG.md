@@ -1,5 +1,19 @@
 # Mochi Changelog
 
+## 0.10.1
+
+- **Code-scan cleanup.** 10 real findings addressed (ReDoS in
+  `sanitizeVerifyCommand` and `providerKey`, clear-text key logging in
+  `describeConfig`, a template-literal regex bug where `[\s\S]` collapsed to
+  `[sS]`, prototype pollution in config merge, lenient script/style end-tag
+  matching, glob metachar escaping, and a missing `permissions` block in CI).
+  CodeQL default setup is enabled for JS/TS; 79 stale alerts from the
+  pre-rewrite Go codebase were dismissed.
+- **Hermetic daemon test.** The resume test no longer calls a real provider in
+  CI (it built tasks directly), eliminating a 429 rate-limit flake.
+- **Docs.** README hero refreshed to match the current product (goals/DAG/teams,
+  daemon, traces, zero deps, polyglot harness).
+
 ## 0.10.0
 
 - **Daemon `resume` over CLI.** `mochi daemon resume <goalId>` is now wired
