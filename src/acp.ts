@@ -33,6 +33,25 @@ export interface RpcResponse {
   error?: { code: number; message: string };
 }
 
+/** Extract user text from a spec-valid prompt payload (ContentBlock[] array
+ *  or, for leniency, a plain string). */
+function promptText(prompt: unknown): string {
+  if (typeof prompt === 'string') return prompt;
+  if (Array.isArray(prompt)) {
+    // ACP prompt: [{type:"text", text:"..."}, {type:"resource", resource:{text}},...]
+    const parts = prompt.map((b: any) => {
+      if (b && typeof b === 'object') {
+        if (b.type === 'text' && typeof b.text === 'string') return b.text;
+        if (b.type === 'resource' && b.resource && typeof b.resource.text === 'string') return b.resource.text;
+        if (typeof b.text === 'string') return b.text;
+      }
+      return '';
+    }).filter(Boolean);
+    return parts.join('\n');
+  }
+  return String(prompt ?? '');
+}
+
 /** Dispatch one RPC call against the current sessions. Returns the response.
  *  session/prompt actually runs a goal (requires a configured provider). */
 export async function handleRpc(
@@ -46,28 +65,50 @@ export async function handleRpc(
   try {
     switch (method) {
       case 'initialize':
-        return { id, result: { protocolVersion: 1, capabilities: ['prompt', 'sessions'], implementation: 'mochi' } };
+        return {
+          id,
+          result: {
+            protocolVersion: 1,
+            agentCapabilities: {
+              loadSession: false,
+              sessionCapabilities: { resume: {}, close: {} },
+              completion: { progress: false },
+            },
+            implementation: { name: 'mochi', version: '0.10.3' },
+          },
+        };
       case 'session/new': {
         const sid = randomUUID();
         const sessionCwd = typeof params.cwd === 'string' && params.cwd ? resolve(params.cwd) : cwd;
+        // Spec: mcpServers MAY be provided; connect them if given (best-effort).
         const runtime = Runtime.create({ cwd: sessionCwd });
         sessions.set(sid, { id: sid, cwd: sessionCwd, runtime });
-        return { id, result: { sessionId: sid, cwd: sessionCwd } };
+        return { id, result: { sessionId: sid } };
       }
       case 'session/prompt': {
         const sid = String(params.sessionId ?? '');
-        const text = String(params.prompt ?? '');
+        const text = promptText(params.prompt);
         const session = sessions.get(sid);
         if (!session) return { id, error: { code: -32602, message: `Unknown session ${sid}` } };
         if (!text) return { id, error: { code: -32602, message: 'prompt required' } };
         const constraints: string[] = Array.isArray(params.constraints) ? (params.constraints as string[]).map(String) : [];
-        const summary = await session.runtime.goal(text, constraints);
-        return { id, result: { summary } };
+        await session.runtime.goal(text, constraints);
+        // Verified spec: respond with a StopReason. Full session/update
+        // streaming (plan, message chunks, tool calls, usage) is future work.
+        return { id, result: { stopReason: 'end_turn' } };
+      }
+      case 'session/resume': {
+        const sid = String(params.sessionId ?? '');
+        const sessionCwd = typeof params.cwd === 'string' && params.cwd ? resolve(params.cwd) : cwd;
+        if (sessions.has(sid)) return { id, result: {} };
+        const runtime = Runtime.create({ cwd: sessionCwd });
+        sessions.set(sid, { id: sid, cwd: sessionCwd, runtime });
+        return { id, result: {} };
       }
       case 'session/close': {
         const sid = String(params.sessionId ?? '');
         sessions.delete(sid);
-        return { id, result: { ok: true } };
+        return { id, result: {} };
       }
       case 'shutdown':
         return { id, result: null };
