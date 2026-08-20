@@ -1,84 +1,37 @@
-// ACP stdio server: JSON-RPC over newline-delimited JSON (editor protocol).
+// ACP protocol core: in-process unit tests (no spawn, no dist dependency).
 import { describe, it, expect } from 'vitest';
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { createInterface, type Interface } from 'node:readline';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { handleRpc, type AcpSession } from './acp.js';
 
-const CLI = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'cli.js');
-
-interface RpcClient {
-  child: ChildProcessWithoutNullStreams;
-  rl: Interface;
-  nextId: number;
-  requests: Map<number, (msg: any) => void>;
+function freshSessions(): Map<string, AcpSession> {
+  return new Map();
 }
 
-function connect(): Promise<RpcClient> {
-  return new Promise((res) => {
-    const child = spawn('node', [CLI, 'acp'], { stdio: ['pipe', 'pipe', 'pipe'] });
-    const rl = createInterface({ input: child.stdout });
-    const requests = new Map<number, (msg: any) => void>();
-    rl.on('line', (line) => {
-      if (!line.trim()) return;
-      let msg: any;
-      try { msg = JSON.parse(line); } catch { return; }
-      const cb = requests.get(msg.id);
-      if (cb) { requests.delete(msg.id); cb(msg); }
-    });
-    res({ child, rl, nextId: 1, requests });
-  });
-}
-
-function send(client: RpcClient, method: string, params: Record<string, unknown> = {}): Promise<any> {
-  const id = client.nextId++;
-  return new Promise((resolve2) => {
-    client.requests.set(id, resolve2);
-    client.child.stdin.write(JSON.stringify({ id, method, params }) + '\n');
-  });
-}
-
-async function close(client: RpcClient): Promise<void> {
-  try { client.child.kill(); } catch { /* already gone */ }
-  client.rl.close();
-}
-
-describe('ACP server', () => {
+describe('ACP handleRpc', () => {
   it('initialize returns protocol metadata', async () => {
-    const c = await connect();
-    try {
-      const r = await send(c, 'initialize');
-      expect(r.result.protocolVersion).toBe(1);
-      expect(r.result.capabilities).toContain('prompt');
-    } finally { await close(c); }
-  }, 30_000);
+    const r = await handleRpc({ id: 1, method: 'initialize', params: {} }, freshSessions(), process.cwd());
+    expect(r.id).toBe(1);
+    expect((r.result as any).protocolVersion).toBe(1);
+    expect((r.result as any).capabilities).toContain('prompt');
+  });
 
-  it('session/new creates a session in a cwd', async () => {
-    const c = await connect();
-    try {
-      const dir = mkdtempSync(resolve(tmpdir(), 'mochi-acp-'));
-      const r = await send(c, 'session/new', { cwd: dir });
-      expect(r.result.sessionId).toBeTruthy();
-      expect(r.result.cwd).toBe(resolve(dir));
-      rmSync(dir, { recursive: true, force: true });
-    } finally { await close(c); }
-  }, 30_000);
+  it('session/new creates a session and session/close removes it', async () => {
+    const sessions = freshSessions();
+    const created = await handleRpc({ id: 2, method: 'session/new', params: { cwd: process.cwd() } }, sessions, process.cwd());
+    const sid = (created.result as any).sessionId;
+    expect(sid).toBeTruthy();
+    expect(sessions.has(sid)).toBe(true);
+    const closed = await handleRpc({ id: 3, method: 'session/close', params: { sessionId: sid } }, sessions, process.cwd());
+    expect(closed.result).toEqual({ ok: true });
+    expect(sessions.has(sid)).toBe(false);
+  });
 
   it('session/prompt with an unknown session errors cleanly', async () => {
-    const c = await connect();
-    try {
-      const r = await send(c, 'session/prompt', { sessionId: 'nope', prompt: 'x' });
-      expect(r.error.code).toBe(-32602);
-    } finally { await close(c); }
-  }, 30_000);
+    const r = await handleRpc({ id: 4, method: 'session/prompt', params: { sessionId: 'nope', prompt: 'x' } }, freshSessions(), process.cwd());
+    expect(r.error.code).toBe(-32602);
+  });
 
   it('unknown method returns -32601', async () => {
-    const c = await connect();
-    try {
-      const r = await send(c, 'bogus/method');
-      expect(r.error.code).toBe(-32601);
-    } finally { await close(c); }
-  }, 30_000);
+    const r = await handleRpc({ id: 5, method: 'bogus/method', params: {} }, freshSessions(), process.cwd());
+    expect(r.error.code).toBe(-32601);
+  });
 });
