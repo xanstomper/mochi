@@ -46,6 +46,9 @@ export interface VerifierOptions {
   config: MochiConfig;
   events: EventBus;
   budget: BudgetEngine;
+  /** Failures captured before agents edit anything. A post-work failure
+   *  matching the baseline is pre-existing repo rot, not agent breakage. */
+  baseline?: VerificationBaseline;
 }
 
 export class VerifierEngine {
@@ -55,6 +58,7 @@ export class VerifierEngine {
   private events: EventBus;
   private budget: BudgetEngine;
   private hooks: HookManager;
+  private baseline: VerificationBaseline | undefined;
 
   constructor(opts: VerifierOptions) {
     this.cwd = opts.cwd;
@@ -63,6 +67,7 @@ export class VerifierEngine {
     this.events = opts.events;
     this.budget = opts.budget;
     this.hooks = new HookManager(this.workspace.dir);
+    this.baseline = opts.baseline;
   }
 
   async verify(task: Task, agentSummary: string): Promise<VerificationResult> {
@@ -109,10 +114,23 @@ export class VerifierEngine {
         });
         continue;
       }
+      // Pre-existing failure: the check already failed the same way before the
+      // agent touched anything. This is repo rot, not agent breakage — treat it
+      // as a passed-with-note so good work is not failed by unrelated debt.
+      const passedNow = result.includes('exit_code: 0');
+      if (!passedNow && matchesBaseline(this.baseline, command, result)) {
+        evidence.push({
+          source: `command:${command}`,
+          result: `[PRE-EXISTING FAILURE, identical before this task ran] ${result.slice(0, 2000)}`,
+          passed: true,
+          skipped: true,
+        });
+        continue;
+      }
       evidence.push({
         source: `command:${command}`,
         result: result.slice(0, 2000),
-        passed: result.includes('exit_code: 0'),
+        passed: passedNow,
       });
     }
 
@@ -304,4 +322,81 @@ export class VerifierEngine {
     const out = await this.runCommand(command, 120);
     return out.replace(/^exit_code: \d+\n/, '');
   }
+}
+
+
+/** Baseline failures captured before agents edit anything. Keyed by command,
+ *  value is the failing output signature (first failing lines) + exit code.
+ *  A post-work failure that matches the baseline is PRE-EXISTING repo rot,
+ *  not something the agent broke: it must not fail the task. */
+export interface VerificationBaseline {
+  /** command -> normalized failure signature ('' when the check passed) */
+  signatures: Map<string, string>;
+  capturedAt: number;
+}
+
+/** Normalize command output to a stable failure signature: strip absolute
+ *  paths, timings, and line numbers so the same underlying failure matches
+ *  before and after unrelated code changes. */
+export function failureSignature(output: string): string {
+  const NOISE = new RegExp('\\b(\\d+(\\.\\d+)?\\s*(ms|s))\\b|passing|failing|\\d+\\/\\d+', 'i');
+  return output
+    .split('\n')
+    .filter((l) => l.trim() && !NOISE.test(l))
+    .map((l) => {
+      // Token-based path normalization: any absolute-path token keeps only its
+      // last two segments, so the same failure matches across machines and
+      // checkouts. (Regex-only replacement proved fragile with adjacent text.)
+      const norm = l
+        .split(/(\s+)/)
+        .map((t) => {
+          if (!t.startsWith('/')) return t;
+          const parts = t.split('/').filter(Boolean);
+          return parts.length > 2 ? parts.slice(-2).join('/') : t;
+        })
+        .join('');
+      return norm
+        .replace(/:(\d+)(:(\d+))?/g, ':L')
+        .replace(/\s+/g, ' ')
+        .trim();
+    })
+    .filter((l) => /fail|error|expected|assert/i.test(l))
+    .slice(0, 5)
+    .join('\n');
+}
+
+export async function captureBaseline(
+  cwd: string,
+  runCommand: (cmd: string) => Promise<string>,
+): Promise<VerificationBaseline> {
+  const repo = detectRepo(cwd);
+  const commands = [repo.testCommand, repo.typecheckCommand, repo.lintCommand, repo.buildCommand].filter(
+    (c): c is string => Boolean(c),
+  );
+  const signatures = new Map<string, string>();
+  for (const cmd of commands) {
+    try {
+      const out = await runCommand(cmd);
+      if (!out.includes('exit_code: 0')) {
+        // A failing check with no parseable failure lines still needs a
+        // signature: fall back to the raw exit code so it can match later.
+        const sig = failureSignature(out) || out.split('\n')[0] || 'failed';
+        signatures.set(cmd, sig);
+      }
+    } catch {
+      // A baseline check that cannot even run has no signature; it will be
+      // judged post-work like any other check (e.g. exit 127 skip rule).
+    }
+  }
+  return { signatures, capturedAt: Date.now() };
+}
+
+/** True when a post-work failure is identical to the pre-work baseline. */
+export function matchesBaseline(baseline: VerificationBaseline | undefined, command: string, output: string): boolean {
+  if (!baseline) return false;
+  const sig = baseline.signatures.get(command);
+  if (sig === undefined) return false;
+  if (sig === '') return false; // passed at baseline; failing now is new
+  const now = failureSignature(output) || output.split('\n')[0] || 'failed';
+  return now === sig;
 }

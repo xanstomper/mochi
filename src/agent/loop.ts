@@ -9,6 +9,7 @@ import { createProvider } from '../model/router.js';
 import { executeTool, buildTools } from '../tools/index.js';
 import type { ToolContext, ReadCache } from '../tools/types.js';
 import { detectRepo, languageHint } from '../repo.js';
+import { matchesBaseline, type VerificationBaseline } from '../verification.js';
 import type { AgentProfile } from '../types.js';
 import { AgentProfileService } from '../agents/profile.js';
 import { BudgetEngine } from '../budget.js';
@@ -148,6 +149,9 @@ export interface AgentOptions {
   /** Depth guard: children spawn with subagentDepth = parent + 1. Subagents
    *  may not delegate further (depth 1 has no spawnSubagent injected). */
   subagentDepth?: number;
+  /** Repo-check failures captured before this run. A verify failure matching
+   *  it is pre-existing debt and must not fail the task. */
+  verifyBaseline?: VerificationBaseline;
 }
 
 export type AgentStopReason =
@@ -181,6 +185,7 @@ export class Agent {
   private events: EventBus;
   private cwd: string;
   private context: ContextEngine;
+  private verifyBaseline?: VerificationBaseline;
   private budget?: BudgetEngine;
   private abortSignal?: AbortSignal;
   private tools: Map<string, import('../tools/types.js').Tool>;
@@ -226,6 +231,7 @@ export class Agent {
     this.context = opts.context;
     this.budget = opts.budget;
     this.abortSignal = opts.abortSignal;
+    this.verifyBaseline = opts.verifyBaseline;
     // A shared run-wide cache is preferred so parallel agents that read the same
     // source file don't each re-read it from disk; the cache is keyed on
     // (mtime, size) so any edit automatically misses, keeping it safe to share.
@@ -812,6 +818,11 @@ export class Agent {
     for (const cmd of checks) {
       const out = await this.runShell(cmd, 180);
       if (out.includes('exit_code: 0') || out.trim().endsWith('PASS')) {
+        continue;
+      }
+      // Pre-existing failure: identical failure captured before this run
+      // started. It is repo debt, not agent breakage; do not fail the task.
+      if (matchesBaseline(this.verifyBaseline, cmd, out)) {
         continue;
       }
       return { passed: false, summary: `Check failed: ${cmd}\n${truncateMiddle(out, 1200)}` };

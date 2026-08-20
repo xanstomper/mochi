@@ -9,7 +9,7 @@ import { createTask } from './task.js';
 import { Agent } from '../agent/loop.js';
 import { AgentProfileService } from '../agents/profile.js';
 import { BudgetEngine } from '../budget.js';
-import { VerifierEngine } from '../verification.js';
+import { VerifierEngine, captureBaseline, type VerificationBaseline } from '../verification.js';
 import { HookManager } from '../hooks.js';
 import { classifyOneShot } from '../one-shot.js';
 import { consolidate } from '../consolidate.js';
@@ -33,6 +33,8 @@ export class GoalEngine {
   private events: EventBus;
   private cwd: string;
   private goalStats = { tokens: 0, duration: 0 };
+  /** Baseline for the in-flight run (undefined outside runGoal). */
+  private runBaseline: VerificationBaseline | undefined;
   private hooks: HookManager;
   private profiles: AgentProfileService;
 
@@ -181,7 +183,27 @@ Return ONLY the JSON array, no markdown.`;
     this.goalStats = { tokens: 0, duration: 0 };
     const budget = new BudgetEngine(this.config.safety);
     budget.start();
-    const verifier = new VerifierEngine({ cwd: this.cwd, workspace: this.workspace, config: this.config, events: this.events, budget });
+    // Capture repo check failures BEFORE any agent edits. A verify failure
+    // that matches this baseline afterwards is pre-existing debt, not agent
+    // breakage, and must not fail the task (the 47k-token "failed" write-a-
+    // file run class of bug). Best-effort: a baseline capture that itself
+    // fails just yields an empty baseline and today's behavior.
+    let baseline: VerificationBaseline | undefined;
+    try {
+      baseline = await captureBaseline(this.cwd, async (cmd) => {
+        const { execFile } = await import('node:child_process');
+        return await new Promise<string>((res) => {
+          execFile('sh', ['-c', cmd], { cwd: this.cwd, timeout: 120_000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+            const code = err && 'code' in err ? Number((err as { code?: number }).code ?? 1) : err ? 1 : 0;
+            res(`exit_code: ${code}\n${stdout ?? ''}\n${stderr ?? ''}`);
+          });
+        });
+      });
+    } catch {
+      baseline = undefined;
+    }
+    const verifier = new VerifierEngine({ cwd: this.cwd, workspace: this.workspace, config: this.config, events: this.events, budget, baseline });
+    this.runBaseline = baseline;
     const allTasks = tasks ?? this.workspace.loadTasks(goal.id);
     const scheduler = new TaskScheduler(allTasks, this.events);
     const maxConcurrency = this.config.safety.maxConcurrentAgents;
@@ -381,6 +403,7 @@ Return ONLY the JSON array, no markdown.`;
       abortSignal,
       budget,
       readCache,
+      verifyBaseline: this.runBaseline,
     });
 
     const result = await agent.run(task);
