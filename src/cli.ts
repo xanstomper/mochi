@@ -437,6 +437,38 @@ async function main() {
     await launchTui(runtime);
     return;
   }
+  if (first === 'docs') {
+    const { queryDocs, generateAdr } = await import('./dox.js');
+    const sub = positional[1];
+    const docsDir = resolve(cwd, 'docs');
+    if (sub === 'query') {
+      const q = positional.slice(2).join(' ');
+      if (!q) { console.log('Usage: mochi docs query "<text>"'); return; }
+      const hits = queryDocs(docsDir, q);
+      if (!hits.length) { console.log('No doc matches.'); return; }
+      for (const h of hits.slice(0, 5)) {
+        console.log(`[${h.file}] ${h.title}`);
+        console.log('  ' + h.text.slice(0, 180).replace(/\n/g, ' '));
+      }
+      return;
+    }
+    if (sub === 'adr') {
+      // mochi docs adr "<title>" --context "..." --decision "..." [--tradeoffs "a;b"]
+      const title = positional.slice(2).join(' ');
+      const context = String(flags.context ?? '');
+      const decision = String(flags.decision ?? '');
+      if (!title || !context || !decision) {
+        console.log('Usage: mochi docs adr "<title>" --context "..." --decision "..." [--tradeoffs "a;b"]');
+        return;
+      }
+      const tradeoffs = typeof flags.tradeoffs === 'string' && flags.tradeoffs ? flags.tradeoffs.split(';').map((x) => x.trim()).filter(Boolean) : undefined;
+      const rel = generateAdr(cwd, { title, context, decision, tradeoffs });
+      console.log(`ADR written: ${rel}`);
+      return;
+    }
+    console.log('Usage: mochi docs query "<text>" | mochi docs adr "<title>" --context "..." --decision "..."');
+    return;
+  }
   if (first === 'acp') {
     // Editor-native stdio server (Agent Client Protocol). Runs until the
     // editor closes stdin. Never falls through to the prompt path.
