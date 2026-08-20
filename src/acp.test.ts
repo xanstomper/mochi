@@ -15,6 +15,7 @@ describe('ACP handleRpc', () => {
     // Verified ACP shape: agentCapabilities with nested sessionCapabilities.
     expect(res.agentCapabilities.sessionCapabilities.resume).toBeDefined();
     expect(res.agentCapabilities.sessionCapabilities.close).toBeDefined();
+    expect(res.implementation.name).toBe('mochi');
   });
 
   it('session/new creates a session and session/close removes it', async () => {

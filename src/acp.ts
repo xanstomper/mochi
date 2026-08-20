@@ -13,7 +13,16 @@
 import { createInterface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { Runtime } from './runtime.js';
+
+// Baked-in default overridden by the package.json version at runtime (matching
+// the CLI); the baked constant keeps the compiled binary versioned correctly.
+let ACP_VERSION = '0.10.4';
+try {
+  const pkgPath = resolve(process.cwd(), 'package.json');
+  ACP_VERSION = JSON.parse(readFileSync(pkgPath, 'utf8')).version;
+} catch { /* keep baked constant */ }
 
 export interface AcpSession {
   id: string;
@@ -79,7 +88,7 @@ export async function handleRpc(
               sessionCapabilities: { resume: {}, close: {} },
               completion: { progress: false },
             },
-            implementation: { name: 'mochi', version: '0.10.3' },
+            implementation: { name: 'mochi', version: ACP_VERSION },
           },
         };
       case 'session/new': {
