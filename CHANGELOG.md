@@ -5,9 +5,18 @@
 - **ACP editor adapter.** `mochi acp` speaks the Agent Client Protocol v1 over
   JSON-RPC stdio, so editors (VS Code, Zed, JetBrains) can drive the full
   harness: `initialize`, `session/new`, `session/resume`, `session/prompt`,
-  `session/close`, `shutdown`. Shapes verified against the spec:
-  `agentCapabilities` in initialize, `ContentBlock[]` prompts, and
-  `stopReason` responses.
+  `session/close`, `shutdown`. Supports all ACP v1 methods:
+  - Full `agentCapabilities`: `loadSession`, `sessionCapabilities` (list,
+    delete, additionalDirectories, resume, close), `promptCapabilities`,
+    `mcpCapabilities`, `authMethods`
+  - Streaming `session/update` notifications: `tool_call`, `tool_call_update`,
+    `agent_message_chunk`, `usage_update`, `plan`
+  - Per-session abort support for clean cancellation via `session/cancel`
+  - `session/load` with `goalId` to resume persisted goals
+  - `session/list` pagination with cursor and `additionalDirectories`
+  - `session/set_mode` / `session/set_config_option`
+  - `session/request_permission` for MCP
+  - `authenticate` / `logout` for built-in agent auth
 - **`mochi daemon restart`.** Stop + start a fresh daemon on the same
   port/token. Cron jobs, sessions, and goal state persist across restarts
   (`.mochi/cron.json` plus the SQLite session store).

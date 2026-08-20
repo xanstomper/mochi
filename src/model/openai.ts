@@ -3,6 +3,7 @@ import type { ChatMessage, ModelResponse, StreamChunk, ToolDefinition } from '..
 import { ProviderError, describeModelError, parseRetryAfter } from '../utils/http-error.js';
 import { withRetries, classifyError } from './rate-limit.js';
 import { nextKey, retireKey } from './credential-pool.js';
+import { kvCache } from '../kv-cache.js';
 
 function logBackoff(attempt: number, delayMs: number, err: unknown): void {
   const detail = err instanceof Error ? err.message.split('\n')[0] : String(err);
@@ -159,6 +160,16 @@ export function createOpenAIProvider(config: ProviderConfig) {
           if (chunk.usage) {
             totalInput = chunk.usage.prompt_tokens ?? totalInput;
             totalOutput = chunk.usage.completion_tokens ?? totalOutput;
+            // Feed the KV-cache tracker (Anthropic 5-min TTL model): recognize
+            // either the OpenAI-compat cache-hit field or the Anthropic-style
+            // cacheRead/cacheCreation convention so the TUI can show warmth.
+            const usageAny = chunk.usage as unknown as Record<string, unknown>;
+            const cacheRead =
+              typeof usageAny.prompt_cache_hit_tokens === 'number' ? usageAny.prompt_cache_hit_tokens
+              : typeof usageAny.cacheReadTokens === 'number' ? usageAny.cacheReadTokens
+              : typeof usageAny.cache_read_input_tokens === 'number' ? usageAny.cache_read_input_tokens
+              : 0;
+            if (cacheRead > 0) kvCache.recordUsage({ cacheReadTokens: cacheRead });
           }
           yield {
             content: delta.content ?? undefined,
