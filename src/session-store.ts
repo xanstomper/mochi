@@ -100,7 +100,12 @@ export class SessionStore {
     const existing = obj.goalId
       ? (this.db.prepare('SELECT id FROM sessions WHERE goal_id=? ORDER BY updated_at DESC LIMIT 1').get(obj.goalId) as { id: string } | undefined)
       : undefined;
-    if (existing) return existing.id;
+    if (existing) {
+      // Freshen objective/role so a later begin({goalId}) that omits them
+      // doesn't leave a stale/empty objective row.
+      if (obj.objective) this.db.prepare('UPDATE sessions SET objective=?, role=COALESCE(?,role) WHERE id=?').run(obj.objective, obj.role ?? null, existing.id);
+      return existing.id;
+    }
     const id = randomUUID();
     const now = Date.now();
     this.db.prepare(

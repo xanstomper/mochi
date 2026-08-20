@@ -18,7 +18,7 @@ let fake: Awaited<ReturnType<typeof startFakeOpenAI>>;
 afterAll(async () => { if (fake) await fake.close(); });
 
 maybeDescribe('session recording through the goal engine', () => {
-  it('persists a searchable transcript when a goal runs', async () => {
+  it('persists a searchable transcript when a goal runs and resumes with it', async () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-sessgoal-'));
     writeFileSync(resolve(dir, 'package.json'), JSON.stringify({ name: 'x', scripts: { test: 'node -e "process.exit(0)"' } }));
     fake = await startFakeOpenAI([
@@ -40,11 +40,17 @@ maybeDescribe('session recording through the goal engine', () => {
 
     const store = new SessionStore(dir);
     const rows = store.list();
-    const hit = rows.find((r) => (r.objective || '').includes('flag') || (r.objective || '').includes('Make'));
+    const hit = rows.find((r) => (r.objective || '').includes('Make thing') || (r.objective || '').includes('flag'));
     expect(hit, 'expected a session row').toBeDefined();
-    // the objective/result is searchable by content
+    // Full-text search finds the persisted content by key phrase.
     const found = store.search('flag');
-    expect(found.length).toBeGreaterThanOrEqual(0); // objective alone may not be full-text indexed; just assert store is non-broken
+    expect(found.length).toBeGreaterThanOrEqual(1);
+    // The transcript content is retrievable via messages(id) — this is what
+    // the resume path (>20 prior messages) would inject. Assert it has the
+    // recorded user goal/task + assistant summary.
+    const msgs = store.messages(hit!.id);
+    expect(msgs.length).toBeGreaterThanOrEqual(2);
+    expect(msgs.some((m) => m.role === 'user' && (m.content.includes('flag') || m.content.includes('Make')))).toBe(true);
     store.close();
   }, 60_000);
 });

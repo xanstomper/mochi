@@ -397,6 +397,21 @@ Return ONLY the JSON array, no markdown.`;
       completedTasks: this.workspace.loadState().completedTasks,
     });
     context.addMessage({ role: 'user', content: `Task: ${task.title}\n${task.description}\nAcceptance criteria: ${task.acceptanceCriteria.join('; ')}` });
+    // Resumed-goal context: if this goal has prior session history, load the
+    // most recent transcript (stored by the same goal id) so the model resumes
+    // with the REAL prior conversation, not just the autopsy's terse summary.
+    // This is the Hermes insight applied to goals: memory survives restarts.
+    if (hasSqlite()) {
+      try {
+        const sid = this.store.begin({ goalId: goal.id });
+        const prior = this.store.messages(sid);
+        if (prior.length > 0) {
+          const keep = prior.slice(-20); // last ~20 messages (bound token use)
+          const transcript = keep.map((m) => (m.role === 'user' ? '>>> prior user:' : '>>> prior agent:') + ' ' + m.content).join('\n');
+          context.addMessage({ role: 'system', content: `PRIOR TRANSCRIPT (resume): the goal was run before. Here is the last part of that conversation — do NOT redo work already done and reported:\n${transcript.slice(0, 6000)}` });
+        }
+      } catch { /* best-effort */ }
+    }
     // Optional synthetic-parameter context (e.g. Lazy Chameleon enhancement) is
     // injected as a leading system message so the agent reasons within it.
     for (const extra of extraContext) {
