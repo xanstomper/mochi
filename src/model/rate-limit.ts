@@ -19,9 +19,13 @@ export interface RetryOptions {
   maxDelayMs?: number;     // ceiling for the exponential term
   jitter?: number;         // fraction of the delay to randomize (default 0.3)
   onBackoff?: (attempt: number, delayMs: number, error: unknown) => void;
+  /** Fired before each retry for a retryable error (after backoff). Lets a
+   *  provider rotate credentials (401/429) to a fresh pool key between
+   *  attempts. */
+  onRetryable?: (attempt: number, error: unknown) => void;
 }
 
-const DEFAULT: Required<Omit<RetryOptions, 'onBackoff'>> = {
+const DEFAULT: Required<Omit<RetryOptions, 'onBackoff' | 'onRetryable'>> = {
   maxAttempts: 4,
   maxTotalWaitMs: 60_000,
   baseDelayMs: 400,
@@ -115,6 +119,7 @@ export async function withRetries<T>(fn: () => Promise<T>, opts: RetryOptions = 
       }
 
       opts.onBackoff?.(attempts, delay, err);
+      opts.onRetryable?.(attempts, err);
       await sleep(delay);
       waited += delay;
     }

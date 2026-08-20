@@ -2,6 +2,7 @@ import { StreamParser } from '../stream-parser.js';
 import type { ChatMessage, ModelResponse, StreamChunk, ToolDefinition } from '../types.js';
 import { ProviderError, describeModelError, parseRetryAfter } from '../utils/http-error.js';
 import { withRetries, classifyError } from './rate-limit.js';
+import { nextKey, retireKey } from './credential-pool.js';
 
 function logBackoff(attempt: number, delayMs: number, err: unknown): void {
   const detail = err instanceof Error ? err.message.split('\n')[0] : String(err);
@@ -47,7 +48,25 @@ function openAITools(tools: ToolDefinition[]) {
 export function createOpenAIProvider(config: ProviderConfig) {
   const base = config.baseUrl.replace(/\/$/, '');
   const model = config.model;
-  const apiKey = config.apiKey;
+  // Current key for this provider instance. Start with the configured key,
+  // then rotate through the credential pool on 401/429 (Hermes insight).
+  let apiKey = config.apiKey ?? null;
+  if (!apiKey) {
+    const pooled = nextKey(config.providerName ?? 'unknown', config.apiKey);
+    apiKey = pooled.key;
+  }
+
+  /** Rotate to a fresh pool key; retire the failing one briefly. */
+  function rotateCredentials(err: unknown): void {
+    const status = (err as { status?: number }).status;
+    // Only 401/403 (bad key) justify retiring; 429 (rate) just needs a fresh
+    // key from a separate account/pool entry — retire that key too.
+    if (status === 401 || status === 403 || status === 429) {
+      retireKey(config.providerName ?? 'unknown', apiKey, status === 429 ? 20_000 : 120_000);
+      const rotated = nextKey(config.providerName ?? 'unknown', config.apiKey);
+      if (rotated.key) apiKey = rotated.key;
+    }
+  }
 
   async function* streamChat(messages: ChatMessage[], tools: ToolDefinition[], options?: { temperature?: number; maxTokens?: number; signal?: AbortSignal }): AsyncGenerator<StreamChunk> {
     const body: Record<string, unknown> = {
@@ -92,7 +111,12 @@ export function createOpenAIProvider(config: ProviderConfig) {
         if (err instanceof ProviderError) throw err;
         throw new ProviderError(err instanceof Error ? err.message : String(err), { retryable: classifyError(err).retryable, cause: err });
       }
-    }, { maxAttempts: 4, onBackoff: (attempt, delayMs, err) => logBackoff(attempt, delayMs, err) });
+    }, {
+      maxAttempts: 4,
+      onBackoff: (attempt, delayMs, err) => logBackoff(attempt, delayMs, err),
+      // Rotate to a fresh pool key (401/403/429) before the next attempt.
+      onRetryable: (_attempt, err) => rotateCredentials(err),
+    });
 
     if (!res.body) throw new ProviderError('No response body from model', { retryable: true });
     const reader = res.body.getReader();

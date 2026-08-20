@@ -1,5 +1,19 @@
 # Mochi Changelog
 
+## Unreleased
+
+- **Credential pool + rotation.** A single `$PROVIDER_API_KEY` was a single point
+  of failure for long agent runs. New `src/model/credential-pool.ts` pools
+  multiple keys per provider (env comma/newline lists, `~/.config/mochi/credentials/<provider>.json`,
+  or config) and rotates transparently on 401/403/429 via `nextKey` /
+  `retireKey` with per-key cooldowns. `createOpenAIProvider` now calls
+  `onRetryable` before each retry to swap to a fresh pool key, and
+  `withRetries` gained the `onRetryable` hook. Keys are redacted in
+  `inspectPool`/`describeConfig`; nothing secret is ever logged.
+- **State cleanup.** Stale failed goal `3f5cb725` (a dogfood fixture whose
+  `broken.ts` never existed) and its trace were removed; the spurious
+  `completedTasks` entry and the matching `failures.md` block were cleared.
+
 ## 0.10.2
 
 - **Proportionate verification.** Content-only tasks (e.g. "write OK to a file")
