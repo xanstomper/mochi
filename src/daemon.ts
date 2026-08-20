@@ -157,7 +157,7 @@ export async function startDaemonInProcess(opts: {
       processing = false;
     }
   };
-  ticker = setInterval(runDue, 10_000);
+  ticker = setInterval(runDue, 1_000);
 
   return {
     info,

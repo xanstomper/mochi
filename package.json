@@ -20,6 +20,7 @@
     "build:native": "mkdir -p native/bin && (rustc -O -o native/bin/fuzzy_rust native/rust/fuzzy.rs || true) && (g++ -O2 -std=c++17 -o native/bin/fuzzy_cpp native/cpp/fuzzy.cpp || true)",
     "dev": "tsx src/cli.ts",
     "test": "vitest run",
+    "test:verbose": "vitest run --reporter=dot",
     "bench": "node bench/startup.mjs",
     "bench:efficiency": "node bench/efficiency.mjs",
     "bench:task": "node bench/task.mjs",

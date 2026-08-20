@@ -371,6 +371,35 @@ Return ONLY the JSON array, no markdown.`;
     // succeeds on the agent's own result; the plan text is the deliverable.
     const needsVerification = !this.config.planMode && (task.acceptanceCriteria.length > 0 || Boolean(task.verificationCommand));
     if (needsVerification) {
+      // Simple acceptance criteria shortcut: if there is no explicit verification command
+      // and the criteria are plain "<path> exists" checks, perform a lightweight file existence
+      // test instead of running the full verifier (which may invoke repo-wide test suites).
+      if (!task.verificationCommand && task.acceptanceCriteria.length > 0) {
+        const fs = await import('node:fs');
+        let simplePass = true;
+        for (const crit of task.acceptanceCriteria) {
+          const trimmed = crit.trim().toLowerCase();
+          const match = trimmed.match(/^(.+?)\s+exists$/);
+          if (match) {
+            const filePath = match[1].replace(/^['\"]|['\"]$/g, '');
+            try {
+              fs.accessSync(resolve(this.cwd, filePath));
+            } catch {
+              simplePass = false;
+              break;
+            }
+          } else {
+            simplePass = false;
+            break;
+          }
+        }
+        if (simplePass) {
+          task.output = 'All acceptance criteria passed (simple check).';
+          scheduler.complete(task.id, this.agentId(task));
+          await this.hooks.runAfter('after_task', { task: task.id });
+          return;
+        }
+      }
       const verification = await verifier.verify(task, result.summary);
       task.output = verification.summary;
       if (verification.status !== 'PASS') {
