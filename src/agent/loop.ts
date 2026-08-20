@@ -10,6 +10,7 @@ import { executeTool, buildTools } from '../tools/index.js';
 import type { ToolContext, ReadCache } from '../tools/types.js';
 import { detectRepo, languageHint } from '../repo.js';
 import { matchesBaseline, type VerificationBaseline } from '../verification.js';
+import { diagnoseFile, renderDiagnostics } from '../diagnostics.js';
 import type { AgentProfile } from '../types.js';
 import { AgentProfileService } from '../agents/profile.js';
 import { BudgetEngine } from '../budget.js';
@@ -333,7 +334,23 @@ export class Agent {
       this.mcpClose = connected.close;
     }
 
+    // Delivered background results: task ids already surfaced to the model,
+    // so each completion is injected exactly once.
+    const bgDelivered = new Set<string>();
     for (let i = 0; i < maxIterations; i++) {
+      // Deliver completed background tasks as events into the transcript.
+      try {
+        const { listTasks, describeTask } = await import('../background-tasks.js');
+        for (const t of listTasks()) {
+          if (t.status !== 'running' && t.endedAt && !bgDelivered.has(t.id)) {
+            bgDelivered.add(t.id);
+            this.context.addMessage({
+              role: 'system',
+              content: `BACKGROUND TASK FINISHED:\n${describeTask(t)}`,
+            });
+          }
+        }
+      } catch { /* background registry unavailable; skip */ }
       if (this.abortSignal?.aborted) {
         return this.finish(task, false, 'Aborted by user', 'aborted');
       }
@@ -771,10 +788,30 @@ export class Agent {
         : {}),
     };
     const { output, error, durationMs } = await executeTool(tc.function.name, args, ctx, this.tools);
+    // Instant diagnostics (the Crush LSP insight): after every edit, surface
+    // type/syntax errors for the touched file in the SAME turn so the model
+    // fixes them now instead of burning whole iterations discovering them at
+    // verification time.
+    let diagNote = '';
+    if (['write', 'edit', 'patch'].includes(tc.function.name) && !error) {
+      const targets = [String(args.path ?? '')].filter(Boolean);
+      if (tc.function.name === 'patch' && typeof output === 'string') {
+        for (const line of output.split('\n')) {
+          const m = line.match(/^- (?:added|updated|deleted) (.+?)(?: \(\d+ lines\))?$/);
+          if (m && /\.(ts|tsx|js|jsx|mts|cts|py)$/.test(m[1])) targets.push(m[1]);
+        }
+      }
+      if (targets.length > 0 && targets.length <= 4) {
+        const diags = await Promise.all(
+          targets.filter((t) => /\.(ts|tsx|js|jsx|mts|cts|py)$/.test(t)).map((t) => diagnoseFile(resolve(this.cwd, t), this.cwd)),
+        );
+        diagNote = renderDiagnostics(diags);
+      }
+    }
     const result: ToolResult = {
       toolCallId: tc.id,
       name: tc.function.name,
-      output: error ? `Error: ${error}\n${output}` : output,
+      output: (error ? `Error: ${error}\n${output}` : output) + (diagNote ? `\n${diagNote}` : ''),
       error,
       durationMs,
     };

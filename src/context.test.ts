@@ -61,15 +61,15 @@ describe('ContextEngine task-kind hints', () => {
       id: 't1', title: 'Fix the login crash', description: 'reproduces on every load',
       role: 'coder', status: 'pending', priority: 1, dependencies: [], fileScope: [], acceptanceCriteria: [], attempts: [],
     });
-    expect(p.systemPrompt).toContain('Focus: debugging');
-    expect(p.systemPrompt).toContain('reproduc');
+    expect(JSON.stringify(p)).toContain('Focus: debugging');
+    expect(JSON.stringify(p)).toContain('reproduc');
   });
   it('injects a research hint for "investigate" tasks', () => {
     const p = engine.buildPacket(NO_TOOLS, {
       id: 't2', title: 'Investigate the auth flow', description: 'how does session live?',
       role: 'coder', status: 'pending', priority: 1, dependencies: [], fileScope: [], acceptanceCriteria: [], attempts: [],
     });
-    expect(p.systemPrompt).toContain('Focus: research');
+    expect(JSON.stringify(p)).toContain('Focus: research');
     expect(p.systemPrompt).toContain('read-only');
   });
   it('falls back to implementation hint for plain tasks', () => {
@@ -77,6 +77,6 @@ describe('ContextEngine task-kind hints', () => {
       id: 't3', title: 'Add export to foo', description: 'export const x = 1',
       role: 'coder', status: 'pending', priority: 1, dependencies: [], fileScope: [], acceptanceCriteria: [], attempts: [],
     });
-    expect(p.systemPrompt).toContain('Focus: implementation');
+    expect(JSON.stringify(p)).toContain('Focus: implementation');
   });
 });

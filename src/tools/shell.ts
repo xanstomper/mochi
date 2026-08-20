@@ -13,13 +13,33 @@ export const shellTool: Tool = {
       { name: 'cwd', type: 'string', description: 'Working directory (defaults to current)', required: false },
       { name: 'timeout', type: 'integer', description: 'Timeout in seconds', required: false },
       { name: 'description', type: 'string', description: 'Short description of what this command does', required: false },
+      { name: 'background', type: 'boolean', description: 'Run in the background: returns a task id immediately; check with command "bg status <id>"', required: false },
     ],
     permission: 'shell',
     dangerous: true,
   },
   async execute(args, ctx) {
-    const command = String(args.command ?? '');
+    let command = String(args.command ?? '');
     if (!command) throw new Error('No command provided');
+
+    // Background task management surface: `bg status <id>` / `bg list`.
+    if (command === 'bg list' || command.startsWith('bg status')) {
+      const { listTasks, getTask, describeTask } = await import('../background-tasks.js');
+      const id = command.startsWith('bg status') ? command.split(/\s+/)[2] : undefined;
+      if (id) {
+        const t = getTask(id);
+        return t ? describeTask(t) : `No background task ${id}. Use 'bg list'.`;
+      }
+      const all = listTasks();
+      return all.length === 0 ? 'No background tasks.' : all.map((t) => describeTask(t, 400)).join('\n---\n');
+    }
+    if (args.background === true) {
+      const { startBackgroundTask, describeTask } = await import('../background-tasks.js');
+      const t = startBackgroundTask(command, ctx.cwd, {
+        description: typeof args.description === 'string' ? args.description : undefined,
+      });
+      return `${describeTask(t)}\nStarted in background. Continue working; check later with: bg status ${t.id}`;
+    }
 
     // Horus-derived command risk gate: in safe mode, destructive or network-
     // touching commands are blocked outright; in auto/ask they run but the

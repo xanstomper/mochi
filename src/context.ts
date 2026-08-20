@@ -167,8 +167,6 @@ export class ContextEngine {
 
   private buildSystemPrompt(tools: ToolDefinition[], repo?: RepoInfo, task?: Task): string {
     const rules = this.loadProjectRules();
-    const query = task ? `${task.title} ${task.description}` : this.state.goal ?? '';
-    const memory = this.loadMemory(query);
     const repoInfo = repo ? `
 Repository:
 - language: ${repo.language ?? 'unknown'}
@@ -213,6 +211,7 @@ Repository:
 6. Work within your budget
    - Be aware of token and cost budgets. Prefer lean tool calls, short targeted reads, and finishing in as few steps as possible.
    - Stop iterating as soon as you have produced a correct, verified result. Resist polishing forever.
+   - LONG commands (full test suites, builds, installs) should run in the BACKGROUND: pass background:true to shell. You get a task id immediately, keep working, and the harness injects the result when it finishes. Check status with the shell command "bg status <id>" or "bg list".
 
 7. Stay correct, even on hard problems
    - Decompose hard work into sub-problems, solve each, then integrate.
@@ -232,12 +231,26 @@ Repository:
    - shell: for builds, tests, greps. Not for file mutation when edit/patch will do.
    - plan mode (when active): research with read-only tools and return a plan. Mutating calls are vetoed.
 
-${rules ? rules + '\n' : ''}${memory ? `Project memory:\n${memory}\n` : ''}${repoInfo}${this.skills()}${task ? kindHint(classifyTaskKind(task)) : ''}
+${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
 `.trim();
+  }
+
+  /** VOLATILE tier (task-dependent): memory query + task-kind hint. Kept OUT
+   *  of the stable system prompt so the identity prefix stays byte-identical
+   *  across tasks and providers can prefix-cache it (Hermes insight). */
+  private buildVolatilePrompt(task?: Task): string {
+    const query = task ? `${task.title} ${task.description}` : this.state.goal ?? '';
+    const memory = this.loadMemory(query);
+    const parts: string[] = [];
+    if (memory) parts.push(`Project memory:\n${memory}`);
+    if (task) parts.push(kindHint(classifyTaskKind(task)));
+    return parts.join('\n\n');
   }
 
   private buildStatePrompt(task?: Task): string {
     const lines: string[] = [];
+    const volatile = this.buildVolatilePrompt(task);
+    if (volatile) lines.push(volatile);
     lines.push('## Current State');
     if (this.state.goal) lines.push(`Goal: ${this.state.goal}`);
     if (task) {
@@ -272,6 +285,10 @@ ${rules ? rules + '\n' : ''}${memory ? `Project memory:\n${memory}\n` : ''}${rep
       recent.unshift(m);
     }
 
+    // Prompt-stability tiers (Hermes insight): providers cache by shared
+    // prefix. Keep the STABLE identity block first, volatile repo/state last,
+    // so an identical prefix across turns maximizes cache hits and cuts
+    // re-tokenizing cost on every call.
     const messages: ChatMessage[] = [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: statePrompt },
