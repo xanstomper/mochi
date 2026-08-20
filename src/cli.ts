@@ -17,6 +17,7 @@ try {
 
 const BOOLEAN_FLAGS = new Set([
   'p', 'print', 'auto', 'quiet', 'q', 'verbose', 'v', 'debug', 'h', 'help', 'version', 'offline', 'enhance', 'install', 'plan',
+  'y', 'yolo', 'dangerously-skip-permissions',
 ]);
 
 function parseArgs(argv: string[]): { flags: Record<string, string | boolean>; positional: string[] } {
@@ -77,6 +78,12 @@ function configFromFlags(flags: Record<string, string | boolean>): Partial<Mochi
   // is positional and unaffected) makes every agent in the run research and
   // return a plan instead of editing files.
   if (flags.plan) overrides.planMode = true;
+  // --yolo / -y / --dangerously-skip-permissions: bypass all permission gates
+  if (flags.yolo || flags.y || flags['dangerously-skip-permissions'] ||
+      process.env.MOCHI_DANGEROUSLY_SKIP_PERMISSIONS === '1') {
+    overrides.safety = { ...(overrides.safety ?? {} as any), mode: 'auto' as const };
+    (overrides as any).__yolo = true;
+  }
   return overrides;
 }
 
@@ -127,12 +134,18 @@ Options:
   --max-model-calls <n>   Model call limit
   --max-tool-calls <n>    Tool call limit
   --workspace <name>      Use workspace
+  --plan                  Plan mode (no edits)
+  -y, --yolo              Bypass all permission prompts (alias: --dangerously-skip-permissions)
+  --dangerously-skip-permissions  Same as --yolo
   -q, --quiet             Less output
   -v, --verbose           More output
   --debug                 Debug output
   --chunks <n>            Chunk count for mochi perf
   -h, --help              Show help
   --version               Show version
+
+Environment:
+  MOCHI_DANGEROUSLY_SKIP_PERMISSIONS=1  Same as --yolo
 `);
 }
 
@@ -148,6 +161,16 @@ async function main() {
   const { randomSlug } = await import('./util.js');
   const { status, diff, isRepo } = await import('./git.js');
   const runtime = Runtime.create({ cwd, config: configOverrides });
+
+  // Permission policy — propagate --yolo / env var to the runtime object so
+  // the TUI status badge and PermissionManager can read it without config hacks.
+  const isYolo = (configOverrides as any).__yolo === true ||
+    process.env.MOCHI_DANGEROUSLY_SKIP_PERMISSIONS === '1';
+  (runtime as any).__permPolicy = isYolo ? 'yolo'
+    : (configOverrides.safety?.mode === 'auto' ? 'workspace-safe' : 'strict');
+  if (isYolo) {
+    console.error('⚡ YOLO mode: all permission prompts bypassed. Proceeding autonomously.');
+  }
 
   // Ctrl-C / SIGTERM aborts the active run cleanly instead of SIGKILLing the
   // process and orphaning subagents; a second interrupt force-exits.

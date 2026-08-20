@@ -309,6 +309,24 @@ export async function handleRpc(
         const sid = String(params.sessionId ?? '');
         return { id, result: { outcome: 'allowed' } };
       }
+      case 'authenticate': {
+        const sid = String(params.sessionId ?? '');
+        const session = sessions.get(sid);
+        if (!session) return { id, error: { code: -32602, message: `Unknown session ${sid}` } };
+        // We only support the built-in 'agent' auth method which requires no action
+        const methodId = String(params.methodId ?? 'agent');
+        if (methodId !== 'agent') {
+          return { id, error: { code: -32602, message: `Unknown auth method: ${methodId}` } };
+        }
+        return { id, result: {} };
+      }
+      case 'logout': {
+        const sid = String(params.sessionId ?? '');
+        const session = sessions.get(sid);
+        if (!session) return { id, error: { code: -32602, message: `Unknown session ${sid}` } };
+        // No-op for built-in auth; just acknowledge
+        return { id, result: {} };
+      }
       case 'shutdown':
         return { id, result: null };
       default:

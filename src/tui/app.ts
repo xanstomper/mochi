@@ -6,6 +6,7 @@ import type { MochiEvent } from '../types.js';
 import { PROVIDERS, providerById, providerByName } from '../providers.js';
 import { reduceEvent } from './state.js';
 import pkg from '../../package.json' with { type: 'json' };
+import { kvCache } from '../kv-cache.js';
 
 const HIDE = '\x1b[?25l';
 const SHOW = '\x1b[?25h';
@@ -393,7 +394,8 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     const left = state.busy
       ? CYAN + SPINNER[state.spinner] + RESET + ' thinking… ' + DIM + (state.currentTool || state.currentTask || '') + RESET
       : GREEN + '●' + RESET + ' ready' + permBadge;
-    const right = DIM + 'tokens' + RESET + ' ' + (state.lines.length * 4) + ' ' + GREY + '·' + RESET + ' ' + DIM + formatDuration(Date.now() - state.startedAt) + RESET + (queued ? ' ' + GREY + '·' + RESET + ' ' + DIM + queued + ' queued' + RESET : '') + ctxBar(w);
+    const cacheBadge = kvCache.badge() ? ' ' + GREY + '·' + RESET + ' ' + kvCache.badge() : '';
+    const right = DIM + 'tokens' + RESET + ' ' + (state.lines.length * 4) + ' ' + GREY + '·' + RESET + ' ' + DIM + formatDuration(Date.now() - state.startedAt) + RESET + cacheBadge + (queued ? ' ' + GREY + '·' + RESET + ' ' + DIM + queued + ' queued' + RESET : '') + ctxBar(w);
     const sp = Math.max(1, w - visibleLen(left) - visibleLen(right));
     return pad(left + ' '.repeat(sp) + right, w);
   }
@@ -429,6 +431,12 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     side.push(PINK + '║' + RESET + ' ' + DIM + 'model' + RESET + ' ' + CYAN + modelShort + RESET + ' '.repeat(Math.max(0, inner - 7 - visibleLen(modelShort))) + PINK + '║' + RESET);
     side.push(PINK + '║' + RESET + ' ' + DIM + 'tokens' + RESET + ' ' + String(state.lines.length * 4) + ' '.repeat(Math.max(0, inner - 8 - String(state.lines.length * 4).length)) + PINK + '║' + RESET);
     side.push(PINK + '║' + RESET + ' ' + DIM + 'budget' + RESET + ' ' + (runtime.config.safety.contextBudgetTokens / 1000).toFixed(0) + 'k' + ' '.repeat(Math.max(0, inner - 9 - (runtime.config.safety.contextBudgetTokens / 1000).toFixed(0).length)) + PINK + '║' + RESET);
+    // KV Cache status
+    const cacheLabel = kvCache.badge() || 'unknown';
+    side.push(PINK + '║' + RESET + ' ' + DIM + 'cache' + RESET + ' ' + cacheLabel + ' '.repeat(Math.max(0, inner - 7 - visibleLen(cacheLabel))) + PINK + '║' + RESET);
+    // Permission policy
+    const permLabel = (runtime as any).__permPolicy === 'yolo' ? '\x1b[38;2;255;100;0m⚡ YOLO\x1b[0m' : (runtime as any).__permPolicy === 'workspace-safe' ? YELLOW + '🔓 auto' + RESET : GREEN + '🛡️  safe' + RESET;
+    side.push(PINK + '║' + RESET + ' ' + DIM + 'perms' + RESET + ' ' + permLabel + ' '.repeat(Math.max(0, inner - 12)) + PINK + '║' + RESET);
     side.push(PINK + '║' + ' '.repeat(inner) + '║' + RESET);
     if (state.tasks.size > 0) {
       side.push(PINK + '║' + RESET + ' ' + BOLD + 'Tasks' + RESET + ' '.repeat(Math.max(0, inner - 6)) + PINK + '║' + RESET);
@@ -645,6 +653,48 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         const { restore } = await import('../git.js');
         await restore(projectRoot, cp);
         return `Restored ${cp.type} ${cp.ref}`;
+      });
+      return;
+    }
+    // Permission policy slash commands
+    if (line === '/yolo' || line === '/yolo on' || line === '/dangerously-skip-permissions' || line === '/dangerously-skip-permissions on') {
+      (runtime as any).__permPolicy = 'yolo';
+      push('system', '⚡ YOLO mode ENABLED — all permission prompts bypassed. Type /yolo off to restore.');
+      scheduleRender();
+      return;
+    }
+    if (line === '/yolo off' || line === '/dangerously-skip-permissions off') {
+      (runtime as any).__permPolicy = 'strict';
+      push('system', '🛡️  YOLO mode disabled. Strict permissions restored.');
+      scheduleRender();
+      return;
+    }
+    if (line === '/workspace-safe') {
+      (runtime as any).__permPolicy = 'workspace-safe';
+      push('system', '🔓 Workspace-safe mode: reads + workspace edits auto-approved, shell requires approval.');
+      scheduleRender();
+      return;
+    }
+    if (line === '/rewind') {
+      const cpJson = runtime.workspace.readJson<{ ref: string; type: 'commit' | 'stash'; message: string }>('checkpoints/latest.json');
+      if (!cpJson) { push('system', 'No checkpoint found. Use /checkpoint first.'); return; }
+      await run(async () => {
+        const { restore } = await import('../git.js');
+        await restore(projectRoot, cpJson);
+        return `⏪ Rewound to ${cpJson.type} ${cpJson.ref} — "${cpJson.message}"`;
+      });
+      return;
+    }
+    if (line === '/audit') {
+      await run(async () => {
+        const { readFileSync, existsSync } = await import('node:fs');
+        const { resolve: rp } = await import('node:path');
+        const logPath = rp(runtime.workspace.dir, 'logs', 'audit.jsonl');
+        if (!existsSync(logPath)) return 'No audit log yet. Actions are logged when YOLO mode is active.';
+        const lines = readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean).slice(-20);
+        return '📋 Audit log (last 20 entries):\n' + lines.map((l) => {
+          try { const e = JSON.parse(l); return `  ${e.ts} ${e.tool} → ${e.decision}`; } catch { return l; }
+        }).join('\n');
       });
       return;
     }
