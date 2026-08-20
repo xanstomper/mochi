@@ -94,3 +94,26 @@ describe('ACP streaming', () => {
   }, 60_000);
 });
 
+describe('ACP session/cancel', () => {
+  it('aborts a session so session/prompt returns stopReason cancelled', async () => {
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { resolve } = await import('node:path');
+    const { Runtime } = await import('./runtime.js');
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-acp-cancel-'));
+    const sessions = new Map<string, AcpSession>();
+    sessions.set('s1', { id: 's1', cwd: dir, runtime: Runtime.create({ cwd: dir }) });
+    // Cancel marks the runtime aborted; the following prompt must stop early.
+    const cancelled = await handleRpc({ id: 1, method: 'session/cancel', params: { sessionId: 's1' } }, sessions, process.cwd());
+    expect(cancelled.error).toBeUndefined();
+    expect(sessions.get('s1')!.runtime.aborted).toBe(true);
+    // Prompt now: the runtime is already aborted, so it returns cancelled.
+    const r = await handleRpc({ id: 2, method: 'session/prompt', params: { sessionId: 's1', prompt: [{ type: 'text', text: 'x' }] } }, sessions, process.cwd());
+    // With an aborted runtime the goal returns/throws; we still answer the RPC
+    // with the cancelled stop reason (no RPC-level error surfacing).
+    expect(r.error).toBeUndefined();
+    expect((r.result as any).stopReason).toBe('cancelled');
+    rmSync(dir, { recursive: true, force: true });
+  }, 30_000);
+});
+

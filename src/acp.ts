@@ -122,13 +122,26 @@ export async function handleRpc(
             });
           }
         });
+        let aborted = false;
         try {
           await session.runtime.goal(text, constraints);
+        } catch {
+          // A goal that aborts surfaces as a non-zero result while the
+          // runtime is marked aborted (from session/cancel).
         } finally {
           off();
         }
+        // Mid-run cancellation via session/cancel marks this off early.
+        if (session.runtime.aborted) aborted = true;
         // Verified spec: respond with a StopReason when the turn completes.
-        return { id, result: { stopReason: 'end_turn' } };
+        return { id, result: { stopReason: aborted ? 'cancelled' : 'end_turn' } };
+      }
+      case 'session/cancel': {
+        const sid = String(params.sessionId ?? '');
+        const session = sessions.get(sid);
+        if (!session) return { id, error: { code: -32602, message: `Unknown session ${sid}` } };
+        session.runtime.abort('ACP session/cancel');
+        return { id, result: {} };
       }
       case 'session/resume': {
         const sid = String(params.sessionId ?? '');

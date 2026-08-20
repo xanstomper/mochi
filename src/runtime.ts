@@ -59,6 +59,12 @@ export class Runtime {
     if (!this.abortController.signal.aborted) this.abortController.abort(new Error(reason));
   }
 
+  /** True after abort() — used by callers (e.g. ACP session/cancel) to learn
+   *  the run ended early and report the correct stop reason. */
+  get aborted(): boolean {
+    return this.abortController.signal.aborted;
+  }
+
   /** Register a one-shot interrupt: second signal force-exits. */
   onInterrupt(handler: () => void): void {
     let first = true;
