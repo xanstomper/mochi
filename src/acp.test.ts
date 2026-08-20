@@ -88,6 +88,7 @@ describe('ACP streaming', () => {
     expect(r.error).toBeUndefined();
     expect((r.result as any).stopReason).toBe('end_turn');
     expect(updates.length).toBeGreaterThan(0);
+    expect(updates.some((u) => u.includes('plan'))).toBe(true);
     expect(updates.some((u) => u.includes('tool_call'))).toBe(true);
     expect(updates.some((u) => u.includes('agent_message_chunk'))).toBe(true);
     await fake.close();
@@ -119,5 +120,26 @@ describe('ACP session/cancel', () => {
     expect((r.result as any).stopReason).toBe('cancelled');
     rmSync(dir, { recursive: true, force: true });
   }, 30_000);
+});
+
+describe('ACP session/list + delete + mode', () => {
+  it('session/list returns open sessions; delete removes one', async () => {
+    const sessions = freshSessions();
+    const created = await handleRpc({ id: 1, method: 'session/new', params: { cwd: process.cwd() } }, sessions, process.cwd());
+    const sid = (created.result as any).sessionId;
+    const listed = await handleRpc({ id: 2, method: 'session/list', params: {} }, sessions, process.cwd());
+    expect((listed.result as any).sessions.some((s: any) => s.sessionId === sid)).toBe(true);
+    const del = await handleRpc({ id: 3, method: 'session/delete', params: { sessionId: sid } }, sessions, process.cwd());
+    expect(del.error).toBeUndefined();
+    expect(sessions.has(sid)).toBe(false);
+  });
+
+  it('set_mode and set_config_option accept spec-shaped calls', async () => {
+    const sessions = freshSessions();
+    const m = await handleRpc({ id: 1, method: 'session/set_mode', params: { sessionId: 'x', modeId: 'plan' } }, sessions, process.cwd());
+    expect((m.result as any).modeId).toBe('plan');
+    const c = await handleRpc({ id: 2, method: 'session/set_config_option', params: { sessionId: 'x', configId: 'model', value: 'gpt-4o' } }, sessions, process.cwd());
+    expect((c.result as any).configId).toBe('model');
+  });
 });
 

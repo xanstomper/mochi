@@ -2,11 +2,13 @@
 // integration. Editors (VS Code, Zed, JetBrains) spawn Mochi as a child and
 // speak JSON-RPC 2.0 over newline-delimited JSON on stdin/stdout:
 //
-//   initialize       -> {protocolVersion, clientCapabilities}
-//   session/new      -> {sessionId, cwd}   (creates a runtime for a workspace)
-//   session/prompt   -> runs the goal, returns the summary
-//   session/close    -> closes the session
-//   shutdown         -> clean exit
+//   initialize          -> protocol + capabilities
+//   session/new         -> {sessionId, cwd}
+//   session/resume      -> reopen a session
+//   session/prompt      -> runs the goal, streams session/update during
+//   session/cancel      -> aborts the running prompt
+//   session/close       -> close the session
+//   shutdown            -> clean exit
 //
 // The protocol core (handleRpc) is pure and unit-testable without spawning;
 // the stdio loop (serverLoop) is the thin adapter over it.
@@ -16,8 +18,8 @@ import { resolve } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { Runtime } from './runtime.js';
 
-// Baked-in default overridden by the package.json version at runtime (matching
-// the CLI); the baked constant keeps the compiled binary versioned correctly.
+// Baked-in default overridden by package.json at runtime (matching the CLI);
+// the baked constant keeps the compiled binary versioned correctly.
 let ACP_VERSION = '0.10.4';
 try {
   const pkgPath = resolve(process.cwd(), 'package.json');
@@ -47,7 +49,6 @@ export interface RpcResponse {
 function promptText(prompt: unknown): string {
   if (typeof prompt === 'string') return prompt;
   if (Array.isArray(prompt)) {
-    // ACP prompt: [{type:"text", text:"..."}, {type:"resource", resource:{text}},...]
     const parts = prompt.map((b: any) => {
       if (b && typeof b === 'object') {
         if (b.type === 'text' && typeof b.text === 'string') return b.text;
@@ -64,9 +65,19 @@ function promptText(prompt: unknown): string {
 /** Notifications are pushed server→client as `session/update` per ACP v1. */
 export type AcpNotify = (sessionId: string, update: Record<string, unknown>) => void;
 
+/** Map a tool name to its ACP kind (read/edit/execute/other). */
+function toolKind(toolName: string): string {
+  const readTools = new Set(['read', 'glob', 'search', 'inspect', 'memory', 'git', 'skill']);
+  if (readTools.has(toolName)) return 'read';
+  const editTools = new Set(['write', 'edit', 'patch', 'delete', 'replace_symbol']);
+  if (editTools.has(toolName)) return 'edit';
+  if (toolName === 'shell') return 'execute';
+  return 'other';
+}
+
 /** Dispatch one RPC call against the current sessions. Returns the response.
- *  session/prompt actually runs a goal (requires a configured provider) and
- *  streams progress via `onNotify` (spec: session/update notifications). */
+ *  session/prompt runs a goal (requires a configured provider) and streams
+ *  progress via `onNotify` (spec: session/update notifications). */
 export async function handleRpc(
   call: RpcCall,
   sessions: Map<string, AcpSession>,
@@ -86,7 +97,7 @@ export async function handleRpc(
             agentCapabilities: {
               loadSession: false,
               sessionCapabilities: { resume: {}, close: {} },
-              completion: { progress: false },
+              completion: { progress: true },
             },
             implementation: { name: 'mochi', version: ACP_VERSION },
           },
@@ -94,7 +105,6 @@ export async function handleRpc(
       case 'session/new': {
         const sid = randomUUID();
         const sessionCwd = typeof params.cwd === 'string' && params.cwd ? resolve(params.cwd) : cwd;
-        // Spec: mcpServers MAY be provided; connect them if given (best-effort).
         const runtime = Runtime.create({ cwd: sessionCwd });
         sessions.set(sid, { id: sid, cwd: sessionCwd, runtime });
         return { id, result: { sessionId: sid } };
@@ -106,44 +116,52 @@ export async function handleRpc(
         if (!session) return { id, error: { code: -32602, message: `Unknown session ${sid}` } };
         if (!text) return { id, error: { code: -32602, message: 'prompt required' } };
         const constraints: string[] = Array.isArray(params.constraints) ? (params.constraints as string[]).map(String) : [];
-        // Stream progress as session/update notifications (spec v1), mapping
-        // Mochi runtime events onto ACP updates: tool calls, message chunks,
-        // and the final agent message.
+
+        // Emit the plan BEFORE execution (ACP v1 session/update 'plan'): the
+        // decomposed task DAG is the agent's execution plan for this prompt.
+        const goal = await session.runtime.goals.createGoal(text, constraints);
+        const tasks = await session.runtime.goals.decompose(goal);
+        if (tasks.length > 0) {
+          onNotify(sid, {
+            sessionUpdate: 'plan',
+            entries: tasks.map((t) => ({ content: t.title, priority: 'high', status: 'pending' })),
+          });
+        }
+
+        // Stream progress: map Mochi runtime events onto ACP updates.
         const off = session.runtime.events.onAll((e: any) => {
-          if (e.type === 'tool:called') {
-            onNotify(sid, { sessionUpdate: 'tool_call', toolCallId: e.tool, title: String(e.tool), kind: 'other', status: 'pending' });
-          } else if (e.type === 'tool:completed') {
-            onNotify(sid, {
-              sessionUpdate: 'tool_call_update',
-              toolCallId: e.tool,
-              status: 'completed',
-              content: [{ type: 'text', text: String(e.result?.output ?? '').slice(0, 2000) }],
-            });
-          } else if (e.type === 'tool:failed') {
-            onNotify(sid, { sessionUpdate: 'tool_call_update', toolCallId: e.tool, status: 'failed' });
-          } else if (e.type === 'message:chunk' || (e.type === 'message' && e.role === 'assistant')) {
-            const chunk = e.type === 'message:chunk' ? e.content : e.content;
-            const msgId = `msg_${chunk.length % 7}_${Date.now() % 97}`;
-            onNotify(sid, {
-              sessionUpdate: 'agent_message_chunk',
-              messageId: msgId,
-              content: { type: 'text', text: chunk.slice(0, 4000) },
-            });
+          switch (e.type) {
+            case 'tool:called':
+              onNotify(sid, { sessionUpdate: 'tool_call', toolCallId: e.tool, title: String(e.tool), kind: toolKind(e.tool), status: 'pending' });
+              break;
+            case 'tool:completed':
+              onNotify(sid, {
+                sessionUpdate: 'tool_call_update',
+                toolCallId: e.tool,
+                status: 'completed',
+                content: [{ type: 'text', text: String(e.result?.output ?? '').slice(0, 2000) }],
+              });
+              break;
+            case 'tool:failed':
+              onNotify(sid, { sessionUpdate: 'tool_call_update', toolCallId: e.tool, status: 'failed' });
+              break;
+            case 'message:chunk':
+            case 'message':
+              if (e.type === 'message' && e.role !== 'assistant') break;
+              onNotify(sid, {
+                sessionUpdate: 'agent_message_chunk',
+                messageId: `msg_${Date.now() % 1e9}`,
+                content: { type: 'text', text: String(e.content ?? '').slice(0, 4000) },
+              });
+              break;
           }
         });
-        let aborted = false;
         try {
-          await session.runtime.goal(text, constraints);
-        } catch {
-          // A goal that aborts surfaces as a non-zero result while the
-          // runtime is marked aborted (from session/cancel).
-        } finally {
+          await session.runtime.goals.runGoal(goal, tasks, [], session.runtime.signal);
+        } catch { /* cancellation / model error surfaces below via aborted */ } finally {
           off();
         }
-        // Mid-run cancellation via session/cancel marks this off early.
-        if (session.runtime.aborted) aborted = true;
-        // Verified spec: respond with a StopReason when the turn completes.
-        return { id, result: { stopReason: aborted ? 'cancelled' : 'end_turn' } };
+        return { id, result: { stopReason: session.runtime.aborted ? 'cancelled' : 'end_turn' } };
       }
       case 'session/cancel': {
         const sid = String(params.sessionId ?? '');
@@ -152,12 +170,29 @@ export async function handleRpc(
         session.runtime.abort('ACP session/cancel');
         return { id, result: {} };
       }
+      case 'session/list': {
+        const items = [...sessions.values()].map((se) => ({ sessionId: se.id, cwd: se.cwd, path: se.cwd }));
+        return { id, result: { sessions: items } };
+      }
       case 'session/resume': {
         const sid = String(params.sessionId ?? '');
         const sessionCwd = typeof params.cwd === 'string' && params.cwd ? resolve(params.cwd) : cwd;
         if (sessions.has(sid)) return { id, result: {} };
-        const runtime = Runtime.create({ cwd: sessionCwd });
-        sessions.set(sid, { id: sid, cwd: sessionCwd, runtime });
+        sessions.set(sid, { id: sid, cwd: sessionCwd, runtime: Runtime.create({ cwd: sessionCwd }) });
+        return { id, result: {} };
+      }
+      case 'session/set_mode': {
+        // Mode switching (plan/act) is best-effort: we accept any mode id and
+        // let the next prompt run in the configured planMode. Kept spec-shaped
+        // so editors don't hard-fail on the call.
+        return { id, result: { modeId: String(params.modeId ?? 'act') } };
+      }
+      case 'session/set_config_option': {
+        return { id, result: { configId: String(params.configId ?? ''), value: params.value ?? null } };
+      }
+      case 'session/delete': {
+        const sid = String(params.sessionId ?? '');
+        sessions.delete(sid);
         return { id, result: {} };
       }
       case 'session/close': {

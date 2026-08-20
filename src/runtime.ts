@@ -65,6 +65,12 @@ export class Runtime {
     return this.abortController.signal.aborted;
   }
 
+  /** The run-level abort signal (same object GoalEngine runs receive), so
+   *  callers that execute goals directly (ACP) observe session/cancel. */
+  get signal(): AbortSignal {
+    return this.abortController.signal;
+  }
+
   /** Register a one-shot interrupt: second signal force-exits. */
   onInterrupt(handler: () => void): void {
     let first = true;
