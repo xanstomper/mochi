@@ -445,7 +445,19 @@ async function main() {
     return;
   }
   if (first === 'doctor') {
-    console.log(runtime.providerInfo());
+    const { doctorReport, formatDoctor } = await import('./doctor.js');
+    const { daemonRunning, readDaemonInfo } = await import('./daemon.js');
+    const info = readDaemonInfo(runtime.workspace.dir);
+    const isRunning = daemonRunning(runtime.workspace.dir);
+    const report = await doctorReport({
+      provider: runtime.config.model.provider,
+      baseUrl: runtime.config.model.baseUrl ?? '',
+      model: runtime.config.model.model,
+      apiKey: runtime.config.model.apiKey ?? null,
+      workspaceDir: runtime.workspace.dir,
+      daemon: { running: isRunning, port: info?.port },
+    });
+    console.log(formatDoctor(report));
     return;
   }
   if (first === 'run' || first === 'shell') {
