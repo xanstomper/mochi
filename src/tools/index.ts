@@ -23,11 +23,12 @@ import { treeTool } from './tree.js';
 import { regexReplaceTool } from './regex-replace.js';
 import { deepwikiTool } from './deepwiki.js';
 import { clipboardTool } from './clipboard.js';
+import { sqlCodebaseTool } from '../codebase-sql.js';
 
 const ALL_TOOLS: Tool[] = [
   readTool, writeTool, editTool, deleteTool, shellTool, searchTool, globTool,
   gitTool, inspectTool, memoryTool, todoTool, skillTool, subagentTool, patchTool,
-  fetchTool, diffTool, treeTool, regexReplaceTool, deepwikiTool, clipboardTool,
+  fetchTool, diffTool, treeTool, regexReplaceTool, deepwikiTool, clipboardTool, sqlCodebaseTool,
   ...symbolTools, replaceSymbolTool, chameleonTool,
 ];
 

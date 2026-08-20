@@ -453,3 +453,23 @@ export function typeHierarchy(cwd: string, name: string): string {
 
 interface Sym { name: string; kind: string; file: string; rel: string; line: number; body: string; }
 export { Sym };
+
+/** Run a read-only SQL query against the live in-memory symbol graph. Only
+ *  SELECT/WITH/PRAGMA allowed; LIMIT-capped. Returns rows or a descriptive
+ *  error. Used by the sql_codebase_query tool (spec section 3). */
+export function querySymbolGraph(cwd: string, sql: string, maxRows = 50): { rows: unknown[] } | { error: string } {
+  if (!hasSqlite()) return { error: 'node:sqlite unavailable (Node >= 22.5)' };
+  const first = sql.trim().split(/\s+/)[0]?.toLowerCase() ?? '';
+  if (!['select', 'with', 'pragma'].includes(first)) {
+    return { error: `Only read-only queries allowed (SELECT/WITH/PRAGMA). Got "${first}".` };
+  }
+  const hasLimit = /limit\s+\d+/i.test(sql);
+  const finalSql = hasLimit ? sql : `${sql.trim().replace(/;\s*$/, '')} LIMIT ${maxRows}`;
+  try {
+    const database = db(cwd);
+    const rows = database.prepare(finalSql).all() as unknown[];
+    return { rows: rows.slice(0, maxRows) };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
