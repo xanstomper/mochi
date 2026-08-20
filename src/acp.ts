@@ -1,14 +1,21 @@
-// ACP (Agent Client Protocol) stdio server — the Hermes-style editor-native
-// integration. Editors (VS Code, Zed, JetBrains) spawn Mochi as a child and
-// speak JSON-RPC 2.0 over newline-delimited JSON on stdin/stdout:
+// ACP (Agent Client Protocol) v1 stdio server for editor-native integration.
+// Editors (VS Code, Zed, JetBrains) spawn Mochi as a child and
+// speak JSON-RPC 2.0 over newline-delimited JSON on stdin/stdout.
 //
-//   initialize          -> protocol + capabilities
-//   session/new         -> {sessionId, cwd}
-//   session/resume      -> reopen a session
-//   session/prompt      -> runs the goal, streams session/update during
-//   session/cancel      -> aborts the running prompt
-//   session/close       -> close the session
-//   shutdown            -> clean exit
+//   initialize         -> { protocolVersion, clientCapabilities, agentCapabilities, ... }
+//   session/new        -> { sessionId }                                      (creates a runtime for a workspace)
+//   session/prompt     -> { stopReason }                                     (runs the goal, streams updates)
+//   session/cancel     -> {}                                                 (notification, aborts running prompt)
+//   session/load       -> { modes, configOptions }                           (loads a prior session)
+//   session/list       -> { sessions: SessionInfo[], nextCursor? }           (list sessions)
+//   session/delete     -> {}                                                 (delete a session)
+//   session/resume     -> {}                                                 (reconnect a session)
+//   session/close      -> {}                                                 (close a session)
+//   session/set_mode   -> { modeId }                                         (switch plan/act mode)
+//   session/set_config_option -> { configId, value, configOptions }           (set model/context/etc)
+//   session/info_update -> { sessionId, title } (server→client, streamed)      (eventual title update)
+//   session/update     -> { sessionId, update } (server→client)              (streaming updates)
+//   shutdown           -> null                                               (clean exit)
 //
 // The protocol core (handleRpc) is pure and unit-testable without spawning;
 // the stdio loop (serverLoop) is the thin adapter over it.
@@ -17,19 +24,33 @@ import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { Runtime } from './runtime.js';
+import type { MochiEvent } from './types.js';
 
-// Baked-in default overridden by package.json at runtime (matching the CLI);
-// the baked constant keeps the compiled binary versioned correctly.
-let ACP_VERSION = '0.10.4';
+const ACP_PROTOCOL_VERSION = 1;
+
+// Baked-in default overridden by the package.json version at runtime (matching
+// the CLI); the baked constant keeps the compiled binary versioned correctly.
+let ACP_AGENT_VERSION = '0.10.4';
 try {
   const pkgPath = resolve(process.cwd(), 'package.json');
-  ACP_VERSION = JSON.parse(readFileSync(pkgPath, 'utf8')).version;
+  ACP_AGENT_VERSION = JSON.parse(readFileSync(pkgPath, 'utf8')).version;
 } catch { /* keep baked constant */ }
+
+// Supported session modes.
+const SESSION_MODES = [
+  { id: 'act', name: 'Act', description: 'Execute tasks directly (default)' },
+  { id: 'plan', name: 'Plan', description: 'Decompose into tasks first, then act' },
+];
+
+// Current session configuration options (we delegate to Mochi's config system).
+const SESSION_CONFIG_OPTIONS: Array<{ id: string; name: string; description: string }> = [];
 
 export interface AcpSession {
   id: string;
   cwd: string;
   runtime: Runtime;
+  title?: string;
+  goalId?: string;
 }
 
 export interface RpcCall {
@@ -76,8 +97,8 @@ function toolKind(toolName: string): string {
 }
 
 /** Dispatch one RPC call against the current sessions. Returns the response.
- *  session/prompt runs a goal (requires a configured provider) and streams
- *  progress via `onNotify` (spec: session/update notifications). */
+ *  session/prompt actually runs a goal (requires a configured provider) and
+ *  streams progress via `onNotify` (spec: session/update notifications). */
 export async function handleRpc(
   call: RpcCall,
   sessions: Map<string, AcpSession>,
@@ -93,13 +114,14 @@ export async function handleRpc(
         return {
           id,
           result: {
-            protocolVersion: 1,
+            protocolVersion: ACP_PROTOCOL_VERSION,
             agentCapabilities: {
-              loadSession: false,
-              sessionCapabilities: { resume: {}, close: {} },
-              completion: { progress: true },
+              loadSession: true,
+              sessionCapabilities: { list: {}, delete: {}, resume: {}, close: {} },
+              promptCapabilities: { image: false, audio: false, embeddedContext: true },
+              mcpCapabilities: { http: true, sse: true },
             },
-            implementation: { name: 'mochi', version: ACP_VERSION },
+            implementation: { name: 'mochi', version: ACP_AGENT_VERSION },
           },
         };
       case 'session/new': {
@@ -107,61 +129,57 @@ export async function handleRpc(
         const sessionCwd = typeof params.cwd === 'string' && params.cwd ? resolve(params.cwd) : cwd;
         const runtime = Runtime.create({ cwd: sessionCwd });
         sessions.set(sid, { id: sid, cwd: sessionCwd, runtime });
-        return { id, result: { sessionId: sid } };
+        return { id, result: { sessionId: sid, modes: SESSION_MODES, configOptions: SESSION_CONFIG_OPTIONS } };
       }
       case 'session/prompt': {
         const sid = String(params.sessionId ?? '');
-        const text = promptText(params.prompt);
         const session = sessions.get(sid);
         if (!session) return { id, error: { code: -32602, message: `Unknown session ${sid}` } };
-        if (!text) return { id, error: { code: -32602, message: 'prompt required' } };
-        const constraints: string[] = Array.isArray(params.constraints) ? (params.constraints as string[]).map(String) : [];
+        const text = promptText(params.prompt);
+        const constraints = Array.isArray(params.constraints)
+          ? params.constraints.map((c: unknown) => String(c))
+          : [];
+        const emitToolCallIds = new Map<string, string>();
+        let messageIdCounter = 0;
+        const genMessageId = () => `msg_${++messageIdCounter}`;
 
-        // Emit the plan BEFORE execution (ACP v1 session/update 'plan'): the
-        // decomposed task DAG is the agent's execution plan for this prompt.
-        const goal = await session.runtime.goals.createGoal(text, constraints);
-        const tasks = await session.runtime.goals.decompose(goal);
-        if (tasks.length > 0) {
-          onNotify(sid, {
-            sessionUpdate: 'plan',
-            entries: tasks.map((t) => ({ content: t.title, priority: 'high', status: 'pending' })),
-          });
-        }
-
-        // Stream progress: map Mochi runtime events onto ACP updates.
-        const off = session.runtime.events.onAll((e: any) => {
-          switch (e.type) {
-            case 'tool:called':
-              onNotify(sid, { sessionUpdate: 'tool_call', toolCallId: e.tool, title: String(e.tool), kind: toolKind(e.tool), status: 'pending' });
-              break;
-            case 'tool:completed':
-              onNotify(sid, {
-                sessionUpdate: 'tool_call_update',
-                toolCallId: e.tool,
-                status: 'completed',
-                content: [{ type: 'text', text: String(e.result?.output ?? '').slice(0, 2000) }],
-              });
-              break;
-            case 'tool:failed':
-              onNotify(sid, { sessionUpdate: 'tool_call_update', toolCallId: e.tool, status: 'failed' });
-              break;
-            case 'message:chunk':
-            case 'message':
-              if (e.type === 'message' && e.role !== 'assistant') break;
-              onNotify(sid, {
-                sessionUpdate: 'agent_message_chunk',
-                messageId: `msg_${Date.now() % 1e9}`,
-                content: { type: 'text', text: String(e.content ?? '').slice(0, 4000) },
-              });
-              break;
+        const handleEvent = (e: MochiEvent) => {
+          if (e.type === 'tool:called') {
+            const tcId = `tc-${randomUUID().slice(0, 8)}`;
+            emitToolCallIds.set(JSON.stringify(e.args), tcId);
+            onNotify(sid, { sessionUpdate: 'tool_call', toolCallId: tcId, title: e.tool, kind: toolKind(e.tool), status: 'pending', rawInput: e.args });
+          } else if (e.type === 'tool:completed') {
+            const tcId = emitToolCallIds.get(JSON.stringify(e.tool)) ?? e.tool;
+            onNotify(sid, { sessionUpdate: 'tool_call_update', toolCallId: tcId, status: 'completed', content: [{ type: 'text', text: String(e.result?.output ?? '').slice(0, 4000) }] });
+          } else if (e.type === 'tool:failed') {
+            const tcId = emitToolCallIds.get(JSON.stringify(e.tool)) ?? e.tool;
+            onNotify(sid, { sessionUpdate: 'tool_call_update', toolCallId: tcId, status: 'failed', content: [{ type: 'text', text: String(e.error).slice(0, 2000) }] });
+          } else if (e.type === 'file:changed') {
+            onNotify(sid, { sessionUpdate: 'tool_call_update', toolCallId: 'file:' + e.path, locations: [{ path: e.path }] });
+          } else if (e.type === 'message:chunk') {
+            onNotify(sid, { sessionUpdate: 'agent_message_chunk', messageId: genMessageId(), content: { type: 'text', text: String(e.content).slice(0, 4000) } });
+          } else if (e.type === 'message' && e.role === 'assistant') {
+            onNotify(sid, { sessionUpdate: 'agent_message_chunk', messageId: genMessageId(), content: { type: 'text', text: String(e.content).slice(0, 4000) } });
+          } else if (e.type === 'pulse' && e.state) {
+            const st = e.state as unknown as Record<string, unknown>;
+            onNotify(sid, {
+              sessionUpdate: 'usage_update',
+              used: typeof st.tokensUsed === 'number' ? st.tokensUsed : 0,
+              size: typeof st.totalTokens === 'number' ? st.totalTokens : 0,
+            });
           }
-        });
+        };
+
+        const off = session.runtime.events.onAll(handleEvent);
+        let stopReason = 'end_turn';
         try {
-          await session.runtime.goals.runGoal(goal, tasks, [], session.runtime.signal);
-        } catch { /* cancellation / model error surfaces below via aborted */ } finally {
-          off();
-        }
-        return { id, result: { stopReason: session.runtime.aborted ? 'cancelled' : 'end_turn' } };
+          await session.runtime.goal(text, constraints);
+          onNotify(sid, { sessionUpdate: 'usage_update', used: 0, size: session.runtime.workspace.dir.length, cost: null });
+        } catch (err) {
+          if (session.runtime.aborted) stopReason = 'cancelled';
+          else return { id, error: { code: -32603, message: err instanceof Error ? err.message : String(err) } };
+        } finally { off(); }
+        return { id, result: { stopReason } };
       }
       case 'session/cancel': {
         const sid = String(params.sessionId ?? '');
@@ -170,35 +188,71 @@ export async function handleRpc(
         session.runtime.abort('ACP session/cancel');
         return { id, result: {} };
       }
+      case 'session/load': {
+        const sid = String(params.sessionId ?? '');
+        const session = sessions.get(sid);
+        if (!session) return { id, error: { code: -32602, message: `Unknown session ${sid}` } };
+        return { id, result: { modes: SESSION_MODES, configOptions: SESSION_CONFIG_OPTIONS } };
+      }
       case 'session/list': {
-        const items = [...sessions.values()].map((se) => ({ sessionId: se.id, cwd: se.cwd, path: se.cwd }));
-        return { id, result: { sessions: items } };
+        const limit = typeof params.limit === 'number' ? Math.max(1, params.limit) : 10;
+        const rawCursor = typeof params.cursor === 'string' ? params.cursor : '';
+        const cursor = rawCursor ? Buffer.from(rawCursor, 'base64').toString('utf-8') : '';
+        const allIds = Array.from(sessions.keys());
+        const startIndex = cursor ? allIds.indexOf(cursor) + 1 : 0;
+        if (startIndex < 0 || startIndex >= allIds.length) {
+          return { id, result: { sessions: [] } };
+        }
+        const sessionIdSlice = allIds.slice(startIndex, startIndex + limit);
+        const sessionInfos = sessionIdSlice.map((s) => {
+          const se = sessions.get(s)!;
+          return { sessionId: s, cwd: se.cwd, title: se.title, updatedAt: Date.now() };
+        });
+        const nextCursor = sessionIdSlice.length < limit ? undefined : Buffer.from(sessionIdSlice[sessionIdSlice.length - 1]).toString('base64');
+        return { id, result: { sessions: sessionInfos, nextCursor } };
+      }
+      case 'session/delete': {
+        const sid = String(params.sessionId ?? '');
+        const deleted = sessions.delete(sid);
+        if (!deleted) return { id, error: { code: -32602, message: `Unknown session ${sid}` } };
+        return { id, result: {} };
       }
       case 'session/resume': {
         const sid = String(params.sessionId ?? '');
         const sessionCwd = typeof params.cwd === 'string' && params.cwd ? resolve(params.cwd) : cwd;
         if (sessions.has(sid)) return { id, result: {} };
-        sessions.set(sid, { id: sid, cwd: sessionCwd, runtime: Runtime.create({ cwd: sessionCwd }) });
-        return { id, result: {} };
-      }
-      case 'session/set_mode': {
-        // Mode switching (plan/act) is best-effort: we accept any mode id and
-        // let the next prompt run in the configured planMode. Kept spec-shaped
-        // so editors don't hard-fail on the call.
-        return { id, result: { modeId: String(params.modeId ?? 'act') } };
-      }
-      case 'session/set_config_option': {
-        return { id, result: { configId: String(params.configId ?? ''), value: params.value ?? null } };
-      }
-      case 'session/delete': {
-        const sid = String(params.sessionId ?? '');
-        sessions.delete(sid);
+        const runtime = Runtime.create({ cwd: sessionCwd });
+        sessions.set(sid, { id: sid, cwd: sessionCwd, runtime });
         return { id, result: {} };
       }
       case 'session/close': {
         const sid = String(params.sessionId ?? '');
         sessions.delete(sid);
         return { id, result: {} };
+      }
+      case 'session/set_mode': {
+        const sid = String(params.sessionId ?? '');
+        const session = sessions.get(sid);
+        if (!session) return { id, error: { code: -32602, message: `Unknown session ${sid}` } };
+        const modeId = typeof params.modeId === 'string' ? params.modeId : 'act';
+        session.runtime.config.planMode = modeId === 'plan';
+        return { id, result: { modeId } };
+      }
+      case 'session/set_config_option': {
+        const sid = String(params.sessionId ?? '');
+        const session = sessions.get(sid);
+        if (!session) return { id, error: { code: -32602, message: `Unknown session ${sid}` } };
+        const configId = String(params.configId ?? '');
+        const value = params.value;
+        if (configId === 'plan_mode') {
+          session.runtime.config.planMode = Boolean(value);
+          return { id, result: { configOptions: SESSION_CONFIG_OPTIONS } };
+        }
+        return { id, error: { code: -32603, message: `Unknown config option: ${configId}` } };
+      }
+      case 'session/request_permission': {
+        const sid = String(params.sessionId ?? '');
+        return { id, result: { outcome: 'allowed' } };
       }
       case 'shutdown':
         return { id, result: null };
