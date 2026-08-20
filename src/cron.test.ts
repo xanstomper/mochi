@@ -3,7 +3,7 @@ import { describe, it, expect, afterAll } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { everyInterval, nextRunFor, addJob, listJobs, dueJobs, removeJob, bumpJob, isRunnable } from './cron.js';
+import { everyInterval, nextRunFor, addJob, listJobs, dueJobs, removeJob, bumpJob, isRunnable, updateJob } from './cron.js';
 
 let dirs: string[] = [];
 afterAll(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
@@ -78,3 +78,20 @@ describe('job persistence', () => {
     expect(bumped.nextRun).toBeGreaterThan(Date.now());
   });
 });
+
+
+describe('updateJob persistence', () => {
+  it('persists nextRun advance so a due job does not re-fire', () => {
+    const dir = tmp();
+    addJob(dir, 'tick once', 'every 1m');
+    const before = listJobs(dir)[0];
+    // simulate a run: bump + persist (what the daemon ticker does)
+    updateJob(dir, bumpJob(before));
+    const after = listJobs(dir)[0];
+    expect(after.runs).toBe(before.runs + 1);
+    expect(after.nextRun).toBeGreaterThan(Date.now());
+    // now it should no longer be due immediately
+    expect(dueJobs(dir).some((j) => j.id === after.id)).toBe(false);
+  });
+});
+

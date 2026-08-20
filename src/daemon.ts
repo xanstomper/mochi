@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { MochiConfig } from './types.js';
 import { Runtime } from './runtime.js';
-import { addJob, listJobs, removeJob, dueJobs, bumpJob } from './cron.js';
+import { addJob, listJobs, removeJob, dueJobs, bumpJob, updateJob } from './cron.js';
 import { truncateMiddle } from './util.js';
 
 export interface DaemonInfo {
@@ -149,7 +149,7 @@ export async function startDaemonInProcess(opts: {
         try {
           await runtime.goal(job.prompt);
         } catch { /* job failures are non-fatal */ }
-        bumpJob(job);
+        updateJob(cwd, bumpJob(job)); // persist nextRun+runs so it won't re-fire
       }
     } finally {
       processing = false;
@@ -338,7 +338,7 @@ export async function serverMain(argv: string[]): Promise<void> {
       const due = await dueJobs(cwd);
       for (const job of due) {
         try { await rt.goal(job.prompt); } catch { /* best-effort */ }
-        bumpJob(job);
+        updateJob(cwd, bumpJob(job)); // persist so the same job doesn't re-fire
       }
     } finally { processing = false; }
   }, 10_000);

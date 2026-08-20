@@ -138,6 +138,12 @@ export function removeJob(dir: string, id: string): boolean {
   return true;
 }
 
+/** Persist an in-memory update to a job back to disk (e.g. after a run). */
+export function updateJob(dir: string, job: CronJob): void {
+  const jobs = loadJobs(dir).map((j) => (j.id === job.id ? job : j));
+  saveJobs(dir, jobs);
+}
+
 export function listJobs(dir: string): CronJob[] {
   return loadJobs(dir);
 }

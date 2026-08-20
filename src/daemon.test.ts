@@ -215,3 +215,44 @@ it('resumes a goal after a daemon restart (shutdown -> new daemon -> /api/resume
     rmSync(dir, { recursive: true, force: true });
   }
 }, 60_000);
+
+it('runs and persists a scheduled cron job through the daemon', async () => {
+  const d = mkdtempSync(resolve(tmpdir(), 'mochi-daemon-cron-'));
+  // Fake provider so runtime.goal completes instantly in the ticker.
+  const { startFakeOpenAI } = await import('./testutil/fake-openai.js');
+  const fake = await startFakeOpenAI([
+    { content: '{"tasks":[{"title":"say hi","description":"say hi","role":"coder","dependencies":[],"acceptanceCriteria":[],"verificationCommand":""}]}', finishReason: 'stop' },
+    { content: 'done', finishReason: 'stop', completionTokens: 4 },
+  ]);
+  const cfg = { model: { provider: 'openai', baseUrl: fake.url, model: 'fake-model' }, safety: { mode: 'auto', commandTimeoutSeconds: 10, maxIterations: 3, maxRuntimeMinutes: 2, maxConcurrentAgents: 1, contextBudgetTokens: 4000 }, permissions: { read: true, write: true, shell: true, network: true, gitDestructive: true }, telemetry: false, projectDir: '.mochi', quiet: true, verbose: false, debug: false } as any;
+  const h = await startDaemonInProcess({ cwd: d, token: 'crontok', config: cfg });
+  try {
+    // Add a job whose due-time is immediately in the past by using a tiny interval.
+    const res = await fetch(`http://127.0.0.1:${h.info.port}/api/cron`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer crontok' },
+      body: JSON.stringify({ action: 'add', prompt: 'say hi', schedule: 'every 1m' }),
+    });
+    const added = await res.json();
+    expect(res.status).toBe(200);
+    expect((added as any).id).toBeTruthy();
+
+    // Force due: rewrite nextRun to the past, then let the ticker run.
+    const { listJobs } = await import('./cron.js');
+    const jobs = listJobs(d);
+    const due = { ...jobs[0], nextRun: Date.now() - 1 };
+    const fs = await import('node:fs');
+    fs.writeFileSync(resolve(d, '.mochi', 'cron.json'), JSON.stringify([due], null, 2));
+
+    // Ticker runs every 10s; wait for one tick.
+    await new Promise((r) => setTimeout(r, 12_000));
+    const after = listJobs(d)[0];
+    // After firing, nextRun must have advanced past now and runs incremented.
+    expect(after.runs).toBeGreaterThanOrEqual(1);
+    expect(after.nextRun).toBeGreaterThan(Date.now());
+  } finally {
+    await h.close();
+    try { await fake.close(); } catch { /* already */ }
+    rmSync(d, { recursive: true, force: true });
+  }
+}, 60_000);
