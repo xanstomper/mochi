@@ -17,7 +17,7 @@ try {
 
 const BOOLEAN_FLAGS = new Set([
   'p', 'print', 'auto', 'quiet', 'q', 'verbose', 'v', 'debug', 'h', 'help', 'version', 'offline', 'enhance', 'install', 'plan',
-  'y', 'yolo', 'dangerously-skip-permissions',
+  'y', 'yolo', 'dangerously-skip-permissions', 'force', 'user',
 ]);
 
 function parseArgs(argv: string[]): { flags: Record<string, string | boolean>; positional: string[] } {
@@ -496,6 +496,47 @@ async function main() {
     const { readFileSync } = await import('node:fs');
     try { console.log(readFileSync(sk.path, 'utf8').slice(0, 4000)); }
     catch (e) { console.error(`Failed to read skill: ${(e as Error).message}`); }
+    return;
+  }
+  if (first === 'plugins' || first === 'plugin') {
+    // spec 12-E: mochi plugin add|remove|list [--user|--force]
+    const { PluginRegistry } = await import('./plugins.js');
+    const projectPlugins = resolve(cwd, '.mochi', 'plugins');
+    const reg = new PluginRegistry(projectPlugins);
+    const sub = positional[1];
+    if (sub === 'list' || sub === 'ls' || !sub) {
+      const records = reg.list();
+      if (!records.length) { console.log('No plugins installed. Use: mochi plugin add <dir>'); return; }
+      for (const p of records) {
+        console.log(`${p.name.padEnd(24)} v${p.version.padEnd(8)} ${p.scope === 'user' ? '[user] '.padEnd(8) : '[proj] '.padEnd(8)}${p.description}${p.hooks.length ? ` hooks:${p.hooks.join(',')}` : ''}`);
+      }
+      return;
+    }
+    if (sub === 'add' || sub === 'install') {
+      const source = positional[2];
+      if (!source) { console.log('Usage: mochi plugin add <dir> [--user] [--force]'); return; }
+      try {
+        const rec = reg.install(source, { scope: flags.user ? 'user' : 'project', overwrite: !!flags.force });
+        const hooksFile = resolve(cwd, '.mochi', 'hooks.json');
+        const { existsSync, readFileSync } = await import('node:fs');
+        const existing = existsSync(hooksFile) ? JSON.parse(readFileSync(hooksFile, 'utf8')) : {};
+        reg.syncToHooksFile(hooksFile, existing);
+        console.log(`Installed plugin "${rec.name}" v${rec.version} (${rec.scope} scope).`);
+        console.log(`Hooks merged into ${hooksFile}`);
+        return;
+      } catch (e) {
+        console.error(`Install failed: ${(e as Error).message}`);
+        return;
+      }
+    }
+    if (sub === 'remove' || sub === 'rm') {
+      const name = positional[2];
+      if (!name) { console.log('Usage: mochi plugin remove <name>'); return; }
+      if (reg.remove(name)) { console.log(`Removed plugin "${name}".`); }
+      else { console.error(`No plugin "${name}" installed.`); }
+      return;
+    }
+    console.log('Usage: mochi plugin <add <dir>|remove <name>|list>');
     return;
   }
   if (first === 'ask') {

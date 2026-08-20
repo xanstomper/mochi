@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { basename } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { findProjectRoot } from '../repo.js';
 import type { Runtime } from '../runtime.js';
 import type { MochiEvent } from '../types.js';
@@ -51,6 +51,7 @@ const COMMANDS = [
   { name: '/model', hint: 'Show / change model' },
   { name: '/mode', hint: 'Set execution mode (spec|security|codemod|chaos|normal)' },
   { name: '/modes', hint: 'List execution modes' },
+  { name: '/plugins', hint: 'List installed plugins' },
   { name: '/goal', hint: 'Create goal' },
   { name: '/team', hint: 'Run team mode' },
   { name: '/plan', hint: 'Plan only' },
@@ -600,6 +601,13 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     if (line === '/modes') {
       const { formatModes } = await import('../modes.js');
       push('system', formatModes((runtime.config.mode as any) ?? 'normal'));
+      return;
+    }
+    if (line === '/plugins') {
+      const { PluginRegistry } = await import('../plugins.js');
+      const records = new PluginRegistry(resolve(projectRoot, '.mochi', 'plugins')).list();
+      if (!records.length) { push('system', 'No plugins installed. Use: mochi plugin add <dir>'); return; }
+      push('system', records.map((p) => `${p.name} v${p.version} [${p.scope}] ${p.description}${p.hooks.length ? ` hooks:${p.hooks.join(',')}` : ''}`).join('\n'));
       return;
     }
     if (line === '/profiles') { await run(async () => runtime.profiles().map(p => `${p.name} (${p.role}) model=${p.defaultModel ?? 'coding'} verification=${p.verification ?? 'optional'}`).join('\n')); return; }
