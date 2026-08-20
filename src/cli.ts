@@ -106,6 +106,7 @@ Usage:
   mochi daemon approve
   mochi daemon resume <goalId>      # resume a persisted goal over HTTP
   mochi daemon cron add|list|remove # scheduled agent jobs
+  mochi daemon restart              # stop + start on the same port
   mochi daemon stop
   mochi enhance "<task>" [--mode <mode>]
   mochi termix ["<task>"] [--coms|--sep] [--sessions N]
@@ -199,18 +200,25 @@ async function main() {
       for (const j of data.jobs ?? []) console.log(`${j.status.padEnd(10)} ${j.id}  ${j.objective}`);
       return;
     }
-    if (action === 'stop') {
+    if (action === 'stop' || action === 'restart') {
       if (!info || !daemonRunning(wsDir)) {
-        console.log('No daemon running for this workspace.');
+        console.log(action === 'restart' ? 'No daemon running; nothing to restart.' : 'No daemon running for this workspace.');
         return;
       }
-      const res = await fetch(`http://127.0.0.1:${info.port}/api/status`, {
+      const restRes = await fetch(`http://127.0.0.1:${info.port}/api/status`, {
         method: 'POST', headers: { authorization: `Bearer ${info.token}` },
       });
-      await res.text();
+      await restRes.text();
       // Best-effort: kill the recorded pid after telling it to exit.
       try { process.kill(info.pid, 'SIGTERM'); } catch { /* already gone */ }
-      console.log('Daemon stopped.');
+      if (action === 'stop') {
+        console.log('Daemon stopped.');
+        return;
+      }
+      // restart: start a fresh daemon on the same port/token.
+      await new Promise((r) => setTimeout(r, 400));
+      const r = await startDaemon({ cwd, port: info.port, token: info.token, config: configOverrides });
+      console.log(r.ok ? `Daemon restarted on 127.0.0.1:${r.port}.` : `Restart failed: ${r.error}`);
       return;
     }
     if (action === 'send' || action === 'approve' || action === 'resume') {
@@ -272,7 +280,7 @@ async function main() {
       console.error('Usage: mochi daemon cron add <prompt> --schedule <every Xm|cron> | list | remove <id>');
       process.exit(1);
     }
-    console.error('Usage: mochi daemon start|status|jobs|send|approve|resume|cron|stop');
+    console.error('Usage: mochi daemon start|status|jobs|send|approve|resume|cron|restart|stop');
     process.exit(1);
   }
 

@@ -270,3 +270,38 @@ it('runs and persists a scheduled cron job through the daemon', async () => {
     rmSync(d, { recursive: true, force: true });
   }
 }, 60_000);
+
+it('cron jobs survive a daemon restart (durable schedule)', async () => {
+  const d = mkdtempSync(resolve(tmpdir(), 'mochi-daemon-cron-restart-'));
+  const { startFakeOpenAI } = await import('./testutil/fake-openai.js');
+  const fake = await startFakeOpenAI([
+    { content: '{"tasks":[{"title":"say hi","description":"say hi","role":"coder","dependencies":[],"acceptanceCriteria":[],"verificationCommand":""}]}', finishReason: 'stop' },
+    { content: 'done', finishReason: 'stop', completionTokens: 4 },
+  ]);
+  const cfg = { model: { provider: 'openai', baseUrl: fake.url, model: 'fake-model' }, safety: { mode: 'auto', commandTimeoutSeconds: 10, maxIterations: 3, maxRuntimeMinutes: 2, maxConcurrentAgents: 1, contextBudgetTokens: 4000 }, permissions: { read: true, write: true, shell: true, network: true, gitDestructive: true }, telemetry: false, projectDir: '.mochi', quiet: true, verbose: false, debug: false } as any;
+
+  // First daemon: add a scheduled job.
+  const h1 = await startDaemonInProcess({ cwd: d, token: 'rstok', config: cfg });
+  const res = await fetch(`http://127.0.0.1:${h1.info.port}/api/cron`, {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer rstok' },
+    body: JSON.stringify({ action: 'add', prompt: 'say hi', schedule: 'every 5m' }),
+  });
+  await res.json();
+  const { listJobs } = await import('./cron.js');
+  const before = listJobs(d);
+  expect(before.length).toBe(1);
+  await h1.close(); // shutdown
+
+  // Fresh daemon on the SAME workspace: the job must still be scheduled.
+  const h2 = await startDaemonInProcess({ cwd: d, token: 'tokok', config: cfg });
+  try {
+    const after = listJobs(d);
+    expect(after.length).toBe(1);
+    expect(after[0].prompt).toBe('say hi');
+    expect(after[0].schedule).toBe('every 5m');
+  } finally {
+    await h2.close();
+    try { await fake.close(); } catch { /* already */ }
+    rmSync(d, { recursive: true, force: true });
+  }
+}, 60_000);
