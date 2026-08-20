@@ -104,6 +104,8 @@ Usage:
   mochi daemon jobs
   mochi daemon send "<goal>"
   mochi daemon approve
+  mochi daemon resume <goalId>      # resume a persisted goal over HTTP
+  mochi daemon cron add|list|remove # scheduled agent jobs
   mochi daemon stop
   mochi enhance "<task>" [--mode <mode>]
   mochi termix ["<task>"] [--coms|--sep] [--sessions N]
