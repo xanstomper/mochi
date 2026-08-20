@@ -379,9 +379,27 @@ ACP-capable editors (VS Code, Zed, JetBrains) can drive Mochi natively:
 mochi acp   # spawn as an editor subprocess; speaks ACP v1 on stdin/stdout
 ```
 
-Supported methods: `initialize`, `session/new`, `session/resume`,
-`session/prompt`, `session/close`, `shutdown`. Prompts accept ACP
-`ContentBlock[]` payloads; each run returns a `stopReason`.
+Supported methods (ACP v1):
+
+| Method | Description |
+|--------|-------------|
+| `initialize` | Protocol handshake; returns agent capabilities |
+| `session/new` | Create a workspace session; returns `sessionId`, `modes`, `configOptions` |
+| `session/prompt` | Run a goal with streaming `session/update` notifications; returns `stopReason` |
+| `session/cancel` | Abort a running prompt |
+| `session/load` | Load a session's modes and config options |
+| `session/list` | List sessions with pagination (`limit`, `cursor`) |
+| `session/delete` | Delete a session |
+| `session/resume` | Reconnect to a session |
+| `session/close` | Close a session |
+| `session/set_mode` | Switch between `act` / `plan` modes |
+| `session/set_config_option` | Set config (e.g., `plan_mode`) |
+| `session/request_permission` | MCP permission requests (returns `allowed`) |
+| `shutdown` | Clean server shutdown |
+
+Streaming updates (`session/update`): `tool_call`, `tool_call_update`, `agent_message_chunk`, `usage_update`, `plan`.
+
+Prompts accept ACP `ContentBlock[]` payloads; each run returns a `stopReason`.
 
 ## Health (`mochi doctor`)
 
