@@ -437,6 +437,23 @@ async function main() {
     await launchTui(runtime);
     return;
   }
+  if (first === 'issue') {
+    // mochi issue <n> — start an issue-to-PR flow: fetch, branch, and print how
+    // to implement + open the PR (the agent fix is a normal `mochi` run in the
+    // created branch; this keeps the plumbing honest without auto-pushing).
+    const n = Number(positional[1]);
+    if (!Number.isInteger(n) || n < 1) { console.log('Usage: mochi issue <number>'); return; }
+    const { runIssueToPr } = await import('./pr.js');
+    try {
+      const res = await runIssueToPr({ cwd, issueNumber: n });
+      console.log(`Branch: ${res.branch}`);
+      console.log(`Next: checkout ${res.branch}, run 'mochi goal "fix #${n} …"', then 'mochi pr ${n}' to open the PR.`);
+      return;
+    } catch (e) {
+      console.error(`Issue pipeline failed: ${(e as Error).message}`);
+      return;
+    }
+  }
   if (first === 'skills') {
     const { loadAllSkills, readSkillBody } = await import('./skills.js');
     const { skills } = loadAllSkills(cwd);
