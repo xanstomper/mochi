@@ -241,13 +241,14 @@ async function main() {
           method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${info.token}` },
           body: JSON.stringify({ action: action2, ...extra }),
         });
-        return (await res.json()) as { ok?: boolean; error?: string; id?: string; jobs?: Array<{ id: string; prompt: string; schedule: string; enabled: boolean; runs: number; lastRun?: number; nextRun?: number }> };
+        return (await res.json()) as { ok?: boolean; error?: string; id?: string; jobs?: Array<{ id: string; prompt: string; schedule: string; enabled: boolean; runs: number; lastRun?: number; nextRun?: number; notify?: string | null }> };
       };
       if (sub === 'add') {
         const prompt = positional.slice(3).join(' ');
         const schedule = flags.schedule ?? flags.every;
-        if (!prompt || !schedule) { console.error('Usage: mochi daemon cron add "<prompt>" --schedule "every 30m"'); process.exit(1); }
-        const r = await post('add', { prompt, schedule });
+        const notify = flags.notify;
+        if (!prompt || !schedule) { console.error('Usage: mochi daemon cron add "<prompt>" --schedule "every 30m" [--notify <url|cmd>]'); process.exit(1); }
+        const r = await post('add', { prompt, schedule, ...(typeof notify === 'string' && notify ? { notify } : {}) });
         if (r.error) { console.error(r.error); process.exit(1); }
         console.log(`Cron job added: ${r.id}`);
         return;
@@ -256,7 +257,8 @@ async function main() {
         const r = await post('listed-up');
         for (const j of r.jobs ?? []) {
           const next = j.nextRun ? new Date(j.nextRun).toISOString() : '-';
-          console.log(`${j.id}  ${j.enabled ? 'on ' : 'off'}  runs=${j.runs}  next=${next}  "${j.prompt.slice(0, 50)}"`);
+          const n = j.notify ? `  notify=${String(j.notify).slice(0, 24)}` : '';
+          console.log(`${j.id}  ${j.enabled ? 'on ' : 'off'}  runs=${j.runs}  next=${next}  "${j.prompt.slice(0, 50)}"${n}`);
         }
         return;
       }

@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { MochiConfig } from './types.js';
 import { Runtime } from './runtime.js';
-import { addJob, listJobs, removeJob, dueJobs, bumpJob, updateJob } from './cron.js';
+import { addJob, listJobs, removeJob, dueJobs, bumpJob, updateJob, notifyJobResult } from './cron.js';
 import { truncateMiddle } from './util.js';
 
 export interface DaemonInfo {
@@ -146,9 +146,11 @@ export async function startDaemonInProcess(opts: {
     try {
       const due = await dueJobs(cwd);
       for (const job of due) {
+        let summary = 'Goal ran.';
         try {
-          await runtime.goal(job.prompt);
+          summary = await runtime.goal(job.prompt);
         } catch { /* job failures are non-fatal */ }
+        await notifyJobResult(job, summary);
         updateJob(cwd, bumpJob(job)); // persist nextRun+runs so it won't re-fire
       }
     } finally {
@@ -257,13 +259,14 @@ async function handleRequest(
       if (action === 'add') {
         const prompt = String(body.prompt ?? '');
         const schedule = String(body.schedule ?? '');
+        const notify = body.notify ? String(body.notify) : undefined;
         if (!prompt || !schedule) { send(400, { ok: false, error: 'prompt and schedule required' }); return; }
-        const r = addJob(cwd, prompt, schedule);
+        const r = addJob(cwd, prompt, schedule, notify);
         send(r.error ? 400 : 200, r.error ? { ok: false, error: r.error } : { ok: true, id: r.id });
         return;
       }
       if (action === 'listed-up') {
-        const jobs = listJobs(cwd).map((j) => ({ id: j.id, prompt: j.prompt, schedule: j.schedule, enabled: j.enabled, runs: j.runs, lastRun: j.lastRun, nextRun: j.nextRun }));
+        const jobs = listJobs(cwd).map((j) => ({ id: j.id, prompt: j.prompt, schedule: j.schedule, enabled: j.enabled, runs: j.runs, lastRun: j.lastRun, nextRun: j.nextRun, notify: j.notify ?? null }));
         send(200, { ok: true, jobs });
         return;
       }
@@ -337,7 +340,9 @@ export async function serverMain(argv: string[]): Promise<void> {
     try {
       const due = await dueJobs(cwd);
       for (const job of due) {
-        try { await rt.goal(job.prompt); } catch { /* best-effort */ }
+        let out = 'Goal ran.';
+        try { out = await rt.goal(job.prompt); } catch { /* best-effort */ }
+        await notifyJobResult(job, out);
         updateJob(cwd, bumpJob(job)); // persist so the same job doesn't re-fire
       }
     } finally { processing = false; }

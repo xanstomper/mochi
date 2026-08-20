@@ -19,6 +19,9 @@ export interface CronJob {
   createdAt: number;
   enabled: boolean;
   runs: number;
+  /** Optional delivery when a job finishes: either an https webhook URL or a
+   *  shell command. Receives the goal summary via stdin / {summary} token. */
+  notify?: string;
 }
 
 const UNIT_MS: Record<string, number> = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000, w: 7 * 86_400_000 };
@@ -114,9 +117,9 @@ function saveJobs(dir: string, jobs: CronJob[]): void {
 }
 
 /** Add a recurring job; returns its id or a validation error. */
-export function addJob(dir: string, prompt: string, schedule: string): { id?: string; error?: string } {
+export function addJob(dir: string, prompt: string, schedule: string, notify?: string): { id?: string; error?: string } {
   const n = nextRunFor(schedule);
-  if (n === null) return { error: `Unparseable schedule "${schedule}". Use "every 30m" or a 5-field cron like "0 9 * * 1-5".` };
+  if (n === null) return { id: undefined, error: `Unparseable schedule "${schedule}". Use "every 30m" or a 5-field cron like "0 9 * * 1-5".` };
   const jobs = loadJobs(dir);
   const job: CronJob = {
     id: randomUUID().slice(0, 8),
@@ -127,10 +130,47 @@ export function addJob(dir: string, prompt: string, schedule: string): { id?: st
     createdAt: Date.now(),
     enabled: true,
     runs: 0,
+    ...(notify ? { notify } : {}),
   };
   jobs.push(job);
   saveJobs(dir, jobs);
   return { id: job.id };
+}
+
+/** Deliver a job result to its configured notify target (webhook or command).
+ *  Webhooks get a POST with JSON; shell commands get the summary as an ENV var
+ *  and stdin. Never throws — notification failures are logged, not fatal. */
+export async function notifyJobResult(job: CronJob, summary: string): Promise<void> {
+  const target = job.notify;
+  if (!target) return;
+  const summaryLine = summary.replace(/"/g, '\"');
+  const ok = await (async () => {
+    try {
+      if (/^https?:\/\//i.test(target)) {
+        const res = await fetch(target, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ job: job.id, prompt: job.prompt, summary, ts: Date.now() }),
+        });
+        return res.ok;
+      }
+      // shell command: pass the summary through stdin + an env var
+      const { execFile } = await import('node:child_process');
+      return await new Promise<boolean>((resolve2) => {
+        execFile('sh', ['-c', target], { env: { ...process.env, MOCHI_JOB_SUMMARY: summaryLine } }, (err, stdout, stderr) => {
+          resolve2(!err);
+        });
+      });
+    } catch {
+      return false;
+    }
+  })();
+  if (!ok) console.warn(`[cron] notify failed for job ${job.id} -> ${target.slice(0, 60)}`);
+}
+
+/** Returns the notify target (for the CLI to surface). */
+export function jobNotify(job: CronJob): string | null {
+  return job.notify ?? null;
 }
 
 export function removeJob(dir: string, id: string): boolean {

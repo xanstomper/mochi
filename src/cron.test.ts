@@ -3,7 +3,7 @@ import { describe, it, expect, afterAll } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { everyInterval, nextRunFor, addJob, listJobs, dueJobs, removeJob, bumpJob, isRunnable, updateJob } from './cron.js';
+import { everyInterval, nextRunFor, addJob, listJobs, dueJobs, removeJob, bumpJob, isRunnable, updateJob, notifyJobResult } from './cron.js';
 
 let dirs: string[] = [];
 afterAll(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
@@ -93,5 +93,36 @@ describe('updateJob persistence', () => {
     // now it should no longer be due immediately
     expect(dueJobs(dir).some((j) => j.id === after.id)).toBe(false);
   });
+});
+
+
+describe('notifyJobResult', () => {
+  it('POSTs to a webhook URL with the summary', async () => {
+    const { createServer } = await import('node:http');
+    let received: unknown = null;
+    const server = createServer((req, res) => {
+      let b = '';
+      req.on('data', (c) => (b += c));
+      req.on('end', () => { received = JSON.parse(b); res.writeHead(200); res.end(); });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const addr = server.address() as { port: number };
+    const job = { id: 'job1', prompt: 'run tests', schedule: 'every 1m', lastRun: null, nextRun: 0, createdAt: 0, enabled: true, runs: 0, notify: `http://127.0.0.1:${addr.port}/hook` };
+    await notifyJobResult(job, 'Goal completed. 1 done, 0 failed.');
+    expect((received as any)?.summary).toContain('1 done');
+    expect((received as any)?.prompt).toBe('run tests');
+    await new Promise<void>((r) => server.close(() => r()));
+  }, 15_000);
+
+  it('runs a shell command with the summary in an env var', async () => {
+    const { mkdtempSync, writeFileSync, readFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { resolve } = await import('node:path');
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-notify-'));
+    const out = resolve(dir, 'got.txt');
+    const job = { id: 'job2', prompt: 'x', schedule: 'every 1m', lastRun: null, nextRun: 0, createdAt: 0, enabled: true, runs: 0, notify: `echo "$MOCHI_JOB_SUMMARY" > ${out}` };
+    await notifyJobResult(job, 'the summary text');
+    expect(readFileSync(out, 'utf8').trim()).toBe('the summary text');
+  }, 15_000);
 });
 
