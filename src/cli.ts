@@ -99,6 +99,7 @@ Usage:
   mochi session list                 # list past sessions
   mochi session search "<text>"       # full-text search past transcripts
   mochi speculate "<question>"
+  mochi acp                          # editor-native stdio server (Agent Client Protocol)
   mochi daemon start [--port <n>] [--token <t>]
   mochi daemon status
   mochi daemon jobs
@@ -411,6 +412,13 @@ async function main() {
   if (first === 'tui') {
     const { launchTui } = await import('./tui/app.js');
     await launchTui(runtime);
+    return;
+  }
+  if (first === 'acp') {
+    // Editor-native stdio server (Agent Client Protocol). Runs until the
+    // editor closes stdin. Never falls through to the prompt path.
+    const { serverLoop } = await import('./acp.js');
+    await serverLoop(cwd);
     return;
   }
   if (first === 'perf') {
