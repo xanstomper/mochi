@@ -100,9 +100,12 @@ describe('ACP session/cancel', () => {
     const { tmpdir } = await import('node:os');
     const { resolve } = await import('node:path');
     const { Runtime } = await import('./runtime.js');
+    const { startFakeOpenAI } = await import('./testutil/fake-openai.js');
+    const fake = await startFakeOpenAI([{ content: 'done', finishReason: 'stop', completionTokens: 4 }]);
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-acp-cancel-'));
+    const cfg = { model: { provider: 'openai', baseUrl: fake.url, model: 'fake-model' }, safety: { mode: 'auto', commandTimeoutSeconds: 10, maxIterations: 3, maxRuntimeMinutes: 2, maxConcurrentAgents: 1, contextBudgetTokens: 4000 }, permissions: { read: true, write: true, shell: true, network: true, gitDestructive: true }, telemetry: false, projectDir: '.mochi', quiet: true, verbose: false, debug: false } as any;
     const sessions = new Map<string, AcpSession>();
-    sessions.set('s1', { id: 's1', cwd: dir, runtime: Runtime.create({ cwd: dir }) });
+    sessions.set('s1', { id: 's1', cwd: dir, runtime: Runtime.create({ cwd: dir, config: cfg }) });
     // Cancel marks the runtime aborted; the following prompt must stop early.
     const cancelled = await handleRpc({ id: 1, method: 'session/cancel', params: { sessionId: 's1' } }, sessions, process.cwd());
     expect(cancelled.error).toBeUndefined();
