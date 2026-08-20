@@ -83,6 +83,11 @@ const COMMANDS = [
   { name: '/history', hint: 'Command history' },
   { name: '/tools', hint: 'List available tools' },
   { name: '/compact', hint: 'Compact context' },
+  { name: '/yolo', hint: 'Toggle unrestricted (bypass permissions)' },
+  { name: '/dangerously-skip-permissions', hint: 'Alias for /yolo' },
+  { name: '/workspace-safe', hint: 'Auto-approve workspace edits, prompt for shell' },
+  { name: '/rewind', hint: 'Rollback to last checkpoint' },
+  { name: '/audit', hint: 'Show recent audit log entries' },
 ];
 
 const SPINNER = ['◐', '◓', '◑', '◒'];
@@ -358,7 +363,12 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   }
 
   function buildHeader(w: number): string {
-    const left = ' ' + PINK + BOLD + '◉ MOCHI' + RESET + ' ' + DIM + pkg.version + RESET;
+    const yoloBadge = (runtime as any).__permPolicy === 'yolo'
+      ? ' ' + '\x1b[38;2;255;100;0m' + '\x1b[1m' + '⚡ YOLO' + RESET
+      : (runtime as any).__permPolicy === 'workspace-safe'
+        ? ' ' + YELLOW + '🔓 AUTO' + RESET
+        : '';
+    const left = ' ' + PINK + BOLD + '🍡 mochi' + RESET + ' ' + DIM + pkg.version + RESET + yoloBadge;
     const right = ' ' + DIM + projectName + RESET + (branch ? ' ' + GREY + branch + RESET : '') + ' ' + GREY + '·' + RESET + ' ' + CYAN + modelShort + RESET + ' ';
     const sp = Math.max(1, w - visibleLen(left) - visibleLen(right));
     return pad(left + ' '.repeat(sp) + right, w);
@@ -377,9 +387,12 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
 
   function buildStatus(w: number): string {
     const queued = [...state.tasks.values()].filter(t => t.status === 'pending').length;
+    const permBadge = (runtime as any).__permPolicy === 'yolo'
+      ? ' ' + '\x1b[38;2;255;100;0m' + '[⚡ PERMS BYPASSED]' + RESET
+      : '';
     const left = state.busy
       ? CYAN + SPINNER[state.spinner] + RESET + ' thinking… ' + DIM + (state.currentTool || state.currentTask || '') + RESET
-      : GREEN + '●' + RESET + ' ready';
+      : GREEN + '●' + RESET + ' ready' + permBadge;
     const right = DIM + 'tokens' + RESET + ' ' + (state.lines.length * 4) + ' ' + GREY + '·' + RESET + ' ' + DIM + formatDuration(Date.now() - state.startedAt) + RESET + (queued ? ' ' + GREY + '·' + RESET + ' ' + DIM + queued + ' queued' + RESET : '') + ctxBar(w);
     const sp = Math.max(1, w - visibleLen(left) - visibleLen(right));
     return pad(left + ' '.repeat(sp) + right, w);

@@ -43,7 +43,11 @@ const SESSION_MODES = [
 ];
 
 // Current session configuration options (we delegate to Mochi's config system).
-const SESSION_CONFIG_OPTIONS: Array<{ id: string; name: string; description: string }> = [];
+const SESSION_CONFIG_OPTIONS: Array<{ id: string; name: string; description: string }> = [
+  { id: 'max_iterations', name: 'Max Iterations', description: 'Maximum agent loop iterations per task (1–50)' },
+  { id: 'context_budget_tokens', name: 'Context Budget', description: 'Token budget for the context window (4000–200000)' },
+  { id: 'plan_mode', name: 'Plan Mode', description: 'When enabled, generate plans instead of executing changes directly' },
+];
 
 export interface AcpSession {
   id: string;
@@ -92,9 +96,9 @@ export type AcpNotify = (sessionId: string, update: Record<string, unknown>) => 
 
 /** Map a tool name to its ACP kind (read/edit/execute/other). */
 function toolKind(toolName: string): string {
-  const readTools = new Set(['read', 'glob', 'search', 'inspect', 'memory', 'git', 'skill']);
+  const readTools = new Set(['read', 'glob', 'search', 'inspect', 'memory', 'git', 'skill', 'diff', 'tree', 'fetch', 'deepwiki']);
   if (readTools.has(toolName)) return 'read';
-  const editTools = new Set(['write', 'edit', 'patch', 'delete', 'replace_symbol']);
+  const editTools = new Set(['write', 'edit', 'patch', 'delete', 'replace_symbol', 'regex_replace']);
   if (editTools.has(toolName)) return 'edit';
   if (toolName === 'shell') return 'execute';
   return 'other';
@@ -124,6 +128,9 @@ export async function handleRpc(
               sessionCapabilities: { list: {}, delete: {}, additionalDirectories: {}, resume: {}, close: {} },
               promptCapabilities: { image: false, audio: false, embeddedContext: true },
               mcpCapabilities: { http: true, sse: true },
+              authMethods: [
+                { id: 'agent', name: 'Agent', description: 'Agent handles authentication internally (no external auth)' }
+              ],
             },
             implementation: { name: 'mochi', version: ACP_AGENT_VERSION },
           },
@@ -235,7 +242,9 @@ export async function handleRpc(
         const sessionIdSlice = allIds.slice(startIndex, startIndex + limit);
         const sessionInfos = sessionIdSlice.map((s) => {
           const se = sessions.get(s)!;
-          return { sessionId: s, cwd: se.cwd, title: se.title, updatedAt: Date.now() };
+          const info: any = { sessionId: s, cwd: se.cwd, title: se.title, updatedAt: Date.now() };
+          if (se.additionalDirectories && se.additionalDirectories.length) info.additionalDirectories = se.additionalDirectories;
+          return info;
         });
         const nextCursor = sessionIdSlice.length < limit ? undefined : Buffer.from(sessionIdSlice[sessionIdSlice.length - 1]).toString('base64');
         return { id, result: { sessions: sessionInfos, nextCursor } };
@@ -275,9 +284,26 @@ export async function handleRpc(
         const value = params.value;
         if (configId === 'plan_mode') {
           session.runtime.config.planMode = Boolean(value);
-          return { id, result: { configOptions: SESSION_CONFIG_OPTIONS } };
+          return { id, result: { configId, value: session.runtime.config.planMode, configOptions: SESSION_CONFIG_OPTIONS } };
+        } else if (configId === 'max_iterations') {
+          const parsed = Math.max(1, Math.min(50, Math.round(Number(value))));
+          session.runtime.config.safety.maxIterations = parsed;
+          return { id, result: { configId, value: parsed, configOptions: SESSION_CONFIG_OPTIONS } };
+        } else if (configId === 'context_budget_tokens') {
+          const parsed = Math.max(4000, Math.min(200_000, Math.round(Number(value))));
+          session.runtime.config.safety.contextBudgetTokens = parsed;
+          return { id, result: { configId, value: parsed, configOptions: SESSION_CONFIG_OPTIONS } };
         }
         return { id, error: { code: -32603, message: `Unknown config option: ${configId}` } };
+      }
+      case 'session/tools_list': {
+        const sid = String(params.sessionId ?? '');
+        const session = sessions.get(sid);
+        if (!session) return { id, error: { code: -32602, message: `Unknown session ${sid}` } };
+        const tools = session.runtime.listTools
+          ? session.runtime.listTools().map((t) => ({ name: t.name, description: t.description, permission: t.permission, dangerous: t.dangerous }))
+          : [];
+        return { id, result: { tools } };
       }
       case 'session/request_permission': {
         const sid = String(params.sessionId ?? '');

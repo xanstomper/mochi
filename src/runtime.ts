@@ -15,6 +15,7 @@ import { SpeculativeEngine, type SpeculativeResult } from './speculative.js';
 import { BudgetEngine } from './budget.js';
 import { setProvider, currentConfig, login as doLogin, selectProviderById, describeConfig, listModelsForProvider } from './model-manager.js';
 import { UsageStore } from './usage.js';
+import { buildTools } from './tools/index.js';
 
 export interface RuntimeOptions {
   cwd?: string;
@@ -119,6 +120,17 @@ export class Runtime {
 
   profiles() {
     return new AgentProfileService(this.workspace.dir).list();
+  }
+
+  /** List all tools available in this runtime, returning lightweight metadata. */
+  listTools(): Array<{ name: string; description: string; permission?: string; dangerous?: boolean }> {
+    const tools = buildTools(this.config);
+    return Array.from(tools.values()).map((t) => ({
+      name: t.def.name,
+      description: t.def.description,
+      permission: t.def.permission,
+      dangerous: t.def.dangerous,
+    }));
   }
 
   memory() {

@@ -17,8 +17,19 @@ import { todoTool } from './todo.js';
 import { skillTool } from './skill.js';
 import { subagentTool } from './subagent.js';
 import { patchTool } from './patch.js';
+import { fetchTool } from './fetch.js';
+import { diffTool } from './diff.js';
+import { treeTool } from './tree.js';
+import { regexReplaceTool } from './regex-replace.js';
+import { deepwikiTool } from './deepwiki.js';
+import { clipboardTool } from './clipboard.js';
 
-const ALL_TOOLS: Tool[] = [readTool, writeTool, editTool, deleteTool, shellTool, searchTool, globTool, gitTool, inspectTool, memoryTool, todoTool, skillTool, subagentTool, patchTool, ...symbolTools, replaceSymbolTool, chameleonTool];
+const ALL_TOOLS: Tool[] = [
+  readTool, writeTool, editTool, deleteTool, shellTool, searchTool, globTool,
+  gitTool, inspectTool, memoryTool, todoTool, skillTool, subagentTool, patchTool,
+  fetchTool, diffTool, treeTool, regexReplaceTool, deepwikiTool, clipboardTool,
+  ...symbolTools, replaceSymbolTool, chameleonTool,
+];
 
 export function buildTools(config: MochiConfig, allowed?: string[]): Map<string, Tool> {
   const map = new Map<string, Tool>();
