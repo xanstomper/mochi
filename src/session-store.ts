@@ -26,6 +26,10 @@ export interface SessionMessage {
 }
 
 export function hasSqlite(): boolean {
+  // Must actually confirm node:sqlite loaded — on runtimes without it the
+  // fallback class  succeeds vacuously, so a test on  alone would
+  // wrongly report true.
+  if (couldNotLoad) return false;
   try { new DatabaseSync(':memory:'); return true; } catch { return false; }
 }
 
@@ -70,15 +74,25 @@ CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at);
 export class SessionStore {
   private db: DatabaseSyncT;
   private dir: string;
+  /** false when node:sqlite is unavailable; all reads return empty. */
+  private available = true;
 
   constructor(dir: string) {
     this.dir = dir;
+    // Guard: on runtimes without node:sqlite (Node < 22.5) this is a no-op
+    // store so callers never crash — every method safely returns empty.
+    if (!hasSqlite()) {
+      this.available = false;
+      this.db = new DatabaseSync(':memory:');
+      return;
+    }
+    this.available = true;
     mkdirSync(resolve(dir, '.mochi'), { recursive: true });
     this.db = new DatabaseSync(resolve(dir, '.mochi', 'sessions.sqlite'));
     this.db.exec(DDL);
   }
 
-  close(): void { this.db.close(); }
+  close(): void { if (this.db && typeof (this.db as { close?: unknown }).close === 'function') (this.db as { close: () => void }).close(); }
 
   /** Create a session; returns its id (or the existing id for a goal-id that
    *  already has one — makes `resume` idempotent). */
@@ -97,7 +111,7 @@ export class SessionStore {
 
   /** Append one transcript message to a session. */
   append(sessionId: string, role: string, content: string): void {
-    if (!content) return;
+    if (!this.available || !content) return;
     // Bound a single message so a giant tool dump doesn't bloat the index.
     const text = content.length > 60_000 ? content.slice(0, 60_000) + `\n…(${content.length - 60_000} more chars)` : content;
     // The session's objective is indexed alongside each message so a search
@@ -109,6 +123,7 @@ export class SessionStore {
 
   /** The full ordered transcript for a session. */
   messages(sessionId: string): SessionMessage[] {
+    if (!this.available) return [];
     return this.db.prepare('SELECT role,content,t FROM session_messages WHERE session_id=? ORDER BY rowid').all(sessionId) as unknown as SessionMessage[];
   }
 
@@ -139,6 +154,7 @@ export class SessionStore {
   }
 
   session(id: string): SessionRow | undefined {
+    if (!this.available) return undefined;
     return this.db.prepare(
       `SELECT id, parent_id AS parentId, goal_id AS goalId, role, objective,
               created_at AS createdAt, updated_at AS updatedAt, status, summary
@@ -147,6 +163,7 @@ export class SessionStore {
   }
 
   markCompleted(id: string, status: 'completed'): void {
+    if (!this.available) return;
     this.db.prepare("UPDATE sessions SET status='completed', updated_at=? WHERE id=?").run(Date.now(), id);
   }
 }
