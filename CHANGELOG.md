@@ -1,6 +1,6 @@
 # Mochi Changelog
 
-## Unreleased
+## 0.10.3
 
 - **Credential pool + rotation.** A single `$PROVIDER_API_KEY` was a single point
   of failure for long agent runs. New `src/model/credential-pool.ts` pools
@@ -10,6 +10,24 @@
   `onRetryable` before each retry to swap to a fresh pool key, and
   `withRetries` gained the `onRetryable` hook. Keys are redacted in
   `inspectPool`/`describeConfig`; nothing secret is ever logged.
+- **Scheduled agent jobs.** `mochi daemon cron add|list|remove` (and the
+  `/api/cron` endpoint) run a prompt on an interval (`"every 30m"`) or 5-field
+  cron (`"0 9 * * 1-5"`), persisted to `.mochi/cron.json`. The daemon ticker
+  (in-process and detached) runs due jobs serially through the goal engine.
+- **Session history (Hermes-style).** SQLite + FTS5 transcript store
+  (`src/session-store.ts`) records every task conversation; `mochi session
+  search "<text>"` and `mochi session list` inspect past work. Resuming a goal
+  injects the real prior transcript so work isn't redone.
+- **Background tasks.** `shell` accepts `background:true`; long tests/builds
+  return a task id immediately and the loop injects the result when it
+  finishes (`bg list` / `bg status <id>`).
+- **Instant per-file diagnostics.** After write/edit/patch the edited file is
+  type-checked same-turn (TS LanguageService cached ~32ms warm, Python via
+  py_compile, `npx tsc` fallback) with FIX-BEFORE-CONTINUING guidance.
+- **`replace_symbol` tool.** Name-addressed whole-symbol replacement through
+  the code symbol index (no whitespace matching).
+- **Prompt-stability tiers.** Task-dependent memory/kind hint moved out of the
+  system prompt into the per-turn state tier for provider prefix caching.
 - **State cleanup.** Stale failed goal `3f5cb725` (a dogfood fixture whose
   `broken.ts` never existed) and its trace were removed; the spurious
   `completedTasks` entry and the matching `failures.md` block were cleared.

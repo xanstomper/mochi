@@ -49,10 +49,18 @@ Implemented:
 - Git checkpoint / rollback
 - Interactive terminal UI with rounded input, transcript, command palette, and status bar
 - Multiple workspaces
-- Persistent daemon over HTTP: `start/status/jobs/send/approve/resume/stop`
+- Persistent daemon over HTTP: `start/status/jobs/send/approve/resume/cron/stop`
 - Durable run traces with deep redaction (`mochi trace [<goalId>]`)
+- Full-text session history in SQLite+FTS5 (`mochi session list` / `mochi session search`)
+- Recurring agent jobs on a schedule (`mochi daemon cron add|list|remove`)
+- Credential pools: multi-key rotation on 401/429/403
+- Instant per-file diagnostics (TS LanguageService + Python) after every edit
+- Background tasks: async shell (`shell` with `background:true`) + result delivery
+- Name-addressed whole-symbol edit (`replace_symbol` via the code symbol index)
+- Baseline + proportionate verification (pre-existing repo debt doesn't fail correct work)
 - Mid-stream cancellation: Ctrl-C aborts the model request on the wire
-- Structured stop reasons (`completed`/`aborted`/`runtime_limit`/`budget`/`model_error`/) on every `AgentResult`
+- Structured stop reasons (`completed`/`aborted`/`runtime_limit`/`budget`/`model_error`/...) on every `AgentResult`
+- Warm-start resume: prior session transcript + failed attempts injected on restart
 - Unit and integration tests
 
 ## Quick start

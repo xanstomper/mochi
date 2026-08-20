@@ -1,6 +1,6 @@
 {
   "name": "@mochi/agent",
-  "version": "0.10.2",
+  "version": "0.10.3",
   "description": "Minimal, fast, autonomous coding agent for the terminal.",
   "type": "module",
   "bin": {
