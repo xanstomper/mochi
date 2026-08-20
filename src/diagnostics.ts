@@ -82,6 +82,15 @@ function getTsService(root: string): TsService | undefined {
   return entry;
 }
 
+async function diagnoseTsViaCli(path: string, cwd: string): Promise<FileDiagnostics> {
+  const t0 = Date.now();
+  // npx resolves the local typescript when present; timeout keeps worst-case bounded.
+  const { code, out } = await exec('npx', ['tsc', '--noEmit', path], cwd, 20_000);
+  if (code === 127 || code === 0) return { path, ok: code === 0, errors: [], warnings: [], ms: Date.now() - t0 };
+  const errors = out.split('\n').filter((l) => l.includes('error TS')).slice(0, MAX_LINES);
+  return { path, ok: errors.length === 0, errors, warnings: [], ms: Date.now() - t0 };
+}
+
 function diagnoseTs(path: string, root: string): FileDiagnostics {
   const t0 = Date.now();
   const entry = getTsService(root);
@@ -143,7 +152,11 @@ export async function diagnoseFile(path: string, cwd: string): Promise<FileDiagn
         if (parent === root) break;
         root = parent;
       }
-      return diagnoseTs(path, root);
+      if (getTsService(root)) return diagnoseTs(path, root);
+      // No importable typescript in the edited project: fall back to the CLI
+      // (npx tsc) so diagnostics still work in repos that only have tsc
+      // installed globally or via npx. Bounded by a timeout.
+      return diagnoseTsViaCli(path, root);
     }
     if (/\.py$/.test(path)) return diagnosePython(path, cwd);
     return { path, ok: true, errors: [], warnings: [], ms: Date.now() - t0 };
