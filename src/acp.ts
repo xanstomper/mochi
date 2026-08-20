@@ -52,12 +52,17 @@ function promptText(prompt: unknown): string {
   return String(prompt ?? '');
 }
 
+/** Notifications are pushed server→client as `session/update` per ACP v1. */
+export type AcpNotify = (sessionId: string, update: Record<string, unknown>) => void;
+
 /** Dispatch one RPC call against the current sessions. Returns the response.
- *  session/prompt actually runs a goal (requires a configured provider). */
+ *  session/prompt actually runs a goal (requires a configured provider) and
+ *  streams progress via `onNotify` (spec: session/update notifications). */
 export async function handleRpc(
   call: RpcCall,
   sessions: Map<string, AcpSession>,
   cwd: string,
+  onNotify: AcpNotify = () => {},
 ): Promise<RpcResponse> {
   const id = call.id ?? null;
   const method = call.method ?? '';
@@ -92,9 +97,37 @@ export async function handleRpc(
         if (!session) return { id, error: { code: -32602, message: `Unknown session ${sid}` } };
         if (!text) return { id, error: { code: -32602, message: 'prompt required' } };
         const constraints: string[] = Array.isArray(params.constraints) ? (params.constraints as string[]).map(String) : [];
-        await session.runtime.goal(text, constraints);
-        // Verified spec: respond with a StopReason. Full session/update
-        // streaming (plan, message chunks, tool calls, usage) is future work.
+        // Stream progress as session/update notifications (spec v1), mapping
+        // Mochi runtime events onto ACP updates: tool calls, message chunks,
+        // and the final agent message.
+        const off = session.runtime.events.onAll((e: any) => {
+          if (e.type === 'tool:called') {
+            onNotify(sid, { sessionUpdate: 'tool_call', toolCallId: e.tool, title: String(e.tool), kind: 'other', status: 'pending' });
+          } else if (e.type === 'tool:completed') {
+            onNotify(sid, {
+              sessionUpdate: 'tool_call_update',
+              toolCallId: e.tool,
+              status: 'completed',
+              content: [{ type: 'text', text: String(e.result?.output ?? '').slice(0, 2000) }],
+            });
+          } else if (e.type === 'tool:failed') {
+            onNotify(sid, { sessionUpdate: 'tool_call_update', toolCallId: e.tool, status: 'failed' });
+          } else if (e.type === 'message:chunk' || (e.type === 'message' && e.role === 'assistant')) {
+            const chunk = e.type === 'message:chunk' ? e.content : e.content;
+            const msgId = `msg_${chunk.length % 7}_${Date.now() % 97}`;
+            onNotify(sid, {
+              sessionUpdate: 'agent_message_chunk',
+              messageId: msgId,
+              content: { type: 'text', text: chunk.slice(0, 4000) },
+            });
+          }
+        });
+        try {
+          await session.runtime.goal(text, constraints);
+        } finally {
+          off();
+        }
+        // Verified spec: respond with a StopReason when the turn completes.
         return { id, result: { stopReason: 'end_turn' } };
       }
       case 'session/resume': {
@@ -134,7 +167,9 @@ export async function serverLoop(cwd: string): Promise<void> {
       msg = JSON.parse(trimmed);
     } catch { return; }
     if (!msg.method) return;
-    const res = await handleRpc(msg, sessions, cwd);
+    const res = await handleRpc(msg, sessions, cwd, (sessionId, update) => {
+      send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update } });
+    });
     send(res);
     if (msg.method === 'shutdown') process.exit(0);
   });
