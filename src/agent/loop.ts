@@ -432,12 +432,21 @@ export class Agent {
         // the gather as soon as the same line clearly repeats.
         const repCounts = new Map<string, number>();
         let maxRep = 0;
+        // A single model generation can also degenerate WITHOUT repeating an
+        // identical line: e.g. a weak model streams hundreds of tiny fragments
+        // of "let me explore the repo…" (lots of entropy, no progress) and
+        // never issues a tool call. Put a hard budget on one response so those
+        // runaway generations are truncated too.
+        const MAX_STREAM_BYTES = 24_000;   // rough ~6k tokens of prose
+        const MAX_STREAM_CHUNKS = 800;
+        let streamBytes = 0;
 
         for await (const chunk of activeProvider.streamChat(messages, this.toolDefs, { temperature: 0.2, signal: this.abortSignal })) {
           chunks.push(chunk);
           if (chunk.content) {
             const newChunk = chunk.content;
             streamBuf += newChunk;
+            streamBytes += newChunk.length;
             if (newChunk.length > 0) {
               for (const raw of newChunk.split('\n')) {
                 const line = raw.trim();
@@ -447,8 +456,9 @@ export class Agent {
                 if (c > maxRep) maxRep = c;
               }
             }
-            if (maxRep >= 24) {
-              // High-confidence loop: stop streaming before it floods output.
+            if (maxRep >= 24 || streamBytes >= MAX_STREAM_BYTES || chunks.length >= MAX_STREAM_CHUNKS) {
+              // High-confidence loop / runaway generation: stop streaming
+              // before it floods output.
               looped = true;
               break;
             }

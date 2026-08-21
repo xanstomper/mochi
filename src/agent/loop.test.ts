@@ -513,6 +513,43 @@ describe('Agent', () => {
     rmSync(dir, { recursive: true, force: true });
   }, 60_000);
 
+  it('truncates a high-entropy runaway generation even when no single line repeats', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-loop-runaway-'));
+    // A degenerate model streams thousands of distinct tiny fragments of the
+    // same "let me explore the repo" intent (high entropy, no progress, no
+    // identical line). The old repeat-only guard missed this; the generation
+    // must now be bounded by SIZE not just repetition.
+    const fragments = Array.from(
+      { length: 1200 },
+      (_, i) => `Let me explore the repository structure to understand the project setup (pass ${i}).`,
+    );
+    const fake = await startFakeOpenAI([
+      { content: fragments.join('\n'), finishReason: 'stop' },
+      { content: 'Done.', finishReason: 'stop', completionTokens: 8 },
+    ]);
+    const config = makeConfig(dir, fake.url);
+    const workspace = new Workspace(dir, '.mochi');
+    workspace.ensure();
+    const context = new ContextEngine(config, dir);
+    context.setGoal('answer');
+    const task = createTask('Answer', 'Give the result.');
+    const bus = new EventBus();
+    const chunks: string[] = [];
+    bus.on('message:chunk', (e: any) => chunks.push(String(e.content)));
+    const agent = new Agent({ id: 'loop-runaway', role: 'coder', config, workspace, events: bus, cwd: dir, context });
+    const result = await agent.run(task);
+    expect(result.success).toBe(true);
+    // Each fragment differs only by "(pass N)", so no identical line repeated
+    // >=24 times. The runaway (1200 lines, ~100KB) is still truncated by size;
+    // the transcript must not contain the flood, only the clean answer.
+    expect(chunks.join('').replace(/\s+/g, ' ')).toContain('Done');
+    expect(chunks.length).toBeLessThan(12);
+    const flat = chunks.join('');
+    expect(flat.match(/pass \d+/g)?.length ?? 0).toBeLessThan(5);
+    await fake.close();
+    rmSync(dir, { recursive: true, force: true });
+  }, 60_000);
+
   it('plan mode fails when the model never produces a plan (nudge budget exhausted)', async () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-plan-giveup-'));
     // The fake replays its last entry forever, so the loop sees preambles on
