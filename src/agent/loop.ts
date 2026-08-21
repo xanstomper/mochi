@@ -432,6 +432,7 @@ export class Agent {
         // the gather as soon as the same line clearly repeats.
         const repCounts = new Map<string, number>();
         let maxRep = 0;
+        let phraseBuf = '';
         // A single model generation can also degenerate WITHOUT repeating an
         // identical line: e.g. a weak model streams hundreds of tiny fragments
         // of "let me explore the repo…" (lots of entropy, no progress) and
@@ -447,15 +448,21 @@ export class Agent {
             const newChunk = chunk.content;
             streamBuf += newChunk;
             streamBytes += newChunk.length;
-            if (newChunk.length > 0) {
-              for (const raw of newChunk.split('\n')) {
-                const line = raw.trim();
-                if (line.length < 8) continue; // ignore short/empty lines
-                const c = (repCounts.get(line) ?? 0) + 1;
-                repCounts.set(line, c);
-                if (c > maxRep) maxRep = c;
+            
+            for (let i = 0; i < newChunk.length; i++) {
+              const char = newChunk[i];
+              phraseBuf += char;
+              if (char === '\n' || char === ',' || char === '.') {
+                const phrase = phraseBuf.trim();
+                if (phrase.length >= 5) {
+                  const c = (repCounts.get(phrase) ?? 0) + 1;
+                  repCounts.set(phrase, c);
+                  if (c > maxRep) maxRep = c;
+                }
+                phraseBuf = '';
               }
             }
+
             if (maxRep >= 12 || streamBytes >= MAX_STREAM_BYTES || chunks.length >= MAX_STREAM_CHUNKS) {
               // High-confidence loop / runaway generation: stop streaming
               // before it floods output.
@@ -1406,7 +1413,6 @@ export class Agent {
       }
     }
     const durationMs = Math.round(performance.now() - this.startTime);
-    this.events.emit({ type: success ? 'task:completed' : 'task:failed', task, agentId: this.id, reason: summary, stopReason });
     this.events.emit({ type: 'agent:completed', id: this.id, taskId: task.id });
     return {
       success,
