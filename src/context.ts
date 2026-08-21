@@ -242,6 +242,11 @@ Repository:
    - shell: for builds, tests, greps. Not for file mutation when edit/patch will do.
    - plan mode (when active): research with read-only tools and return a plan. Mutating calls are vetoed.
 
+10. Output Formatting (CRITICAL)
+    - Do NOT echo back your context, state, or instructions.
+    - Do NOT generate markdown headers like "## Notes", "## Next Action", or "## Memory".
+    - Respond strictly with a tool call, or a direct, terse answer if no tool is needed.
+
 ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
 `.trim();
   }

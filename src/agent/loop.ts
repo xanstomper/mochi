@@ -592,6 +592,14 @@ export class Agent {
       if ((response.content && response.content.trim()) || response.toolCalls?.length) {
         this.emptyResponseCount = 0;
       }
+      
+      // Reset stream-loop counter if the model successfully used a tool,
+      // proving it recovered from the previous loop and made actual progress.
+      if (response.toolCalls?.length) {
+        this.streamLoopNudges = 0;
+      }
+
+      this.lastStrategy = response.toolCalls?.[0]?.function.name ?? response.content?.slice(0, 60) ?? '';
 
       // Stream-loop guard: the model repeated the same boilerplate block dozens
       // of times in one response (common with overloaded free-tier models). Stop
