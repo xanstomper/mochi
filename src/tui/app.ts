@@ -7,6 +7,7 @@ import { PROVIDERS, providerById } from '../providers.js';
 import { reduceEvent } from './state.js';
 import pkg from '../../package.json' with { type: 'json' };
 import { kvCache } from '../kv-cache.js';
+import { formatModes } from '../modes.js';
 import {
   T,
   gradientContextBar,
@@ -360,6 +361,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       totalCost: state.totalCost,
       maxInputTokens: runtime.config.safety.contextBudgetTokens,
       mode: state.uiMode,
+      agentMode: (runtime.config.mode as any) ?? 'normal',
       workspaceName: projectName,
       gitBranch: branch || null,
       gitDiff: state.gitDiff,
@@ -478,7 +480,6 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     if (line === '/mode' || line.startsWith('/mode ')) {
       const specific = line.startsWith('/mode ') ? line.slice(6).trim() : '';
       if (!specific) {
-        const { formatModes } = await import('../modes.js');
         push('system', `${formatModes((runtime.config.mode as any) ?? 'normal')}\n\nUsage: /mode <name>`);
         return;
       }
@@ -491,7 +492,6 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       return;
     }
     if (line === '/modes') {
-      const { formatModes } = await import('../modes.js');
       push('system', formatModes((runtime.config.mode as any) ?? 'normal'));
       return;
     }
