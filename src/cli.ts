@@ -976,7 +976,13 @@ async function main() {
     // the prompt and print the result instead of spewing escape codes.
     const isTTY = Boolean(process.stdin.isTTY && process.stdout.isTTY);
     if (flags.p || flags.print || !isTTY) {
-      console.log(await runtime.runPrompt(prompt));
+      const result = await runtime.runPrompt(prompt);
+      console.log(result);
+      // Non-interactive one-shot: exit explicitly once stdout has flushed.
+      // runPrompt can leave handles alive (event bus, recorder, model keep-alive)
+      // that would keep the process running forever even after work is done,
+      // so don't rely on the event loop draining on its own.
+      process.stdout.write('\n', () => process.exit(0));
     } else {
       await interactive(runtime, prompt);
     }

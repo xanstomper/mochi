@@ -12,6 +12,10 @@
   and the system prompt tells the agent that BUILD/IMPLEMENT/CODE requests are
   delivered as source files verified headlessly. Fixes "make a calculator"
   repeatedly opening a calculator window.
+- **Non-interactive runs exit cleanly.** `mochi --print "..."` (and piped
+  invocations) now call `process.exit(0)` once output has flushed, instead of
+  hanging after the work is done because the event bus / recorder / model
+  keep-alive leaves a live handle.
 - **Full scroll to top.** PgUp/PgDn scroll a full visible page and Home/End
   (`\x1b[1~`/`\x1b[4~`) jump straight to the absolute top or bottom of the
   transcript.
