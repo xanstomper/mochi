@@ -1,29 +1,16 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { resolve, relative, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import ts from 'typescript';
-import { createRequire } from 'node:module';
-import type { DatabaseSync } from 'node:sqlite';
+import { hasSqlite as driverAvailable, openDb, type SqliteDb } from './sqlite.js';
 import { mutationGeneration } from './tools/fs-signal.js';
 
-// Keep Node's "SQLite is experimental" noise out of the TUI.
-process.removeAllListeners?.('warning');
-
-const makeDb = (): typeof DatabaseSync => {
-  const req = createRequire(import.meta.url);
-  return req('node:sqlite').DatabaseSync as typeof DatabaseSync;
-};
-const DatabaseSyncType = makeDb;
-
-/** True when this runtime has node:sqlite (Node >= 22.5). On older runtimes
- *  the codegraph degrades to "no symbol index" instead of throwing. */
+/** True when any SQLite driver is available (node:sqlite on Node >= 22.5 or
+ *  bun:sqlite in the compiled binary). Without it the codegraph degrades to
+ *  "no symbol index" instead of throwing. */
 export function hasSqlite(): boolean {
-  try {
-    DatabaseSyncType();
-    return true;
-  } catch {
-    return false;
-  }
+  return driverAvailable();
 }
 
 // ---------------------------------------------------------------------------
@@ -97,7 +84,7 @@ function heritage(node: ts.ClassLikeDeclaration | ts.InterfaceDeclaration): stri
   return out;
 }
 
-function indexFile(file: string, rel: string, database: DatabaseSync): void {
+function indexFile(file: string, rel: string, database: SqliteDb): void {
   let text: string;
   try { text = readFileSync(file, 'utf8'); } catch { return; }
   const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, scriptKind(file));
@@ -254,7 +241,7 @@ function namedChildren(node: any): any[] {
 // in the `calls` table (caller <callee, file, line). findCallers then answers
 // from the graph instead of re-grepping every file, which makes cross-file and
 // cross-language call resolution exact and fast.
-function tsIndexFile(file: string, rel: string, database: DatabaseSync): void {
+function tsIndexFile(file: string, rel: string, database: SqliteDb): void {
   const lang = langOf(file);
   if (!lang) return;
   const grammar = _languages.get(lang);
@@ -317,7 +304,7 @@ function callName(node: any): string | undefined {
 // (mtime,size) fingerprint changed -- never the whole tree. So read tools
 // always reflect the latest edits without a full O(repo) re-walk.
 interface CachedDb {
-  database: DatabaseSync;
+  database: SqliteDb;
   gen: number;
   files: Map<string, string>; // abs path -> "mtimeMs:size"
 }
@@ -339,14 +326,13 @@ function fingerprint(full: string): string {
   }
 }
 
-function db(cwd: string): DatabaseSync {
+function db(cwd: string): SqliteDb {
   const cached = dbCache.get(cwd);
   const gen = mutationGeneration();
   if (cached && cached.gen === gen && cached.files.size > 0) return cached.database;
 
-  const DatabaseSyncCtor = DatabaseSyncType();
   const database = cached?.database ?? (() => {
-    const db = new DatabaseSyncCtor(':memory:');
+    const db = openDb(':memory:');
     db.exec('CREATE TABLE IF NOT EXISTS symbols(name TEXT,line INTEGER,kind TEXT,file TEXT,rel TEXT,body TEXT);');
     db.exec('CREATE INDEX IF NOT EXISTS idx_sym ON symbols(name);');
     db.exec('CREATE TABLE IF NOT EXISTS relations(src TEXT,dst TEXT,kind TEXT,file TEXT);');

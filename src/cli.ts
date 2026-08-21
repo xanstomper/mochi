@@ -156,6 +156,10 @@ Environment:
 
 async function main() {
   const { flags, positional } = parseArgs(process.argv.slice(2));
+  // Resolve the SQLite driver (node:sqlite or bun:sqlite) before any
+  // subsystem probes it: sessions, codegraph, and search all check
+  // synchronously on first use.
+  try { await (await import('./sqlite.js')).sqliteDriverAsync(); } catch {}
 
   if (flags.h || flags.help) { printHelp(); return; }
   if (flags.version) { console.log(VERSION); return; }
@@ -856,7 +860,7 @@ async function main() {
 
   if (first === 'session') {
     const { SessionStore, hasSqlite } = await import('./session-store.js');
-    if (!hasSqlite()) { console.log('Session store needs node:sqlite (Node >= 22.5).'); return; }
+    if (!hasSqlite()) { console.log('Session store needs a SQLite driver (Node >= 22.5 or the bun binary).'); return; }
     const store = new SessionStore(runtime.workspace.dir);
     try {
       const sub = positional[1];

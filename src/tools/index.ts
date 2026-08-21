@@ -24,11 +24,17 @@ import { regexReplaceTool } from './regex-replace.js';
 import { deepwikiTool } from './deepwiki.js';
 import { clipboardTool } from './clipboard.js';
 import { sqlCodebaseTool } from '../codebase-sql.js';
+import { performance } from 'node:perf_hooks';
+import { searchReplaceMultiTool } from './search-replace-multi.js';
+import { analyzeCodeTool } from './analyze-code.js';
+import { verifyTool } from './verify.js';
+import { perfTool } from './perf-tool.js';
 
 const ALL_TOOLS: Tool[] = [
   readTool, writeTool, editTool, deleteTool, shellTool, searchTool, globTool,
   gitTool, inspectTool, memoryTool, todoTool, skillTool, subagentTool, patchTool,
   fetchTool, diffTool, treeTool, regexReplaceTool, deepwikiTool, clipboardTool, sqlCodebaseTool,
+  searchReplaceMultiTool, analyzeCodeTool, verifyTool, perfTool,
   ...symbolTools, replaceSymbolTool, chameleonTool,
 ];
 

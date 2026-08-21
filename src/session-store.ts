@@ -7,17 +7,8 @@
 //   - sessions keep parent/child links across compactions (Hermes-style)
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { createHash } from 'node:crypto';
-import { createRequire } from 'node:module';
-import type { DatabaseSync as DatabaseSyncT } from 'node:sqlite';
-import { randomUUID } from 'node:crypto';
-
-process.removeAllListeners?.('warning');
-const req = createRequire(import.meta.url);
-const couldNotLoad = (() => {
-  try { req('node:sqlite'); return false; } catch { return true; }
-})();
-const DatabaseSync = couldNotLoad ? (class {} as unknown as typeof DatabaseSyncT) : (req('node:sqlite').DatabaseSync as typeof DatabaseSyncT);
+import { createHash, randomUUID } from 'node:crypto';
+import { openDb, hasSqlite as driverAvailable, type SqliteDb } from './sqlite.js';
 
 export interface SessionMessage {
   role: string;
@@ -26,11 +17,8 @@ export interface SessionMessage {
 }
 
 export function hasSqlite(): boolean {
-  // Must actually confirm node:sqlite loaded — on runtimes without it the
-  // fallback class  succeeds vacuously, so a test on  alone would
-  // wrongly report true.
-  if (couldNotLoad) return false;
-  try { new DatabaseSync(':memory:'); return true; } catch { return false; }
+  // node:sqlite (Node >= 22.5) or bun:sqlite (compiled binary).
+  return driverAvailable();
 }
 
 export interface SessionRow {
@@ -72,7 +60,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at);
 
 /** One store per Mochi workspace (.mochi/sessions.sqlite). */
 export class SessionStore {
-  private db: DatabaseSyncT;
+  private db: SqliteDb;
   private dir: string;
   /** false when node:sqlite is unavailable; all reads return empty. */
   private available = true;
@@ -83,12 +71,12 @@ export class SessionStore {
     // store so callers never crash — every method safely returns empty.
     if (!hasSqlite()) {
       this.available = false;
-      this.db = new DatabaseSync(':memory:');
+      this.db = openDb(':memory:');
       return;
     }
     this.available = true;
     mkdirSync(resolve(dir, '.mochi'), { recursive: true });
-    this.db = new DatabaseSync(resolve(dir, '.mochi', 'sessions.sqlite'));
+    this.db = openDb(resolve(dir, '.mochi', 'sessions.sqlite'));
     this.db.exec(DDL);
   }
 

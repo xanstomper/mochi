@@ -8,6 +8,8 @@ import { editTool } from './edit.js';
 import { globTool } from './glob.js';
 import { searchTool } from './search.js';
 import { memoryTool } from './memory.js';
+import { searchReplaceMultiTool } from './search-replace-multi.js';
+import { analyzeCodeTool } from './analyze-code.js';
 import { EventBus } from '../events.js';
 import type { ToolContext, ReadCache } from './types.js';
 import type { MochiConfig } from '../types.js';
@@ -183,7 +185,7 @@ describe('structure-aware search', () => {
     expect(fresh).not.toContain('[query cache hit]');
   });
 
-  it('invalidates the query cache after an edit', async () => {
+    it('invalidates the query cache after an edit', async () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-search-'));
     writeFileSync(resolve(dir, 'c.ts'), 'export const marker = "old";');
     const c = ctx(dir);
@@ -193,5 +195,45 @@ describe('structure-aware search', () => {
     const afterEdit = await searchTool.execute({ query: 'newval' }, c);
     expect(afterEdit).toContain('newval');
     expect(afterEdit).not.toContain('[query cache hit]');
+  });
+});
+
+describe('search_replace_multi', () => {
+  it('replaces patterns across multiple files', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-mreplace-'));
+    await writeTool.execute({ path: resolve(dir, 'a.ts'), content: 'old\nold\n' }, ctx(dir));
+    await writeTool.execute({ path: resolve(dir, 'b.ts'), content: 'old\n' }, ctx(dir));
+    const out = await searchReplaceMultiTool.execute(
+      { pattern: 'old', replacement: 'new', preview: false },
+      ctx(dir),
+    );
+    expect(out).toContain('Replaced 3');
+    expect(readFileSync(resolve(dir, 'a.ts'), 'utf8')).toBe('new\nnew\n');
+    expect(readFileSync(resolve(dir, 'b.ts'), 'utf8')).toBe('new\n');
+  });
+
+  it('previews changes without writing', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-mreplace-'));
+    await writeTool.execute({ path: resolve(dir, 'a.ts'), content: 'old\n' }, ctx(dir));
+    const out = await searchReplaceMultiTool.execute(
+      { pattern: 'old', replacement: 'new', preview: true },
+      ctx(dir),
+    );
+    expect(out).toContain('Preview');
+    expect(readFileSync(resolve(dir, 'a.ts'), 'utf8')).toBe('old\n');
+  });
+});
+
+describe('analyze_code', () => {
+  it('analyzes a file and returns complexity metrics', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-analyze-'));
+    await writeTool.execute({
+      path: resolve(dir, 'test.ts'),
+      content: 'function foo() {\n  if (x) {\n    return 1;\n  }\n  return 0;\n}\n',
+    }, ctx(dir));
+    const out = await analyzeCodeTool.execute({ path: 'test.ts' }, ctx(dir));
+    expect(out).toContain('Code Analysis');
+    expect(out).toContain('Complexity Score:');
+    expect(out).toContain('Functions:');
   });
 });

@@ -4,7 +4,7 @@
 // background tasks, cron jobs, sessions, and the running daemon.
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { hasSqlite } from './codegraph.js';
+import { hasSqlite, sqliteSource } from './sqlite.js';
 import { listJobs } from './cron.js';
 import { SessionStore } from './session-store.js';
 
@@ -66,7 +66,7 @@ export async function doctorReport(opts: {
   };
 
   if (!opts.apiKey) problems.push('No API key configured for the active provider.');
-  if (!sqlite) problems.push('node:sqlite unavailable (Node >= 22.5) — sessions, code index, and search are off.');
+  if (!sqlite) problems.push('No SQLite driver (need Node >= 22.5 or the bun binary) — sessions, code index, and search are off.');
   if (!opts.model) problems.push('No model selected for the active provider.');
   if (cronJobs > 0 && !opts.daemon?.running) problems.push(`${cronJobs} scheduled job(s) configured but the daemon is not running — they will not fire.`);
   return report;
@@ -80,7 +80,7 @@ export function formatDoctor(r: DoctorReport): string {
     '',
     `  model         ${r.model.provider} @ ${r.model.baseUrl}  (${r.model.model})`,
     `  api key       ${ok(r.model.keySet)} ${r.model.keySource}`,
-    `  sqlite        ${ok(r.runtime.sqlite)} ${r.runtime.sqlite ? 'node:sqlite available' : 'Node < 22.5 — sessions/index/search off'}`,
+    `  sqlite        ${ok(r.runtime.sqlite)} ${r.runtime.sqlite ? `${sqliteSource() || 'driver'} available` : 'no driver — sessions/index/search off'}`,
     `  codegraph     ${ok(r.index.codegraph === 'ready')} ${r.index.codegraph}`,
     `  sessions      ${ok(r.sessions.sqlite)} ${r.sessions.sqlite ? 'FTS5 enabled' : 'disabled'}`,
     `  daemon        ${ok(r.daemon.running)} ${r.daemon.running ? `running on :${r.daemon.port}` : 'not running'}`,
