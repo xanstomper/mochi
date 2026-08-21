@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import { existsSync, mkdirSync } from 'node:fs';
 import type { MochiConfig } from './types.js';
-import { loadConfig, loadProjectConfig } from './config.js';
+import { loadConfig, loadProjectConfig, validateConfig } from './config.js';
 import { EventBus } from './events.js';
 import { Workspace } from './workspace.js';
 import { GoalEngine } from './goals/goal.js';
@@ -54,6 +54,13 @@ export class Runtime {
     const projectConfig = loadProjectConfig(this.workspace.dir);
     if (Object.keys(projectConfig).length) {
       this.config = loadConfig({ ...projectConfig, ...opts.config });
+    }
+
+    // Surface misconfigurations (invalid safety mode, bad numbers, missing API
+    // key, etc.) at startup instead of mid-run.
+    const problems = validateConfig(this.config);
+    if (problems.length) {
+      throw new Error(`Invalid configuration:\n${problems.map((p) => `  - ${p}`).join('\n')}`);
     }
   }
 

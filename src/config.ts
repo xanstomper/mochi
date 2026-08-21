@@ -139,3 +139,64 @@ function merge(target: Record<string, unknown>, source: Record<string, unknown>)
 export function loadProjectConfig(projectDir: string): Partial<MochiConfig> {
   return readJsonFile(resolve(projectDir, 'config.json')) ?? {};
 }
+
+/** Validate a merged config and return a list of human-readable problems.
+ *  Catches common mistakes early (invalid safety mode, bad numbers, missing
+ *  API key, etc.) so they surface at startup instead of mid-run. */
+export function validateConfig(config: MochiConfig): string[] {
+  const problems: string[] = [];
+
+  // Provider / model sanity
+  if (!config.model.provider) {
+    problems.push('model.provider is empty — set provider in config or MOCHI_PROVIDER env var');
+  }
+  if (!config.model.baseUrl && !config.model.provider.startsWith('openrouter')) {
+    problems.push('model.baseUrl should be set for the selected provider');
+  }
+  if (!config.model.model) {
+    problems.push('model.model is empty — set a default model');
+  }
+  if (!config.model.apiKey) {
+    problems.push('No API key found — set the appropriate *_API_KEY env var (e.g. OPENCODE_ZEN_API_KEY)');
+  }
+
+  // Safety config ranges
+  const s = config.safety;
+  if (s.maxIterations < 1 || s.maxIterations > 100) {
+    problems.push(`safety.maxIterations (${s.maxIterations}) is out of range 1–100`);
+  }
+  if (s.maxRuntimeMinutes < 0.5 || s.maxRuntimeMinutes > 720) {
+    problems.push(`safety.maxRuntimeMinutes (${s.maxRuntimeMinutes}) is out of range 0.5–720`);
+  }
+  if (s.contextBudgetTokens < 1000 || s.contextBudgetTokens > 1_000_000) {
+    problems.push(`safety.contextBudgetTokens (${s.contextBudgetTokens}) is out of range 1000–1M`);
+  }
+  if (s.commandTimeoutSeconds < 5 || s.commandTimeoutSeconds > 600) {
+    problems.push(`safety.commandTimeoutSeconds (${s.commandTimeoutSeconds}) is out of range 5–600`);
+  }
+  if (s.maxConcurrentAgents < 1 || s.maxConcurrentAgents > 32) {
+    problems.push(`safety.maxConcurrentAgents (${s.maxConcurrentAgents}) is out of range 1–32`);
+  }
+  if (s.mode !== 'safe' && s.mode !== 'ask' && s.mode !== 'auto') {
+    problems.push(`safety.mode "${s.mode}" is invalid — must be "safe", "ask", or "auto"`);
+  }
+
+  // Optional budgets
+  if (s.maxTokens !== undefined && s.maxTokens < 1000) {
+    problems.push(`safety.maxTokens (${s.maxTokens}) must be >= 1000`);
+  }
+  if (s.maxCostUsd !== undefined && s.maxCostUsd < 0) {
+    problems.push(`safety.maxCostUsd (${s.maxCostUsd}) must be >= 0`);
+  }
+
+  // MCP server config
+  if (config.mcpServers) {
+    for (const [name, server] of Object.entries(config.mcpServers)) {
+      if (!server.command) {
+        problems.push(`MCP server "${name}" has no "command" field`);
+      }
+    }
+  }
+
+  return problems;
+}

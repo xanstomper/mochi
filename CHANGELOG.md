@@ -17,6 +17,12 @@
   - `session/set_mode` / `session/set_config_option`
   - `session/request_permission` for MCP
   - `authenticate` / `logout` for built-in agent auth
+- **New Tools:** `search_replace_multi` (multi-file regex replace with preview),
+  `analyze_code` (code complexity metrics), `verify` (run tests/builds with auto-detect),
+  `perf` (performance diagnostics and monitoring)
+- **Config Validation.** `validateConfig()` validates config values at startup,
+  catching misconfigurations (invalid safety mode, bad numbers, missing API key)
+  before they cause mid-run failures.
 - **`mochi daemon restart`.** Stop + start a fresh daemon on the same
   port/token. Cron jobs, sessions, and goal state persist across restarts
   (`.mochi/cron.json` plus the SQLite session store).

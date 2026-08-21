@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { loadConfig } from './config.js';
+import { loadConfig, validateConfig } from './config.js';
 
 describe('loadConfig', () => {
   it('loads defaults (isolated from user config)', () => {
@@ -44,5 +44,47 @@ describe('loadConfig', () => {
     } finally {
       if (prior !== undefined) process.env.FREEINFERENCE_API_KEY = prior;
     }
+  });
+});
+
+describe('validateConfig', () => {
+  it('returns empty array for valid config', () => {
+    const cfg = loadConfig();
+    const problems = validateConfig(cfg);
+    expect(problems).toHaveLength(0);
+  });
+
+  it('detects missing API key', () => {
+    const prior = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      const cfg = loadConfig({ model: { provider: 'openai', model: 'gpt-4', apiKey: undefined } });
+      // Note: apiKey may be set from env, so we check if the config ends up without one
+      const problems = validateConfig(cfg);
+      expect(problems.some(p => p.includes('API key'))).toBe(!cfg.model.apiKey);
+    } finally {
+      if (prior !== undefined) process.env.OPENAI_API_KEY = prior;
+    }
+  });
+
+  it('detects invalid maxIterations', () => {
+    const cfg = loadConfig();
+    cfg.safety.maxIterations = 0;
+    const problems = validateConfig(cfg);
+    expect(problems.some(p => p.includes('maxIterations'))).toBe(true);
+  });
+
+  it('detects invalid safety mode', () => {
+    const cfg = loadConfig();
+    cfg.safety.mode = 'invalid' as any;
+    const problems = validateConfig(cfg);
+    expect(problems.some(p => p.includes('safety.mode'))).toBe(true);
+  });
+
+  it('detects invalid contextBudgetTokens', () => {
+    const cfg = loadConfig();
+    cfg.safety.contextBudgetTokens = 100;
+    const problems = validateConfig(cfg);
+    expect(problems.some(p => p.includes('contextBudgetTokens'))).toBe(true);
   });
 });
