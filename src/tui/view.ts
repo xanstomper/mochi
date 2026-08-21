@@ -36,7 +36,31 @@ export const T = {
   rule: '\x1b[38;2;48;54;61m',
   /** brand */
   pink: '\x1b[38;2;255;175;209m',
+  // ---- extended mochi palette -------------------------------------------
+  /** magenta #ff6ec7 — brand-forward accent for headers/tasks */
+  magenta: '\x1b[38;2;255;110;199m',
+  /** violet #c792ea — tool call names */
+  violet: '\x1b[38;2;199;146;234m',
+  /** cyan #56d4dd — streaming tokens */
+  cyan: '\x1b[38;2;86;212;221m',
+  /** lime #a3e635 — cache hits */
+  lime: '\x1b[38;2;163;230;53m',
+  /** orange #ff9e64 — in-flight work */
+  orange: '\x1b[38;2;255;158;100m',
+  /** teal #2dd4bf — plan-mode banner */
+  teal: '\x1b[38;2;45;212;191m',
 } as const;
+
+/** Truecolor 24-bit fg helper. */
+export function rgb(r: number, g: number, b: number): string {
+  return `\x1b[38;2;${r};${g};${b}m`;
+}
+
+/** Interpolate two [r,g,b] colors; t in [0,1]. */
+export function lerp(a: [number, number, number], b: [number, number, number], t: number): [number, number, number] {
+  const c = (x: number, y: number) => Math.round(x + (y - x) * t);
+  return [c(a[0], b[0]), c(a[1], b[1]), c(a[2], b[2])];
+}
 
 export const RESULT = '⌿';
 export const MAX_COLLAPSED_LINES = 5;
@@ -65,15 +89,111 @@ export function padEnd(s: string, n: number): string {
   return s + ' '.repeat(n - vis);
 }
 
-// ---- Thinking spinner (braille dots like opentui-spinner "dots") ----------
+// ---- Thinking spinner ------------------------------------------------------
+// Layered animation: a braille cycle for motion + a sweeping color gradient
+// (violet → cyan → lime) so the spinner feels alive instead of a gray dot.
 const DOTS = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const SPIN_COLORS: Array<[number, number, number]> = [
+  [199, 146, 234], // violet
+  [121, 184, 255], // act blue
+  [86, 212, 221],  // cyan
+  [163, 230, 53],  // lime
+];
+
 export function spinnerFrame(i: number): string {
   return DOTS[Math.abs(i) % DOTS.length];
 }
 
+export function spinnerColored(i: number): string {
+  const dot = spinnerFrame(i);
+  const c = SPIN_COLORS[Math.abs(i) % SPIN_COLORS.length];
+  return `${rgb(c[0], c[1], c[2])}${T.bold}${dot}${T.reset}`;
+}
+
+/** Animated gradient underline that sweeps under the thinking note. */
+export function spinnerSweep(i: number, width = 18): string {
+  const pos = Math.abs(i) % width;
+  const cells: string[] = [];
+  for (let x = 0; x < width; x++) {
+    const dist = Math.abs(x - pos);
+    if (dist > 2) { cells.push(`${T.grayDark}·${T.reset}`); continue; }
+    const t = 1 - dist / 2; // 0..1 peak at the sweep head
+    const c = lerp([72, 79, 86], [86, 212, 221], t);
+    cells.push(`${rgb(c[0], c[1], c[2])}━${T.reset}`);
+  }
+  return cells.join('');
+}
+
 export function thinkingLine(frame: number, note = ''): string {
-  const note_ = note ? ` ${note}` : '';
-  return `${T.gray}${spinnerFrame(frame)} Thinking…${note_}${T.reset} ${T.grayDark}(esc to cancel)${T.reset}`;
+  const note_ = note ? ` ${T.orange}${note}${T.reset}` : '';
+  return `${spinnerColored(frame)} ${T.cyan}Thinking…${T.reset}${note_} ${T.grayDark}(esc to cancel)${T.reset}\n${spinnerSweep(frame)}`;
+}
+
+// ---- jcode-style animated context + cache bars ----------------------------
+export interface GradientBar {
+  text: string;
+  pct: number;
+}
+
+const CTX_STOPS: Array<[number, number, number]> = [
+  [163, 230, 53],  // lime — plenty of room
+  [86, 212, 221],  // cyan
+  [255, 234, 127], // yellow
+  [255, 158, 100], // orange
+  [248, 81, 73],   // red — nearly full
+];
+
+function rampColor(pct: number): [number, number, number] {
+  const clamped = Math.max(0, Math.min(1, pct));
+  const scaled = clamped * (CTX_STOPS.length - 1);
+  const idx = Math.min(CTX_STOPS.length - 2, Math.floor(scaled));
+  return lerp(CTX_STOPS[idx], CTX_STOPS[idx + 1], scaled - idx);
+}
+
+/**
+ * Animated gradient context bar (jcode-style): each filled cell gets the
+ * gradient ramp color for its position; an animated glow head tracks `tick`
+ * so the bar shimmers while active.
+ */
+export function gradientContextBar(used: number, total: number | undefined, width = 12, tick = 0): GradientBar {
+  const w = Math.max(0, Math.floor(width));
+  const pct = total && total > 0 ? Math.min(used / total, 1) : 0;
+  const filled = total && total > 0 && used > 0 ? Math.max(1, Math.round(pct * w)) : 0;
+  const cells: string[] = [];
+  for (let x = 0; x < w; x++) {
+    if (x < filled) {
+      const frac = w > 1 ? x / (w - 1) : 1;
+      const c = rampColor(frac);
+      const isHead = tick > 0 && x === (tick - 1) % Math.max(1, filled);
+      cells.push(isHead
+        ? `${T.bold}${rgb(255, 255, 255)}█${T.reset}`
+        : `${rgb(c[0], c[1], c[2])}█${T.reset}`);
+    } else {
+      cells.push(`${T.grayDark}░${T.reset}`);
+    }
+  }
+  return { text: cells.join(''), pct };
+}
+
+/** Cache-hit bar: lime gradient + live percentage, animated shimmer head. */
+export function gradientCacheBar(hitRate: number, width = 10, tick = 0): GradientBar {
+  const w = Math.max(0, Math.floor(width));
+  const pct = Math.max(0, Math.min(1, hitRate));
+  const filled = Math.round(pct * w);
+  const cells: string[] = [];
+  for (let x = 0; x < w; x++) {
+    if (x < filled) {
+      const frac = w > 1 ? x / (w - 1) : 1;
+      const c = lerp([74, 222, 128], [163, 230, 53], frac);
+      const isHead = tick > 0 && x === (tick - 1) % Math.max(1, filled);
+      cells.push(isHead
+        ? `${T.bold}${rgb(220, 255, 200)}▪${T.reset}`
+        : `${rgb(c[0], c[1], c[2])}▪${T.reset}`);
+    } else {
+      cells.push(`${T.grayDark}▪${T.reset}`);
+    }
+  }
+  return { text: cells.join(''), pct };
 }
 
 // ---- Context bar (Cline createContextBar) ----------------------------------
@@ -173,10 +293,11 @@ export interface RenderEntry {
 /**
  * Collapsed tool output (Cline tool-output.tsx): first line with ⌿, then
  * "... N more lines" in gray. Output longer than MAX_COLLAPSED_LINES folds.
+ * The tool name keeps its coordinated accent color.
  */
 export function renderToolOutput(text: string, indent = 2): string[] {
   const lines = text.replace(/\n+$/, '').split('\n');
-  const first = lines[0] ?? '';
+  const first = accentToolPrefix(lines[0] ?? '');
   const pad = ' '.repeat(indent);
   const out = [`${pad}${T.gray}${RESULT} ${first}${T.reset}`];
   if (lines.length > 1) {
@@ -185,26 +306,43 @@ export function renderToolOutput(text: string, indent = 2): string[] {
   return out;
 }
 
-/** Render one transcript entry to display lines (no wrapping; caller wraps). */
+/** Color-coordinate tool names: known edit tools get the violet accent,
+ *  read tools cyan, verification lime — so a transcript scan shows what the
+ *  agent is DOING at a glance. */
+const TOOL_ACCENTS: Array<[RegExp, string]> = [
+  [/^(write|edit|delete|patch|replace_symbol|search_replace_multi)\b/, 'violet'],
+  [/^(read|search|glob|inspect|tree|fetch|deepwiki|clipboard)\b/, 'cyan'],
+  [/^(shell|git|verify|perf)\b/, 'orange'],
+  [/^(memory|skill|subagent|chameleon|analyze_code|sql_codebase_query)\b/, 'magenta'],
+];
+
+function accentToolPrefix(text: string): string {
+  const name = text.split(/[(:]/)[0] ?? '';
+  for (const [re, color] of TOOL_ACCENTS) {
+    if (re.test(name)) return `${(T as any)[color]}${name}${T.reset}${T.grayDark}${text.slice(name.length)}${T.reset}`;
+  }
+  return `${T.violet}${name}${T.reset}${T.grayDark}${text.slice(name.length)}${T.reset}`;
+}
+
+/** Render one transcript entry with mochi color coordination. */
 export function renderEntry(entry: RenderEntry, expandTools = false): string[] {
   const text = entry.text;
   if (!text.trim()) return [];
   switch (entry.kind) {
     case 'user':
-      // Cline: user text on a subtle background block, ❯ accent.
-      return [`${T.act}❯${T.reset} ${T.bgUser}${T.fg}${T.bold}${text}${T.reset}`];
+      return [`${T.magenta}❯${T.reset} ${T.bgUser}${T.fg}${T.bold}${text}${T.reset}`];
     case 'assistant':
-      return [`${T.fg}${text}${T.reset}`];
+      return [`${T.cyan}${text}${T.reset}`];
     case 'tool':
-      return expandTools ? [text] : renderToolOutput(text);
+      return expandTools ? [accentToolPrefix(text)] : renderToolOutput(text);
     case 'error':
-      return [`${T.error}✗ ${text}${T.reset}`];
+      return [`${T.error}${T.bold}✗${T.reset} ${T.error}${text}${T.reset}`];
     case 'system':
       return [`${T.gray}${text}${T.reset}`];
     case 'task':
-      return [`${T.gray}· ${text}${T.reset}`];
+      return [`${T.teal}▸ ${text}${T.reset}`];
     case 'goal':
-      return [`${T.plan}● ${text}${T.reset}`];
+      return [`${T.pink}${T.bold}● ${text}${T.reset}`];
     default:
       return [text];
   }
@@ -270,3 +408,61 @@ export function transcriptIndent(termWidth: number): number {
   const w = Math.min(termWidth, TRANSCRIPT_MAX_WIDTH);
   return Math.max(0, Math.floor((termWidth - w) / 2));
 }
+
+// ---- Animated mochi splash screen ------------------------------------------
+const MOCHI_LOGO = [
+  '                     ███╗   ███╗',
+  '                     ████╗ ████║',
+  '                     ███╔╝╚███║',
+  '                     ███║ ╚███║',
+  '                     ███║  ███║',
+  '                    ╚████████╔╝',
+  '                     ╚═══════╝ ',
+];
+
+const SPLASH_STOPS: Array<[number, number, number]> = [
+  [255, 110, 199], // magenta
+  [199, 146, 234], // violet
+  [86, 212, 221],  // cyan
+  [255, 175, 209], // pink
+];
+
+/** One frame of the animated splash: gradient logo, shimmer bar, version. */
+export function splashFrame(tick: number, width: number, version: string): string[] {
+  const logoW = MOCHI_LOGO.reduce((m, l) => Math.max(m, l.length), 0);
+  const left = Math.max(0, Math.floor((width - logoW) / 2));
+  const pad = ' '.repeat(left);
+  const lines: string[] = [];
+  // breathing glow phase
+  const phase = (Math.sin(tick / 4) + 1) / 2;
+  for (let i = 0; i < MOCHI_LOGO.length; i++) {
+    const frac = i / Math.max(1, MOCHI_LOGO.length - 1);
+    const c = lerp(SPLASH_STOPS[0], SPLASH_STOPS[1], frac);
+    const glow = lerp(c, [255, 255, 255], phase * 0.18);
+    lines.push(pad + `${rgb(glow[0], glow[1], glow[2])}${T.bold}${MOCHI_LOGO[i]}${T.reset}`);
+  }
+  // shimmer underline sweeping across
+  const barW = Math.min(logoW, 36);
+  const barLeft = ' '.repeat(Math.max(0, Math.floor((width - barW) / 2)));
+  const head = tick % (barW + 6);
+  const cells: string[] = [];
+  for (let x = 0; x < barW; x++) {
+    const dist = Math.abs(x - head);
+    if (dist > 3) { cells.push(`${T.grayDark}═${T.reset}`); continue; }
+    const k = 1 - dist / 3;
+    const c = lerp([72, 79, 86], SPLASH_STOPS[2], k);
+    cells.push(`${rgb(c[0], c[1], c[2])}═${T.reset}`);
+  }
+  lines.push('');
+  lines.push(barLeft + cells.join(''));
+  const title = `m o c h i`;
+  const titlePad = ' '.repeat(Math.max(0, Math.floor((width - title.length) / 2)));
+  lines.push(titlePad + `${T.pink}${T.bold}${title}${T.reset}`);
+  const sub = `v${version} · the dango agent`;
+  const subPad = ' '.repeat(Math.max(0, Math.floor((width - sub.length) / 2)));
+  lines.push(subPad + `${T.gray}${sub}${T.reset}`);
+  return lines;
+}
+
+/** How many splash ticks before fading into the session (~1.2s at 60ms). */
+export const SPLASH_TICKS = 20;

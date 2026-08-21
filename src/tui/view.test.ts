@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
   T,
+  gradientContextBar,
+  gradientCacheBar,
+  spinnerColored,
+  spinnerSweep,
+  splashFrame,
   contextBar,
   usageText,
   statusBarRow1,
@@ -108,7 +113,8 @@ describe('renderToolOutput', () => {
   it('single line has no more-note', () => {
     const out = renderToolOutput('only line');
     expect(out).toHaveLength(1);
-    expect(out[0]).toContain('⌿ only line');
+    const plain = out[0].replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).toContain('⌿ only line');
   });
 });
 
@@ -121,7 +127,8 @@ describe('renderEntry', () => {
 
   it('errors get ✗', () => {
     const [row] = renderEntry({ kind: 'error', text: 'boom' });
-    expect(row).toContain('✗ boom');
+    const plain = row.replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).toContain('✗ boom');
   });
 
   it('empty text renders nothing', () => {
@@ -188,5 +195,91 @@ describe('text utils', () => {
     const out = ellipsize('abcdefghij', 5);
     expect(visibleLen(out)).toBe(5);
     expect(out.endsWith('…')).toBe(true);
+  });
+});
+describe('gradient bars (jcode-style)', () => {
+  it('context bar ramps lime→red as usage grows', () => {
+    const low = gradientContextBar(1, 100, 10, 0);
+    const high = gradientContextBar(99, 100, 10, 0);
+    expect(low.pct).toBeLessThan(0.2);
+    expect(high.pct).toBeGreaterThan(0.9);
+    // low-usage filled cells are lime-ish (163,230,53 present)
+    expect(low.text).toContain('38;2;163;230;53');
+    // high-usage ramp reaches red family
+    expect(high.text).toContain('38;2;248;81;73');
+  });
+
+  it('tick animates a white glow head while busy', () => {
+    const idle = gradientContextBar(50, 100, 10, 0);
+    const busy = gradientContextBar(50, 100, 10, 3);
+    expect(busy.text).toContain('38;2;255;255;255');
+    expect(idle.text).not.toContain('38;2;255;255;255');
+  });
+
+  it('cache bar full at rate 1 with lime gradient', () => {
+    const full = gradientCacheBar(1, 8, 0);
+    expect(full.pct).toBe(1);
+    expect(full.text).not.toContain('░');
+    expect(full.text).toContain('38;2;163;230;53');
+  });
+
+  it('cache bar empty at rate 0', () => {
+    const empty = gradientCacheBar(0, 8, 0);
+    expect(empty.text).not.toContain('38;2;163');
+  });
+});
+
+describe('animated spinner', () => {
+  it('cycles colored frames', () => {
+    const a = spinnerColored(0);
+    const b = spinnerColored(3);
+    expect(a).not.toBe(b);
+    expect(a).toMatch(/⠋/);
+    expect(b).toMatch(/⠸/);
+  });
+
+  it('sweep line animates', () => {
+    const a = spinnerSweep(0, 12);
+    const b = spinnerSweep(5, 12);
+    expect(a).not.toBe(b);
+    expect(a).toContain('━');
+  });
+
+  it('thinking line includes the sweep and note', () => {
+    const line = thinkingLine(2, 'running tests');
+    expect(line).toContain('Thinking');
+    expect(line).toContain('running tests');
+    expect(line).toContain('━');
+  });
+});
+
+describe('splash screen', () => {
+  it('renders centered logo + version each tick', () => {
+    const f = splashFrame(3, 100, '0.10.2');
+    const plain = f.join('\n').replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).toContain('█');
+    expect(plain).toContain('m o c h i');
+    expect(plain).toContain('v0.10.2');
+  });
+
+  it('animates between ticks', () => {
+    const a = splashFrame(2, 100, '1.0.0');
+    const b = splashFrame(6, 100, '1.0.0');
+    expect(a.join('|')).not.toBe(b.join('|'));
+  });
+});
+
+describe('color coordination', () => {
+  it('edit tools get violet accent, read tools cyan', () => {
+    const edit = renderEntry({ kind: 'tool', text: 'write({"path":"a.ts"})' });
+    expect(edit[0]).toContain('38;2;199;146;234');
+    const read = renderEntry({ kind: 'tool', text: 'read({"path":"a.ts"})' });
+    expect(read[0]).toContain('38;2;86;212;221');
+  });
+
+  it('errors are bold red with ✗', () => {
+    const err = renderEntry({ kind: 'error', text: 'boom' });
+    expect(err[0]).toContain('✗');
+    expect(err[0]).toContain('38;2;248;81;73');
   });
 });

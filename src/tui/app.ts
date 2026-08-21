@@ -9,6 +9,10 @@ import pkg from '../../package.json' with { type: 'json' };
 import { kvCache } from '../kv-cache.js';
 import {
   T,
+  gradientContextBar,
+  gradientCacheBar,
+  splashFrame,
+  SPLASH_TICKS,
   statusBarRow1,
   statusBarRow2,
   statusBarRow3,
@@ -138,6 +142,8 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     gitDiff: null as { files: number; additions: number; deletions: number } | null,
     totalTokens: 0,
     totalCost: 0,
+    /** splash animation tick; >= SPLASH_TICKS means done */
+    splashTick: 0,
   };
 
   let pendingResolver: ((v: string) => void) | undefined;
@@ -177,6 +183,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     if (spinnerTimer) return;
     spinnerTimer = setInterval(() => {
       state.spinner = (state.spinner + 1) % SPINNER.length;
+      if (state.splashTick < SPLASH_TICKS) state.splashTick++;
       scheduleRender();
     }, 160);
     // Freeze-guard: if something starves event-driven renders for > 800ms,
@@ -281,8 +288,9 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     const w = width();
     const h = height();
 
-    const statusRows = 3;
-    const composerH = 3; // top rule + input + bottom rule (multi-line grows)
+    // 4 status rows when tall (model+toggle, ctx/cache bars, workspace+git,
+    // auto-approve); 3 when short (bars folded away).
+    const statusRows: number = h >= 24 ? 4 : 3;
     const composerRows = state.input ? Math.min(6, Math.ceil(state.input.length / Math.max(10, w - 8)) + 2) : 3;
     const bottomRows = composerRows + statusRows;
     const contentH = Math.max(1, h - bottomRows - 1);
@@ -298,9 +306,18 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
 
     const rows: string[] = new Array(h).fill('');
     const lead = ' '.repeat(indent);
-    for (let i = 0; i < contentH; i++) {
-      const r = i;
-      rows[r] = lead + (visible[i] ?? '');
+    if (state.splashTick < SPLASH_TICKS) {
+      // Animated splash: centered logo + shimmer; fades into the transcript.
+      const splash = splashFrame(state.splashTick, w, pkg.version);
+      const top = Math.max(0, Math.floor((contentH - splash.length) / 2));
+      for (let i = 0; i < splash.length && i < contentH; i++) {
+        rows[top + i] = splash[i];
+      }
+    } else {
+      for (let i = 0; i < contentH; i++) {
+        const r = i;
+        rows[r] = lead + (visible[i] ?? '');
+      }
     }
 
     // thinking line pinned under the transcript while busy
@@ -337,15 +354,31 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       autoApprove: state.autoApprove,
       extra,
     };
-    const s1 = h - bottomRows;
-    const s2 = s1 + 1;
-    const s3 = s2 + 1;
+    const s1 = h - bottomRows;          // model + context + Plan/Act
+    const s2 = s1 + 1;                  // animated ctx + cache bars
+    const s3 = s2 + 1;                  // workspace (branch) | git stats
+    const s4 = s3 + 1;                  // auto-approve
     rows[s1] = statusBarRow1(statusModel, w);
-    rows[s2] = statusBarRow2(statusModel, w);
-    rows[s3] = statusBarRow3(state.autoApprove, w);
+    // jcode-style animated gradient bars, shimmering while busy.
+    const ctx = gradientContextBar(state.totalTokens, runtime.config.safety.contextBudgetTokens, 12, state.busy ? state.spinner + 1 : 0);
+    // Map KV-cache state to the bar: warm → full, cooling → fraction of TTL
+    // remaining, cold/unknown → empty but still shimmering while busy.
+    const kv = kvCache.status();
+    const cacheRate = kv.state === 'warm' ? 1 : kv.state === 'cooling' ? Math.max(0.15, Math.min(0.85, kv.remainingSecs / 300)) : 0;
+    const cache = gradientCacheBar(cacheRate, 10, state.busy ? state.spinner + 1 : 0);
+    const barsRow = ` ${T.gray}ctx${T.reset} ${ctx.text} ${T.gray}${Math.round(ctx.pct * 100)}%${T.reset}   ${T.gray}cache${T.reset} ${cache.text} ${T.lime}${Math.round(cache.pct * 100)}%${T.reset}`;
+    if (statusRows === 4) {
+      rows[s2] = barsRow;
+      rows[s3] = statusBarRow2(statusModel, w);
+      rows[s4] = statusBarRow3(state.autoApprove, w);
+    } else {
+      // short terminal: drop the bars row, keep the classic 3-row layout
+      rows[s2] = statusBarRow2(statusModel, w);
+      rows[s3] = statusBarRow3(state.autoApprove, w);
+    }
 
     // ---- composer (cline InputBar) ----
-    const cTop = s3 + 1;
+    const cTop = s1 + statusRows;
     rows[cTop] = composerTopRule(w);
     const innerW = Math.max(1, w - 6);
     const rawRows = state.input ? wrap(state.input, innerW) : [''];
@@ -390,10 +423,16 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         out += '\x1b[' + (i + 1) + ';1H' + line + '\x1b[K';
       }
     }
-    const cursorRow = cTop + 1 + Math.min(shownRows.length - 1, Math.max(0, rawRows.length - 1));
+    // Cursor placement: the composer spans the FULL terminal width from col 0,
+    // so the caret column is exactly (❯ prefix + 2 spaces) + wrapped col —
+    // no transcript indent. Row tracks the cursor's actual wrapped line,
+    // scrolled into the visible window like the text itself.
     const beforeCursor = state.input.slice(0, state.cursor);
     const beforeLines = wrap(beforeCursor, innerW);
-    const cursorCol = indent + 4 + (beforeLines.length ? visibleLen(beforeLines[beforeLines.length - 1]) : 0);
+    const cursorVisualRow = Math.max(0, beforeLines.length - 1);
+    const firstVisibleRow = Math.max(0, rawRows.length - shownRows.length);
+    const cursorRow = cTop + 1 + Math.max(0, cursorVisualRow - firstVisibleRow);
+    const cursorCol = 4 + (beforeLines.length ? visibleLen(beforeLines[beforeLines.length - 1]) : 0);
     out += '\x1b[' + (cursorRow + 1) + ';' + (cursorCol + 1) + 'H' + SHOW;
     process.stdout.write(out);
     lastFrame = rows.slice();
