@@ -114,6 +114,8 @@ const READ_ONLY_TOOLS = new Set([
   'read', 'search', 'glob', 'inspect', 'git', 'fetch', 'diff', 'tree',
   'get_function', 'find_callers', 'type_hierarchy', 'verify', 'perf_audit',
   'deepwiki', 'clipboard', 'sql_codebase', 'analyze_code', 'memory',
+  'web_search', 'get_diagnostics', 'git_blame', 'git_history', 'system_info',
+  'find_references', 'find_definitions', 'db_inspect',
 ]);
 
 export function toolToCapability(tool: Tool): Capability {

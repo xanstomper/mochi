@@ -29,12 +29,22 @@ import { searchReplaceMultiTool } from './search-replace-multi.js';
 import { analyzeCodeTool } from './analyze-code.js';
 import { verifyTool } from './verify.js';
 import { perfTool } from './perf-tool.js';
+import { webSearchTool } from './web-search.js';
+import { getDiagnosticsTool } from './diagnostics-tool.js';
+import { mkdirTool, moveFileTool, copyFileTool } from './file-ops.js';
+import { gitBlameTool, gitHistoryTool } from './git-blame.js';
+import { systemInfoTool } from './system-info.js';
+import { findReferencesTool, findDefinitionsTool } from './find-references.js';
+import { dbInspectTool } from './db-inspect.js';
 
 export const ALL_TOOLS: Tool[] = [
   readTool, writeTool, editTool, deleteTool, shellTool, searchTool, globTool,
   gitTool, inspectTool, memoryTool, todoTool, skillTool, subagentTool, patchTool,
   fetchTool, diffTool, treeTool, regexReplaceTool, deepwikiTool, clipboardTool, sqlCodebaseTool,
   searchReplaceMultiTool, analyzeCodeTool, verifyTool, perfTool,
+  webSearchTool, getDiagnosticsTool, mkdirTool, moveFileTool, copyFileTool,
+  gitBlameTool, gitHistoryTool, systemInfoTool, findReferencesTool, findDefinitionsTool,
+  dbInspectTool,
   ...symbolTools, replaceSymbolTool, chameleonTool,
 ];
 

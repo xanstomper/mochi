@@ -702,8 +702,13 @@ export class Agent {
   private isReadOnly(name: string): boolean {
     // Allowlist of non-mutating tools. Note: MCP resource tools registered as
     // <server>__resources_list/read are read-only by construction.
-    return ['read', 'search', 'glob', 'inspect', 'get_function', 'find_callers', 'type_hierarchy', 'todo', 'skill', 'memory', 'chameleon', 'analyze_code', 'perf'].includes(name)
-      || /__resources_(list|read)$/.test(name);
+    return [
+      'read', 'search', 'glob', 'inspect', 'get_function', 'find_callers', 'type_hierarchy',
+      'todo', 'skill', 'memory', 'chameleon', 'analyze_code', 'perf', 'perf_audit',
+      'web_search', 'get_diagnostics', 'git_blame', 'git_history', 'system_info',
+      'find_references', 'find_definitions', 'db_inspect', 'diff', 'tree', 'deepwiki',
+      'fetch', 'verify', 'sql_codebase',
+    ].includes(name) || /__resources_(list|read)$/.test(name);
   }
 
   /** Veto a tool call in plan mode, still answering its tool_call_id so the
