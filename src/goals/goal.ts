@@ -311,7 +311,11 @@ Return ONLY the JSON array, no markdown.`;
       const sid = this.store.begin({ goalId: goal.id, role: task.role, objective: task.title });
       const goalText = goal.objective;
       const taskDesc = task.description;
-      this.store.append(sid, 'user', 'Goal: ' + goalText + '\nTask: ' + task.title + '\n' + taskDesc);
+      // This is a synthesized internal directive (the engine's task brief), not
+      // a real user request. Store it as `system` so replayed sessions show it
+      // as muted context instead of a prominent "user" prompt above the agent
+      // turns — and so searches don't confuse it for a genuine user ask.
+      this.store.append(sid, 'system', 'Goal: ' + goalText + '\nTask: ' + task.title + '\n' + taskDesc);
       if (result.summary) this.store.append(sid, 'assistant', result.summary);
       // surface non-tool (user/assistant/system) message content
       const msgs = (context as unknown as { messages: Array<{ role: string; content?: string }> }).messages ?? [];

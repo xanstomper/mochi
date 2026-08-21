@@ -3,6 +3,7 @@
 import { readFileSync, statSync, existsSync, readdirSync } from 'node:fs';
 import { dirname, resolve, join as pathJoin } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { findProjectRoot } from './repo.js';
 import type { MochiConfig } from './types.js';
 
 // Resolve the version from package.json when running from source; when Mochi is
@@ -761,7 +762,7 @@ async function main() {
       baseUrl: runtime.config.model.baseUrl ?? '',
       model: runtime.config.model.model,
       apiKey: runtime.config.model.apiKey ?? null,
-      workspaceDir: runtime.workspace.dir,
+      workspaceDir: findProjectRoot(runtime.cwd),
       daemon: { running: isRunning, port: info?.port },
     });
     console.log(formatDoctor(report));
@@ -916,7 +917,10 @@ async function main() {
   if (first === 'session') {
     const { SessionStore, hasSqlite } = await import('./session-store.js');
     if (!hasSqlite()) { console.log('Session store needs a SQLite driver (Node >= 22.5 or the bun binary).'); return; }
-    const store = new SessionStore(runtime.workspace.dir);
+    // GoalEngine persists sessions under the PROJECT ROOT (.mochi/sessions.sqlite);
+    // workspace.dir is already that root's .mochi subdir. Use the same key the
+    // engine does or the CLI reads an empty sibling DB and sessions never list.
+    const store = new SessionStore(findProjectRoot(runtime.cwd));
     try {
       const sub = positional[1];
       if (sub === 'search') {

@@ -47,10 +47,13 @@ maybeDescribe('session recording through the goal engine', () => {
     expect(found.length).toBeGreaterThanOrEqual(1);
     // The transcript content is retrievable via messages(id) — this is what
     // the resume path (>20 prior messages) would inject. Assert it has the
-    // recorded user goal/task + assistant summary.
+    // recorded goal/task brief + assistant summary.
     const msgs = store.messages(hit!.id);
     expect(msgs.length).toBeGreaterThanOrEqual(2);
-    expect(msgs.some((m) => m.role === 'user' && (m.content.includes('flag') || m.content.includes('Make')))).toBe(true);
+    // The engine's goal/task brief is a synthesized internal directive, so it is
+    // recorded as a muted `system` message, not a `user` request (the TUI must
+    // not show brief text as a user prompt above agent turns).
+    expect(msgs.some((m) => m.role === 'system' && (m.content.includes('flag') || m.content.includes('Make')))).toBe(true);
     store.close();
   }, 60_000);
 });

@@ -744,7 +744,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     if (line === '/rename' || line.startsWith('/rename ')) {
       const specific = line.startsWith('/rename ') ? line.slice(8).trim() : '';
       const { SessionStore } = await import('../session-store.js');
-      const store = new SessionStore(runtime.workspace.dir);
+      const store = new SessionStore(projectRoot);
       const list = store.list(1);
       const target = list[0];
       if (!target) {
@@ -1073,7 +1073,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
 
   async function historySessionMenu() {
     const { SessionStore } = await import('../session-store.js');
-    const store = new SessionStore(runtime.workspace.dir);
+    const store = new SessionStore(projectRoot);
     const sessions = store.list(40);
 
     const items: string[] = [
