@@ -23,6 +23,9 @@
 - **Config Validation.** `validateConfig()` validates config values at startup,
   catching misconfigurations (invalid safety mode, bad numbers, missing API key)
   before they cause mid-run failures.
+- **TUI mode overlay.** The status bar now shows the active execution mode
+  (`[SPEC]`, `[SECURITY]`, `[CODEMOD]`, `[CHAOS]`) so users can see at a glance
+  which harness behavior is active.
 - **`mochi daemon restart`.** Stop + start a fresh daemon on the same
   port/token. Cron jobs, sessions, and goal state persist across restarts
   (`.mochi/cron.json` plus the SQLite session store).

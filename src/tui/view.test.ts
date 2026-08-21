@@ -88,6 +88,18 @@ describe('statusBar rows', () => {
     expect(plain).toContain('○ Act');
   });
 
+  it('row1 shows agent-mode overlay when active', () => {
+    const row = statusBarRow1(baseStatus({ agentMode: 'security' }), 90);
+    const plain = row.replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).toContain('[SECURITY]');
+  });
+
+  it('row1 hides normal agent-mode overlay', () => {
+    const row = statusBarRow1(baseStatus({ agentMode: 'normal' }), 90);
+    const plain = row.replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).not.toContain('[NORMAL]');
+  });
+
   it('row2 shows workspace, branch, and diff stats', () => {
     const row = statusBarRow2(baseStatus(), 90);
     const plain = row.replace(/\x1b\[[0-9;]*m/g, '');

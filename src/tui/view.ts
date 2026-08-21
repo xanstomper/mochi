@@ -237,6 +237,8 @@ export interface StatusBarModel {
   maxInputTokens?: number;
   /** plan/act mode */
   mode: 'plan' | 'act';
+  /** active execution mode (normal/spec/security/codemod/chaos) */
+  agentMode?: string;
   workspaceName: string;
   gitBranch: string | null;
   gitDiff: { files: number; additions: number; deletions: number } | null;
@@ -245,7 +247,22 @@ export interface StatusBarModel {
   extra?: string[];
 }
 
-/** Row 1: model + context … ○ Plan ● Act (Tab) */
+function modeColor(mode: string): string {
+  switch (mode) {
+    case 'spec':
+      return T.plan;
+    case 'security':
+      return T.error;
+    case 'codemod':
+      return T.violet;
+    case 'chaos':
+      return T.warning;
+    default:
+      return T.gray;
+  }
+}
+
+/** Row 1: model + [mode] + context … ○ Plan ● Act (Tab) */
 export function statusBarRow1(m: StatusBarModel, width: number): string {
   const bar = m.maxInputTokens ? contextBar(m.totalTokens, m.maxInputTokens) : undefined;
   const usage = usageText(m.totalTokens, m.totalCost);
@@ -253,7 +270,10 @@ export function statusBarRow1(m: StatusBarModel, width: number): string {
     ? ` ${T.fg}${bar.filled}${T.grayDark}${bar.empty}${T.reset} ${T.gray}${usage}${T.reset}`
     : ` ${T.gray}${usage}${T.reset}`;
   const toggle = `${m.mode === 'plan' ? `${T.plan}● Plan` : `${T.grayDark}○ Plan`}${T.reset} ${m.mode === 'act' ? `${T.act}● Act` : `${T.grayDark}○ Act`}${T.reset} ${T.grayDark}(Tab)${T.reset}`;
-  const left = `${T.gray}${ellipsize(m.modelId, 40)}${T.reset}${barText}`;
+  const modeBadge = m.agentMode && m.agentMode !== 'normal'
+    ? ` ${modeColor(m.agentMode)}${T.bold}[${m.agentMode.toUpperCase()}]${T.reset} `
+    : '';
+  const left = `${T.gray}${ellipsize(m.modelId, 32)}${T.reset}${modeBadge}${barText}`;
   const extra = m.extra?.length ? ` ${T.grayDark}· ${m.extra.join(' · ')}${T.reset}` : '';
   const leftAll = left + extra;
   const leftLen = visibleLen(leftAll);
