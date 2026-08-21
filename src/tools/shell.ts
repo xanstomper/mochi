@@ -4,6 +4,28 @@ import { classifyCommand } from '../security.js';
 
 const MAX_OUTPUT = 256_000;
 
+// Desktop GUI applications that must never be launched by a coding agent.
+// Opening a window (gnome-calculator, kcalc, browsers, terminals, editors)
+// never delivers source code and visibly "spams" when a model loops on it.
+const GUI_LAUNCHERS = [
+  /\bgnome-calculator\b/i, /\bkcalc\b/i, /\bxcalc\b/i, /\bgnome-calculator-gtk3\b/i,
+  /\bgnome-terminal\b/i, /\bkonsole\b/i, /\bgitk\b/i, /\bgedit\b/i,
+  /\bgnome-text-editor\b/i, /\bnautilus\b/i, /\bfirefox\b/i, /\bchromium\b/i,
+  /\bgoogle-chrome\b/i,
+];
+
+/** Returns a human-readable reason when `command` launches a desktop GUI app,
+ *  or null if it's a normal headless command the agent may run. */
+export function desktopGuiReason(command: string): string | null {
+  const c = command.trim();
+  if (!c) return null;
+  for (const re of GUI_LAUNCHERS) {
+    const m = re.exec(c);
+    if (m) return m[0].trim();
+  }
+  return null;
+}
+
 export const shellTool: Tool = {
   def: {
     name: 'shell',
@@ -33,6 +55,17 @@ export const shellTool: Tool = {
       const all = listTasks();
       return all.length === 0 ? 'No background tasks.' : all.map((t) => describeTask(t, 400)).join('\n---\n');
     }
+
+    // Never spawn a desktop GUI app: it opens a window, delivers no source
+    // code, and when a model loops on a "make/build X" request it visibly
+    // spams the screen. Redirect the agent to write code instead.
+    const gui = desktopGuiReason(command);
+    if (gui) {
+      throw new Error(
+        `Refused to launch desktop GUI app "${gui}". You are a coding agent: when asked to BUILD/IMPLEMENT/CODE something, deliver it as source files (write/edit), then verify headlessly (unit test, CLI invocation, or script) and report the result. Do NOT open a GUI window. Current working directory: ${ctx.cwd ?? ''}`
+      );
+    }
+
     if (args.background === true) {
       const { startBackgroundTask, describeTask } = await import('../background-tasks.js');
       const t = startBackgroundTask(command, ctx.cwd, {

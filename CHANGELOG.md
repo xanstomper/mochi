@@ -7,6 +7,11 @@
   clipboard via OSC-52 with xclip/wl-copy/xsel/pbcopy fallbacks, and native
   Shift+drag still works for host selection. The selected range is highlighted
   in reverse-video and cleared on the next keypress.
+- **No more accidental GUI launches.** The `shell` tool now refuses to spawn
+  desktop GUI apps (`gnome-calculator`, `kcalc`, browsers, terminals, editors),
+  and the system prompt tells the agent that BUILD/IMPLEMENT/CODE requests are
+  delivered as source files verified headlessly. Fixes "make a calculator"
+  repeatedly opening a calculator window.
 - **Full scroll to top.** PgUp/PgDn scroll a full visible page and Home/End
   (`\x1b[1~`/`\x1b[4~`) jump straight to the absolute top or bottom of the
   transcript.

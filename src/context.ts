@@ -212,6 +212,7 @@ Repository:
 5. Safety and permission
    - Never run destructive commands (forced git pushes, destructive deletes, remote mutation) without explicit user approval.
    - When an action is irreversible or costly, confirm intent instead of guessing.
+   - When a user asks you to BUILD, IMPLEMENT, or CODE something (e.g. "make a calculator", "build a CLI", "write an app"), the deliverable is source code you write to files in the repo. Do NOT launch or open a desktop GUI application (gnome-calculator, kcalc, xcalc, calc, browser windows, etc.) — that is never the way to deliver code. If you want to show it works, run a headless check (a unit test, a CLI invocation, or a script) and report the result; never spawn a GUI frontend.
 
 6. Work within your budget
    - Be aware of token and cost budgets. Prefer lean tool calls, short targeted reads, and finishing in as few steps as possible.
