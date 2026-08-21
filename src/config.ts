@@ -141,8 +141,11 @@ export function loadProjectConfig(projectDir: string): Partial<MochiConfig> {
 }
 
 /** Validate a merged config and return a list of human-readable problems.
- *  Catches common mistakes early (invalid safety mode, bad numbers, missing
- *  API key, etc.) so they surface at startup instead of mid-run. */
+ *  Catches common mistakes early (invalid safety mode, bad numbers, MCP server
+ *  shape, etc.) so they surface at startup instead of mid-run. Purposely does
+ *  NOT check for an API key: a missing key is a per-provider/credential concern
+ *  surfaced at the model call layer, and a Runtime must still be constructible
+ *  without keys for inspection and tests. */
 export function validateConfig(config: MochiConfig): string[] {
   const problems: string[] = [];
 
@@ -150,14 +153,11 @@ export function validateConfig(config: MochiConfig): string[] {
   if (!config.model.provider) {
     problems.push('model.provider is empty — set provider in config or MOCHI_PROVIDER env var');
   }
-  if (!config.model.baseUrl && !config.model.provider.startsWith('openrouter')) {
+  if (!config.model.baseUrl && config.model.provider && !config.model.provider.startsWith('openrouter')) {
     problems.push('model.baseUrl should be set for the selected provider');
   }
   if (!config.model.model) {
     problems.push('model.model is empty — set a default model');
-  }
-  if (!config.model.apiKey) {
-    problems.push('No API key found — set the appropriate *_API_KEY env var (e.g. OPENCODE_ZEN_API_KEY)');
   }
 
   // Safety config ranges

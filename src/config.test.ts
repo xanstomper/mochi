@@ -54,14 +54,15 @@ describe('validateConfig', () => {
     expect(problems).toHaveLength(0);
   });
 
-  it('detects missing API key', () => {
+  it('does not report a missing API key (key is a call-time concern, not structural)', () => {
     const prior = process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_KEY;
     try {
       const cfg = loadConfig({ model: { provider: 'openai', model: 'gpt-4', apiKey: undefined } });
-      // Note: apiKey may be set from env, so we check if the config ends up without one
       const problems = validateConfig(cfg);
-      expect(problems.some(p => p.includes('API key'))).toBe(!cfg.model.apiKey);
+      // Missing-key must not be a structural config problem; it is surfaced
+      // at the model call layer so Runtimes can be built without keys.
+      expect(problems.some(p => p.includes('API key'))).toBe(false);
     } finally {
       if (prior !== undefined) process.env.OPENAI_API_KEY = prior;
     }

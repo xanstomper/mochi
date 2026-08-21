@@ -17,9 +17,6 @@ jobs:
       fail-fast: false
       matrix:
         node: [20, 22]
-    env:
-      OPENCODE_ZEN_API_KEY: sk-test
-      OPENAI_API_KEY: sk-test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

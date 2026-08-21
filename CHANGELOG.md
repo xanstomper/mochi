@@ -21,11 +21,18 @@
   `analyze_code` (code complexity metrics), `verify` (run tests/builds with auto-detect),
   `perf` (performance diagnostics and monitoring)
 - **Config Validation.** `validateConfig()` validates config values at startup,
-  catching misconfigurations (invalid safety mode, bad numbers, missing API key)
-  before they cause mid-run failures.
+  catching misconfigurations (invalid safety mode, bad numbers, MCP server shape)
+  before they cause mid-run failures. A missing API key is intentionally NOT a
+  structural error — it surfaces at the model call layer, so a Runtime can be
+  built for inspection/tests without keys and no provider key is required in CI.
 - **TUI mode overlay.** The status bar now shows the active execution mode
   (`[SPEC]`, `[SECURITY]`, `[CODEMOD]`, `[CHAOS]`) so users can see at a glance
   which harness behavior is active.
+- **TUI transcript scrolling.** The scroll wheel now scrolls the chat (mouse
+  reporting enabled); PageUp/PageDown scroll too. Scrolling up holds the view
+  instead of live events yanking it back to the bottom. `git diff` stats in the
+  status bar are throttled so heavy tool work no longer stutters or freezes the
+  UI loop.
 - **`mochi daemon restart`.** Stop + start a fresh daemon on the same
   port/token. Cron jobs, sessions, and goal state persist across restarts
   (`.mochi/cron.json` plus the SQLite session store).

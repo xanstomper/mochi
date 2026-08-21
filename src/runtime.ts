@@ -56,8 +56,9 @@ export class Runtime {
       this.config = loadConfig({ ...projectConfig, ...opts.config });
     }
 
-    // Surface misconfigurations (invalid safety mode, bad numbers, missing API
-    // key, etc.) at startup instead of mid-run.
+    // Surface misconfigurations (invalid safety mode, bad numbers, MCP server
+    // shape, etc.) at startup instead of mid-run. A missing API key is NOT a
+    // config-structure problem and is surfaced at the model call layer.
     const problems = validateConfig(this.config);
     if (problems.length) {
       throw new Error(`Invalid configuration:\n${problems.map((p) => `  - ${p}`).join('\n')}`);

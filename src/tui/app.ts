@@ -150,6 +150,9 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     /** splash animation tick + real startup progress (0..1) */
     splashTick: 0,
     splashProgress: 0,
+    /** true while the user has scrolled up away from the bottom (prevents
+     *  live events from yanking the view back to the newest line). */
+    userScrolled: false,
   };
 
   let pendingResolver: ((v: string) => void) | undefined;
@@ -172,7 +175,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     state.lines.push({ kind, text });
     state.chatVer++;
     if (state.lines.length > state.limit) state.lines.splice(0, state.lines.length - state.limit);
-    state.scroll = 0;
+    if (!state.userScrolled) state.scroll = 0;
     scheduleRender();
   };
 
@@ -260,8 +263,16 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   }
 
   // ---- git diff stats for the status bar -------------------------------
-  async function refreshGitStats() {
+  // Throttled: spawning `git diff --numstat` on every tool event (and every
+  // force-render while busy) was stalling the UI loop during heavy work.
+  let gitStatsTimer: NodeJS.Timeout | undefined;
+  let gitStatsInFlight = false;
+  async function refreshGitStats(force = false) {
+    if (!force && (gitStatsTimer || gitStatsInFlight)) return; // already queued/flying
+    gitStatsTimer = setTimeout(() => { gitStatsTimer = undefined; }, 1500);
+    gitStatsInFlight = true;
     const stats = await gitDiffStats(projectRoot);
+    gitStatsInFlight = false;
     state.gitDiff = stats;
   }
 
@@ -802,6 +813,14 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
 
   function onKey(buf: Buffer) {
     const s = buf.toString('utf8');
+    // Mouse wheel (SGR protocol): CSI < 64 ; row ; col M = scroll up,
+    // CSI < 65 ; row ; col M = scroll down. Only active when mouse tracking
+    // is enabled (see start()). Intercept before the generic escape router.
+    const wheel = s.match(/^\x1b\[<(\d+);\d+;\d+[Mm]$/);
+    if (wheel) {
+      scrollTranscript(Number(wheel[1]) === 64 ? 3 : -3);
+      return;
+    }
     // Shift+Tab arrives as CSI Z — intercept before the escape router.
     if (s.startsWith('\x1b[Z')) {
       state.autoApprove = !state.autoApprove;
@@ -960,8 +979,8 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       case '\x1b[B':
         if (state.dropActive) { state.dropSelected = Math.min(currentDropItems().length - 1, state.dropSelected + 1); break; }
         historyNext(); break;
-      case '\x1b[5~': state.scroll = Math.min(state.lines.length, state.scroll + 10); break;
-      case '\x1b[6~': state.scroll = Math.max(0, state.scroll - 10); break;
+      case '\x1b[5~': scrollTranscript(10); return;
+      case '\x1b[6~': scrollTranscript(-10); return;
       case '\x1b[3~': state.input = state.input.slice(0, state.cursor) + state.input.slice(state.cursor + 1); break;
       default: break;
     }
@@ -989,6 +1008,23 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     state.cursor = state.input.length;
   }
 
+  /** Scroll the transcript. Positive `delta` scrolls up (view older content),
+   *  negative scrolls back down. Reaching the bottom clears manual-scroll so
+   *  live events auto-follow again. */
+  function scrollTranscript(delta: number) {
+    const maxScroll = Math.max(0, state.lines.length);
+    // Up (delta > 0): scroll deeper into history, enter manual mode.
+    if (delta > 0) {
+      state.scroll = Math.min(maxScroll, state.scroll + delta);
+      if (state.scroll > 0) state.userScrolled = true;
+    } else {
+      // Down (delta < 0): closer to bottom; exit manual mode at the newest line.
+      state.scroll = Math.max(0, state.scroll + delta);
+      if (state.scroll <= 0) state.userScrolled = false;
+    }
+    scheduleRender();
+  }
+
   function onRuntimeEvent(event: MochiEvent) {
     // First real event (model streaming, tools) means startup is done: finish
     // the splash immediately so it never covers live output.
@@ -1000,7 +1036,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     // the transcript, task tree, current tool, and stop reasons exactly as the
     // tests assert. Non-rendering events return false and skip the redraw.
     if (reduceEvent(state, event as unknown as Record<string, unknown>)) {
-      state.scroll = 0;
+      if (!state.userScrolled) state.scroll = 0;
       scheduleRender();
     }
     // Keep the status bar's git stats + token meter live.
@@ -1017,7 +1053,9 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   }
 
   function start() {
-    process.stdout.write(ALT_ENTER + HIDE);
+    // Enable SGR mouse reporting so the scroll wheel (and future click-to-focus)
+    // reach stdin as escape sequences. Disabled again on exit.
+    process.stdout.write(ALT_ENTER + HIDE + '\x1b[?1000h\x1b[?1006h');
     process.stdin.setRawMode?.(true);
     process.stdin.resume();
     const keyListener = (buf: Buffer) => onKey(buf);
@@ -1025,7 +1063,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     const resizeListener = () => scheduleRender();
     process.stdout.on('resize', resizeListener);
     const exitListener = () => {
-      process.stdout.write(`${RESET}${SHOW}${ALT_EXIT}`);
+      process.stdout.write(`${RESET}${SHOW}${ALT_EXIT}\x1b[?1000l\x1b[?1006l`);
     };
     process.on('exit', exitListener);
     runtime.events.onAll(onRuntimeEvent);
