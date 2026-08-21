@@ -238,6 +238,9 @@ export class Agent {
   private planNudges = 0;
   private emptyResponseCount = 0;
   private selfReviewCount = 0;
+  private lastCompletionAnswer = '';
+  private sameAnswerStreak = 0;
+  private lastVerifyPassed = false;
   private subagentDepth: number;
   private mcpClose?: () => void;
 
@@ -532,6 +535,25 @@ export class Agent {
       }
       this.lastStrategy = response.toolCalls?.[0]?.function.name ?? response.content?.slice(0, 60) ?? '';
 
+      // Anti-"same message" guard: if the model returns the exact same
+      // no-tool-call answer again (typically a stalled verification/loop that
+      // would otherwise re-stream the identical text to the TUI forever),
+      // stop instead of re-printing it — but ONLY when nothing real is pending:
+      // the fix is already verified (or it's a pure answer with no file work),
+      // and never in plan mode (where a plan preamble must still be nudged).
+      if (!this.planMode && (!response.toolCalls || response.toolCalls.length === 0)) {
+        const text = (response.content ?? '').trim();
+        if (text && text === this.lastCompletionAnswer && this.lastVerifyPassed) {
+          this.sameAnswerStreak++;
+          if (this.sameAnswerStreak >= 2) {
+            return this.finish(task, true, text, 'completed');
+          }
+        } else {
+          if (text) this.lastCompletionAnswer = text;
+          this.sameAnswerStreak = 0;
+        }
+      }
+
       if (response.toolCalls && response.toolCalls.length > 0) {
         this.context.addMessage({ role: 'assistant', content: response.content ?? '', tool_calls: response.toolCalls });
         // Plan mode: allow read-only research, but veto any mutating tool and
@@ -622,6 +644,7 @@ export class Agent {
       const verification = await this.verify(task, repo);
       this.verifyCount++;
       if (verification.passed) {
+        this.lastVerifyPassed = true;
         // Success after diagnosis turns earlier hypotheses into confirmed or
         // refuted states and writes a procedural lesson so the next run has a
         // head start on this kind of failure.
