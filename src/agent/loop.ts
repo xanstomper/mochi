@@ -433,6 +433,7 @@ export class Agent {
         const repCounts = new Map<string, number>();
         let maxRep = 0;
         let phraseBuf = '';
+        const recentPhrases: string[] = []; // sliding window of last 20 phrases
         // A single model generation can also degenerate WITHOUT repeating an
         // identical line: e.g. a weak model streams hundreds of tiny fragments
         // of "let me explore the repo…" (lots of entropy, no progress) and
@@ -454,7 +455,12 @@ export class Agent {
               phraseBuf += char;
               if (char === '\n' || char === ',' || char === '.') {
                 const phrase = phraseBuf.trim();
-                if (phrase.length >= 5) {
+                if (phrase.length >= 12) {
+                  recentPhrases.push(phrase);
+                  if (recentPhrases.length > 20) {
+                    const dropped = recentPhrases.shift()!;
+                    repCounts.set(dropped, Math.max(0, (repCounts.get(dropped) ?? 0) - 1));
+                  }
                   const c = (repCounts.get(phrase) ?? 0) + 1;
                   repCounts.set(phrase, c);
                   if (c > maxRep) maxRep = c;
@@ -463,18 +469,18 @@ export class Agent {
               }
             }
 
-            if (maxRep >= 12 || streamBytes >= MAX_STREAM_BYTES || chunks.length >= MAX_STREAM_CHUNKS) {
+            if (maxRep >= 8 || streamBytes >= MAX_STREAM_BYTES || chunks.length >= MAX_STREAM_CHUNKS) {
               // High-confidence loop / runaway generation: stop streaming
               // before it floods output.
               looped = true;
               break;
             }
 
-            // Early-warning suppression: once a line has repeated 6+ times,
+            // Early-warning suppression: once a phrase has repeated 3+ times,
             // the model is likely degenerating. Stop emitting chunks to the
-            // TUI so the user doesn't see hundreds of identical lines, but
-            // keep collecting so the loop detector (maxRep >= 12) can trigger.
-            if (maxRep >= 6) {
+            // TUI so the user doesn't see identical lines, but
+            // keep collecting so the loop detector (maxRep >= 8) can trigger.
+            if (maxRep >= 3) {
               streamBuf = '';
               continue;
             }

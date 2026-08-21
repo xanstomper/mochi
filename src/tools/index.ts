@@ -57,9 +57,7 @@ export const ALL_TOOLS: Tool[] = [
  */
 const CORE_TOOL_NAMES = new Set([
   'read', 'write', 'edit', 'delete', 'shell', 'search', 'glob',
-  'git', 'inspect', 'memory', 'todo', 'skill', 'subagent', 'patch',
-  'fetch', 'diff', 'tree', 'verify', 'think',
-  'get_function', 'find_callers', 'replace_symbol',
+  'git', 'inspect', 'todo', 'skill', 'subagent', 'fetch', 'think'
 ]);
 
 /** Extended tools included only when the model is not a known weak/free tier. */
