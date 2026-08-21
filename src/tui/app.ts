@@ -162,6 +162,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
 
   let schedulerTimer: NodeJS.Timeout | undefined;
   let renderQueued = false;
+  let renderPaused = false;
   let lastRenderAt = 0;
   let exited = false;
   let spinnerTimer: NodeJS.Timeout | undefined;
@@ -185,7 +186,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   };
 
   const scheduleRender = () => {
-    if (renderQueued) return;
+    if (renderQueued || renderPaused) return;
     renderQueued = true;
     // Use a macrotask (setTimeout 0) instead of queueMicrotask so bursty
     // updates (streaming message:chunk, tool events) coalesce into a single
@@ -235,12 +236,19 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     const out: string[] = [];
     for (const paragraph of text.split('\n')) {
       let line = '';
+      let lineVis = 0; // visible (ANSI-stripped) length of `line`, kept O(1)
       for (const word of paragraph.split(/(\s+)/)) {
-        if (visibleLen(line + word) > max) {
+        const wVis = visibleLen(word);
+        if (lineVis + wVis > max) {
           if (line.trim()) out.push(line.trimEnd());
           line = word.startsWith(' ') ? word.slice(1) : word;
+          lineVis = visibleLen(line);
         } else {
+          // O(1) cumulative visible length instead of re-stripping ANSI over
+          // the whole growing line per word, which was O(line^2) and froze
+          // the UI while a long response streamed in.
           line += word;
+          lineVis += wVis;
         }
       }
       out.push(line);
@@ -342,14 +350,19 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
 
   function render() {
     if (exited) return;
-    // A single bad frame must never freeze the whole UI: recover, log, and
-    // reschedule instead of throwing out of the render loop.
+    // A single bad frame must never freeze the whole UI. If a frame throws we
+    // surface the real error, then PAUSE rendering (front-burner) instead of
+    // rescheduling a throwing frame every 300ms, which itself pegs the loop and
+    // looks like a freeze. The user can recover with Esc / typing.
     try {
       renderFrame();
     } catch (e) {
       renderQueued = false;
-      process.stdout.write(`${T.reset}${SHOW}\r\n${T.error}[mochi render error] ${e instanceof Error ? e.message : String(e)}${T.reset}\r\n${HIDE}`);
-      setTimeout(() => scheduleRender(), 300);
+      const msg = e instanceof Error ? `${e.message}\n${e.stack ?? ''}` : String(e);
+      process.stdout.write(`${RESET}${SHOW}\r\n${T.error}[render error] ${msg}${RESET}\r\n${HIDE}`);
+      // Back off: only resume renders from a real event (typing, resize), not
+      // from an automatic retry, so a persistent bug can't wedge the loop.
+      renderPaused = true;
     }
   }
 
@@ -856,6 +869,9 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
 
   function onKey(buf: Buffer) {
     const s = buf.toString('utf8');
+    // Real user input always re-arms rendering so a caught render error can't
+    // permanently leave the UI dark.
+    if (s.length > 0) renderPaused = false;
     // Mouse wheel (SGR protocol): CSI < 64 ; row ; col M = scroll up,
     // CSI < 65 ; row ; col M = scroll down. Only active when mouse tracking
     // is enabled (see start()). Intercept before the generic escape router.

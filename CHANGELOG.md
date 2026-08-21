@@ -40,6 +40,12 @@
   microtasks synchronously), the spinner and UI stay responsive while the agent
   explores code and runs tools. Render frames are guarded with a try/catch so a
   single bad frame logs and recovers instead of permanently freezing the UI.
+- **TUI line-wrap speed.** `wrap` no longer re-strips ANSI codes over the whole
+  growing line for every word (that was O(line²) and froze while a long response
+  streamed in); it now tracks visible width incrementally in O(n). Render frames
+  that do throw print their stack and PAUSE rendering (instead of auto-retrying
+  a throwing frame in a loop), and any real key re-arms rendering so a transient
+  error can never leave the screen frozen.
 - **`mochi daemon restart`.** Stop + start a fresh daemon on the same
   port/token. Cron jobs, sessions, and goal state persist across restarts
   (`.mochi/cron.json` plus the SQLite session store).
