@@ -22,16 +22,24 @@ export const perfTool: Tool = {
     const target = args.target ? String(args.target) : undefined;
     const iterations = Math.max(1, Math.min(100, Number(args.iterations ?? 1)));
 
+    // Safe access to config values (may be undefined in test contexts)
+    const safety = ctx.config.safety ?? {};
+    const mode = safety.mode ?? 'ask';
+    const maxIterations = safety.maxIterations ?? 10;
+    const contextBudget = safety.contextBudgetTokens ?? 10000;
+    const maxConcurrent = safety.maxConcurrentAgents ?? 3;
+    const timeoutSec = safety.commandTimeoutSeconds ?? 120;
+
     switch (action) {
       case 'stats': {
         const metrics: string[] = [
           `Performance Stats:`,
           `- Token approximation rate: ~${Math.round(1000 / (performance.now() - performance.now() + 1))} estimates/sec`,
           `- Message count: ${ctx.cwd ? 'tracked' : 'unknown'}`,
-          `- Config safety mode: ${ctx.config.safety.mode}`,
-          `- Max iterations: ${ctx.config.safety.maxIterations}`,
-          `- Context budget: ${ctx.config.safety.contextBudgetTokens} tokens`,
-          `- Concurrent agents: ${ctx.config.safety.maxConcurrentAgents}`,
+          `- Config safety mode: ${mode}`,
+          `- Max iterations: ${maxIterations}`,
+          `- Context budget: ${contextBudget} tokens`,
+          `- Concurrent agents: ${maxConcurrent}`,
         ];
         return metrics.join('\n');
       }
@@ -64,8 +72,8 @@ export const perfTool: Tool = {
 
       case 'diag': {
         const diag: string[] = ['Performance Diagnostics:'];
-        diag.push(`- Safety mode: ${ctx.config.safety.mode}`);
-        diag.push(`- Command timeout: ${ctx.config.safety.commandTimeoutSeconds}s`);
+        diag.push(`- Safety mode: ${mode}`);
+        diag.push(`- Command timeout: ${timeoutSec}s`);
         diag.push(`- Read cache: ${ctx.readCache ? 'enabled' : 'disabled'}`);
         diag.push(`- Abort signal: ${ctx.abortSignal ? 'active' : 'not set'}`);
         diag.push(`- Agent ID: ${ctx.agentId}`);
