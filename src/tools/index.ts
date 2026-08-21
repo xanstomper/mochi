@@ -96,7 +96,6 @@ export async function executeTool(
   try {
     const output = await tool.execute(args, ctx);
     const durationMs = Math.round(performance.now() - start);
-    ctx.events.emit({ type: 'tool:completed', tool: name, result: { toolCallId: '', name, output, durationMs }, agentId: ctx.agentId });
     return { output, durationMs };
   } catch (err) {
     const durationMs = Math.round(performance.now() - start);

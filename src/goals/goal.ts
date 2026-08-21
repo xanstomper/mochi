@@ -36,6 +36,7 @@ export class GoalEngine {
   private goalStats = { tokens: 0, duration: 0 };
   /** Baseline for the in-flight run (undefined outside runGoal). */
   private runBaseline: VerificationBaseline | undefined;
+  private baselineCache?: { baseline: VerificationBaseline; cachedAt: number };
   /** Lazy-initialized Hermes-style session store for transcript search. */
   private sessionStoreInstance: SessionStore | undefined;
   private hooks: HookManager;
@@ -97,6 +98,7 @@ export class GoalEngine {
       return [task];
     }
 
+    this.events.emit({ type: 'agent:log', agentId: 'system', message: 'Planning tasks…' } as any);
     const provider = createProvider(this.config.model, 'reasoning');
     const ctx = new ContextEngine(this.config, this.cwd);
     ctx.setGoal(goal.objective);
@@ -191,19 +193,28 @@ Return ONLY the JSON array, no markdown.`;
     // breakage, and must not fail the task (the 47k-token "failed" write-a-
     // file run class of bug). Best-effort: a baseline capture that itself
     // fails just yields an empty baseline and today's behavior.
+    // Reuse a recent baseline (5-min TTL) so the 2nd+ prompt in a session
+    // skips the expensive shell-command capture that freezes the TUI.
+    const BASELINE_TTL_MS = 5 * 60 * 1000;
     let baseline: VerificationBaseline | undefined;
-    try {
-      baseline = await captureBaseline(this.cwd, async (cmd) => {
-        const { execFile } = await import('node:child_process');
-        return await new Promise<string>((res) => {
-          execFile('sh', ['-c', cmd], { cwd: this.cwd, timeout: 120_000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
-            const code = err && 'code' in err ? Number((err as { code?: number }).code ?? 1) : err ? 1 : 0;
-            res(`exit_code: ${code}\n${stdout ?? ''}\n${stderr ?? ''}`);
+    if (this.baselineCache && Date.now() - this.baselineCache.cachedAt < BASELINE_TTL_MS) {
+      baseline = this.baselineCache.baseline;
+    } else {
+      this.events.emit({ type: 'agent:log', agentId: 'system', message: 'Capturing verification baseline…' } as any);
+      try {
+        baseline = await captureBaseline(this.cwd, async (cmd) => {
+          const { execFile } = await import('node:child_process');
+          return await new Promise<string>((res) => {
+            execFile('sh', ['-c', cmd], { cwd: this.cwd, timeout: 60_000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+              const code = err && 'code' in err ? Number((err as { code?: number }).code ?? 1) : err ? 1 : 0;
+              res(`exit_code: ${code}\n${stdout ?? ''}\n${stderr ?? ''}`);
+            });
           });
         });
-      });
-    } catch {
-      baseline = undefined;
+        this.baselineCache = { baseline, cachedAt: Date.now() };
+      } catch {
+        baseline = undefined;
+      }
     }
     const verifier = new VerifierEngine({ cwd: this.cwd, workspace: this.workspace, config: this.config, events: this.events, budget, baseline });
     this.runBaseline = baseline;

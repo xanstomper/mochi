@@ -283,9 +283,13 @@ export class Runtime {
   }
 
   async runPrompt(prompt: string): Promise<string> {
-    // Single-agent one-shot task.
+    // Single-agent one-shot task: create task directly without waiting for decompose LLM call.
+    const { createTask } = await import('./goals/task.js');
     const goal = await this.goals.createGoal(prompt);
-    const task = (await this.goals.decompose(goal))[0];
+    const task = createTask(prompt.split('\n')[0].slice(0, 80), prompt, { role: 'coder', acceptanceCriteria: [] });
+    goal.tasks.push(task.id);
+    this.workspace.saveGoal(goal);
+    this.workspace.saveTasks(goal.id, [task]);
     const { TraceRecorder } = await import('./trace.js');
     const recorder = new TraceRecorder(this.workspace.dir, goal.id).attach(this.events);
     try {

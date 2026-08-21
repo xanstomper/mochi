@@ -224,6 +224,7 @@ export class Agent {
   private planMode: boolean;
   private planVetoes = 0;
   private planNudges = 0;
+  private emptyResponseCount = 0;
   private selfReviewCount = 0;
   private subagentDepth: number;
   private mcpClose?: () => void;
@@ -395,9 +396,9 @@ export class Agent {
       }
 
       const packet = this.context.buildPacket(this.toolDefs, task, repo);
-      // Anti-loop: if it's just gathering context (read/search) without editing, force an answer.
-      if (this.toolCallsTotal >= 6 && !this.fileChanged && !this.planMode) {
-        this.context.addMessage({ role: 'system', content: 'You have gathered enough context without modifying any files. Stop using tools and give your final answer directly now.' });
+      // Anti-loop: if it's just gathering context (read/search) without editing, encourage an answer.
+      if (this.toolCallsTotal >= 12 && !this.fileChanged && !this.planMode) {
+        this.context.addMessage({ role: 'system', content: 'You have gathered sufficient context. Provide your answer directly now without further tool calls.' });
       }
       this.emitMessage('system', `Tokens used: ${packet.usedTokens}/${packet.budgetTokens}`);
 
@@ -458,7 +459,7 @@ export class Agent {
         // prompt_tokens already includes cache-hit tokens on most providers;
         // subtract them for the honest "new input" figure the status bar shows.
         const u = response.usage as { promptTokens?: number; completionTokens?: number; totalTokens?: number };
-        const cacheRead = kvCache.lastCacheSaved;
+        const cacheRead = kvCache.totalCacheSaved || kvCache.lastCacheSaved;
         this.events.emit({
           type: 'usage:updated' as any,
           agentId: this.id,
@@ -467,6 +468,10 @@ export class Agent {
           cacheTokens: cacheRead,
           totalTokens: u.totalTokens ?? 0,
         });
+      }
+      // Reset empty-response counter on any successful model output.
+      if ((response.content && response.content.trim()) || response.toolCalls?.length) {
+        this.emptyResponseCount = 0;
       }
       this.lastStrategy = response.toolCalls?.[0]?.function.name ?? response.content?.slice(0, 60) ?? '';
 
@@ -517,7 +522,7 @@ export class Agent {
           this.sigStreak = 0;
         }
         this.toolCallsTotal++;
-        if (this.toolCallsTotal > 24) {
+        if (this.toolCallsTotal > 40) {
           return this.finish(task, false, 'Too many tool calls; stopping to avoid an infinite loop.', 'tool_loop');
         }
         await this.executeToolCalls(response.toolCalls);
@@ -545,9 +550,15 @@ export class Agent {
           }
           return this.finish(task, true, response.content, 'completed');
         }
-        // Ensure at least a placeholder assistant message when no output
+        // Empty response: the model returned nothing (common with overloaded
+        // free providers or reasoning models that only emit thinking tokens).
+        // Retry a few times, then give up instead of spinning to maxIterations.
+        this.emptyResponseCount++;
+        if (this.emptyResponseCount >= 3) {
+          return this.finish(task, false, 'Model returned empty responses repeatedly. The provider may be overloaded — try again or switch models with /model.', 'model_error');
+        }
         this.context.addMessage({ role: 'assistant', content: '(no output)' });
-        // Continue the loop to retry model response instead of finishing with error
+        this.context.addMessage({ role: 'system', content: 'Your last response was empty. Please respond with either a tool call or a direct text answer.' });
         continue;
       }
 
@@ -602,7 +613,7 @@ export class Agent {
       // Observation-driven retry: classify the failure, retrieve any matching
       // lessons from procedural memory, and append a structured attempt to
       // the autopsy record before nudging the model with the next hypothesis.
-      this.observeFailure(task, verification.summary, repo);
+      await this.observeFailure(task, verification.summary, repo);
     }
 
     this.addAttempt(task, 'exhausted', [], 'failure', `Reached maximum iterations (${maxIterations})`);
@@ -940,6 +951,10 @@ export class Agent {
     if (iteration > 0 && iteration % 12 === 0) {
       return { abort: false, message: `Pulse: ${iteration} iterations. Verify progress and switch approach if blocked.` };
     }
+    // Abort if the model keeps producing empty responses or no-op iterations.
+    if (this.emptyResponseCount >= 3) {
+      return { abort: true, reason: 'Model returning empty responses repeatedly.' };
+    }
     if (this.errors.length >= 6) {
       return { abort: true, reason: `Too many repeated failures (${this.errors.length}). Stopping.` };
     }
@@ -963,7 +978,7 @@ export class Agent {
   /** Classify the most recent failure, refresh hypotheses, persist an
    *  attempt to the autopsy, and inject a structured diagnostic prompt
    *  (including any matching procedural lessons) as the next user turn. */
-  private observeFailure(task: Task, failureText: string, repo: ReturnType<typeof detectRepo>): void {
+  private async observeFailure(task: Task, failureText: string, repo: ReturnType<typeof detectRepo>): Promise<void> {
     const state = this.context['state'];
     const filesModified: string[] = (state?.filesModified ?? []) as string[];
     const { kind, signals } = classifyFailure(failureText);
@@ -982,7 +997,15 @@ export class Agent {
     // only reflected in the lesson+dialogue flow; an exception here would
     // swallow into an empty probeOutput and mark the hypothesis as neutral.
     const top = this.diagnosis.hypotheses[0];
-    const probeOutput = top?.probeCommand ? (() => { try { return this.runProbe(top.probeCommand); } catch { return ''; } })() ?? '' : '';
+    // Bounded probe (20s timeout + abort-aware) is awaited here so its capture
+    // is real and no subprocess is leaked; any failure degrades to '' and the
+    // hypothesis stays neutral, keeping observeFailure non-blocking-critical.
+    let probeOutput = '';
+    try {
+      probeOutput = top?.probeCommand ? await this.runProbe(top.probeCommand) : '';
+    } catch {
+      probeOutput = '';
+    }
 
     if (top && probeOutput) {
       const updated = evaluateProbe(top, probeOutput);
@@ -1024,26 +1047,28 @@ export class Agent {
     this.context.addMessage({ role: 'user', content: parts.join('\n\n') });
   }
 
-  /** Fire a small read-only probe and capture its output. Falls back to the
-   *  pre-existing shell runner but uses the same timeout rules as verify. */
-  private runProbe(command: string): string {
+  /** Fire a small read-only probe and capture its output. Now properly awaited
+   *  through the shell tool with a short timeout and the run's abort signal, so
+   *  it can never leak a dangling subprocess or block the loop past the bound.
+   *  On any failure (tool missing, timeout, abort, hard error) it degrades to an
+   *  empty capture — the next iteration's verify is still authoritative. */
+  private async runProbe(command: string): Promise<string> {
     try {
-      const ctx: { cwd: string; events: EventBus; agentId: string } = {
+      if (!this.tools.has('shell')) return '';
+      const ctx: ToolContext = {
         cwd: this.cwd,
+        workspace: this.workspace,
+        config: this.config,
         events: this.events,
         agentId: this.id,
+        abortSignal: this.abortSignal,
+        readCache: this.readCache,
+        ...(this.subagentDepth === 0
+          ? { spawnSubagent: (p: string, o?: { role?: string }) => this.spawnSubagent(p, o?.role) }
+          : {}),
       };
-      // The shell tool is registered unless profile overrides removed it.
-      const tools = this.tools;
-      const shellTool = tools.get('shell');
-      if (!shellTool) return '';
-      // Use a short timeout; if the probe hangs it's a signal too.
-      // executeTool is async; the synchronous capture is a best-effort string.
-      // Since the loop is itself async, we leak this intentionally and ignore
-      // the promise here; the next iteration's verify is authoritative.
-      // eslint-disable-next-line @typescript-eslint/no-floating-promises
-      shellTool.execute({ command, timeout: 20 }, { ...ctx, workspace: this.workspace, config: this.config, abortSignal: this.abortSignal, readCache: this.readCache, ...(this.subagentDepth === 0 ? { spawnSubagent: (p: string, o?: { role?: string }) => this.spawnSubagent(p, o?.role) } : {}) });
-      return '(probe running; will appear in next verify)';
+      const { output, error } = await executeTool('shell', { command, timeout: 20 }, ctx, this.tools);
+      return error ? `Error: ${error}\n${output}` : output;
     } catch (err) {
       return err instanceof Error ? err.message : String(err);
     }

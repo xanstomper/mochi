@@ -114,7 +114,13 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
           stopReason: event.stopReason as string | undefined,
         });
       }
-      if (t.output) pushLine(state, 'assistant', `✓ ${t.title}: ${t.output}`);
+      if (t.output) {
+        const last = state.lines[state.lines.length - 1];
+        const alreadyPresent = last && last.kind === 'assistant' && (last.text.includes(t.output) || t.output.includes(last.text));
+        if (!alreadyPresent) {
+          pushLine(state, 'assistant', `✓ ${t.title}: ${t.output}`);
+        }
+      }
       return true;
     }
     case 'task:failed': {

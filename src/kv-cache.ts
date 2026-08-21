@@ -31,6 +31,8 @@ export class KvCacheTracker {
   private totalSavedTokens = 0;
   /** Tokens saved by the most recent cache hit (public read for usage bars). */
   get lastCacheSaved(): number { return this.lastSavedTokens; }
+  /** Total tokens saved across all hits this session. */
+  get totalCacheSaved(): number { return this.totalSavedTokens; }
   /** Total prompt tokens sent this session (for cost estimation). */
   private totalInputTokens = 0;
 

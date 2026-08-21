@@ -82,6 +82,7 @@ export function createOpenAIProvider(config: ProviderConfig) {
         return { role: m.role, content: m.content ?? '' };
       }),
       stream: true,
+      stream_options: { include_usage: true },
       ...(tools.length ? { tools: openAITools(tools), tool_choice: 'auto' } : {}),
       ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
       ...(options?.maxTokens !== undefined ? { max_tokens: options.maxTokens } : {}),
@@ -126,8 +127,20 @@ export function createOpenAIProvider(config: ProviderConfig) {
     let totalInput = 0;
     let totalOutput = 0;
 
+    const readWithTimeout = async (ms = 60_000): Promise<ReturnType<typeof reader.read>> => {
+      let timer: NodeJS.Timeout | undefined;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new ProviderError('Model stream stalled (no data received for 60s)', { retryable: true })), ms);
+      });
+      try {
+        return await Promise.race([reader.read(), timeoutPromise]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
+
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readWithTimeout(60_000);
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
@@ -160,16 +173,19 @@ export function createOpenAIProvider(config: ProviderConfig) {
           if (chunk.usage) {
             totalInput = chunk.usage.prompt_tokens ?? totalInput;
             totalOutput = chunk.usage.completion_tokens ?? totalOutput;
-            // Feed the KV-cache tracker (Anthropic 5-min TTL model): recognize
-            // either the OpenAI-compat cache-hit field or the Anthropic-style
-            // cacheRead/cacheCreation convention so the TUI can show warmth.
+            // Feed the KV-cache tracker: recognize OpenAI prompt_tokens_details.cached_tokens,
+            // prompt_cache_hit_tokens (DeepSeek), Anthropic cache_read, and Gemini cached_content.
             const usageAny = chunk.usage as unknown as Record<string, unknown>;
+            const details = usageAny.prompt_tokens_details as Record<string, unknown> | undefined;
             const cacheRead =
-              typeof usageAny.prompt_cache_hit_tokens === 'number' ? usageAny.prompt_cache_hit_tokens
+              typeof details?.cached_tokens === 'number' ? details.cached_tokens
+              : typeof usageAny.prompt_cache_hit_tokens === 'number' ? usageAny.prompt_cache_hit_tokens
+              : typeof usageAny.cached_tokens === 'number' ? usageAny.cached_tokens
               : typeof usageAny.cacheReadTokens === 'number' ? usageAny.cacheReadTokens
               : typeof usageAny.cache_read_input_tokens === 'number' ? usageAny.cache_read_input_tokens
+              : typeof usageAny.cached_content_token_count === 'number' ? usageAny.cached_content_token_count
               : 0;
-            if (cacheRead > 0) kvCache.recordUsage({ cacheReadTokens: cacheRead });
+            if (cacheRead > 0) kvCache.recordUsage({ cacheReadTokens: cacheRead, promptTokens: totalInput });
           }
           yield {
             content: delta.content ?? undefined,

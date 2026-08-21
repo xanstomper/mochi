@@ -297,9 +297,6 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
       { role: 'user', content: statePrompt },
       ...recent,
     ];
-    if (recent.length === 0 || recent[recent.length - 1].role !== 'user') {
-      messages.push({ role: 'user', content: 'Proceed with the task using tools.' });
-    }
 
     const used = this.budget - remaining;
     return { messages, systemPrompt, usedTokens: used, budgetTokens: this.budget };

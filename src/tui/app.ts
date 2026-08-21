@@ -108,7 +108,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   const projectRoot = findProjectRoot(runtime.cwd);
   const projectName = basename(projectRoot);
   const branch = await gitBranch(projectRoot);
-  const modelShort = runtime.config.model.model.split('/').pop() ?? runtime.config.model.model;
+  let modelShort = runtime.config.model.model.split('/').pop() ?? runtime.config.model.model;
 
   const state = {
     input: '',
@@ -203,7 +203,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   const startSpinner = () => {
     if (spinnerTimer) return;
     spinnerTimer = setInterval(() => {
-      state.spinner = (state.spinner + 1) % SPINNER.length;
+      state.spinner = (state.spinner + 1) % 60;
       if (state.splashTick < SPLASH_TICKS) {
         state.splashTick++;
         // Ease toward done: fast at first, slower near 1; first user prompt
@@ -212,7 +212,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         if (state.splashTick >= SPLASH_TICKS) state.splashProgress = 1;
       }
       scheduleRender();
-    }, 160);
+    }, 80);
     // Freeze-guard: if something starves event-driven renders for > 800ms,
     // force a redraw so the TUI can never appear frozen mid-task.
     schedulerTimer = setInterval(() => {
@@ -380,8 +380,9 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     const indent = transcriptIndent(w);
     const chatMw = Math.min(w - indent * 2, Math.max(24, w - 4));
 
+    const availableH = state.busy ? Math.max(1, contentH - 1) : contentH;
     const chatLines = transcriptLines(chatMw);
-    const visible = chatLines.slice(Math.max(0, chatLines.length - contentH - state.scroll), Math.max(0, chatLines.length - state.scroll));
+    const visible = chatLines.slice(Math.max(0, chatLines.length - availableH - state.scroll), Math.max(0, chatLines.length - state.scroll));
 
     const rows: string[] = new Array(h).fill('');
     const lead = ' '.repeat(indent);
@@ -394,16 +395,16 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         rows[top + i] = splash[i];
       }
     } else {
-      for (let i = 0; i < contentH; i++) {
+      for (let i = 0; i < availableH && i < contentH; i++) {
         const r = i;
         rows[r] = lead + (visible[i] ?? '');
       }
     }
 
-    // thinking line pinned under the transcript while busy
+    // thinking line pinned under the transcript while busy (aligned to left margin)
     if (state.busy) {
       const r = Math.max(0, contentH - 1);
-      rows[r] = lead + thinkingLine(state.spinner, state.currentTool || state.currentTask || '');
+      rows[r] = '  ' + thinkingLine(state.spinner, state.currentTool || state.currentTask || '');
     }
 
     // autocomplete dropdown floats above the status bar
@@ -447,7 +448,8 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     const cacheRate = promptTotal > 0 ? Math.min(1, state.cacheTokens / promptTotal) : 0;
     const cache = gradientCacheBar(cacheRate, 10, state.busy ? state.spinner + 1 : 0);
     const fmt = (n: number) => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
-    const barsRow = ` ${T.gray}in${T.reset} ${T.cyan}${fmt(state.inTokens)}${T.reset} ${T.gray}out${T.reset} ${T.orange}${fmt(state.outTokens)}${T.reset}  ${ctx.text} ${T.gray}${Math.round(ctx.pct * 100)}%${T.reset}  ${T.gray}cache${T.reset} ${cache.text} ${T.lime}${fmt(state.cacheTokens)}${T.reset}`;
+    const cachePctText = cacheRate > 0 ? ` ${T.gray}(${Math.round(cacheRate * 100)}%)${T.reset}` : '';
+    const barsRow = ` ${T.gray}in${T.reset} ${T.cyan}${fmt(state.inTokens)}${T.reset} ${T.gray}out${T.reset} ${T.orange}${fmt(state.outTokens)}${T.reset}  ${ctx.text} ${T.gray}${Math.round(ctx.pct * 100)}%${T.reset}  ${T.gray}cache${T.reset} ${cache.text} ${T.lime}${fmt(state.cacheTokens)}${T.reset}${cachePctText}`;
     if (statusRows === 4) {
       rows[s2] = barsRow;
       rows[s3] = statusBarRow2(statusModel, w);
@@ -543,7 +545,6 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     if (line === '/clear') { state.lines = []; state.tasks.clear(); state.scroll = 0; scheduleRender(); return; }
     if (line === '/status' || line === '/changes') { await run(async () => (await import('../git.js')).status(projectRoot)); return; }
     if (line === '/diff') { await run(async () => (await import('../git.js')).diff(projectRoot)); return; }
-    if (line === '/model') { push('system', `${runtime.config.model.provider}/${runtime.config.model.model}`); return; }
     if (line === '/mode' || line.startsWith('/mode ')) {
       const specific = line.startsWith('/mode ') ? line.slice(6).trim() : '';
       if (!specific) {
@@ -800,13 +801,34 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   }
 
   async function modelMenu() {
-    const cur = providerById(runtime.config.model.provider);
-    if (!cur) { push('error', 'Current provider unknown.'); return; }
+    // Step 1: select a provider (current one marked)
+    const curProvider = runtime.config.model.provider;
+    const providerItems = PROVIDERS.map((p) => {
+      const active = p.id === curProvider;
+      return `${p.name}${active ? '  ● active' : ''}  ${T.grayDark}(${p.models.length} models)${T.reset}`;
+    });
+    const curIdx = PROVIDERS.findIndex((p) => p.id === curProvider);
+    state.menuSelected = Math.max(0, curIdx);
+    const pidx = await openMenu('Select provider', providerItems);
+    if (pidx < 0 || pidx >= PROVIDERS.length) return;
+    const prov = PROVIDERS[pidx];
+
+    // Step 2: select a model from the chosen provider
     const activeModel = runtime.config.model.model;
-    const idx = await openMenu(`${cur.name} · select model`, cur.models.map((m) => `${m}${m === activeModel ? '  (active)' : ''}`));
-    if (idx < 0) return;
-    const model = cur.models[idx];
-    await run(async () => runtime.useProvider(cur.id, model));
+    const modelItems = prov.models.map((m) => {
+      const active = prov.id === curProvider && m === activeModel;
+      return `${m}${active ? '  ● active' : ''}`;
+    });
+    const midx = await openMenu(`${prov.name} · select model`, modelItems);
+    if (midx < 0 || midx >= prov.models.length) return;
+    const model = prov.models[midx];
+
+    // Apply the selection
+    await run(async () => {
+      const desc = await runtime.useProvider(prov.id, model);
+      modelShort = model.split('/').pop() ?? model;
+      return desc;
+    });
   }
 
   async function listSessions(): Promise<string> {
@@ -1091,9 +1113,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       state.splashTick = SPLASH_TICKS;
       state.splashProgress = 1;
     }
-    // Delegate to the pure, tested reducer (src/tui/state.ts): it maintains
-    // the transcript, task tree, current tool, and stop reasons exactly as the
-    // tests assert. Non-rendering events return false and skip the redraw.
+    renderPaused = false;
     if (reduceEvent(state, event as unknown as Record<string, unknown>)) {
       if (!state.userScrolled) state.scroll = 0;
       scheduleRender();

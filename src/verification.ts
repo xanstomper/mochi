@@ -401,7 +401,7 @@ export async function captureBaseline(
     (c): c is string => Boolean(c),
   );
   const signatures = new Map<string, string>();
-  for (const cmd of commands) {
+  await Promise.all(commands.map(async (cmd) => {
     try {
       const out = await runCommand(cmd);
       if (!out.includes('exit_code: 0')) {
@@ -414,7 +414,7 @@ export async function captureBaseline(
       // A baseline check that cannot even run has no signature; it will be
       // judged post-work like any other check (e.g. exit 127 skip rule).
     }
-  }
+  }));
   return { signatures, capturedAt: Date.now() };
 }
 
