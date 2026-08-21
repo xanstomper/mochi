@@ -1,0 +1,192 @@
+import { describe, it, expect } from 'vitest';
+import {
+  T,
+  contextBar,
+  usageText,
+  statusBarRow1,
+  statusBarRow2,
+  statusBarRow3,
+  renderToolOutput,
+  renderEntry,
+  composerRow,
+  composerBottomRule,
+  renderDropdown,
+  transcriptIndent,
+  spinnerFrame,
+  thinkingLine,
+  ellipsize,
+  visibleLen,
+} from './view.js';
+
+function baseStatus(over: Partial<Parameters<typeof statusBarRow1>[0]> = {}) {
+  return {
+    modelId: 'deepseek-v4-flash',
+    totalTokens: 12345,
+    totalCost: 0.42,
+    maxInputTokens: 128000,
+    mode: 'act' as const,
+    workspaceName: 'mochi',
+    gitBranch: 'main',
+    gitDiff: { files: 3, additions: 120, deletions: 8 },
+    autoApprove: false,
+    ...over,
+  };
+}
+
+describe('palette', () => {
+  it('exposes cline accent colors', () => {
+    expect(T.act).toContain('121;184;255'); // #79b8ff
+    expect(T.plan).toContain('255;234;127'); // #ffea7f
+    expect(T.success).toContain('153;232;155'); // #99e89b
+  });
+});
+
+describe('contextBar', () => {
+  it('builds a filled bar proportional to usage', () => {
+    const half = contextBar(500, 1000, 6);
+    expect(half.filled.length).toBeGreaterThanOrEqual(2);
+    expect(half.filled.length + half.empty.length).toBe(6);
+    expect(half.pct).toBe(0.5);
+  });
+
+  it('saturates at full usage', () => {
+    expect(contextBar(2000, 1000, 6).filled).toBe('██████');
+  });
+
+  it('renders empty when no budget', () => {
+    expect(contextBar(0, 0, 6).filled).toBe('');
+  });
+});
+
+describe('usageText', () => {
+  it('formats tokens with separators and cost', () => {
+    expect(usageText(12345, 0.423)).toBe('(12,345) $0.42');
+  });
+});
+
+describe('statusBar rows', () => {
+  it('row1 shows model, usage, and Plan/Act toggle', () => {
+    const row = statusBarRow1(baseStatus(), 90);
+    const plain = row.replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).toContain('deepseek-v4-flash');
+    expect(plain).toContain('(12,345) $0.42');
+    expect(plain).toContain('○ Plan');
+    expect(plain).toContain('● Act');
+    expect(plain).toContain('(Tab)');
+  });
+
+  it('row1 highlights plan mode', () => {
+    const row = statusBarRow1(baseStatus({ mode: 'plan' }), 90);
+    const plain = row.replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).toContain('● Plan');
+    expect(plain).toContain('○ Act');
+  });
+
+  it('row2 shows workspace, branch, and diff stats', () => {
+    const row = statusBarRow2(baseStatus(), 90);
+    const plain = row.replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).toContain('mochi (main)');
+    expect(plain).toContain('3 files');
+    expect(plain).toContain('+120');
+    expect(plain).toContain('-8');
+  });
+
+  it('row3 shows auto-approve state', () => {
+    expect(statusBarRow3(true, 80)).toMatch(/Auto-approve enabled/);
+    expect(statusBarRow3(false, 80)).toMatch(/Auto-approve off/);
+  });
+});
+
+describe('renderToolOutput', () => {
+  it('collapses to first line plus a more-lines note', () => {
+    const out = renderToolOutput('line1\nline2\nline3\nline4');
+    const plain = out.join('\n').replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).toContain('⌿ line1');
+    expect(plain).toContain('… 3 more lines');
+  });
+
+  it('single line has no more-note', () => {
+    const out = renderToolOutput('only line');
+    expect(out).toHaveLength(1);
+    expect(out[0]).toContain('⌿ only line');
+  });
+});
+
+describe('renderEntry', () => {
+  it('user entries get the ❯ accent', () => {
+    const [row] = renderEntry({ kind: 'user', text: 'hello' });
+    expect(row).toContain('❯');
+    expect(row).toContain('hello');
+  });
+
+  it('errors get ✗', () => {
+    const [row] = renderEntry({ kind: 'error', text: 'boom' });
+    expect(row).toContain('✗ boom');
+  });
+
+  it('empty text renders nothing', () => {
+    expect(renderEntry({ kind: 'assistant', text: '   ' })).toEqual([]);
+  });
+});
+
+describe('composer', () => {
+  it('composer row shows the ❯ prompt and text', () => {
+    const row = composerRow('fix the bug', 60);
+    const plain = row.replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).toContain('❯');
+    expect(plain).toContain('fix the bug');
+  });
+
+  it('bottom rule carries the hint', () => {
+    const rule = composerBottomRule(60, '⏎ send · / commands · esc stop');
+    const plain = rule.replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).toContain('⏎ send');
+  });
+});
+
+describe('dropdown', () => {
+  it('renders items with selection marker', () => {
+    const rows = renderDropdown(
+      [
+        { name: '/mode', hint: 'set mode' },
+        { name: '/model', hint: 'pick model' },
+      ],
+      1,
+      60,
+    );
+    const plain = rows.join('\n').replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).toContain('/mode');
+    expect(plain).toContain('/model');
+    expect(plain).toContain('❯ /model');
+    expect(plain).not.toContain('❯ /mode ');
+  });
+});
+
+describe('layout', () => {
+  it('centers the transcript on wide terminals', () => {
+    expect(transcriptIndent(120)).toBeGreaterThan(0);
+    expect(transcriptIndent(60)).toBe(0);
+  });
+
+  it('spinner cycles braille dots', () => {
+    expect(spinnerFrame(0)).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+    expect(spinnerFrame(1)).not.toBe(spinnerFrame(0));
+  });
+
+  it('thinking line mentions esc', () => {
+    expect(thinkingLine(0)).toContain('Thinking');
+    expect(thinkingLine(0)).toContain('esc to cancel');
+  });
+});
+
+describe('text utils', () => {
+  it('visibleLen ignores ansi', () => {
+    expect(visibleLen(`${T.act}abc${T.reset}`)).toBe(3);
+  });
+
+  it('ellipsize truncates to budget', () => {
+    const out = ellipsize('abcdefghij', 5);
+    expect(visibleLen(out)).toBe(5);
+    expect(out.endsWith('…')).toBe(true);
+  });
+});

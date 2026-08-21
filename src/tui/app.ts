@@ -3,30 +3,33 @@ import { basename, resolve } from 'node:path';
 import { findProjectRoot } from '../repo.js';
 import type { Runtime } from '../runtime.js';
 import type { MochiEvent } from '../types.js';
-import { PROVIDERS, providerById, providerByName } from '../providers.js';
+import { PROVIDERS, providerById } from '../providers.js';
 import { reduceEvent } from './state.js';
 import pkg from '../../package.json' with { type: 'json' };
 import { kvCache } from '../kv-cache.js';
+import {
+  T,
+  statusBarRow1,
+  statusBarRow2,
+  statusBarRow3,
+  renderEntry,
+  renderDropdown,
+  composerRow,
+  composerPlaceholderRow,
+  composerTopRule,
+  composerBottomRule,
+  transcriptIndent,
+  thinkingLine,
+  spinnerFrame,
+  visibleLen,
+  ellipsize,
+} from './view.js';
 
 const HIDE = '\x1b[?25l';
 const SHOW = '\x1b[?25h';
 const ALT_ENTER = '\x1b[?1049h';
 const ALT_EXIT = '\x1b[?1049l';
 const RESET = '\x1b[0m';
-const DIM = '\x1b[2m';
-const BOLD = '\x1b[1m';
-const PINK = '\x1b[38;2;255;175;209m';
-const CYAN = '\x1b[38;2;137;220;235m';
-const GREEN = '\x1b[38;2;152;195;121m';
-const RED = '\x1b[38;2;224;108;117m';
-const GREY = '\x1b[38;2;120;120;120m';
-const YELLOW = '\x1b[38;2;229;192;123m';
-const BLUE = '\x1b[38;2;97;175;239m';
-const UNDERLINE = '\x1b[4m';
-const BG = '\x1b[48;2;50;60;80m';
-const BG_USER = '\x1b[48;2;75;50;75m';
-const BG_ASSISTANT = '\x1b[48;2;35;48;68m';
-const BG_COMPOSER = '\x1b[48;2;22;24;38m';
 
 type LineKind = 'user' | 'assistant' | 'system' | 'error' | 'tool' | 'task' | 'goal' | 'plain';
 
@@ -124,6 +127,17 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     lastStatus: '' as string,
     chatVer: 0 as number,
     limit: 500 as number,
+    /** cline-style plan/act mode (Tab) */
+    uiMode: (runtime.config.planMode ? 'plan' : 'act') as 'plan' | 'act',
+    /** auto-approve all (Shift+Tab) — mirrors /yolo */
+    autoApprove: (runtime as any).__permPolicy === 'yolo',
+    /** slash autocomplete */
+    dropActive: false,
+    dropSelected: 0,
+    /** live git diff stats for the status bar */
+    gitDiff: null as { files: number; additions: number; deletions: number } | null,
+    totalTokens: 0,
+    totalCost: 0,
   };
 
   let pendingResolver: ((v: string) => void) | undefined;
@@ -183,14 +197,6 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     return s.replace(/\x1b\[[0-9;]*m/g, '').length;
   }
 
-  function colorizeMarkdown(text: string): string {
-    return text
-      .replace(/^(#{1,6})\s+(.*)$/, (_, __, title) => `${YELLOW}${BOLD}${title}${RESET}`)
-      .replace(/\*\*(.*?)\*\*/g, `${BOLD}$1${RESET}`)
-      .replace(/https?:\/\/[^\s]+/g, (url) => `${BLUE}${UNDERLINE}${url}${RESET}`)
-      .replace(/^(\s*)-\s+(.*)$/, (_, indent, rest) => `${indent}${GREY}•${RESET} ${rest}`);
-  }
-
   function wrap(text: string, max: number): string[] {
     if (!text) return [''];
     const out: string[] = [];
@@ -207,34 +213,6 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       out.push(line);
     }
     return out.length ? out : [''];
-  }
-
-  function inputLines(): { lines: string[]; cursorRow: number; cursorCol: number } {
-    const inner = width() - 6;
-    if (!state.input) return { lines: [''], cursorRow: 0, cursorCol: 0 };
-    const before = state.input.slice(0, state.cursor);
-    const after = state.input.slice(state.cursor);
-    const beforeLines = wrap(before, inner);
-    const afterLines = wrap(after, inner);
-    const cursorLine = beforeLines[beforeLines.length - 1] ?? '';
-    const lines = [...beforeLines.slice(0, -1), cursorLine + (afterLines[0] ?? ''), ...afterLines.slice(1)];
-    return {
-      lines,
-      cursorRow: beforeLines.length - 1,
-      cursorCol: Math.min(cursorLine.length, inner),
-    };
-  }
-
-  function taskTree(): string[] {
-    if (state.tasks.size === 0) return [];
-    const out: string[] = [];
-    const roots = [...state.tasks.values()];
-    for (const task of roots) {
-      const icon = task.status === 'done' ? '✓' : task.status === 'failed' ? '✗' : task.status === 'running' ? '◐' : '○';
-      const color = task.status === 'done' ? GREEN : task.status === 'failed' ? RED : task.status === 'running' ? CYAN : GREY;
-      out.push(`${color}${icon}${RESET} ${task.title}${DIM} (${task.role})${RESET}`);
-    }
-    return out;
   }
 
   function prettifyToolCall(text: string): string | undefined {
@@ -262,202 +240,37 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     return `${name}: ${get('description') ?? get('command') ?? get('path') ?? get('query') ?? ''}`;
   }
 
-  function prefixFor(kind: LineKind): { text: string; displayLength: number } {
-    switch (kind) {
-      case 'user': return { text: `${PINK}>${RESET} `, displayLength: 2 };
-      case 'assistant': return { text: '', displayLength: 0 };
-      case 'tool': return { text: `${DIM}·${RESET} `, displayLength: 2 };
-      case 'task': return { text: `${DIM}·${RESET} `, displayLength: 2 };
-      case 'goal': return { text: `${PINK}●${RESET} `, displayLength: 2 };
-      case 'error': return { text: `${RED}✗${RESET} `, displayLength: 2 };
-      case 'system': return { text: `${DIM}·${RESET} `, displayLength: 2 };
-      default: return { text: '  ', displayLength: 2 };
-    }
+  // ---- git diff stats for the status bar -------------------------------
+  async function refreshGitStats() {
+    const stats = await gitDiffStats(projectRoot);
+    state.gitDiff = stats;
   }
 
-  function pad(s: string, n: number): string {
-    const vis = (s || '').replace(/\x1b\[[0-9;]*m/g, '');
-    if (vis.length === n) return s;
-    if (vis.length > n) return s.slice(0, n);
-    return s + ' '.repeat(n - vis.length);
-  }
-
-  function renderChat(maxWidth: number): string[] {
+  function transcriptLines(maxWidth: number): string[] {
     const out: string[] = [];
     for (const line of state.lines) {
       if (line.kind === 'goal') continue;
       if (line.kind === 'system' && line.text.startsWith('Tokens used:')) continue;
       const text = prettifyToolCall(line.text) ?? line.text;
       if (!text.trim()) continue;
-      if (line.kind === 'user') {
-        out.push(...roundedBox(text, maxWidth, 'right', 'You', PINK, BG_USER));
-      } else if (line.kind === 'assistant') {
-        out.push(...roundedBox(text, maxWidth, 'left', 'AI', CYAN, BG_ASSISTANT));
-      } else {
-        const prefix = prefixFor(line.kind);
-        const wrapped = wrap(text, maxWidth - prefix.displayLength);
-        for (let i = 0; i < wrapped.length; i++) {
-          const content = colorizeMarkdown(wrapped[i]);
-          const txt = i === 0 ? prefix.text + CYAN + content + RESET : ' '.repeat(prefix.displayLength) + CYAN + content + RESET;
-          out.push(pad(txt, maxWidth));
+      const entries = renderEntry({ kind: line.kind, text }, false);
+      for (const e of entries) {
+        // wrap each rendered entry line to the transcript width
+        const segs = e.split('\n');
+        for (const seg of segs) {
+          const wrapped = wrap(seg.replace(/\x1b\[[0-9;]*m/g, ''), Math.max(10, maxWidth));
+          for (const wLine of wrapped) out.push(wLine);
         }
-        out.push('');
       }
+      out.push('');
     }
     return out;
   }
 
-  function roundedBox(text: string, maxWidth: number, align: 'left' | 'right', label: string, fg: string, bg: string): string[] {
-    const textVis = Math.max(1, visibleLen(text));
-    const labelVis = visibleLen(label);
-    const minInner = Math.max(textVis + 2, labelVis + 4);
-    const boxW = Math.min(Math.max(20, minInner), Math.floor(maxWidth * 0.92));
-    const innerW = boxW - 2;
-    const contentW = innerW - 2;
-    const leftPad = align === 'right' ? Math.max(0, maxWidth - boxW) : 0;
-    const wrapped = wrap(text, contentW);
-    const lines: string[] = [];
-
-    const topFill = Math.max(0, innerW - labelVis - 2);
-    const topLabel = align === 'right'
-      ? '─'.repeat(topFill) + ' ' + label + ' '
-      : ' ' + label + ' ' + '─'.repeat(topFill);
-    const top = ' '.repeat(leftPad) + bg + fg + '╭' + topLabel + '╮' + RESET + ' '.repeat(Math.max(0, maxWidth - leftPad - boxW));
-    lines.push(pad(top, maxWidth));
-
-    for (const wline of wrapped) {
-      const content = colorizeMarkdown(wline);
-      const fill = Math.max(0, contentW - visibleLen(content));
-      const row = ' '.repeat(leftPad) + bg + fg + '│ ' + RESET + bg + content + bg + fg + ' │' + RESET + ' '.repeat(Math.max(0, maxWidth - leftPad - boxW));
-      lines.push(pad(row, maxWidth));
-    }
-
-    const bottom = ' '.repeat(leftPad) + bg + fg + '╰' + '─'.repeat(innerW) + '╯' + RESET + ' '.repeat(Math.max(0, maxWidth - leftPad - boxW));
-    lines.push(pad(bottom, maxWidth));
-    lines.push('');
-    return lines;
-  }
-
-  function composerState(): { rows: string[]; cursorRow: number; cursorCol: number; height: number } {
-    const w = width();
-    const innerW = Math.max(20, w - 6);
-    const raw = state.input;
-    const wrapped = raw ? wrap(raw, innerW) : [''];
-    const placeholder = GREY + 'Send a message…' + RESET;
-    const displayRows = raw ? wrapped.map(colorizeMarkdown) : [placeholder];
-    const maxRows = 6;
-    let cursorRow = 0;
-    let cursorCol = 0;
-    if (raw) {
-      const before = raw.slice(0, state.cursor);
-      const beforeLines = wrap(before, innerW);
-      cursorRow = beforeLines.length - 1;
-      cursorCol = visibleLen(beforeLines[beforeLines.length - 1] ?? '');
-    }
-    let visibleRows = displayRows;
-    if (displayRows.length > maxRows) {
-      visibleRows = displayRows.slice(-maxRows);
-      const firstVisible = displayRows.length - maxRows;
-      if (cursorRow < firstVisible) cursorRow = visibleRows.length - 1;
-      else cursorRow -= firstVisible;
-    }
-    const height = Math.min(8, Math.max(3, visibleRows.length + 2));
-    while (visibleRows.length < height - 2) visibleRows.push('');
-    return { rows: visibleRows, cursorRow, cursorCol, height };
-  }
-
-  function buildHeader(w: number): string {
-    const yoloBadge = (runtime as any).__permPolicy === 'yolo'
-      ? ' ' + '\x1b[38;2;255;100;0m' + '\x1b[1m' + '⚡ YOLO' + RESET
-      : (runtime as any).__permPolicy === 'workspace-safe'
-        ? ' ' + YELLOW + '🔓 AUTO' + RESET
-        : '';
-    const left = ' ' + PINK + BOLD + '🍡 mochi' + RESET + ' ' + DIM + pkg.version + RESET + yoloBadge;
-    const right = ' ' + DIM + projectName + RESET + (branch ? ' ' + GREY + branch + RESET : '') + ' ' + GREY + '·' + RESET + ' ' + CYAN + modelShort + RESET + ' ';
-    const sp = Math.max(1, w - visibleLen(left) - visibleLen(right));
-    return pad(left + ' '.repeat(sp) + right, w);
-  }
-
-  function ctxBar(w: number): string {
-    const used = state.lines.length * 4;
-    const budget = runtime.config.safety.contextBudgetTokens || 120000;
-    const pct = Math.max(0, Math.min(1, used / budget));
-    const width = 10;
-    const filled = Math.round(pct * width);
-    const bar = GREEN + '█'.repeat(filled) + GREY + '░'.repeat(width - filled) + RESET;
-    const color = pct > 0.8 ? RED : pct > 0.5 ? YELLOW : DIM;
-    return ' ' + bar + ' ' + color + Math.round(pct * 100) + '%' + RESET;
-  }
-
-  function buildStatus(w: number): string {
-    const queued = [...state.tasks.values()].filter(t => t.status === 'pending').length;
-    const permBadge = (runtime as any).__permPolicy === 'yolo'
-      ? ' ' + '\x1b[38;2;255;100;0m' + '[⚡ PERMS BYPASSED]' + RESET
-      : '';
-    const left = state.busy
-      ? CYAN + SPINNER[state.spinner] + RESET + ' thinking… ' + DIM + (state.currentTool || state.currentTask || '') + RESET
-      : GREEN + '●' + RESET + ' ready' + permBadge;
-    const cacheBadge = kvCache.badge() ? ' ' + GREY + '·' + RESET + ' ' + kvCache.badge() : '';
-    const right = DIM + 'tokens' + RESET + ' ' + (state.lines.length * 4) + ' ' + GREY + '·' + RESET + ' ' + DIM + formatDuration(Date.now() - state.startedAt) + RESET + cacheBadge + (queued ? ' ' + GREY + '·' + RESET + ' ' + DIM + queued + ' queued' + RESET : '') + ctxBar(w);
-    const sp = Math.max(1, w - visibleLen(left) - visibleLen(right));
-    return pad(left + ' '.repeat(sp) + right, w);
-  }
-
-  function buildSidebar(sideW: number, contentH: number): string[] {
-    const side: string[] = [];
-    if (sideW === 0) return side;
-    const inner = sideW - 2;
-    const lastUser = [...state.lines].reverse().find(l => l.kind === 'user')?.text ?? '';
-    side.push(PINK + '╔' + '═'.repeat(inner) + '╗' + RESET);
-    side.push(PINK + '║' + RESET + ' ' + BOLD + 'MOCHI' + RESET + ' ' + DIM + 'sidebar' + ' '.repeat(Math.max(0, inner - 10)) + PINK + '║' + RESET);
-    side.push(PINK + '╠' + '═'.repeat(inner) + '╣' + RESET);
-    if (lastUser) {
-      const qLines = wrap(lastUser, inner - 4);
-      for (const ql of qLines) {
-        const fill = Math.max(0, inner - 2 - visibleLen(ql));
-        side.push(PINK + '║' + RESET + ' ' + YELLOW + BOLD + ql + RESET + ' '.repeat(fill) + PINK + '║' + RESET);
-      }
-      side.push(PINK + '║' + ' '.repeat(inner) + '║' + RESET);
-    }
-    side.push(PINK + '║' + RESET + ' ' + BOLD + 'Status' + RESET + ' '.repeat(Math.max(0, inner - 7)) + PINK + '║' + RESET);
-    if (state.busy) {
-      side.push(PINK + '║' + RESET + ' ' + CYAN + SPINNER[state.spinner] + RESET + ' working…' + ' '.repeat(Math.max(0, inner - 13)) + PINK + '║' + RESET);
-    } else {
-      side.push(PINK + '║' + RESET + ' ' + GREEN + '●' + RESET + ' ready' + ' '.repeat(Math.max(0, inner - 8)) + PINK + '║' + RESET);
-    }
-    if (state.busy && state.currentTool) {
-      side.push(PINK + '║' + RESET + ' ' + DIM + state.currentTool + RESET + ' '.repeat(Math.max(0, inner - 1 - visibleLen(state.currentTool))) + PINK + '║' + RESET);
-    }
-    side.push(PINK + '║' + ' '.repeat(inner) + '║' + RESET);
-    side.push(PINK + '║' + RESET + ' ' + BOLD + 'Details' + RESET + ' '.repeat(Math.max(0, inner - 8)) + PINK + '║' + RESET);
-    side.push(PINK + '║' + RESET + ' ' + DIM + 'time' + RESET + '  ' + formatDuration(Date.now() - state.startedAt) + ' '.repeat(Math.max(0, inner - 7 - visibleLen(formatDuration(Date.now() - state.startedAt)))) + PINK + '║' + RESET);
-    side.push(PINK + '║' + RESET + ' ' + DIM + 'model' + RESET + ' ' + CYAN + modelShort + RESET + ' '.repeat(Math.max(0, inner - 7 - visibleLen(modelShort))) + PINK + '║' + RESET);
-    side.push(PINK + '║' + RESET + ' ' + DIM + 'tokens' + RESET + ' ' + String(state.lines.length * 4) + ' '.repeat(Math.max(0, inner - 8 - String(state.lines.length * 4).length)) + PINK + '║' + RESET);
-    side.push(PINK + '║' + RESET + ' ' + DIM + 'budget' + RESET + ' ' + (runtime.config.safety.contextBudgetTokens / 1000).toFixed(0) + 'k' + ' '.repeat(Math.max(0, inner - 9 - (runtime.config.safety.contextBudgetTokens / 1000).toFixed(0).length)) + PINK + '║' + RESET);
-    // KV Cache status
-    const cacheLabel = kvCache.badge() || 'unknown';
-    side.push(PINK + '║' + RESET + ' ' + DIM + 'cache' + RESET + ' ' + cacheLabel + ' '.repeat(Math.max(0, inner - 7 - visibleLen(cacheLabel))) + PINK + '║' + RESET);
-    // Permission policy
-    const permLabel = (runtime as any).__permPolicy === 'yolo' ? '\x1b[38;2;255;100;0m⚡ YOLO\x1b[0m' : (runtime as any).__permPolicy === 'workspace-safe' ? YELLOW + '🔓 auto' + RESET : GREEN + '🛡️  safe' + RESET;
-    side.push(PINK + '║' + RESET + ' ' + DIM + 'perms' + RESET + ' ' + permLabel + ' '.repeat(Math.max(0, inner - 12)) + PINK + '║' + RESET);
-    side.push(PINK + '║' + ' '.repeat(inner) + '║' + RESET);
-    if (state.tasks.size > 0) {
-      side.push(PINK + '║' + RESET + ' ' + BOLD + 'Tasks' + RESET + ' '.repeat(Math.max(0, inner - 6)) + PINK + '║' + RESET);
-      const order: Record<string, number> = { running: 0, pending: 1, done: 2, failed: 3 };
-      const all = [...state.tasks.values()].sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9));
-      const pendingCount = all.filter(t => t.status === 'pending').length;
-      for (const t of all.slice(0, contentH - 16)) {
-        const ic = t.status === 'done' ? '✓' : t.status === 'failed' ? '✗' : t.status === 'running' ? '◐' : '○';
-        const col = t.status === 'done' ? GREEN : t.status === 'failed' ? RED : t.status === 'running' ? CYAN : GREY;
-        const line = ` ${col}${ic}${RESET} ${t.title}`;
-        side.push(PINK + '║' + RESET + pad(line, inner) + PINK + '║' + RESET);
-      }
-      side.push(PINK + '║' + RESET + ' ' + DIM + pendingCount + ' queued' + RESET + ' '.repeat(Math.max(0, inner - 10 - String(pendingCount).length)) + PINK + '║' + RESET);
-      side.push(PINK + '║' + ' '.repeat(inner) + '║' + RESET);
-    }
-    while (side.length < contentH) side.push(PINK + '║' + ' '.repeat(inner) + '║' + RESET);
-    side[side.length - 1] = PINK + '╚' + '═'.repeat(inner) + '╝' + RESET;
-    return side.slice(0, contentH);
+  function currentDropItems() {
+    const head = state.input.split(' ')[0];
+    if (!head.startsWith('/')) return [];
+    return COMMANDS.filter((c) => c.name.startsWith(head));
   }
 
   let lastFrame: string[] = [];
@@ -467,78 +280,103 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     if (exited) return;
     const w = width();
     const h = height();
-    const sideW = w >= 110 ? Math.max(44, Math.floor(w * 0.34)) : 0;
-    const mainW = w - sideW - (sideW ? 2 : 0);
-    const composer = composerState();
-    const composerHeight = composer.height;
-    const composerTop = h - composerHeight + 1;
-    const statusRow = composerTop - 1;
-    const contentTop = 2;
-    const contentBottom = statusRow - 1;
-    const contentH = Math.max(1, contentBottom - contentTop + 1);
 
-    const chatMw = mainW - 2;
+    const statusRows = 3;
+    const composerH = 3; // top rule + input + bottom rule (multi-line grows)
+    const composerRows = state.input ? Math.min(6, Math.ceil(state.input.length / Math.max(10, w - 8)) + 2) : 3;
+    const bottomRows = composerRows + statusRows;
+    const contentH = Math.max(1, h - bottomRows - 1);
+
+    const indent = transcriptIndent(w);
+    const chatMw = Math.min(w - indent * 2, Math.max(24, w - 4));
+
     if (!chatCache || chatCache.ver !== state.chatVer || chatCache.mw !== chatMw) {
-      chatCache = { ver: state.chatVer, mw: chatMw, lines: renderChat(chatMw) };
+      chatCache = { ver: state.chatVer, mw: chatMw, lines: transcriptLines(chatMw) };
     }
     const chatLines = chatCache.lines;
     const visible = chatLines.slice(Math.max(0, chatLines.length - contentH - state.scroll), Math.max(0, chatLines.length - state.scroll));
-    const sideRows = buildSidebar(sideW, contentH);
 
     const rows: string[] = new Array(h).fill('');
-
-    rows[0] = buildHeader(w);
-
+    const lead = ' '.repeat(indent);
     for (let i = 0; i < contentH; i++) {
-      const r = contentTop + i - 1;
-      const left = visible[i] ?? '';
-      if (sideW > 0) {
-        const right = sideRows[i] ?? '';
-        rows[r] = pad(left, mainW) + ' ' + right;
-      } else {
-        rows[r] = pad(left, w);
+      const r = i;
+      rows[r] = lead + (visible[i] ?? '');
+    }
+
+    // thinking line pinned under the transcript while busy
+    if (state.busy) {
+      const r = Math.max(0, contentH - 1);
+      rows[r] = lead + thinkingLine(state.spinner, state.currentTool || state.currentTask || '');
+    }
+
+    // autocomplete dropdown floats above the status bar
+    const dropItems = currentDropItems();
+    if (dropItems.length && !state.menuActive) {
+      const dd = renderDropdown(dropItems.slice(0, 6).map((c) => ({ name: c.name, hint: c.hint })), state.dropSelected, w - indent);
+      const top = h - bottomRows - dd.length - 1;
+      for (let i = 0; i < dd.length; i++) {
+        const r = top + i;
+        if (r >= 0 && r < h) rows[r] = lead + dd[i];
       }
     }
 
-    if (state.input.startsWith('/') && !state.menuActive) {
-      const palette = COMMANDS.filter(c => c.name.startsWith(state.input.split(' ')[0])).slice(0, 5);
-      const pTop = Math.max(contentTop, contentBottom - palette.length - 1);
-      for (let pi = 0; pi < palette.length; pi++) {
-        const r = pTop + pi - 1;
-        const c = palette[pi];
-        const line = ' ' + CYAN + c.name.padEnd(14) + RESET + ' ' + DIM + c.hint + RESET;
-        if (r >= 0 && r < h) rows[r] = pad(line, mainW - 2);
+    // ---- 3-row status bar (cline StatusBar) ----
+    const extra: string[] = [];
+    if (kvCache.badge()) extra.push(kvCache.badge());
+    const queued = [...state.tasks.values()].filter((t) => t.status === 'pending').length;
+    if (queued) extra.push(`${queued} queued`);
+    const statusModel = {
+      modelId: modelShort,
+      totalTokens: state.totalTokens,
+      totalCost: state.totalCost,
+      maxInputTokens: runtime.config.safety.contextBudgetTokens,
+      mode: state.uiMode,
+      workspaceName: projectName,
+      gitBranch: branch || null,
+      gitDiff: state.gitDiff,
+      autoApprove: state.autoApprove,
+      extra,
+    };
+    const s1 = h - bottomRows;
+    const s2 = s1 + 1;
+    const s3 = s2 + 1;
+    rows[s1] = statusBarRow1(statusModel, w);
+    rows[s2] = statusBarRow2(statusModel, w);
+    rows[s3] = statusBarRow3(state.autoApprove, w);
+
+    // ---- composer (cline InputBar) ----
+    const cTop = s3 + 1;
+    rows[cTop] = composerTopRule(w);
+    const innerW = Math.max(1, w - 6);
+    const rawRows = state.input ? wrap(state.input, innerW) : [''];
+    const shownRows = rawRows.slice(-4);
+    for (let i = 0; i < shownRows.length; i++) {
+      const r = cTop + 1 + i;
+      if (r < h) {
+        rows[r] = state.input
+          ? composerRow(shownRows[i], w)
+          : composerPlaceholderRow('Message mochi… (type / for commands)', w);
       }
     }
+    rows[h - 1] = composerBottomRule(w, state.uiMode === 'plan' ? '⏎ send · Tab → act · esc stop' : '⏎ send · Tab → plan · esc stop');
 
-    rows[statusRow - 1] = buildStatus(w);
-
-    const title = ' Message ';
-    rows[composerTop - 1] = CYAN + '╔' + title + '═'.repeat(Math.max(0, w - 2 - title.length)) + '╗' + RESET;
-    const innerW = Math.max(20, w - 6);
-    for (let i = 0; i < composerHeight - 2; i++) {
-      const r = composerTop + i;
-      if (r >= 0 && r < h) rows[r] = CYAN + '║ ' + RESET + BG_COMPOSER + pad(composer.rows[i] ?? '', innerW) + RESET + CYAN + ' ║' + RESET;
-    }
-    rows[h - 1] = CYAN + '╚' + '═'.repeat(w - 2) + '╝' + RESET;
-
+    // ---- centered menu overlay (kept from before) ----
     if (state.menuActive) {
-      const menuH = Math.min(state.menuItems.length + 4, contentH - 2);
-      const menuTop = Math.max(contentTop, Math.floor((contentTop + contentBottom) / 2 - menuH / 2));
-      const menuW = Math.min(Math.max(50, Math.floor(w * 0.5)), w - 8);
-      const mLeft = Math.floor((w - menuW - 2) / 2);
-      rows[menuTop - 1] = PINK + '╔' + '═'.repeat(menuW - 2) + '╗' + RESET;
-      rows[menuTop] = PINK + '║' + RESET + ' ' + BOLD + state.menuTitle + RESET + ' ' + DIM + '↑/↓ · Enter · Esc' + RESET + ' '.repeat(Math.max(0, menuW - 6 - visibleLen(state.menuTitle) - 20)) + PINK + '║' + RESET;
-      rows[menuTop + 1] = PINK + '╠' + '═'.repeat(menuW - 2) + '╣' + RESET;
-      for (let mi = 0; mi < menuH - 4 && menuTop + 3 + mi < contentBottom; mi++) {
-        const r = menuTop + 3 + mi - 1;
+      const menuH = Math.min(state.menuItems.length + 4, h - 4);
+      const menuTop = Math.max(1, Math.floor((h - menuH) / 2));
+      const menuW = Math.min(Math.max(50, Math.floor(w * 0.6)), w - 6);
+      const mLeft = Math.floor((w - menuW) / 2);
+      rows[menuTop] = T.rule + '╭' + '─'.repeat(menuW - 2) + '╮' + T.reset;
+      rows[menuTop + 1] = T.rule + '│' + T.reset + ' ' + T.bold + state.menuTitle + T.reset + ' ' + T.grayDark + '↑/↓ · Enter · Esc' + T.reset + ' '.repeat(Math.max(0, menuW - 6 - visibleLen(state.menuTitle) - 18)) + T.rule + '│' + T.reset;
+      for (let mi = 0; mi < menuH - 3 && menuTop + 2 + mi < h - bottomRows; mi++) {
+        const r = menuTop + 2 + mi;
         const sel = mi === state.menuSelected;
         const item = state.menuItems[mi] ?? '';
         const mark = state.menuMark.has(mi);
-        const row = (sel ? PINK + '➤ ' : '  ') + (mark ? PINK + '● ' : '   ') + (sel ? BOLD : '') + item + RESET;
-        rows[r] = PINK + '║' + RESET + ' ' + pad(row, menuW - 6) + PINK + '║' + RESET;
+        const body = (sel ? T.act + '❯ ' : '  ') + (mark ? T.pink + '● ' : '  ') + (sel ? T.bold : '') + item + T.reset;
+        rows[r] = T.rule + '│' + T.reset + ' ' + body + ' '.repeat(Math.max(0, menuW - 4 - visibleLen(item) - 3)) + T.rule + '│' + T.reset;
       }
-      rows[menuTop + menuH - 2] = PINK + '╚' + '═'.repeat(menuW - 2) + '╝' + RESET;
+      rows[menuTop + menuH - 1] = T.rule + '╰' + '─'.repeat(menuW - 2) + '╯' + T.reset;
     }
 
     let out = HIDE;
@@ -552,14 +390,17 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         out += '\x1b[' + (i + 1) + ';1H' + line + '\x1b[K';
       }
     }
-    const cursorRow = composerTop + 1 + composer.cursorRow;
-    const cursorCol = 3 + composer.cursorCol;
-    out += '\x1b[' + cursorRow + ';' + cursorCol + 'H' + SHOW;
+    const cursorRow = cTop + 1 + Math.min(shownRows.length - 1, Math.max(0, rawRows.length - 1));
+    const beforeCursor = state.input.slice(0, state.cursor);
+    const beforeLines = wrap(beforeCursor, innerW);
+    const cursorCol = indent + 4 + (beforeLines.length ? visibleLen(beforeLines[beforeLines.length - 1]) : 0);
+    out += '\x1b[' + (cursorRow + 1) + ';' + (cursorCol + 1) + 'H' + SHOW;
     process.stdout.write(out);
     lastFrame = rows.slice();
     lastW = w;
     lastRenderAt = Date.now();
   }
+
   function stripAnsi(s: string): string {
     return s.replace(/\[[0-9;]*m/g, '');
   }
@@ -927,6 +768,22 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     while (i < s.length) {
       const c = s[i];
       if (c === '\r' || c === '\n') {
+        // Dropdown active: Enter completes the selected slash command — unless
+        // the input already IS that exact command, in which case run it.
+        if (state.dropActive) {
+          const items = currentDropItems();
+          const pick = items[Math.min(state.dropSelected, items.length - 1)];
+          const exactMatch = items.length === 1 && state.input.trim() === items[0].name;
+          if (pick && state.input.startsWith('/') && !exactMatch) {
+            state.input = pick.name + ' ';
+            state.cursor = state.input.length;
+            state.dropActive = false;
+            state.dropSelected = 0;
+            scheduleRender();
+            i++;
+            continue;
+          }
+        }
         const text = state.input;
         state.input = '';
         state.cursor = 0;
@@ -1029,6 +886,29 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         i++;
         continue;
       }
+      if (c === '\t') {
+        // Shift+Tab = \x1b[Z, plain Tab = \t. Cline: Tab toggles Plan/Act,
+        // Shift+Tab toggles auto-approve-all.
+        if (s.startsWith('\x1b[Z')) {
+          state.autoApprove = !state.autoApprove;
+          (runtime as any).__permPolicy = state.autoApprove ? 'yolo' : 'strict';
+          push('system', state.autoApprove ? '⏵⏵ Auto-approve enabled.' : 'Auto-approve off.');
+          i += 3;
+        } else {
+          const items = currentDropItems();
+          if (items.length > 1 && state.input.startsWith('/')) {
+            // cycle the slash autocomplete first
+            state.dropSelected = (state.dropSelected + 1) % Math.min(items.length, 6);
+          } else {
+            state.uiMode = state.uiMode === 'plan' ? 'act' : 'plan';
+            runtime.config.planMode = state.uiMode === 'plan';
+          }
+          i++;
+        }
+        state.dropActive = currentDropItems().length > 0;
+        scheduleRender();
+        continue;
+      }
       // Accumulate a printable run.
       let j = i;
       while (j < s.length) {
@@ -1041,6 +921,8 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         const text = s.slice(i, j);
         state.input = state.input.slice(0, state.cursor) + text + state.input.slice(state.cursor);
         state.cursor += text.length;
+        state.dropActive = currentDropItems().length > 0;
+        state.dropSelected = 0;
         scheduleRender();
         i = j;
         continue;
@@ -1055,8 +937,12 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       case '\x1b[C': if (state.cursor < state.input.length) state.cursor++; break;
       case '\x1b[H': state.cursor = 0; break;
       case '\x1b[F': state.cursor = state.input.length; break;
-      case '\x1b[A': historyPrev(); break;
-      case '\x1b[B': historyNext(); break;
+      case '\x1b[A':
+        if (state.dropActive) { state.dropSelected = Math.max(0, state.dropSelected - 1); break; }
+        historyPrev(); break;
+      case '\x1b[B':
+        if (state.dropActive) { state.dropSelected = Math.min(currentDropItems().length - 1, state.dropSelected + 1); break; }
+        historyNext(); break;
       case '\x1b[5~': state.scroll = Math.min(state.lines.length, state.scroll + 10); break;
       case '\x1b[6~': state.scroll = Math.max(0, state.scroll - 10); break;
       case '\x1b[3~': state.input = state.input.slice(0, state.cursor) + state.input.slice(state.cursor + 1); break;
@@ -1094,6 +980,15 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       state.scroll = 0;
       scheduleRender();
     }
+    // Keep the status bar's git stats + token meter live.
+    const type = String((event as any).type);
+    if (type === 'file:changed' || type === 'tool:completed') void refreshGitStats();
+    if (type === 'usage:recorded') {
+      const tokens = Number((event as any).tokensOut ?? 0);
+      const cost = Number((event as any).costUsd ?? 0);
+      if (tokens) state.totalTokens += tokens;
+      if (cost) state.totalCost += cost;
+    }
   }
 
   function start() {
@@ -1109,6 +1004,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     };
     process.on('exit', exitListener);
     runtime.events.onAll(onRuntimeEvent);
+    void refreshGitStats(); // seed the status bar diff stats
     cleanupFns = [
       () => process.stdin.off('data', keyListener),
       () => process.stdout.off('resize', resizeListener),
@@ -1144,6 +1040,24 @@ async function gitBranch(cwd: string): Promise<string> {
     execFile('git', ['branch', '--show-current'], { cwd }, (error, stdout) => {
       if (error || !stdout) return resolve('');
       resolve(stdout.toString().trim());
+    });
+  });
+}
+
+/** Cline-style git diff stats for the status bar: files, +additions, -deletions. */
+async function gitDiffStats(cwd: string): Promise<{ files: number; additions: number; deletions: number } | null> {
+  return new Promise(resolve => {
+    execFile('git', ['diff', '--numstat'], { cwd, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
+      if (error || !stdout) return resolve(null);
+      let files = 0, additions = 0, deletions = 0;
+      for (const line of stdout.toString().split('\n')) {
+        const m = line.match(/^(\d+|-)\s+(\d+|-)\s+/);
+        if (!m) continue;
+        files++;
+        if (m[1] !== '-') additions += Number(m[1]);
+        if (m[2] !== '-') deletions += Number(m[2]);
+      }
+      resolve(files ? { files, additions, deletions } : null);
     });
   });
 }
