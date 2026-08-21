@@ -549,13 +549,14 @@ async function main() {
     if (sub === 'list' || !sub) {
       if (!skills.length) { console.log('No skills available.'); return; }
       for (const sk of skills) {
-        console.log(`${sk.name.padEnd(20)} ${sk.description.slice(0, 72)}`);
+        console.log(`${sk.name.padEnd(24)} ${sk.description.slice(0, 72)}`);
       }
       return;
     }
-    // mochi skills show <name>
-    const sk = skills.find((x) => x.name === sub);
-    if (!sk) { console.log(`No skill "${sub}".`); return; }
+    // mochi skills show <name> or mochi skills <name>
+    const targetName = (sub === 'show' ? positional[2] : sub) || '';
+    const sk = skills.find((x) => x.name === targetName || x.name.toLowerCase() === targetName.toLowerCase());
+    if (!sk) { console.log(`No skill "${targetName}". Type "mochi skills" to list all.`); return; }
     const { readFileSync } = await import('node:fs');
     try { console.log(readFileSync(sk.path, 'utf8').slice(0, 4000)); }
     catch (e) { console.error(`Failed to read skill: ${(e as Error).message}`); }

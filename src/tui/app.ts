@@ -59,6 +59,7 @@ const COMMANDS = [
   { name: '/clear', hint: 'Clear transcript' },
   { name: '/model', hint: 'Select AI model provider & model' },
   { name: '/theme', hint: 'Select color theme (15 styles)' },
+  { name: '/skills', hint: 'Browse & activate specialized engineering skills' },
   { name: '/mode', hint: 'Set execution mode (normal, spec, security, chaos)' },
   { name: '/providers', hint: 'List connected AI model providers' },
   { name: '/login', hint: 'Authenticate a model provider API key' },
@@ -717,6 +718,25 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       }
       return;
     }
+    if (line === '/skills' || line.startsWith('/skills ') || line === '/skill' || line.startsWith('/skill ')) {
+      const specific = (line.startsWith('/skills ') ? line.slice(8) : line.startsWith('/skill ') ? line.slice(7) : '').trim();
+      if (specific) {
+        const { loadAllSkills, readSkillBody } = await import('../skills.js');
+        const { skills } = loadAllSkills(projectRoot);
+        const sk = skills.find((s) => s.name === specific || s.name.toLowerCase().includes(specific.toLowerCase()));
+        if (!sk) {
+          push('error', `Skill "${specific}" not found. Type /skills to browse available skills.`);
+          scheduleRender();
+          return;
+        }
+        const body = readSkillBody(sk, projectRoot);
+        push('system', `=== Skill: ${sk.name} ===\n${body || sk.description}`);
+        scheduleRender();
+      } else {
+        await skillsMenu();
+      }
+      return;
+    }
     if (line === '/history' || line === '/sessions' || line === '/resume') {
       await historySessionMenu();
       return;
@@ -1000,6 +1020,43 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     setTheme(chosen.id);
     push('system', `Theme switched to ${chosen.name} — ${chosen.description}`);
     scheduleRender();
+  }
+
+  async function skillsMenu() {
+    const { loadAllSkills, readSkillBody } = await import('../skills.js');
+    const { skills } = loadAllSkills(projectRoot);
+    if (!skills.length) {
+      push('system', 'No skills found in catalog or project.');
+      scheduleRender();
+      return;
+    }
+
+    const items = skills.map((s) => {
+      const name = s.name.padEnd(24);
+      const desc = s.description.length > 55 ? s.description.slice(0, 52) + '…' : s.description;
+      return `${T.cyan}${name}${T.reset}  ${T.grayDark}· ${desc}${T.reset}`;
+    });
+
+    state.menuSelected = 0;
+    const idx = await openMenu(`Available Engineering Skills (${skills.length} Loaded)`, items);
+    if (idx < 0 || idx >= skills.length) return;
+
+    const chosen = skills[idx];
+    const subActions = [
+      `▶  Activate & Load into Context`,
+      `📖 View Full Skill Instructions`,
+    ];
+    const actIdx = await openMenu(`Skill: ${chosen.name}`, subActions);
+    if (actIdx === 0) {
+      const body = readSkillBody(chosen, projectRoot);
+      await run(async () => {
+        return runtime.runPrompt(`Please follow and activate the ${chosen.name} skill instructions:\n\n${body}`);
+      }, false);
+    } else if (actIdx === 1) {
+      const body = readSkillBody(chosen, projectRoot);
+      push('system', `=== Skill: ${chosen.name} ===\n${body || chosen.description}`);
+      scheduleRender();
+    }
   }
 
   function formatTimeAgo(ts: number): string {
