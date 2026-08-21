@@ -182,10 +182,16 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   const scheduleRender = () => {
     if (renderQueued) return;
     renderQueued = true;
-    queueMicrotask(() => {
+    // Use a macrotask (setTimeout 0) instead of queueMicrotask so bursty
+    // updates (streaming message:chunk, tool events) coalesce into a single
+    // render per tick instead of draining N microtasks synchronously and
+    // pegging the event loop. That spinning was the source of the freeze
+    // during heavy work: every chunk scheduled a full O(n) transcript wrap
+    // that starved everything else.
+    setTimeout(() => {
       renderQueued = false;
       render();
-    });
+    }, 0);
   };
 
   const startSpinner = () => {
@@ -308,6 +314,18 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
 
   function render() {
     if (exited) return;
+    // A single bad frame must never freeze the whole UI: recover, log, and
+    // reschedule instead of throwing out of the render loop.
+    try {
+      renderFrame();
+    } catch (e) {
+      renderQueued = false;
+      process.stdout.write(`${T.reset}${SHOW}\r\n${T.error}[mochi render error] ${e instanceof Error ? e.message : String(e)}${T.reset}\r\n${HIDE}`);
+      setTimeout(() => scheduleRender(), 300);
+    }
+  }
+
+  function renderFrame() {
     const w = width();
     const h = height();
 
