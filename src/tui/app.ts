@@ -255,10 +255,10 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       if (!text.trim()) continue;
       const entries = renderEntry({ kind: line.kind, text }, false);
       for (const e of entries) {
-        // wrap each rendered entry line to the transcript width
+        // wrap() measures visible length, so ANSI colors survive wrapping.
         const segs = e.split('\n');
         for (const seg of segs) {
-          const wrapped = wrap(seg.replace(/\x1b\[[0-9;]*m/g, ''), Math.max(10, maxWidth));
+          const wrapped = wrap(seg, Math.max(10, maxWidth));
           for (const wLine of wrapped) out.push(wLine);
         }
       }
