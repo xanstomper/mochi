@@ -707,7 +707,7 @@ export class Agent {
       'todo', 'skill', 'memory', 'chameleon', 'analyze_code', 'perf', 'perf_audit',
       'web_search', 'get_diagnostics', 'git_blame', 'git_history', 'system_info',
       'find_references', 'find_definitions', 'db_inspect', 'diff', 'tree', 'deepwiki',
-      'fetch', 'verify', 'sql_codebase',
+      'fetch', 'verify', 'sql_codebase', 'think',
     ].includes(name) || /__resources_(list|read)$/.test(name);
   }
 

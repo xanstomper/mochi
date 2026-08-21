@@ -1,0 +1,136 @@
+import type { Tool } from './types.js';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
+
+// create_pr — turn the current working tree into a branch + GitHub PR.
+//
+// The agent version of `git commit && gh pr create`. Given an optional PR
+// title it: (1) creates a feature branch off the current branch, (2) stages
+// and commits all pending changes, (3) pushes, (4) opens a PR back to the
+// default branch. Uses the `gh` CLI for GitHub so credentials stay out of mochi.
+//
+// Safety: this is a mutating, network-facing operation (push + PR open), so
+// the tool carries `permission: 'shell'` — the app's permission gate enforces
+// it (approval in interactive mode, blocked in safe mode) like a `git push`.
+
+/** Run a command, resolving its combined output. Never rejects: callers use
+ *  the raw string to decide. Bounded by a timeout so a hung push/gh can't
+ *  stall the loop. */
+async function run(cmd: string, args: string[], cwd: string, timeoutMs = 120_000): Promise<string> {
+  try {
+    const { stdout, stderr } = await execFileAsync(cmd, args, { cwd, timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 });
+    return String(stdout === undefined ? stderr ?? '' : (stdout === null ? '' : stdout)).replace(/\n+$/, '');
+  } catch (err) {
+    const e = err as { stdout?: string; stderr?: string; message?: string };
+    return String(e.stderr || e.message || '').trim();
+  }
+}
+
+function sanitizeTitle(title: string): string {
+  return title.replace(/[\r\n]+/g, ' ').slice(0, 200).trim();
+}
+
+export const createPrTool: Tool = {
+  def: {
+    name: 'create_pr',
+    description:
+      'Commit the current changes to a new feature branch and open a GitHub Pull Request via the authenticated `gh` CLI, returning the PR URL. Use once the task is complete and the user wants the work submitted for review.',
+    parameters: [
+      { name: 'title', type: 'string', description: 'PR title (defaults to a diff-derived summary)', required: false },
+      { name: 'branch', type: 'string', description: 'Feature branch name (default: mochi/<slug>)', required: false },
+      { name: 'base', type: 'string', description: 'Base branch for the PR (default: repo default)', required: false },
+      { name: 'draft', type: 'boolean', description: 'Open as a draft PR (default: false)', required: false },
+      { name: 'body', type: 'string', description: 'PR body (defaults to commit summary)', required: false },
+      { name: 'commit_message', type: 'string', description: 'Optional override commit message', required: false },
+    ],
+    permission: 'shell',
+    dangerous: true,
+  },
+  async execute(args, ctx) {
+    const cwd = ctx.cwd;
+
+    // 1. Must be a git repo with pending changes.
+    const status = await run('git', ['status', '--porcelain'], cwd);
+    if (!status.trim()) {
+      return 'No pending changes to open a PR with (working tree is clean). Commit or make an edit first.';
+    }
+
+    const diffStat = await run('git', ['diff', '--stat'], cwd);
+    const stagedStat = await run('git', ['diff', '--cached', '--stat'], cwd);
+
+    // 2. Resolve the base branch (exit-code-aware so a failed symbolic-ref or a
+    //    missing remote-detached HEAD falls back cleanly instead of leaking the
+    //    error text into the branch name).
+    let base = args.base ? String(args.base) : '';
+    if (!base) {
+      try {
+        const sym = (await execFileAsync('git', ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { cwd })).stdout.trim();
+        base = sym.replace(/^origin\//, '');
+      } catch {
+        try {
+          base = (await execFileAsync('git', ['branch', '--show-current'], { cwd })).stdout.trim() || 'main';
+        } catch { base = 'main'; }
+      }
+      if (!base) base = 'main';
+    }
+
+    // 3. Choose a title and branch name.
+    const rawTitle = args.title ? String(args.title) : '';
+    let title = sanitizeTitle(rawTitle || 'Mochi agent change');
+    if (!rawTitle && status.includes('->')) title = sanitizeTitle(`Update ${status.split('\n')[0]?.trim()}`);
+    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 28);
+    const branch = args.branch ? String(args.branch) : (slug ? `mochi/${slug}` : 'mochi-agent-change');
+
+    // 4. Create / move onto the branch (reuse existing without clobbering).
+    let exists = false;
+    try {
+      await execFileAsync('git', ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], { cwd, timeout: 10_000 });
+      exists = true;
+    } catch { exists = false; }
+    if (exists) await run('git', ['checkout', branch], cwd);
+    else await run('git', ['checkout', '-b', branch], cwd);
+
+    // 5. Stage + commit pending changes.
+    const commitMsg = args.commit_message
+      ? String(args.commit_message)
+      : `${title}\n\n${diffStat || stagedStat || '(new files)'}\n\nGenerated by mochi.`;
+    if ((await run('git', ['status', '--porcelain'], cwd)).trim()) {
+      await run('git', ['add', '-A'], cwd);
+      const commitOut = await run('git', ['commit', '-m', commitMsg.slice(0, 4000)], cwd);
+      if (/nothing to commit|no changes added/i.test(commitOut)) {
+        return 'Nothing to commit on the branch; no new changes after checkout. Check branch state.';
+      }
+    }
+
+    // Snapshot the short commit leader for reporting.
+    const head = await run('git', ['rev-parse', '--short', 'HEAD'], cwd);
+
+    // 6. Push and open the PR. A push succeeds when git exits 0 (its stdout may
+    //    be just a "set up to track" line, or "Everything up-to-date" on a
+    //    no-op); a nonzero exit with a real message means the remote refused.
+    let pushErr = '';
+    try {
+      await execFileAsync('git', ['push', '-u', 'origin', branch], { cwd, timeout: 60_000 });
+    } catch (e) {
+      const err = e as { stderr?: string; message?: string };
+      pushErr = String(err.stderr || err.message || '').trim();
+    }
+    if (pushErr && !/up-to-date|new branch|tracking/i.test(pushErr)) {
+      return `Could not push origin/${branch}: ${pushErr}\nCommitted locally as ${head}.`;
+    }
+
+    const ghArgs = ['pr', 'create', '--base', base, '--head', branch, '--title', title];
+    if (args.draft === true) ghArgs.push('--draft');
+    if (args.body) ghArgs.push('--body', String(args.body));
+    else ghArgs.push('--body', `Summary:\n${diffStat || stagedStat || ''}\n\nCommitted at \`${head}\`.\n\nGenerated by mochi.`);
+    const prUrl = await run('gh', ghArgs, cwd, 60_000);
+
+    if (!/https?:\/\/|\.\.\.\/|pull\//i.test(prUrl)) {
+      return `Pushed origin/${branch} (commit ${head}) but gh could not open the PR — is \`gh\` installed and authenticated?\ngh: ${prUrl.slice(0, 300)}`;
+    }
+
+    return `Opened PR → ${prUrl}\nBranch: ${branch} → ${base}\nTitle: ${title}\nCommit: ${head}`;
+  },
+};

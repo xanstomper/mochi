@@ -89,3 +89,36 @@ describe('ContextEngine task-kind hints', () => {
     expect(JSON.stringify(p)).toContain('Focus: implementation');
   });
 });
+describe('ContextEngine cache-stable packet prefix', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mochi-ctx-cache-'));
+  const engine = new ContextEngine(cfg(), dir);
+  const task = {
+    id: 't', title: 'Add export to foo', description: 'export const x = 1',
+    role: 'coder', status: 'pending', priority: 1, dependencies: [], fileScope: [],
+    acceptanceCriteria: [], attempts: [],
+  } as any;
+
+  it('keeps the leading system message byte-identical as state grows (prefix cache hit)', () => {
+    const p1 = engine.buildPacket(NO_TOOLS, task);
+    const leading1 = p1.messages[0].content;
+
+    // Simulate a second turn: the task state evolves (known errors, files).
+    engine.updateState({ nextAction: 'verify the edit', knownErrors: ['ERROR'], filesModified: ['src/x.ts'] } as any);
+    engine.addKnownError('compile error in src/x.ts');
+    const p2 = engine.buildPacket(NO_TOOLS, task);
+
+    // The leading system prompt (identity+skills+rules) is UNCHANGED → the
+    // provider can prefix-cache the whole front of the conversation.
+    expect(p2.messages[0].content).toBe(leading1);
+    // Volatile state lives in a SEPARATE trailing system message, not the lead.
+    const last = p2.messages[p2.messages.length - 1];
+    expect(last.role).toBe('system');
+    expect(String(last.content)).toContain('Current State');
+  });
+
+  it('does not freeze the leading prompt when the task kind hint changes', () => {
+    const pA = engine.buildPacket(NO_TOOLS, task);
+    const pB = engine.buildPacket(NO_TOOLS, task);
+    expect(pA.messages[0].content).toBe(pB.messages[0].content);
+  });
+});

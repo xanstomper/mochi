@@ -88,6 +88,16 @@ export function createOpenAIProvider(config: ProviderConfig) {
       ...(options?.maxTokens !== undefined ? { max_tokens: options.maxTokens } : {}),
     };
 
+    // A local AbortController, linked to the caller's signal, so BOTH the
+    // request and (later) the watchdog stall guard can tear down the in-flight
+    // stream. We reuse one signal so the caller's abort still works identically.
+    const signal = new AbortController();
+    const onAbort = () => signal.abort();
+    if (options?.signal) {
+      if (options.signal.aborted) signal.abort();
+      else options.signal.addEventListener('abort', onAbort, { once: true });
+    }
+
     // Rate-limit + transient-failure safe fetch: only the request is retried
     // (never mid-stream), with exponential backoff honoring Retry-After.
     const res = await withRetries(async () => {
@@ -99,7 +109,7 @@ export function createOpenAIProvider(config: ProviderConfig) {
             ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
           },
           body: JSON.stringify(body),
-          signal: options?.signal,
+          signal: signal.signal,
         });
         if (!r.ok) {
           const text = await r.text().catch(() => '');
@@ -127,22 +137,27 @@ export function createOpenAIProvider(config: ProviderConfig) {
     let totalInput = 0;
     let totalOutput = 0;
 
-    const readWithTimeout = async (ms = 60_000): Promise<ReturnType<typeof reader.read>> => {
-      let timer: NodeJS.Timeout | undefined;
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new ProviderError('Model stream stalled (no data received for 60s)', { retryable: true })), ms);
-      });
-      try {
-        return await Promise.race([reader.read(), timeoutPromise]);
-      } finally {
-        if (timer) clearTimeout(timer);
+    // Watchdog stall guard: ONE reusable timer (not a fresh Promise + setTimeout
+    // per .read()). The stream is read bare-fast with zero per-read allocation,
+    // and the timer aborts the request only when the stream has been silent for
+    // STALL_TIMEOUT_MS. This measurably raises token throughput on chatty
+    // providers vs. a Promise.race around every chunk.
+    const STALL_TIMEOUT_MS = 60_000;
+    let lastChunkAt = Date.now();
+    let stalled = false;
+    const stallTimer = setTimeout(() => {
+      if (!stalled && Date.now() - lastChunkAt >= STALL_TIMEOUT_MS) {
+        stalled = true;
+        signal.abort(); // tear down the still-open stream now, not after read
       }
-    };
+    }, STALL_TIMEOUT_MS + 1000);
 
-    while (true) {
-      const { done, value } = await readWithTimeout(60_000);
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        lastChunkAt = Date.now();
+        buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() ?? '';
       for (const line of lines) {
@@ -197,6 +212,10 @@ export function createOpenAIProvider(config: ProviderConfig) {
           // ignore malformed lines
         }
       }
+      }
+    } finally {
+      clearTimeout(stallTimer);
+      options?.signal?.removeEventListener('abort', onAbort);
     }
   }
 

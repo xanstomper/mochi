@@ -36,6 +36,8 @@ import { gitBlameTool, gitHistoryTool } from './git-blame.js';
 import { systemInfoTool } from './system-info.js';
 import { findReferencesTool, findDefinitionsTool } from './find-references.js';
 import { dbInspectTool } from './db-inspect.js';
+import { createPrTool } from './create-pr.js';
+import { thinkTool } from './think.js';
 
 export const ALL_TOOLS: Tool[] = [
   readTool, writeTool, editTool, deleteTool, shellTool, searchTool, globTool,
@@ -44,7 +46,7 @@ export const ALL_TOOLS: Tool[] = [
   searchReplaceMultiTool, analyzeCodeTool, verifyTool, perfTool,
   webSearchTool, getDiagnosticsTool, mkdirTool, moveFileTool, copyFileTool,
   gitBlameTool, gitHistoryTool, systemInfoTool, findReferencesTool, findDefinitionsTool,
-  dbInspectTool,
+  dbInspectTool, createPrTool, thinkTool,
   ...symbolTools, replaceSymbolTool, chameleonTool,
 ];
 

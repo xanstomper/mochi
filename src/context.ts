@@ -278,18 +278,23 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
   }
 
   buildPacket(tools: ToolDefinition[], task?: Task, repo?: RepoInfo): ContextPacket {
+    // STABLE tier: identity + rules + skills + repo info. Kept byte-identical
+    // across turns so providers with prefix caching (DeepSeek, Anthropic,
+    // OpenAI cached_tokens, Gemini cached_content) hit on the whole leading
+    // prefix every turn instead of re-reading it because a volatile state line
+    // shifted the bytes. This is the single biggest first-token latency win for
+    // multi-turn agents.
     const baseSystemPrompt = this.buildSystemPrompt(tools, repo, task);
+
+    // VOLATILE tier: task state / next-action / files / errors. Emitted as a
+    // SEPARATE trailing system message appended AFTER the growing history, so
+    // the prefix (identity + prior conversation) stays byte-stable and cached.
     const statePrompt = this.buildStatePrompt(task);
-    
-    // Combine base system identity with state/focus into ONE clean system prompt.
-    // NEVER put statePrompt or focus hints into a fake 'user' role message.
-    const fullSystemPrompt = statePrompt.trim()
-      ? `${baseSystemPrompt}\n\n${statePrompt}`
-      : baseSystemPrompt;
 
-    let remaining = this.budget - approxTokens(fullSystemPrompt);
+    let remaining = this.budget - approxTokens(baseSystemPrompt);
 
-    // Add recent messages until budget exhausted; prefer latest.
+    // Add recent messages until budget exhausted; prefer latest. Reserve room
+    // for the trailing state note.
     const recent: ChatMessage[] = [];
     for (let i = this.messages.length - 1; i >= 0; i--) {
       const m = this.messages[i];
@@ -301,12 +306,13 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
     }
 
     const messages: ChatMessage[] = [
-      { role: 'system', content: fullSystemPrompt },
+      { role: 'system', content: baseSystemPrompt },
       ...recent,
     ];
+    if (statePrompt) messages.push({ role: 'system', content: statePrompt });
 
     const used = this.budget - remaining;
-    return { messages, systemPrompt: fullSystemPrompt, usedTokens: used, budgetTokens: this.budget };
+    return { messages, systemPrompt: baseSystemPrompt, usedTokens: used, budgetTokens: this.budget };
   }
 
   addDecision(decision: string) {
