@@ -104,4 +104,17 @@ describe('skill tool', () => {
     const out = await skillTool.execute({ name: 'nope' }, ctx);
     expect(out).toContain("No skill named 'nope'");
   });
+
+  it('loads bundled engineering skills like tdd-workflow and git-wizard', async () => {
+    const list = await skillTool.execute({ name: 'list' }, ctx);
+    expect(list).toContain('tdd-workflow');
+    expect(list).toContain('git-wizard');
+    expect(list).toContain('debugger');
+
+    const tdd = await skillTool.execute({ name: 'tdd-workflow' }, ctx);
+    expect(tdd).toContain('Red-Green-Refactor');
+
+    const git = await skillTool.execute({ name: 'git-wizard' }, ctx);
+    expect(git).toContain('Merge Conflict Resolution');
+  });
 });

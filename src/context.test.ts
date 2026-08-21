@@ -51,6 +51,15 @@ describe('ContextEngine project-rule + memory caching', () => {
     expect(after).toBeGreaterThan(before);
     expect(after).toBeGreaterThan(0);
   });
+
+  it('advertises available skills in system prompt', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mochi-ctx-'));
+    const engine = new ContextEngine(cfg(), dir);
+    const p = engine.buildPacket(NO_TOOLS);
+    expect(p.systemPrompt).toContain('<available_skills>');
+    expect(p.systemPrompt).toContain('tdd-workflow');
+    expect(p.systemPrompt).toContain('git-wizard');
+  });
 });
 
 describe('ContextEngine task-kind hints', () => {

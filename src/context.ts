@@ -60,6 +60,7 @@ export class ContextEngine {
   private memoryQuery = '';
   private skillsCache = '';
   private skillsFingerprint = '';
+  private skillsInitialized = false;
 
   constructor(config: MochiConfig, projectRoot: string) {
     this.budget = config.safety.contextBudgetTokens;
@@ -149,13 +150,14 @@ export class ContextEngine {
     return this.rulesCache;
   }
 
-  /** Advertise project skills in the system prompt so the model knows to load
+  /** Advertise project and bundled skills in the system prompt so the model knows to load
    *  them. Recomputes only when the skills dir fingerprint changes. */
   private skills(): string {
     const skillsDir = resolve(this.projectRoot, '.mochi', 'skills');
     const fp = fingerprint(skillsDir);
-    if (fp === '' || fp === this.skillsFingerprint) return this.skillsCache;
+    if (this.skillsInitialized && fp === this.skillsFingerprint) return this.skillsCache;
     try {
+      this.skillsInitialized = true;
       this.skillsFingerprint = fp;
       const { homedir } = require('node:os') as typeof import('node:os');
       const userSkills = resolve(homedir(), '.mochi', 'skills');
