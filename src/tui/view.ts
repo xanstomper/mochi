@@ -414,10 +414,9 @@ export function transcriptIndent(termWidth: number): number {
 // animation: gradient sheen sweeps left→right across the letters, a progress
 // bar fills underneath with live status text, then it fades into the session.
 const MOCHI_ASCII = [
-  '█▀▄▀█ █▀▀█ █▀▀▀ █▀▀▀ █▀▀ █▀▀█',
-  '█ ▀ █ █  █ █ ▀█ █ ▀█ █   █  █',
-  '▀   ▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀ ▀▀▀▀',
-  '▀ ▀▀▀ ▀▀▀▀',
+  '█▀▄▀█ █▀▀█ █▀▀▀ █  █ ▀█▀',
+  '█ ▀ █ █  █ █    █▀▀█  █ ',
+  '▀   ▀ ▀▀▀▀ ▀▀▀▀ ▀  ▀ ▀▀▀',
 ];
 
 const SPLASH_STOPS: Array<[number, number, number]> = [
