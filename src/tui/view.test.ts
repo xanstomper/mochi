@@ -6,6 +6,7 @@ import {
   spinnerColored,
   spinnerSweep,
   splashFrame,
+  SPLASH_PHASES,
   contextBar,
   usageText,
   statusBarRow1,
@@ -254,18 +255,42 @@ describe('animated spinner', () => {
 });
 
 describe('splash screen', () => {
-  it('renders centered logo + version each tick', () => {
+  it('renders MOCHI ascii art + version', () => {
     const f = splashFrame(3, 100, '0.10.2');
     const plain = f.join('\n').replace(/\x1b\[[0-9;]*m/g, '');
-    expect(plain).toContain('█');
-    expect(plain).toContain('m o c h i');
-    expect(plain).toContain('v0.10.2');
+    expect(plain).toContain('█▀▄▀█');   // M block letters
+    expect(plain).toContain('█▀▀█');
+    expect(plain).toContain('▀▀▀▀');
+    expect(plain).toContain('mochi v0.10.2');
+  });
+
+  it('shows loading phases and percent', () => {
+    const f = splashFrame(3, 100, '1.0.0', 0.5);
+    const plain = f.join('\n').replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).toContain('50%');
+    expect(plain).toMatch(/warming|skills|indexing|connecting/);
+  });
+
+  it('loading bar fills with progress', () => {
+    // Measure the filled segment: glyphs between the magenta start and the
+    // dim empty segment on the bar row.
+    const barFilled = (p: number) => {
+      const row = splashFrame(0, 100, '1.0.0', p).find((r) => r.includes('━')) ?? '';
+      const m = row.match(/38;2;255;110;199m(━+)/);
+      return m ? m[1].length : 0;
+    };
+    expect(barFilled(0.95)).toBeGreaterThan(barFilled(0.1));
+    expect(barFilled(1)).toBeGreaterThan(barFilled(0.5));
   });
 
   it('animates between ticks', () => {
     const a = splashFrame(2, 100, '1.0.0');
     const b = splashFrame(6, 100, '1.0.0');
     expect(a.join('|')).not.toBe(b.join('|'));
+  });
+
+  it('phase list ends at ready', () => {
+    expect(SPLASH_PHASES[SPLASH_PHASES.length - 1]).toBe('ready.');
   });
 });
 

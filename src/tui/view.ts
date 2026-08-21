@@ -410,59 +410,85 @@ export function transcriptIndent(termWidth: number): number {
 }
 
 // ---- Animated mochi splash screen ------------------------------------------
-const MOCHI_LOGO = [
-  '                     ███╗   ███╗',
-  '                     ████╗ ████║',
-  '                     ███╔╝╚███║',
-  '                     ███║ ╚███║',
-  '                     ███║  ███║',
-  '                    ╚████████╔╝',
-  '                     ╚═══════╝ ',
+// Big block-letter MOCHI (figlet "ANSI Shadow"-style) rendered as a loading
+// animation: gradient sheen sweeps left→right across the letters, a progress
+// bar fills underneath with live status text, then it fades into the session.
+const MOCHI_ASCII = [
+  '█▀▄▀█ █▀▀█ █▀▀▀ █▀▀▀ █▀▀ █▀▀█',
+  '█ ▀ █ █  █ █ ▀█ █ ▀█ █   █  █',
+  '▀   ▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀ ▀▀▀▀',
+  '▀ ▀▀▀ ▀▀▀▀',
 ];
 
 const SPLASH_STOPS: Array<[number, number, number]> = [
   [255, 110, 199], // magenta
   [199, 146, 234], // violet
   [86, 212, 221],  // cyan
+  [121, 184, 255], // blue
   [255, 175, 209], // pink
 ];
 
-/** One frame of the animated splash: gradient logo, shimmer bar, version. */
-export function splashFrame(tick: number, width: number, version: string): string[] {
-  const logoW = MOCHI_LOGO.reduce((m, l) => Math.max(m, l.length), 0);
-  const left = Math.max(0, Math.floor((width - logoW) / 2));
-  const pad = ' '.repeat(left);
-  const lines: string[] = [];
-  // breathing glow phase
-  const phase = (Math.sin(tick / 4) + 1) / 2;
-  for (let i = 0; i < MOCHI_LOGO.length; i++) {
-    const frac = i / Math.max(1, MOCHI_LOGO.length - 1);
-    const c = lerp(SPLASH_STOPS[0], SPLASH_STOPS[1], frac);
-    const glow = lerp(c, [255, 255, 255], phase * 0.18);
-    lines.push(pad + `${rgb(glow[0], glow[1], glow[2])}${T.bold}${MOCHI_LOGO[i]}${T.reset}`);
+/** Loading progress messages shown under the logo, one per phase. */
+export const SPLASH_PHASES = [
+  'warming up the dango…',
+  'loading skills + memory…',
+  'indexing code graph…',
+  'connecting model provider…',
+  'ready.',
+] as const;
+
+/** One frame of the animated splash.
+ *  - tick: animation frame counter (drives sheen + progress)
+ *  - progress: 0..1 real startup progress (drives the loading bar)
+ */
+export function splashFrame(tick: number, width: number, version: string, progress = 1): string[] {
+  const logoW = MOCHI_ASCII.reduce((m, l) => Math.max(m, l.length), 0);
+  const lines: string[] = [''];
+
+  // Per-cell gradient sheen: a bright band sweeps across the letters.
+  const sheenPos = (tick % (logoW + 12)) - 6;
+  for (let r = 0; r < MOCHI_ASCII.length; r++) {
+    const row = MOCHI_ASCII[r];
+    const left = Math.max(0, Math.floor((width - logoW) / 2));
+    const cells: string[] = [];
+    for (let x = 0; x < row.length; x++) {
+      const ch = row[x];
+      if (ch === ' ') { cells.push(' '); continue; }
+      // base gradient along the row: magenta → violet → cyan → blue
+      const base = lerp(SPLASH_STOPS[0], SPLASH_STOPS[2], x / Math.max(1, logoW - 1));
+      // sheen: brighten near the sweep position
+      const dist = Math.abs(x - sheenPos);
+      const glow = dist <= 4 ? 1 - dist / 4 : 0;
+      const c = lerp(base, [255, 255, 255], glow * 0.85);
+      cells.push(`${rgb(c[0], c[1], c[2])}${T.bold}${ch}${T.reset}`);
+    }
+    lines.push(' '.repeat(left) + cells.join(''));
   }
-  // shimmer underline sweeping across
-  const barW = Math.min(logoW, 36);
-  const barLeft = ' '.repeat(Math.max(0, Math.floor((width - barW) / 2)));
-  const head = tick % (barW + 6);
-  const cells: string[] = [];
-  for (let x = 0; x < barW; x++) {
-    const dist = Math.abs(x - head);
-    if (dist > 3) { cells.push(`${T.grayDark}═${T.reset}`); continue; }
-    const k = 1 - dist / 3;
-    const c = lerp([72, 79, 86], SPLASH_STOPS[2], k);
-    cells.push(`${rgb(c[0], c[1], c[2])}═${T.reset}`);
-  }
+
+  // Loading bar with animated fill + status text for the current phase.
   lines.push('');
-  lines.push(barLeft + cells.join(''));
-  const title = `m o c h i`;
-  const titlePad = ' '.repeat(Math.max(0, Math.floor((width - title.length) / 2)));
-  lines.push(titlePad + `${T.pink}${T.bold}${title}${T.reset}`);
-  const sub = `v${version} · the dango agent`;
-  const subPad = ' '.repeat(Math.max(0, Math.floor((width - sub.length) / 2)));
-  lines.push(subPad + `${T.gray}${sub}${T.reset}`);
+  const barW = Math.min(40, width - 8);
+  const barLeft = Math.max(0, Math.floor((width - barW) / 2));
+  const filled = Math.round(Math.max(0, Math.min(1, progress)) * barW);
+  const head = filled > 0 && filled < barW && progress < 1 ? (tick % 2 === 0 ? '▓' : '▒') : '';
+  const bar =
+    `${T.magenta}${'━'.repeat(Math.max(0, filled - (head ? 1 : 0)))}${T.reset}` +
+    (head ? `${T.bold}${rgb(255,255,255)}${head}${T.reset}` : '') +
+    `${T.grayDark}${'━'.repeat(Math.max(0, barW - filled))}${T.reset}`;
+  lines.push(' '.repeat(barLeft) + bar);
+  const phaseIdx = Math.min(SPLASH_PHASES.length - 1, Math.floor(progress * SPLASH_PHASES.length));
+  const phase = SPLASH_PHASES[phaseIdx];
+  const pct = Math.round(Math.max(0, Math.min(1, progress)) * 100);
+  const label = `${phase}  ${pct}%`;
+  lines.push(' '.repeat(Math.max(0, Math.floor((width - label.length) / 2))) + `${T.gray}${phase}${T.reset}  ${T.pink}${pct}%${T.reset}`);
+
+  // version footer
+  const sub = `mochi v${version}`;
+  lines.push('');
+  lines.push(' '.repeat(Math.max(0, Math.floor((width - sub.length) / 2))) + `${T.grayDark}${sub}${T.reset}`);
   return lines;
 }
 
-/** How many splash ticks before fading into the session (~1.2s at 60ms). */
-export const SPLASH_TICKS = 20;
+/** Splash duration in ticks (~2.4s at 60ms); the bar reflects REAL startup
+ *  milestones passed by the caller via progress. */
+export const SPLASH_TICKS = 40;

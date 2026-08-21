@@ -142,8 +142,13 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     gitDiff: null as { files: number; additions: number; deletions: number } | null,
     totalTokens: 0,
     totalCost: 0,
-    /** splash animation tick; >= SPLASH_TICKS means done */
+    /** real provider usage from usage:updated events */
+    inTokens: 0,
+    outTokens: 0,
+    cacheTokens: 0,
+    /** splash animation tick + real startup progress (0..1) */
     splashTick: 0,
+    splashProgress: 0,
   };
 
   let pendingResolver: ((v: string) => void) | undefined;
@@ -183,7 +188,13 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     if (spinnerTimer) return;
     spinnerTimer = setInterval(() => {
       state.spinner = (state.spinner + 1) % SPINNER.length;
-      if (state.splashTick < SPLASH_TICKS) state.splashTick++;
+      if (state.splashTick < SPLASH_TICKS) {
+        state.splashTick++;
+        // Ease toward done: fast at first, slower near 1; first user prompt
+        // or any runtime event jumps it to full so the splash never blocks.
+        state.splashProgress = Math.min(1, Math.max(state.splashProgress + 0.03, state.splashTick / SPLASH_TICKS));
+        if (state.splashTick >= SPLASH_TICKS) state.splashProgress = 1;
+      }
       scheduleRender();
     }, 160);
     // Freeze-guard: if something starves event-driven renders for > 800ms,
@@ -307,8 +318,9 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     const rows: string[] = new Array(h).fill('');
     const lead = ' '.repeat(indent);
     if (state.splashTick < SPLASH_TICKS) {
-      // Animated splash: centered logo + shimmer; fades into the transcript.
-      const splash = splashFrame(state.splashTick, w, pkg.version);
+      // Splash with REAL loading progress: providers/skills/graph milestones
+      // push splashProgress; the bar fills with them and the sheen animates.
+      const splash = splashFrame(state.splashTick, w, pkg.version, state.splashProgress);
       const top = Math.max(0, Math.floor((contentH - splash.length) / 2));
       for (let i = 0; i < splash.length && i < contentH; i++) {
         rows[top + i] = splash[i];
@@ -344,7 +356,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     if (queued) extra.push(`${queued} queued`);
     const statusModel = {
       modelId: modelShort,
-      totalTokens: state.totalTokens,
+      totalTokens: state.inTokens + state.outTokens + state.cacheTokens,
       totalCost: state.totalCost,
       maxInputTokens: runtime.config.safety.contextBudgetTokens,
       mode: state.uiMode,
@@ -360,13 +372,13 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     const s4 = s3 + 1;                  // auto-approve
     rows[s1] = statusBarRow1(statusModel, w);
     // jcode-style animated gradient bars, shimmering while busy.
-    const ctx = gradientContextBar(state.totalTokens, runtime.config.safety.contextBudgetTokens, 12, state.busy ? state.spinner + 1 : 0);
-    // Map KV-cache state to the bar: warm → full, cooling → fraction of TTL
-    // remaining, cold/unknown → empty but still shimmering while busy.
-    const kv = kvCache.status();
-    const cacheRate = kv.state === 'warm' ? 1 : kv.state === 'cooling' ? Math.max(0.15, Math.min(0.85, kv.remainingSecs / 300)) : 0;
+    const ctx = gradientContextBar(state.inTokens + state.outTokens, runtime.config.safety.contextBudgetTokens, 12, state.busy ? state.spinner + 1 : 0);
+    // Cache bar: share of prompt tokens served from cache this session.
+    const promptTotal = state.inTokens + state.cacheTokens;
+    const cacheRate = promptTotal > 0 ? Math.min(1, state.cacheTokens / promptTotal) : 0;
     const cache = gradientCacheBar(cacheRate, 10, state.busy ? state.spinner + 1 : 0);
-    const barsRow = ` ${T.gray}ctx${T.reset} ${ctx.text} ${T.gray}${Math.round(ctx.pct * 100)}%${T.reset}   ${T.gray}cache${T.reset} ${cache.text} ${T.lime}${Math.round(cache.pct * 100)}%${T.reset}`;
+    const fmt = (n: number) => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
+    const barsRow = ` ${T.gray}in${T.reset} ${T.cyan}${fmt(state.inTokens)}${T.reset} ${T.gray}out${T.reset} ${T.orange}${fmt(state.outTokens)}${T.reset}  ${ctx.text} ${T.gray}${Math.round(ctx.pct * 100)}%${T.reset}  ${T.gray}cache${T.reset} ${cache.text} ${T.lime}${fmt(state.cacheTokens)}${T.reset}`;
     if (statusRows === 4) {
       rows[s2] = barsRow;
       rows[s3] = statusBarRow2(statusModel, w);
@@ -790,6 +802,14 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
 
   function onKey(buf: Buffer) {
     const s = buf.toString('utf8');
+    // Shift+Tab arrives as CSI Z — intercept before the escape router.
+    if (s.startsWith('\x1b[Z')) {
+      state.autoApprove = !state.autoApprove;
+      (runtime as any).__permPolicy = state.autoApprove ? 'yolo' : 'strict';
+      push('system', state.autoApprove ? '⏵⏵ Auto-approve ENABLED — all permission prompts bypassed.' : 'Auto-approve off — strict permissions restored.');
+      scheduleRender();
+      return;
+    }
     let i = 0;
     // Menu mode: handle navigation keys only.
     if (state.menuActive) {
@@ -842,32 +862,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         i++;
         continue;
       }
-      if (c === '\x1b' && s[i + 1] === '\x1b') {
-        if (state.busy) {
-          state.busy = false;
-          stopSpinner();
-          push('system', 'Stopped.');
-          if (state.menuActive) closeMenu(-1);
-        } else {
-          exit();
-        }
-        scheduleRender();
-        i += 2;
-        continue;
-      }
-      if (c === '\x1b' && s[i + 1] === '\x1b') {
-        if (state.busy) {
-          state.busy = false;
-          stopSpinner();
-          push('system', 'Stopped.');
-          if (state.menuActive) closeMenu(-1);
-        } else {
-          exit();
-        }
-        scheduleRender();
-        i += 2;
-        continue;
-      }
+      // Single ESC: clear input context (not a termination key)
       if (c === '\x1b') {
         const rest = s.slice(i);
         const m = rest.match(/^\x1b\[[0-9]*[A-Za-z~]/);
@@ -876,23 +871,16 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
           i += m[0].length;
           continue;
         }
+        // Double-tap ESC within 400ms: request clean abort (not immediate exit)
+        const now = Date.now();
         if (rest === '\x1b') {
-          const now = Date.now();
-          if (now - lastEscAt < 400) {
-            if (state.busy) {
-              state.busy = false;
-              stopSpinner();
-              push('system', 'Stopped.');
-              if (state.menuActive) closeMenu(-1);
-            } else {
-              exit();
-            }
-          } else {
-            lastEscAt = now;
-            state.input = '';
-            state.cursor = 0;
-            if (state.menuActive) closeMenu(-1);
+          if (now - lastEscAt < 400 && !state.busy) {
+            runtime.abort('User requested exit via double ESC');
           }
+          lastEscAt = now;
+          state.input = '';
+          state.cursor = 0;
+          if (state.menuActive) closeMenu(-1);
           scheduleRender();
           i++;
           continue;
@@ -926,23 +914,13 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         continue;
       }
       if (c === '\t') {
-        // Shift+Tab = \x1b[Z, plain Tab = \t. Cline: Tab toggles Plan/Act,
-        // Shift+Tab toggles auto-approve-all.
-        if (s.startsWith('\x1b[Z')) {
-          state.autoApprove = !state.autoApprove;
-          (runtime as any).__permPolicy = state.autoApprove ? 'yolo' : 'strict';
-          push('system', state.autoApprove ? '⏵⏵ Auto-approve enabled.' : 'Auto-approve off.');
-          i += 3;
+        // Tab: cycle slash autocomplete when open, else toggle Plan/Act.
+        const items = currentDropItems();
+        if (items.length > 1 && state.input.startsWith('/')) {
+          state.dropSelected = (state.dropSelected + 1) % Math.min(items.length, 6);
         } else {
-          const items = currentDropItems();
-          if (items.length > 1 && state.input.startsWith('/')) {
-            // cycle the slash autocomplete first
-            state.dropSelected = (state.dropSelected + 1) % Math.min(items.length, 6);
-          } else {
-            state.uiMode = state.uiMode === 'plan' ? 'act' : 'plan';
-            runtime.config.planMode = state.uiMode === 'plan';
-          }
-          i++;
+          state.uiMode = state.uiMode === 'plan' ? 'act' : 'plan';
+          runtime.config.planMode = state.uiMode === 'plan';
         }
         state.dropActive = currentDropItems().length > 0;
         scheduleRender();
@@ -1012,6 +990,12 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   }
 
   function onRuntimeEvent(event: MochiEvent) {
+    // First real event (model streaming, tools) means startup is done: finish
+    // the splash immediately so it never covers live output.
+    if (state.splashTick < SPLASH_TICKS) {
+      state.splashTick = SPLASH_TICKS;
+      state.splashProgress = 1;
+    }
     // Delegate to the pure, tested reducer (src/tui/state.ts): it maintains
     // the transcript, task tree, current tool, and stop reasons exactly as the
     // tests assert. Non-rendering events return false and skip the redraw.
@@ -1022,11 +1006,13 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     // Keep the status bar's git stats + token meter live.
     const type = String((event as any).type);
     if (type === 'file:changed' || type === 'tool:completed') void refreshGitStats();
-    if (type === 'usage:recorded') {
-      const tokens = Number((event as any).tokensOut ?? 0);
-      const cost = Number((event as any).costUsd ?? 0);
-      if (tokens) state.totalTokens += tokens;
-      if (cost) state.totalCost += cost;
+    if (type === 'usage:updated') {
+      // REAL provider numbers: input (net of cache hits), output, cache reads.
+      state.inTokens = Number((event as any).inputTokens ?? 0);
+      state.outTokens = Number((event as any).outputTokens ?? 0);
+      state.cacheTokens = Number((event as any).cacheTokens ?? 0);
+      state.totalTokens = Number((event as any).totalTokens ?? 0);
+      scheduleRender();
     }
   }
 

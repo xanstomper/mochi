@@ -7,6 +7,7 @@ import type { Workspace } from '../workspace.js';
 import { ContextEngine } from '../context.js';
 import { createProvider } from '../model/router.js';
 import { isMode, modeInstruction } from '../modes.js';
+import { kvCache } from '../kv-cache.js';
 import { executeTool, buildTools } from '../tools/index.js';
 import type { ToolContext, ReadCache } from '../tools/types.js';
 import { detectRepo, languageHint } from '../repo.js';
@@ -453,6 +454,19 @@ export class Agent {
       if (response.usage) {
         this.tokensUsed += response.usage.totalTokens;
         this.budget?.recordTokens(response.usage.totalTokens, this.config.model.model);
+        // Surface REAL provider usage to the TUI: input, output, cache reads.
+        // prompt_tokens already includes cache-hit tokens on most providers;
+        // subtract them for the honest "new input" figure the status bar shows.
+        const u = response.usage as { promptTokens?: number; completionTokens?: number; totalTokens?: number };
+        const cacheRead = kvCache.lastCacheSaved;
+        this.events.emit({
+          type: 'usage:updated' as any,
+          agentId: this.id,
+          inputTokens: Math.max(0, (u.promptTokens ?? 0) - cacheRead),
+          outputTokens: u.completionTokens ?? 0,
+          cacheTokens: cacheRead,
+          totalTokens: u.totalTokens ?? 0,
+        });
       }
       this.lastStrategy = response.toolCalls?.[0]?.function.name ?? response.content?.slice(0, 60) ?? '';
 
@@ -620,7 +634,7 @@ export class Agent {
   private isReadOnly(name: string): boolean {
     // Allowlist of non-mutating tools. Note: MCP resource tools registered as
     // <server>__resources_list/read are read-only by construction.
-    return ['read', 'search', 'glob', 'inspect', 'get_function', 'find_callers', 'type_hierarchy', 'todo', 'skill', 'memory', 'chameleon'].includes(name)
+    return ['read', 'search', 'glob', 'inspect', 'get_function', 'find_callers', 'type_hierarchy', 'todo', 'skill', 'memory', 'chameleon', 'analyze_code', 'perf'].includes(name)
       || /__resources_(list|read)$/.test(name);
   }
 
