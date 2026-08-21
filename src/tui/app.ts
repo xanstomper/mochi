@@ -1,4 +1,5 @@
-import { execFile } from 'node:child_process';
+import { sliceVisibleRange, highlightRange } from './selection.js';
+import { execFile, spawn } from 'node:child_process';
 import { basename, resolve } from 'node:path';
 import { findProjectRoot } from '../repo.js';
 import type { Runtime } from '../runtime.js';
@@ -38,6 +39,8 @@ const HIDE = '\x1b[?25l';
 const SHOW = '\x1b[?25h';
 const ALT_ENTER = '\x1b[?1049h';
 const ALT_EXIT = '\x1b[?1049l';
+const BRACKET_PASTE_ON = '\x1b[?2004h';
+const BRACKET_PASTE_OFF = '\x1b[?2004l';
 const RESET = '\x1b[0m';
 
 type LineKind = 'user' | 'assistant' | 'system' | 'error' | 'tool' | 'task' | 'goal' | 'plain';
@@ -147,6 +150,13 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     /** true while the user has scrolled up away from the bottom (prevents
      *  live events from yanking the view back to the newest line). */
     userScrolled: false,
+    /** mouse text selection (click-drag). Coordinates are terminal (row,col),
+     *  row relative to the transcript area top. */
+    selActive: false,
+    selStart: null as { row: number; col: number } | null,
+    selEnd: null as { row: number; col: number } | null,
+    /** true while receiving a bracketed-paste block. */
+    pasting: false,
   };
 
   let pendingResolver: ((v: string) => void) | undefined;
@@ -157,6 +167,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   let schedulerTimer: NodeJS.Timeout | undefined;
   let renderQueued = false;
   let renderPaused = false;
+  let pasteBuffer = '';
   let lastRenderAt = 0;
   let exited = false;
   let spinnerTimer: NodeJS.Timeout | undefined;
@@ -401,6 +412,119 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     return rows;
   }
 
+  // ---- Mouse text-selection: highlight + copy ----------------------------
+  /** Recompute the same transcript window renderFrame uses, so selection and
+   *  scroll clamping agree with what is actually on screen. */
+  function transcriptGeometry(w: number): { chatMw: number; availableH: number } {
+    const h = height();
+    const statusRows = h >= 20 ? 4 : 3;
+    const composerRows = state.input ? Math.min(6, Math.ceil(state.input.length / Math.max(10, w - 8)) + 2) : 3;
+    const contentH = Math.max(1, h - statusRows - composerRows - 1);
+    const availableH = state.busy ? Math.max(1, contentH - 1) : contentH;
+    const indent = transcriptIndent(w);
+    const chatMw = Math.min(w - indent * 2, Math.max(24, w - 4));
+    return { chatMw, availableH };
+  }
+
+  /** Apply the active selection to one rendered transcript content row. `row`
+   *  is the terminal row index (0-based) within the chat area; `indent` is the
+   *  leading spacing applied at render. Returns the transformed content. */
+  function applySelection(content: string, row: number, indent: number): string {
+    if (!state.selActive || !state.selStart || !state.selEnd) return content;
+    const top = Math.min(state.selStart.row, state.selEnd.row);
+    const bottom = Math.max(state.selStart.row, state.selEnd.row);
+    if (row < top || row > bottom) return content;
+    const left = Math.min(state.selStart.col, state.selEnd.col);
+    const right = Math.max(state.selStart.col, state.selEnd.col);
+    const len = visibleLen(content);
+    const from = row === top ? Math.max(0, left - indent) : 0;
+    const to = row === bottom ? Math.min(len, right - indent) : len;
+    if (to <= from) return content;
+    return highlightRange(content, from, to);
+  }
+
+  /** Extract the visible text inside the current selection (plain, no ANSI). */
+  function selectedText(): string {
+    if (!state.selActive || !state.selStart || !state.selEnd) return '';
+    const w = width();
+    const { chatMw, availableH } = transcriptGeometry(w);
+    const indent = transcriptIndent(w);
+    const chatLines = transcriptLines(chatMw);
+    const windowStart = Math.max(0, chatLines.length - availableH - state.scroll);
+    const top = Math.min(state.selStart.row, state.selEnd.row);
+    const bottom = Math.max(state.selStart.row, state.selEnd.row);
+    const left = Math.min(state.selStart.col, state.selEnd.col);
+    const right = Math.max(state.selStart.col, state.selEnd.col);
+    const lines: string[] = [];
+    for (let r = top; r <= bottom; r++) {
+      const idx = windowStart + r;
+      if (idx < 0 || idx >= chatLines.length) continue;
+      const bare = stripAnsi(chatLines[idx]);
+      const from = r === top ? Math.max(0, left - indent) : 0;
+      const to = r === bottom ? Math.min(bare.length, right - indent) : bare.length;
+      lines.push(from < to ? bare.slice(from, to) : '');
+    }
+    return lines.join('\n');
+  }
+
+  /** Copy a string to the system clipboard: prefer terminal OSC-52 (works over
+   *  ssh/inside any terminal that supports it), then xclip / xsel / wl-copy /
+   *  pbcopy for a real X11/Wayland/macOS clipboard. Best-effort, never throws. */
+  function copyToClipboard(text: string) {
+    if (!text) return;
+    // OSC-52 needs no local tools and survives remote sessions.
+    try {
+      process.stdout.write(`\x1b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\x07`);
+    } catch { /* ignore */ }
+    setImmediate(() => {
+      const feed = (p: ReturnType<typeof spawn> | null) => {
+        if (!p || !p.stdin) return;
+        p.stdin.on('error', () => {});
+        p.stdin.end(Buffer.from(text, 'utf8'));
+      };
+      try {
+        if (process.env.WAYLAND_DISPLAY) {
+          const wl = spawn('wl-copy', ['--type', 'text/plain']);
+          wl.on('error', () => feed(spawn('xsel', ['-ib'])));
+          feed(wl);
+        } else {
+          const xclip = spawn('xclip', ['-selection', 'clipboard']);
+          xclip.on('error', () => feed(spawn('pbcopy')));
+          feed(xclip);
+        }
+      } catch { /* ignore */ }
+    });
+  }
+
+  function beginSelection(row: number, col: number) {
+    state.selStart = { row, col };
+    state.selEnd = { row, col };
+    state.selActive = true;
+    lastFrame = [];
+    scheduleRender();
+  }
+
+  function updateSelection(row: number, col: number) {
+    if (!state.selActive) return;
+    state.selEnd = { row, col };
+    lastFrame = [];
+    scheduleRender();
+  }
+
+  function endSelection() {
+    if (state.selActive) {
+      const t = selectedText();
+      copyToClipboard(t);
+      // keep the highlight visible until the next click/keypress clears it
+    }
+  }
+
+  function clearSelection() {
+    state.selActive = false;
+    state.selStart = null;
+    state.selEnd = null;
+  }
+
   function currentDropItems() {
     const head = state.input.split(' ')[0];
     if (!head.startsWith('/')) return [];
@@ -460,7 +584,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     } else {
       for (let i = 0; i < availableH && i < contentH; i++) {
         const r = i;
-        rows[r] = lead + (visible[i] ?? '');
+        rows[r] = lead + applySelection(visible[i] ?? '', r, indent);
       }
     }
 
@@ -1172,7 +1296,13 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
 
   function pushHelp() {
     const text = COMMANDS.map(c => `${c.name.padEnd(12)} ${c.hint}`).join('\n');
-    push('system', text);
+    const tips =
+      `\nTerminal shortcuts:\n` +
+      `  Drag to select text - release copies to clipboard\n` +
+      `  Wheel or PgUp/PgDn scroll the transcript - Home/End jump to top/bottom\n` +
+      `  Shift+drag for native host selection - Shift+Tab toggles auto-approve\n` +
+      `  Double Esc exits`;
+    push('system', text + tips);
   }
 
   function exit() {
@@ -1187,6 +1317,29 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   function onKey(buf: Buffer) {
     const s = buf.toString('utf8');
     renderPaused = false;
+
+    // Bracketed paste: the terminal wraps pasted text in
+    // \x1b[200~ ... \x1b[201~ (possibly split across many data chunks).
+    if (state.pasting || s.includes('\x1b[200~')) {
+      if (!state.pasting) {
+        state.pasting = true;
+        pasteBuffer = s.replace(/^\x1b\[200~/, '');
+      } else {
+        pasteBuffer += s;
+      }
+      if (pasteBuffer.includes('\x1b[201~')) {
+        state.pasting = false;
+        const text = pasteBuffer.split('\x1b[201~')[0];
+        pasteBuffer = '';
+        state.input = state.input.slice(0, state.cursor) + text + state.input.slice(state.cursor);
+        state.cursor += text.length;
+        state.dropActive = currentDropItems().length > 0;
+        state.dropSelected = 0;
+        clearSelection();
+        scheduleRender();
+      }
+      return;
+    }
 
     if (s.length > 0) {
       if (state.splashTick < SPLASH_TICKS) {
@@ -1236,19 +1389,22 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
           continue;
         }
 
-        if (btn === 64 && isPress) {
-          scrollTranscript(3);
+        if (btn === 64 || btn === 65) {
+          // Wheel: 64 = scroll up, 65 = scroll down.
+          if (isPress) scrollTranscript(btn === 64 ? 3 : -3);
           continue;
-        } else if (btn === 65 && isPress) {
-          scrollTranscript(-3);
-          continue;
-        } else if (btn === 0 && isPress) {
-          process.stdout.write('\x07');
-          state.splashBurst = (state.splashBurst + 1) % 5;
-          state.splashTick += 8;
-          startSpinner();
-          scheduleRender();
-          continue;
+        }
+
+        // Left-button click-drag text selection. Any press starts/extends a
+        // selection; the drag motion updates it; the release (lowercase "m")
+        // finalizes and copies the selected text to the OS clipboard.
+        const col = Number(sgrMouse[2]);
+        if (isPress) {
+          const isMotion = (btn & 32) !== 0;
+          if (isMotion) updateSelection(row - 1, col - 1);
+          else beginSelection(row - 1, col - 1);
+        } else {
+          endSelection();
         }
         continue;
       }
@@ -1410,6 +1566,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         state.cursor += text.length;
         state.dropActive = currentDropItems().length > 0;
         state.dropSelected = 0;
+        clearSelection();
         scheduleRender();
         i = j;
         continue;
@@ -1430,12 +1587,20 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       case '\x1b[B':
         if (state.dropActive) { state.dropSelected = Math.min(currentDropItems().length - 1, state.dropSelected + 1); break; }
         historyNext(); break;
-      case '\x1b[5~': scrollTranscript(10); return;
-      case '\x1b[6~': scrollTranscript(-10); return;
+      case '\x1b[5~': scrollTranscript(scrollPageSize()); clearSelection(); return;
+      case '\x1b[6~': scrollTranscript(-scrollPageSize()); clearSelection(); return;
       case '\x1b[3~': state.input = state.input.slice(0, state.cursor) + state.input.slice(state.cursor + 1); break;
+      case '\x1b[1~': scrollTranscript(Number.MAX_SAFE_INTEGER); clearSelection(); return;
+      case '\x1b[4~': scrollTranscript(-Number.MAX_SAFE_INTEGER); clearSelection(); return;
       default: break;
     }
+    clearSelection();
     scheduleRender();
+  }
+
+  /** Full visible page of transcript rows to scroll with PgUp/PgDn. */
+  function scrollPageSize(): number {
+    return Math.max(1, (state.busy ? Math.max(1, height() - 8 - 1) : height() - 8) - 2);
   }
 
   function historyPrev() {
@@ -1463,9 +1628,9 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
    *  negative scrolls back down. Reaching the bottom clears manual-scroll so
    *  live events auto-follow again. */
   function scrollTranscript(delta: number) {
-    const chatMw = Math.min(width() - transcriptIndent(width()) * 2, Math.max(24, width() - 4));
+    const w = width();
+    const { chatMw, availableH } = transcriptGeometry(w);
     const lines = transcriptLines(chatMw);
-    const availableH = Math.max(1, height() - 8);
     const maxScroll = Math.max(0, lines.length - availableH);
     if (delta > 0) {
       state.scroll = Math.min(maxScroll, state.scroll + delta);
@@ -1506,7 +1671,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   function start() {
     // Enable SGR mouse reporting so the scroll wheel (and future click-to-focus)
     // reach stdin as escape sequences. Disabled again on exit.
-    process.stdout.write(ALT_ENTER + HIDE + '\x1b[?1000h\x1b[?1006h');
+    process.stdout.write(ALT_ENTER + HIDE + '\x1b[?1000h\x1b[?1006h' + BRACKET_PASTE_ON);
     process.stdin.setRawMode?.(true);
     process.stdin.resume();
     const keyListener = (buf: Buffer) => onKey(buf);
@@ -1514,7 +1679,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     const resizeListener = () => scheduleRender();
     process.stdout.on('resize', resizeListener);
     const exitListener = () => {
-      process.stdout.write(`${RESET}${SHOW}${ALT_EXIT}\x1b[?1000l\x1b[?1006l`);
+      process.stdout.write(`${RESET}${SHOW}${ALT_EXIT}\x1b[?1000l\x1b[?1006l` + BRACKET_PASTE_OFF);
     };
     process.on('exit', exitListener);
     runtime.events.onAll(onRuntimeEvent);
