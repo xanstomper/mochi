@@ -1,5 +1,26 @@
 # Mochi Changelog
 
+## 0.10.5
+
+- **Terminal copy / paste / highlight.** Mouse click-drag now selects
+  transcript text (SGR mouse events); releasing copies the selection to the OS
+  clipboard via OSC-52 with xclip/wl-copy/xsel/pbcopy fallbacks, and native
+  Shift+drag still works for host selection. The selected range is highlighted
+  in reverse-video and cleared on the next keypress.
+- **Full scroll to top.** PgUp/PgDn scroll a full visible page and Home/End
+  (`\x1b[1~`/`\x1b[4~`) jump straight to the absolute top or bottom of the
+  transcript.
+- **Bracketed paste.** Enabled on startup so pasted text is folded into the
+  composer even when the terminal splits it across several data chunks.
+- **History path + TUI fixes.** `/history`, `mochi doctor`, and the CLI session
+  store now resolve paths via `findProjectRoot(cwd)` so GoalEngine sessions are
+  recorded where they are written; self-review no longer re-loops/re-streams on
+  terse non-issue verdicts; identical no-tool answers no longer re-stream and
+  spam the transcript; `find_references`/`find_definitions` work without
+  ripgrep; and the GoalEngine brief is recorded as a system message instead of
+  a user turn.
+- **New TUI `/help` tips** document the terminal shortcuts above.
+
 ## 0.10.4
 
 - **ACP editor adapter.** `mochi acp` speaks the Agent Client Protocol v1 over
