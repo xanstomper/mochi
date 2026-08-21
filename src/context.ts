@@ -6,6 +6,7 @@ import { selectRelevant } from './relevance.js';
 import { loadAllSkills, formatSkillsForPrompt } from './skills.js';
 import { classifyTaskKind, kindHint } from './taskkind.js';
 import type { ChatMessage, MochiConfig, RepoInfo, Task, ToolDefinition } from './types.js';
+import { isWeakModel } from './tools/index.js';
 
 const CANDIDATE_RULES = ['MOCHI.md', 'mochi.md', 'AGENTS.md', 'CLAUDE.md'];
 
@@ -151,8 +152,6 @@ export class ContextEngine {
     }
     return this.rulesCache;
   }
-
-import { isWeakModel } from './tools/index.js';
 
   /** Advertise project and bundled skills in the system prompt so the model knows to load
    *  them. Recomputes only when the skills dir fingerprint changes. */
