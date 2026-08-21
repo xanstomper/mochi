@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+// Sync fs/url/path imports at module top (ESM-safe; no require() in output).
+import { readFileSync, statSync, existsSync, readdirSync } from 'node:fs';
+import { dirname, resolve, join as pathJoin } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { MochiConfig } from './types.js';
 
@@ -154,8 +155,61 @@ Environment:
 `);
 }
 
+// Sync fs/url/path imports at module top (ESM-safe; no require() in output).
+function cliDirname(): string {
+  // dist/cli.js → dist/; src/cli.ts → src/. Resolves relative to this file.
+  return dirname(fileURLToPath(import.meta.url));
+}
+
+function srcFileNewer(dir: string, mtime: number): boolean {
+  let stack = [dir];
+  while (stack.length) {
+    const d = stack.pop()!;
+    let entries;
+    try { entries = readdirSync(d, { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      if (e.name === 'node_modules' || e.name === '.' || e.name === '..') continue;
+      const p = pathJoin(d, e.name);
+      if (e.isDirectory()) { stack.push(p); continue; }
+      if (!/\.(ts|json)$/.test(e.name)) continue;
+      try { if (statSync(p).mtimeMs > mtime) return true; } catch {}
+    }
+  }
+  return false;
+}
+
 async function main() {
   const { flags, positional } = parseArgs(process.argv.slice(2));
+  // Dist freshness guard: when running the compiled dist/ tree (the global
+  // `mochi` shim) and src/*.ts is newer than the last build, rebuild once so
+  // the user never runs a stale TUI/harness after pulling changes. The guard
+  // itself lives in dist/cli.js's import of this file only when DIST build;
+  // running from src via tsx/bun skips it (srcFile check fails).
+  try {
+    const rp = resolve;
+    const distHere = rp(cliDirname(), 'tui', 'view.js');
+    if (existsSync(distHere)) {
+      const distMtime = statSync(distHere).mtimeMs;
+      const srcDir = rp(cliDirname(), '..', 'src');
+      const newer = srcFileNewer(srcDir, distMtime);
+      if (newer && !process.env.MOCHI_SKIP_AUTOBUILD) {
+        console.error('\x1b[38;2;163;230;53mmochi\x1b[0m sources changed — rebuilding dist…');
+        const { execFile } = await import('node:child_process');
+        const repoRoot = rp(cliDirname(), '..');
+        // Run the repo-local TypeScript compiler with the current node binary;
+        // no npx (spawn-without-shell can't resolve it from an ESM process).
+        const tscJs = rp(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc');
+        try {
+          await new Promise<void>((res, rej) => {
+            execFile(process.execPath, [tscJs, '-p', 'tsconfig.json'], { cwd: repoRoot, timeout: 180_000 }, (err) => (err ? rej(err) : res()));
+          });
+          console.error('[38;2;163;230;53mmochi[0m dist rebuilt.');
+        } catch (e) {
+          console.error(`[mochi] auto-rebuild failed (${e instanceof Error ? e.message.split('\n')[0] : 'unknown'}); running the previous build`);
+        }
+      }
+    }
+  } catch { /* best-effort freshness guard */ }
   // Resolve the SQLite driver (node:sqlite or bun:sqlite) before any
   // subsystem probes it: sessions, codegraph, and search all check
   // synchronously on first use.
