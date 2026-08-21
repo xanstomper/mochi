@@ -220,6 +220,7 @@ export class Agent {
   private seenPatterns = new Set<string>();
   private hooks: HookManager;
   private toolCallsTotal = 0;
+  private streamLoopNudges = 0;
   private verifyCount = 0;
   private autopsy: Autopsy | undefined;
   private hypotheses: Hypothesis[] = [];
@@ -421,11 +422,36 @@ export class Agent {
         const chunks: import('../types.js').StreamChunk[] = [];
         let inThinkTag = false;
         let streamBuf = '';
+        let looped = false;
+        // Detect pathological streamed repetition: a free/low-tier model can
+        // emit the same boilerplate block (e.g. "## Focus: implementation")
+        // hundreds of times in one response, which floods the transcript and
+        // looks like the agent "spamming". Count repeats of the most frequent
+        // non-trivial WHOLESOME line across ALl received content (independent
+        // of streamBuf, which is drained for think-tag processing) and abort
+        // the gather as soon as the same line clearly repeats.
+        const repCounts = new Map<string, number>();
+        let maxRep = 0;
 
         for await (const chunk of activeProvider.streamChat(messages, this.toolDefs, { temperature: 0.2, signal: this.abortSignal })) {
           chunks.push(chunk);
           if (chunk.content) {
-            streamBuf += chunk.content;
+            const newChunk = chunk.content;
+            streamBuf += newChunk;
+            if (newChunk.length > 0) {
+              for (const raw of newChunk.split('\n')) {
+                const line = raw.trim();
+                if (line.length < 8) continue; // ignore short/empty lines
+                const c = (repCounts.get(line) ?? 0) + 1;
+                repCounts.set(line, c);
+                if (c > maxRep) maxRep = c;
+              }
+            }
+            if (maxRep >= 24) {
+              // High-confidence loop: stop streaming before it floods output.
+              looped = true;
+              break;
+            }
 
             while (streamBuf.length > 0) {
               if (!inThinkTag) {
@@ -497,6 +523,7 @@ export class Agent {
           toolCalls: tool_calls.length ? tool_calls : undefined,
           finishReason: chunks[chunks.length - 1]?.finishReason,
           usage: chunks[chunks.length - 1]?.usage,
+          looped,
         };
       };
 
@@ -532,6 +559,25 @@ export class Agent {
       // Reset empty-response counter on any successful model output.
       if ((response.content && response.content.trim()) || response.toolCalls?.length) {
         this.emptyResponseCount = 0;
+      }
+
+      // Stream-loop guard: the model repeated the same boilerplate block dozens
+      // of times in one response (common with overloaded free-tier models). Stop
+      // flooding the transcript: nudge it once to answer briefly; if it loops
+      // again, fail cleanly instead of spewing hundreds of identical lines.
+      if ((response as any).looped) {
+        this.streamLoopNudges++;
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: '[stream-loop] model repeated the same content; bounding' });
+        if (this.streamLoopNudges >= 2) {
+          return this.finish(task, false, 'The model repeatedly restreamed the same block and could not produce a clean answer. Try again or switch models.', 'model_error');
+        }
+        const summary = (response.content ?? '').split('\n')[0].slice(0, 80);
+        this.context.addMessage({
+          role: 'system',
+          content: 'Your previous response looped and repeated the same boilerplate many times. STOP repeating. Give a single short, direct answer now with no repetition and no tool calls.',
+        });
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: `[stream-loop] truncated: ${summary}` });
+        continue;
       }
       this.lastStrategy = response.toolCalls?.[0]?.function.name ?? response.content?.slice(0, 60) ?? '';
 

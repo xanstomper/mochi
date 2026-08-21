@@ -484,6 +484,35 @@ describe('Agent', () => {
     rmSync(dir, { recursive: true, force: true });
   }, 60_000);
 
+  it('bounds a model that loops and repeats the same boilerplate in one streamed response', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-loop-spam-'));
+    // A pathological free-tier reply: the same boilerplate many times.
+    const line = 'We must focus on implementation until the verified outcome';
+    const spam = Array.from({ length: 30 }, () => line).join('\n');
+    const fake = await startFakeOpenAI([
+      { content: spam, finishReason: 'stop' },
+      { content: 'Done.', finishReason: 'stop', completionTokens: 8 },
+    ]);
+    const config = makeConfig(dir, fake.url);
+    const workspace = new Workspace(dir, '.mochi');
+    workspace.ensure();
+    const context = new ContextEngine(config, dir);
+    context.setGoal('answer');
+    const task = createTask('Answer', 'Give the result.');
+    const bus = new EventBus();
+    const chunks: string[] = [];
+    bus.on('message:chunk', (e: any) => chunks.push(String(e.content)));
+    const agent = new Agent({ id: 'loop-spam', role: 'coder', config, workspace, events: bus, cwd: dir, context });
+    const result = await agent.run(task);
+    expect(result.success).toBe(true);
+    // The 30-line repeat must NOT be emitted to the transcript; only the
+    // follow-up clean answer is streamed (a couple of chunks).
+    expect(chunks.length).toBeLessThan(8);
+    expect(chunks.join('').replace(/\s+/g, ' ')).toContain('Done');
+    await fake.close();
+    rmSync(dir, { recursive: true, force: true });
+  }, 60_000);
+
   it('plan mode fails when the model never produces a plan (nudge budget exhausted)', async () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-plan-giveup-'));
     // The fake replays its last entry forever, so the loop sees preambles on

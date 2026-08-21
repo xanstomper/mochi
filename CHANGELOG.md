@@ -16,6 +16,11 @@
   invocations) now call `process.exit(0)` once output has flushed, instead of
   hanging after the work is done because the event bus / recorder / model
   keep-alive leaves a live handle.
+- **Bounded stream spam.** When a model (often a low/free-tier one) repeats
+  the same boilerplate block dozens of times in a single streamed response,
+  mochi now aborts the stream, tells the model to stop repeating, and fails
+  cleanly after a couple of attempts instead of flooding the transcript with
+  hundreds of identical lines and looping forever.
 - **Full scroll to top.** PgUp/PgDn scroll a full visible page and Home/End
   (`\x1b[1~`/`\x1b[4~`) jump straight to the absolute top or bottom of the
   transcript.
