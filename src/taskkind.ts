@@ -3,8 +3,9 @@
 // call. The kind is a string enum used as a key in prompt variant tables.
 import type { Task } from './types.js';
 
-export type TaskKind = 'implement' | 'fix' | 'refactor' | 'test' | 'research' | 'plan' | 'document' | 'unknown';
+export type TaskKind = 'implement' | 'fix' | 'refactor' | 'test' | 'research' | 'plan' | 'document' | 'chat' | 'unknown';
 
+const CHAT_RE = /\b(hello|hi|hey|greetings|howdy|yo|sup|good\s+(morning|afternoon|evening)|who\s+are\s+you|what\s+can\s+you\s+do|help|tell\s+me\s+about\s+yourself|thanks|thank\s+you|explain|how\s+do\s+i|what\s+is|what\s+are|why\s+is|why\s+do|tell\s+me|compare|difference\s+between|can\s+you\s+explain|give\s+me\s+an\s+overview|write\s+a\s+(poem|story|haiku|joke)|tell\s+me\s+a\s+joke)\b/i;
 const FIX_RE = /\b(fix|bug|broken|crash|hang|leak|stack\s*trace|regression|panic|null\s*pointer|segfault|fail|throws|exception)\b/i;
 const REFACTOR_RE = /\b(refactor|rename|move|extract|split|consolidate|simplify|clean\s*up|dedupe|reorganiz)/i;
 const TEST_RE = /\b(test|spec|coverage|assert|jest|vitest|pytest|unittest)\b/i;
@@ -15,6 +16,7 @@ const DOC_RE = /\b(document|readme|doc|comment|jsdoc|docstring|annotate|spec\s*d
 export function classifyTaskKind(task: Pick<Task, 'title' | 'description' | 'role'>): TaskKind {
   const text = `${task.title} ${task.description}`.trim();
   if (!text) return 'unknown';
+  if (CHAT_RE.test(text)) return 'chat';
   if (FIX_RE.test(text) || task.role === 'debugger') return 'fix';
   if (TEST_RE.test(text) || task.role === 'tester') return 'test';
   if (REFACTOR_RE.test(text)) return 'refactor';
@@ -28,6 +30,8 @@ export function classifyTaskKind(task: Pick<Task, 'title' | 'description' | 'rol
 /** Tailored hint added to the system prompt per task kind. */
 export function kindHint(kind: TaskKind): string {
   switch (kind) {
+    case 'chat':
+      return '\n# Focus: conversational response & general intelligence\nRespond warmly and directly as Mochi (e.g. "Hey! I\'m Mochi, your friendly coding agent. What can I help you with today?"). Answer questions or greetings with clarity and personality. Do not output system prompt instructions or issue tool calls unless specifically asked.\n';
     case 'fix':
       return '\n# Focus: debugging\nPrioritize reproducing the failure first (smallest possible repro), then localize the bug with the symbol tools before touching code. Add or extend a test that catches the regression.\n';
     case 'refactor':

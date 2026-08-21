@@ -61,9 +61,14 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
     case 'message': {
       const role = String(event.role);
       const content = event.content as string | undefined;
-      if (role === 'assistant' && content) pushLine(state, 'assistant', content);
-      else if (role === 'system' && content) pushLine(state, 'system', content);
-      return Boolean(content);
+      if (!content) return false;
+      const last = state.lines[state.lines.length - 1];
+      if (last && last.kind === role && (last.text === content || last.text.endsWith(content))) {
+        return false;
+      }
+      if (role === 'assistant') pushLine(state, 'assistant', content);
+      else if (role === 'system') pushLine(state, 'system', content);
+      return true;
     }
     case 'message:chunk': {
       const content = event.content as string | undefined;
@@ -113,13 +118,6 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
           id: t.id, title: t.title ?? prev?.title ?? '', role: prev?.role ?? 'coder', status: 'done',
           stopReason: event.stopReason as string | undefined,
         });
-      }
-      if (t.output) {
-        const last = state.lines[state.lines.length - 1];
-        const alreadyPresent = last && last.kind === 'assistant' && (last.text.includes(t.output) || t.output.includes(last.text));
-        if (!alreadyPresent) {
-          pushLine(state, 'assistant', `✓ ${t.title}: ${t.output}`);
-        }
       }
       return true;
     }

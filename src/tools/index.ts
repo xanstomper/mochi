@@ -30,7 +30,7 @@ import { analyzeCodeTool } from './analyze-code.js';
 import { verifyTool } from './verify.js';
 import { perfTool } from './perf-tool.js';
 
-const ALL_TOOLS: Tool[] = [
+export const ALL_TOOLS: Tool[] = [
   readTool, writeTool, editTool, deleteTool, shellTool, searchTool, globTool,
   gitTool, inspectTool, memoryTool, todoTool, skillTool, subagentTool, patchTool,
   fetchTool, diffTool, treeTool, regexReplaceTool, deepwikiTool, clipboardTool, sqlCodebaseTool,

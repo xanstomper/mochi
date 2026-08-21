@@ -286,7 +286,8 @@ export class Runtime {
     // Single-agent one-shot task: create task directly without waiting for decompose LLM call.
     const { createTask } = await import('./goals/task.js');
     const goal = await this.goals.createGoal(prompt);
-    const task = createTask(prompt.split('\n')[0].slice(0, 80), prompt, { role: 'coder', acceptanceCriteria: [] });
+    const isChat = /^(hello|hi|hey|greetings|howdy|yo|sup|who\s+are\s+you|what\s+can\s+you\s+do|explain|tell\s+me)\b/i.test(prompt.trim());
+    const task = createTask(prompt.split('\n')[0].slice(0, 80), prompt, { role: isChat ? 'assistant' as any : 'coder', acceptanceCriteria: [] });
     goal.tasks.push(task.id);
     this.workspace.saveGoal(goal);
     this.workspace.saveTasks(goal.id, [task]);

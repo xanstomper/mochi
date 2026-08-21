@@ -12,44 +12,26 @@
 // capped to a comfortable reading width on wide terminals.
 import type { LineKind } from './state.js';
 
-// ---- Palette (harmonized with Cline's dark theme accents) -----------------
+import { THEMES, getTheme, getAllThemes, getCurrentTheme, applyTheme, themeSwatch, type MochiTheme } from './themes.js';
+
+export { THEMES, getTheme, getAllThemes, getCurrentTheme, applyTheme, themeSwatch, type MochiTheme };
+
+// ---- Palette (customizable with 15 handcrafted themes) -------------------
 export const T = {
   reset: '\x1b[0m',
   bold: '\x1b[1m',
   dim: '\x1b[2m',
   italic: '\x1b[3m',
   underline: '\x1b[4m',
-  /** act accent (Cline #79b8ff) */
-  act: '\x1b[38;2;121;184;255m',
-  /** plan accent (Cline #ffea7f) */
-  plan: '\x1b[38;2;255;234;127m',
-  /** success (Cline #99e89b) */
-  success: '\x1b[38;2;153;232;155m',
-  error: '\x1b[38;2;248;81;73m',
-  warning: '\x1b[38;2;240;173;77m',
-  gray: '\x1b[38;2;139;148;158m',
-  grayDark: '\x1b[38;2;72;79;86m',
-  fg: '\x1b[38;2;230;237;243m',
-  /** user message background tint */
-  bgUser: '\x1b[48;2;32;39;49m',
-  /** rule/border color for the input bar */
-  rule: '\x1b[38;2;48;54;61m',
-  /** brand */
-  pink: '\x1b[38;2;255;175;209m',
-  // ---- extended mochi palette -------------------------------------------
-  /** magenta #ff6ec7 — brand-forward accent for headers/tasks */
-  magenta: '\x1b[38;2;255;110;199m',
-  /** violet #c792ea — tool call names */
-  violet: '\x1b[38;2;199;146;234m',
-  /** cyan #56d4dd — streaming tokens */
-  cyan: '\x1b[38;2;86;212;221m',
-  /** lime #a3e635 — cache hits */
-  lime: '\x1b[38;2;163;230;53m',
-  /** orange #ff9e64 — in-flight work */
-  orange: '\x1b[38;2;255;158;100m',
-  /** teal #2dd4bf — plan-mode banner */
-  teal: '\x1b[38;2;45;212;191m',
-} as const;
+  ...getCurrentTheme().colors,
+};
+
+/** Switch active theme dynamically. Updates all color codes in T in place. */
+export function setTheme(themeId: string): MochiTheme {
+  const t = applyTheme(themeId);
+  Object.assign(T, t.colors);
+  return t;
+}
 
 /** Truecolor 24-bit fg helper. */
 export function rgb(r: number, g: number, b: number): string {
@@ -76,16 +58,32 @@ export function visibleLen(s: string): number {
   return stripAnsi(s).length;
 }
 
-/** Truncate with ellipsis on a visible-length budget. */
+/** Truncate with ellipsis on a visible-length budget, preserving ANSI color codes. */
 export function ellipsize(s: string, max: number): string {
-  const plain = stripAnsi(s);
-  if (plain.length <= max) return plain;
-  return plain.slice(0, Math.max(1, max - 1)) + '…';
+  const vis = visibleLen(s);
+  if (vis <= max) return s;
+  let out = '';
+  let visCount = 0;
+  let i = 0;
+  while (i < s.length && visCount < max - 1) {
+    if (s[i] === '\x1b') {
+      const match = s.slice(i).match(/^\x1b\[[0-9;]*m/);
+      if (match) {
+        out += match[0];
+        i += match[0].length;
+        continue;
+      }
+    }
+    out += s[i];
+    visCount++;
+    i++;
+  }
+  return out + '\x1b[0m…';
 }
 
 export function padEnd(s: string, n: number): string {
   const vis = visibleLen(s);
-  if (vis >= n) return stripAnsi(s).slice(0, n); // width safety net, colors dropped
+  if (vis >= n) return ellipsize(s, n);
   return s + ' '.repeat(n - vis);
 }
 
@@ -423,15 +421,14 @@ export function renderDropdown(items: DropdownItem[], selected: number, width: n
 }
 
 // ---- Layout glue -----------------------------------------------------------
-/** Horizontal center offset for the transcript column, Cline-style. */
+/** Left margin padding for the transcript. Fills full width on widescreen without center compression. */
 export function transcriptIndent(termWidth: number): number {
-  const w = Math.min(termWidth, TRANSCRIPT_MAX_WIDTH);
-  return Math.max(0, Math.floor((termWidth - w) / 2));
+  return termWidth > 60 ? 2 : 0;
 }
 
 // ---- Animated mochi splash screen ------------------------------------------
-// Animated dango + gradient ASCII logo with bouncing dango, shimmer sweep,
-// and phase-based loading messages. Runs for ~3s at 80ms/tick.
+// Pulsating wave gradient on MOCHI ASCII logo with dynamic sheen sweep,
+// and real 0% -> 100% loading animation.
 
 const MOCHI_ASCII = [
   '█▀▄▀█ █▀▀█ █▀▀▀ █  █ ▀█▀',
@@ -439,12 +436,17 @@ const MOCHI_ASCII = [
   '▀   ▀ ▀▀▀▀ ▀▀▀▀ ▀  ▀ ▀▀▀',
 ];
 
-const SPLASH_STOPS: Array<[number, number, number]> = [
-  [255, 110, 199], // magenta-pink
-  [199, 146, 234], // violet
-  [86, 212, 221],  // cyan
-  [121, 184, 255], // sky blue
-  [255, 175, 209], // soft pink
+const SPLASH_PALETTES: Array<Array<[number, number, number]>> = [
+  // 0: Classic Mochi (magenta-pink -> violet -> cyan -> sky blue -> soft pink)
+  [[255, 110, 199], [199, 146, 234], [86, 212, 221], [121, 184, 255], [255, 175, 209]],
+  // 1: Golden Sakura (warm amber -> gold -> cherry blossom -> peach)
+  [[255, 180, 80], [255, 215, 0], [255, 105, 180], [255, 160, 200], [255, 220, 130]],
+  // 2: Cyber Neon (electric cyan -> laser lime -> hot magenta -> violet)
+  [[0, 255, 240], [50, 255, 100], [255, 0, 180], [180, 50, 255], [0, 255, 240]],
+  // 3: Aurora Borealis (emerald -> teal -> sky blue -> indigo -> mint)
+  [[0, 230, 150], [0, 200, 230], [80, 140, 255], [160, 100, 255], [0, 240, 180]],
+  // 4: Rainbow Sparkle (flowing rainbow spectrum)
+  [[255, 80, 80], [255, 180, 50], [240, 240, 60], [80, 230, 120], [80, 180, 255], [200, 100, 255]],
 ];
 
 /** Loading progress messages shown under the logo, one per phase. */
@@ -453,14 +455,15 @@ export const SPLASH_PHASES = [
   'loading skills + memory…',
   'indexing code graph…',
   'connecting model provider…',
-  'ready.',
+  'The Dango Is Ready!',
 ] as const;
 
 /** One frame of the animated splash.
- *  - tick: animation frame counter (drives sheen sweep)
- *  - progress: 0..1 real startup progress (drives the loading bar)
+ *  - tick: animation frame counter (drives pulsating wave + sheen sweep)
+ *  - progress: 0..1 real startup progress (drives the loading bar & 0-100% text)
+ *  - burstMode: optional interactive click burst theme index
  */
-export function splashFrame(tick: number, width: number, version: string, progress = 1): string[] {
+export function splashFrame(tick: number, width: number, version: string, progress = 1, burstMode = 0): string[] {
   const logoW = MOCHI_ASCII.reduce((m, l) => Math.max(m, l.length), 0);
   const lines: string[] = [''];
   const center = (s: string, vis?: number) => {
@@ -468,23 +471,36 @@ export function splashFrame(tick: number, width: number, version: string, progre
     return ' '.repeat(Math.max(0, Math.floor((width - v) / 2))) + s;
   };
 
-  // Per-cell gradient sheen: a bright band sweeps left→right across letters.
+  const activeTheme = getCurrentTheme();
+  const stops = burstMode > 0 ? (SPLASH_PALETTES[burstMode % SPLASH_PALETTES.length] ?? activeTheme.splashStops) : activeTheme.splashStops;
+  const pulseSpeed = burstMode > 0 ? 0.35 : 0.25;
+  const waveSpeed = burstMode > 0 ? 0.12 : 0.08;
+
+  // Dynamic pulsating wave: the gradient shifts horizontally with `tick`,
+  // oscillating with a breathing pulse + bright sweep sheen
+  const waveShift = (tick * waveSpeed) % 1;
+  const pulse = 0.5 + 0.5 * Math.sin(tick * pulseSpeed); // 0..1 smooth sinusoidal breathing pulse
   const sheenPos = (tick % (logoW + 16)) - 8;
+
   for (let r = 0; r < MOCHI_ASCII.length; r++) {
     const row = MOCHI_ASCII[r];
     const cells: string[] = [];
     for (let x = 0; x < row.length; x++) {
       const ch = row[x];
       if (ch === ' ') { cells.push(' '); continue; }
-      // Base gradient: interpolate across the stops based on x position
-      const t = x / Math.max(1, logoW - 1);
-      const stopIdx = Math.min(SPLASH_STOPS.length - 2, Math.floor(t * (SPLASH_STOPS.length - 1)));
-      const localT = (t * (SPLASH_STOPS.length - 1)) - stopIdx;
-      const base = lerp(SPLASH_STOPS[stopIdx], SPLASH_STOPS[stopIdx + 1], localT);
-      // Sheen glow: brighten near the sweep position
+      // Interpolate along moving color wave
+      const t = (x / Math.max(1, logoW - 1) + waveShift) % 1;
+      const numStops = stops.length;
+      const scaled = t * (numStops - 1);
+      const si = Math.min(numStops - 2, Math.floor(scaled));
+      const lt = scaled - si;
+      const base = lerp(stops[si], stops[si + 1], lt);
+
+      // Sheen sweep + breathing glow
       const dist = Math.abs(x - sheenPos);
-      const glow = dist <= 5 ? 1 - dist / 5 : 0;
-      const c = lerp(base, [255, 255, 255], glow * 0.9);
+      const glow = dist <= 4 ? 1 - dist / 4 : 0;
+      const brightness = Math.min(1, glow * 0.75 + pulse * 0.25);
+      const c = lerp(base, [255, 255, 255], brightness);
       cells.push(`${rgb(c[0], c[1], c[2])}${T.bold}${ch}${T.reset}`);
     }
     lines.push(center(cells.join(''), row.length));
@@ -496,24 +512,25 @@ export function splashFrame(tick: number, width: number, version: string, progre
   lines.push(center(sub, 32));
   lines.push('');
 
-  // Animated loading bar with gradient/magenta fill + shimmer head
+  // Animated loading bar with gradient fill + shimmer head
   const barW = Math.min(40, Math.max(16, Math.floor(width * 0.35)));
-  const filled = Math.round(Math.max(0, Math.min(1, progress)) * barW);
+  const clampedProg = Math.max(0, Math.min(1, progress));
+  const filled = Math.round(clampedProg * barW);
   const head = filled > 0 && filled < barW && progress < 1 ? (tick % 2 === 0 ? '▓' : '▒') : '';
   const bar =
     `${T.magenta}${'━'.repeat(Math.max(0, filled - (head ? 1 : 0)))}${T.reset}` +
     (head ? `${T.bold}${rgb(255, 255, 255)}${head}${T.reset}` : '') +
-    `${T.grayDark}${'━'.repeat(Math.max(0, barW - filled))}${T.reset}`;
+    `${T.grayDark}${'─'.repeat(Math.max(0, barW - filled))}${T.reset}`;
   lines.push(center(bar, barW));
 
-  // Phase text + percentage
-  const phaseIdx = Math.min(SPLASH_PHASES.length - 1, Math.floor(progress * SPLASH_PHASES.length));
+  // Phase text + animated percentage (0% -> 100%)
+  const phaseIdx = Math.min(SPLASH_PHASES.length - 1, Math.floor(clampedProg * (SPLASH_PHASES.length - 0.01)));
   const phase = SPLASH_PHASES[phaseIdx];
-  const pct = Math.round(Math.max(0, Math.min(1, progress)) * 100);
-  const statusText = progress >= 1
-    ? `${T.lime}✓ ready${T.reset}`
+  const pct = Math.min(100, Math.max(0, Math.round(clampedProg * 100)));
+  const statusText = clampedProg >= 1
+    ? `${T.lime}${T.bold}🍡 The Dango Is Ready!${T.reset}`
     : `${T.gray}${phase}${T.reset}  ${T.pink}${pct}%${T.reset}`;
-  lines.push(center(statusText, progress >= 1 ? 7 : phase.length + 5 + String(pct).length));
+  lines.push(center(statusText, clampedProg >= 1 ? 23 : phase.length + 5 + String(pct).length));
 
   // Version footer
   lines.push('');
@@ -523,6 +540,4 @@ export function splashFrame(tick: number, width: number, version: string, progre
   return lines;
 }
 
-/** Splash duration in ticks (~3.2s at 80ms). The bar reflects REAL startup
- *  milestones passed by the caller via progress. */
-export const SPLASH_TICKS = 40;
+export const SPLASH_TICKS = 30;

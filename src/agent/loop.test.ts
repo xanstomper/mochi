@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from 'no
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { execSync } from 'node:child_process';
-import { Agent, isPlanShaped, sanitizeVerifyCommand } from './loop.js';
+import { Agent, isPlanShaped, sanitizeVerifyCommand, stripThinkTags } from './loop.js';
 import { ContextEngine } from '../context.js';
 import { EventBus } from '../events.js';
 import { Workspace } from '../workspace.js';
@@ -718,4 +718,21 @@ zigSuite('polyglot: zig repo end-to-end', () => {
     await fake.close();
     rmSync(dir, { recursive: true, force: true });
   }, 120_000);
+});
+
+describe('stripThinkTags', () => {
+  it('strips <think>...</think> reasoning blocks', () => {
+    const raw = '<think>\nNo tools needed... think! System prompt says...\n</think>\nHey! I\'m Mochi, your friendly coding agent.';
+    expect(stripThinkTags(raw)).toBe("Hey! I'm Mochi, your friendly coding agent.");
+  });
+
+  it('strips <thought>...</thought> blocks', () => {
+    const raw = '<thought>Internal monologue</thought>Hello world!';
+    expect(stripThinkTags(raw)).toBe('Hello world!');
+  });
+
+  it('handles unclosed trailing think tags', () => {
+    const raw = '<think>Still thinking...';
+    expect(stripThinkTags(raw)).toBe('');
+  });
 });

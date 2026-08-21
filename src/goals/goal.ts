@@ -195,9 +195,18 @@ Return ONLY the JSON array, no markdown.`;
     // fails just yields an empty baseline and today's behavior.
     // Reuse a recent baseline (5-min TTL) so the 2nd+ prompt in a session
     // skips the expensive shell-command capture that freezes the TUI.
+    const allTasks = tasks ?? this.workspace.loadTasks(goal.id);
+    const { classifyTaskKind } = await import('../taskkind.js');
+    const isOnlyChatOrResearch = allTasks.length > 0 && allTasks.every((t) => {
+      const k = classifyTaskKind(t);
+      return k === 'chat' || k === 'research';
+    });
+
     const BASELINE_TTL_MS = 5 * 60 * 1000;
     let baseline: VerificationBaseline | undefined;
-    if (this.baselineCache && Date.now() - this.baselineCache.cachedAt < BASELINE_TTL_MS) {
+    if (isOnlyChatOrResearch) {
+      baseline = undefined;
+    } else if (this.baselineCache && Date.now() - this.baselineCache.cachedAt < BASELINE_TTL_MS) {
       baseline = this.baselineCache.baseline;
     } else {
       this.events.emit({ type: 'agent:log', agentId: 'system', message: 'Capturing verification baseline…' } as any);
@@ -218,7 +227,6 @@ Return ONLY the JSON array, no markdown.`;
     }
     const verifier = new VerifierEngine({ cwd: this.cwd, workspace: this.workspace, config: this.config, events: this.events, budget, baseline });
     this.runBaseline = baseline;
-    const allTasks = tasks ?? this.workspace.loadTasks(goal.id);
     const scheduler = new TaskScheduler(allTasks, this.events);
     const maxConcurrency = this.config.safety.maxConcurrentAgents;
     // Prefer an externally-created signal (user hit Ctrl-C in the CLI or the
@@ -436,7 +444,10 @@ Return ONLY the JSON array, no markdown.`;
       nextAction: task.title,
       completedTasks: this.workspace.loadState().completedTasks,
     });
-    context.addMessage({ role: 'user', content: `Task: ${task.title}\n${task.description}\nAcceptance criteria: ${task.acceptanceCriteria.join('; ')}` });
+    const userPromptContent = task.acceptanceCriteria.length > 0
+      ? `Task: ${task.title}\n${task.description}\nAcceptance criteria: ${task.acceptanceCriteria.join('; ')}`
+      : (task.description || task.title);
+    context.addMessage({ role: 'user', content: userPromptContent });
     // Resumed-goal context: if this goal has prior session history, load the
     // most recent transcript (stored by the same goal id) so the model resumes
     // with the REAL prior conversation, not just the autopsy's terse summary.

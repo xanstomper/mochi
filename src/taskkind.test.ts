@@ -19,6 +19,11 @@ describe('classifyTaskKind', () => {
     expect(classifyTaskKind({ title: 'Design the new schema', description: 'outline tables' })).toBe('plan');
     expect(classifyTaskKind({ title: 'Document the API', description: 'readme updates' })).toBe('document');
   });
+  it('classifies conversational queries as chat', () => {
+    expect(classifyTaskKind({ title: 'hello', description: 'hello' })).toBe('chat');
+    expect(classifyTaskKind({ title: 'hey there', description: 'how are you doing?' })).toBe('chat');
+    expect(classifyTaskKind({ title: 'who are you', description: 'who are you' })).toBe('chat');
+  });
   it('falls back to implement for unknown shapes', () => {
     expect(classifyTaskKind({ title: 'Add export to foo', description: 'export const x' })).toBe('implement');
     expect(classifyTaskKind({ title: '', description: '' })).toBe('unknown');
@@ -32,7 +37,7 @@ describe('classifyTaskKind', () => {
 
 describe('kindHint', () => {
   it('returns a non-empty hint for every kind', () => {
-    for (const k of ['fix', 'refactor', 'test', 'research', 'plan', 'document', 'implement', 'unknown'] as const) {
+    for (const k of ['fix', 'refactor', 'test', 'research', 'plan', 'document', 'implement', 'chat', 'unknown'] as const) {
       const h = kindHint(k);
       expect(h.length).toBeGreaterThan(20);
     }

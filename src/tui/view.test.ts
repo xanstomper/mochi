@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import {
   T,
+  setTheme,
   gradientContextBar,
   gradientCacheBar,
   spinnerColored,
@@ -40,6 +41,10 @@ function baseStatus(over: Partial<Parameters<typeof statusBarRow1>[0]> = {}) {
 }
 
 describe('palette', () => {
+  beforeEach(() => {
+    setTheme('classic');
+  });
+
   it('exposes cline accent colors', () => {
     expect(T.act).toContain('121;184;255'); // #79b8ff
     expect(T.plan).toContain('255;234;127'); // #ffea7f
@@ -204,10 +209,15 @@ describe('text utils', () => {
     expect(visibleLen(`${T.act}abc${T.reset}`)).toBe(3);
   });
 
-  it('ellipsize truncates to budget', () => {
+  it('ellipsize truncates to budget and preserves ANSI color', () => {
     const out = ellipsize('abcdefghij', 5);
     expect(visibleLen(out)).toBe(5);
     expect(out.endsWith('…')).toBe(true);
+
+    const colored = `\x1b[38;2;255;0;0m■■■■\x1b[0m long text that exceeds`;
+    const truncated = ellipsize(colored, 10);
+    expect(truncated).toContain('\x1b[38;2;255;0;0m■■■■');
+    expect(visibleLen(truncated)).toBe(10);
   });
 });
 describe('gradient bars (jcode-style)', () => {
@@ -284,12 +294,9 @@ describe('splash screen', () => {
   });
 
   it('loading bar fills with progress', () => {
-    // Measure the filled segment: glyphs between the magenta start and the
-    // dim empty segment on the bar row.
     const barFilled = (p: number) => {
       const row = splashFrame(0, 100, '1.0.0', p).find((r) => r.includes('━')) ?? '';
-      const m = row.match(/38;2;255;110;199m(━+)/);
-      return m ? m[1].length : 0;
+      return (row.match(/━/g) || []).length;
     };
     expect(barFilled(0.95)).toBeGreaterThan(barFilled(0.1));
     expect(barFilled(1)).toBeGreaterThan(barFilled(0.5));
@@ -301,12 +308,16 @@ describe('splash screen', () => {
     expect(a.join('|')).not.toBe(b.join('|'));
   });
 
-  it('phase list ends at ready', () => {
-    expect(SPLASH_PHASES[SPLASH_PHASES.length - 1]).toBe('ready.');
+  it('phase list ends at The Dango Is Ready!', () => {
+    expect(SPLASH_PHASES[SPLASH_PHASES.length - 1]).toBe('The Dango Is Ready!');
   });
 });
 
 describe('color coordination', () => {
+  beforeEach(() => {
+    setTheme('classic');
+  });
+
   it('edit tools get violet accent, read tools cyan', () => {
     const edit = renderEntry({ kind: 'tool', text: 'write({"path":"a.ts"})' });
     expect(edit[0]).toContain('38;2;199;146;234');

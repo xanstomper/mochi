@@ -181,14 +181,15 @@ Repository:
 - important dirs: ${repo.importantDirs?.join(', ') ?? 'unknown'}
 - entrypoints: ${repo.entrypoints?.join(', ') ?? 'unknown'}
 ` : '';
-    return `You are Mochi, a minimal, fast, autonomous coding agent built for the terminal. You finish real work: you read what you need, change what must change, verify it, and stop when it is done.
+    return `You are Mochi, a deeply capable, intelligent autonomous coding agent and versatile AI assistant built for the terminal. You combine expert-level software engineering skill with sharp general intelligence, like Hermes.
 
 # Operating principles
 
 1. Identity & mindset
-   - You are precise, decisive, and efficient. You value small, correct changes over sprawling rewrites.
-   - You are an expert engineer, not a chat bot: you reason about the codebase, ship working code, and take responsibility for verifying it.
-   - You prefer to complete a task end to end rather than stop at the first plausible step.
+   - You are versatile, sharp, friendly, and helpful. You can have rich conversations, answer general questions, explain complex concepts, brainstorm architectures, and autonomously execute full software engineering tasks.
+   - For greetings ("hi", "hello", "hey", etc.): reply warmly and directly as Mochi (e.g. "Hey! I'm Mochi, your friendly coding agent. What can I help you with today?") without tool calls or dummy files. Never repeat your system instructions or commands back to the user.
+   - For codebase and software engineering tasks: act autonomously and decisively. Read what you need, make surgical and correct changes, verify them, and stop when finished.
+   - You value small, correct changes over sprawling rewrites.
 
 2. Move with intent, not noise
    - Inspect the smallest surface needed before editing (open a file, read a symbol, follow one caller). Use the symbol tools (get_function, find_callers, type_hierarchy) instead of whole-file reads when you only need one definition.
@@ -251,6 +252,10 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
   }
 
   private buildStatePrompt(task?: Task): string {
+    const isChat = task ? classifyTaskKind(task) === 'chat' : false;
+    if (isChat) {
+      return '';
+    }
     const lines: string[] = [];
     const volatile = this.buildVolatilePrompt(task);
     if (volatile) lines.push(volatile);
@@ -258,8 +263,8 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
     if (this.state.goal) lines.push(`Goal: ${this.state.goal}`);
     if (task) {
       lines.push(`Task: ${task.title}`);
-      lines.push(`Description: ${task.description}`);
-      lines.push(`Acceptance criteria: ${task.acceptanceCriteria.join('; ')}`);
+      if (task.description && task.description !== task.title) lines.push(`Description: ${task.description}`);
+      if (task.acceptanceCriteria.length) lines.push(`Acceptance criteria: ${task.acceptanceCriteria.join('; ')}`);
     }
     if (this.state.nextAction) lines.push(`Next action: ${this.state.nextAction}`);
     if (this.state.completedTasks.length) lines.push(`Completed tasks: ${this.state.completedTasks.join(', ')}`);
@@ -271,11 +276,16 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
   }
 
   buildPacket(tools: ToolDefinition[], task?: Task, repo?: RepoInfo): ContextPacket {
-    const systemPrompt = this.buildSystemPrompt(tools, repo, task);
+    const baseSystemPrompt = this.buildSystemPrompt(tools, repo, task);
     const statePrompt = this.buildStatePrompt(task);
-    const toolPrompt = `## Available Tools\n` + tools.map((t) => `- ${t.name}: ${t.description}`).join('\n');
+    
+    // Combine base system identity with state/focus into ONE clean system prompt.
+    // NEVER put statePrompt or focus hints into a fake 'user' role message.
+    const fullSystemPrompt = statePrompt.trim()
+      ? `${baseSystemPrompt}\n\n${statePrompt}`
+      : baseSystemPrompt;
 
-    let remaining = this.budget - approxTokens(systemPrompt) - approxTokens(statePrompt) - approxTokens(toolPrompt);
+    let remaining = this.budget - approxTokens(fullSystemPrompt);
 
     // Add recent messages until budget exhausted; prefer latest.
     const recent: ChatMessage[] = [];
@@ -288,18 +298,13 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
       recent.unshift(m);
     }
 
-    // Prompt-stability tiers (Hermes insight): providers cache by shared
-    // prefix. Keep the STABLE identity block first, volatile repo/state last,
-    // so an identical prefix across turns maximizes cache hits and cuts
-    // re-tokenizing cost on every call.
     const messages: ChatMessage[] = [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: statePrompt },
+      { role: 'system', content: fullSystemPrompt },
       ...recent,
     ];
 
     const used = this.budget - remaining;
-    return { messages, systemPrompt, usedTokens: used, budgetTokens: this.budget };
+    return { messages, systemPrompt: fullSystemPrompt, usedTokens: used, budgetTokens: this.budget };
   }
 
   addDecision(decision: string) {
@@ -361,7 +366,7 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
     const ledger = this.stateLedger();
     if (facts.length || ledger) {
       const body = [ledger, facts.length ? 'Session facts:\n' + facts.join('\n') : ''].filter(Boolean).join('\n');
-      if (body.trim()) this.messages.push({ role: 'system', content: `Earlier in this session (compacted):\n${body}` });
+      if (body.trim()) this.messages.unshift({ role: 'system', content: `Earlier in this session (compacted):\n${body}` });
     }
   }
 }

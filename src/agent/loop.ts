@@ -11,6 +11,7 @@ import { kvCache } from '../kv-cache.js';
 import { executeTool, buildTools } from '../tools/index.js';
 import type { ToolContext, ReadCache } from '../tools/types.js';
 import { detectRepo, languageHint } from '../repo.js';
+import { classifyTaskKind } from '../taskkind.js';
 import { matchesBaseline, type VerificationBaseline } from '../verification.js';
 import { diagnoseFile, renderDiagnostics } from '../diagnostics.js';
 import type { AgentProfile } from '../types.js';
@@ -49,6 +50,17 @@ import { classifyOneShot } from '../one-shot.js';
 import { classifyContentOnly } from '../one-shot.js';
 import { buildMcpTools } from '../mcp/tools.js';
 import { preEditSnapshot as gitPreEditSnapshot, rollbackToSnapshot as gitRollback, type CheckpointResult } from '../git.js';
+import { foldToolResult } from '../core/context-budget.js';
+
+export function stripThinkTags(text: string): string {
+  if (!text) return '';
+  return text
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<thought>[\s\S]*?<\/thought>/gi, '')
+    .replace(/^<think>[\s\S]*$/gi, '')
+    .replace(/^<thought>[\s\S]*$/gi, '')
+    .trim();
+}
 
 /** True if the leading binary of a shell command exists on PATH (or as a
  *  relative ./ wrapper). Used to skip optional repo checks (lint/typecheck/
@@ -265,7 +277,6 @@ export class Agent {
     this.startTime = performance.now();
     this.events.emit({ type: 'task:started', task, agentId: this.id });
     this.context.updateState({ nextAction: `Start task: ${task.title}` });
-    this.context.addMessage({ role: 'system', content: this.profile.systemPrompt });
     // Active execution mode (modeInstruction from modes.ts) is injected here so
     // spec/security/codemod/chaos directives reach the model every turn.
     if (this.config.mode && isMode(this.config.mode)) {
@@ -298,13 +309,16 @@ export class Agent {
       });
     }
 
+    const taskKind = classifyTaskKind(task);
     const repo = detectRepo(this.cwd);
-    const gitStatus = await this.runShell('git status --short');
-    const langHint = languageHint(repo);
-    this.context.addMessage({
-      role: 'system',
-      content: `Preflight: repo=${repo.language ?? 'unknown'}, git status:\n${gitStatus}${langHint ? '\n\n' + langHint : ''}`,
-    });
+    if (taskKind !== 'chat') {
+      const gitStatus = await this.runShell('git status --short');
+      const langHint = languageHint(repo);
+      this.context.addMessage({
+        role: 'system',
+        content: `Preflight: repo=${repo.language ?? 'unknown'}, git status:\n${gitStatus}${langHint ? '\n\n' + langHint : ''}`,
+      });
+    }
 
     const maxIterations = this.config.safety.maxIterations;
     const runtimeLimit = this.config.safety.maxRuntimeMinutes * 60 * 1000;
@@ -319,9 +333,7 @@ export class Agent {
       acceptanceCriteria: task.acceptanceCriteria ?? [],
       verificationCommand: task.verificationCommand,
     });
-    // In plan mode the deliverable is a plan, not a quick answer; the one-shot
-    // "answer now" nudge would contradict the plan-mode instructions.
-    if (oneShot.suggests && !this.planMode) {
+    if (oneShot.suggests && !this.planMode && taskKind !== 'chat') {
       this.context.addMessage({ role: 'system', content: oneShot.suggests });
     }
 
@@ -395,30 +407,75 @@ export class Agent {
         this.context.addMessage({ role: 'system', content: pulse.message });
       }
 
-      const packet = this.context.buildPacket(this.toolDefs, task, repo);
+      const packet = this.context.buildPacket(this.toolDefs, task, taskKind === 'chat' ? undefined : repo);
       // Anti-loop: if it's just gathering context (read/search) without editing, encourage an answer.
       if (this.toolCallsTotal >= 12 && !this.fileChanged && !this.planMode) {
         this.context.addMessage({ role: 'system', content: 'You have gathered sufficient context. Provide your answer directly now without further tool calls.' });
       }
-      this.emitMessage('system', `Tokens used: ${packet.usedTokens}/${packet.budgetTokens}`);
-
       const activeProvider = this.pickProvider();
       let response;
       const gatherStream = async (messages: any) => {
         const chunks: import('../types.js').StreamChunk[] = [];
-        let first = true;
+        let inThinkTag = false;
+        let streamBuf = '';
+
         for await (const chunk of activeProvider.streamChat(messages, this.toolDefs, { temperature: 0.2, signal: this.abortSignal })) {
           chunks.push(chunk);
           if (chunk.content) {
-            if (first) {
-              this.emitMessage('assistant', chunk.content);
-              first = false;
-            } else {
-              this.events.emit({ type: 'message:chunk', content: chunk.content, agentId: this.id } as any);
+            streamBuf += chunk.content;
+
+            while (streamBuf.length > 0) {
+              if (!inThinkTag) {
+                const thinkOpenIdx = streamBuf.indexOf('<think>');
+                const thoughtOpenIdx = streamBuf.indexOf('<thought>');
+                const openIdx = thinkOpenIdx !== -1 && thoughtOpenIdx !== -1
+                  ? Math.min(thinkOpenIdx, thoughtOpenIdx)
+                  : (thinkOpenIdx !== -1 ? thinkOpenIdx : thoughtOpenIdx);
+
+                if (openIdx === -1) {
+                  const partialMatch = streamBuf.match(/<th?(?:i(?:n(?:k)?)?)?$/i);
+                  if (partialMatch) {
+                    const safeChunk = streamBuf.slice(0, streamBuf.length - partialMatch[0].length);
+                    if (safeChunk) {
+                      this.events.emit({ type: 'message:chunk', content: safeChunk, agentId: this.id } as any);
+                    }
+                    streamBuf = partialMatch[0];
+                    break;
+                  } else {
+                    this.events.emit({ type: 'message:chunk', content: streamBuf, agentId: this.id } as any);
+                    streamBuf = '';
+                  }
+                } else {
+                  const pre = streamBuf.slice(0, openIdx);
+                  if (pre) {
+                    this.events.emit({ type: 'message:chunk', content: pre, agentId: this.id } as any);
+                  }
+                  const isThought = openIdx === thoughtOpenIdx;
+                  streamBuf = streamBuf.slice(openIdx + (isThought ? 9 : 7));
+                  inThinkTag = true;
+                  this.events.emit({ type: 'agent:log', agentId: this.id, message: 'Thinking…' } as any);
+                }
+              } else {
+                const thinkCloseIdx = streamBuf.indexOf('</think>');
+                const thoughtCloseIdx = streamBuf.indexOf('</thought>');
+                const closeIdx = thinkCloseIdx !== -1 && thoughtCloseIdx !== -1
+                  ? Math.min(thinkCloseIdx, thoughtCloseIdx)
+                  : (thinkCloseIdx !== -1 ? thinkCloseIdx : thoughtCloseIdx);
+
+                if (closeIdx === -1) {
+                  streamBuf = '';
+                } else {
+                  const isThoughtClose = closeIdx === thoughtCloseIdx;
+                  streamBuf = streamBuf.slice(closeIdx + (isThoughtClose ? 10 : 8));
+                  inThinkTag = false;
+                }
+              }
             }
           }
         }
-        const content = chunks.map((c) => c.content).join('');
+
+        const rawContent = chunks.map((c) => c.content).join('');
+        const content = stripThinkTags(rawContent);
         const callsByIndex = new Map<number, any>();
         for (const chunk of chunks) {
           if (chunk.toolCalls) {
@@ -850,7 +907,8 @@ export class Agent {
       error,
       durationMs,
     };
-    this.context.addMessage({ role: 'tool', tool_call_id: tc.id, content: result.output, name: tc.function.name });
+    const foldedOutput = result.output.length > 6000 ? foldToolResult(result.output, 1500) : result.output;
+    this.context.addMessage({ role: 'tool', tool_call_id: tc.id, content: foldedOutput, name: tc.function.name });
     this.events.emit({ type: 'tool:completed', tool: tc.function.name, result, agentId: this.id });
     await this.hooks.runAfter('after_tool', { tool: tc.function.name });
     if (['edit', 'write', 'delete', 'patch'].includes(tc.function.name)) {
@@ -871,13 +929,48 @@ export class Agent {
     this.trackFileChange(tc.function.name, args, { output: result.output });
   }
   private parseArgs(raw: string): Record<string, unknown> {
-    if (!raw.trim()) return {};
+    if (!raw || !raw.trim()) return {};
+    const trimmed = raw.trim();
+    // 1. Direct parse
     try {
-      return JSON.parse(raw);
-    } catch {
-      // Fallback: treat as string content
-      return { content: raw };
+      const res = JSON.parse(trimmed);
+      if (typeof res === 'object' && res !== null && !Array.isArray(res)) return res as Record<string, unknown>;
+    } catch {}
+
+    // 2. Strip markdown code fence: ```json ... ```
+    const fenceMatch = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+    if (fenceMatch) {
+      try {
+        const res = JSON.parse(fenceMatch[1]);
+        if (typeof res === 'object' && res !== null && !Array.isArray(res)) return res as Record<string, unknown>;
+      } catch {}
     }
+
+    // 3. Extract outermost JSON object { ... }
+    const firstBrace = trimmed.indexOf('{');
+    const lastBrace = trimmed.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+      const slice = trimmed.slice(firstBrace, lastBrace + 1);
+      try {
+        const res = JSON.parse(slice);
+        if (typeof res === 'object' && res !== null && !Array.isArray(res)) return res as Record<string, unknown>;
+      } catch {}
+
+      // 4. Relaxed JSON repair: trailing commas, single quotes, Python booleans
+      try {
+        const relaxed = slice
+          .replace(/,\s*([}\]])/g, '$1')
+          .replace(/'([^'\\]*(?:\\.[^'\\]*)*)'/g, '"$1"')
+          .replace(/\bTrue\b/g, 'true')
+          .replace(/\bFalse\b/g, 'false')
+          .replace(/\bNone\b/g, 'null');
+        const res = JSON.parse(relaxed);
+        if (typeof res === 'object' && res !== null && !Array.isArray(res)) return res as Record<string, unknown>;
+      } catch {}
+    }
+
+    // 5. Fallback
+    return { content: raw, query: raw, command: raw, path: raw };
   }
 
   /** Replace unfilled hints in a verification command (models sometimes write

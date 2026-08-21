@@ -10,6 +10,10 @@ import { kvCache } from '../kv-cache.js';
 import { formatModes } from '../modes.js';
 import {
   T,
+  setTheme,
+  getAllThemes,
+  getCurrentTheme,
+  themeSwatch,
   gradientContextBar,
   gradientCacheBar,
   splashFrame,
@@ -53,53 +57,36 @@ interface TaskView {
 const COMMANDS = [
   { name: '/help', hint: 'Show commands' },
   { name: '/clear', hint: 'Clear transcript' },
-  { name: '/exit', hint: 'Quit' },
-  { name: '/login', hint: 'Set up a model provider' },
-  { name: '/providers', hint: 'List providers' },
-  { name: '/model', hint: 'Show / change model' },
-  { name: '/mode', hint: 'Set execution mode (spec|security|codemod|chaos|normal)' },
-  { name: '/modes', hint: 'List execution modes' },
-  { name: '/plugins', hint: 'List installed plugins' },
-  { name: '/goal', hint: 'Create goal' },
-  { name: '/team', hint: 'Run team mode' },
-  { name: '/plan', hint: 'Plan only' },
+  { name: '/model', hint: 'Select AI model provider & model' },
+  { name: '/theme', hint: 'Select color theme (15 styles)' },
+  { name: '/mode', hint: 'Set execution mode (normal, spec, security, chaos)' },
+  { name: '/providers', hint: 'List connected AI model providers' },
+  { name: '/login', hint: 'Authenticate a model provider API key' },
+  { name: '/plan', hint: 'Plan only without executing changes' },
   { name: '/approve', hint: 'Execute the pending plan' },
-  { name: '/tasks', hint: 'List tasks' },
-  { name: '/status', hint: 'Git status' },
-  { name: '/diff', hint: 'Show diff' },
-  { name: '/changes', hint: 'Changed files' },
-  { name: '/checkpoint', hint: 'Create checkpoint' },
-  { name: '/rollback', hint: 'Roll back' },
-  { name: '/profiles', hint: 'List agent profiles' },
-  { name: '/memory', hint: 'Project memory' },
-  { name: '/inspect', hint: 'Inspect query' },
-  { name: '/sessions', hint: 'List sessions' },
-  { name: '/resume', hint: 'Resume session' },
-  { name: '/export', hint: 'Export session' },
-  { name: '/import', hint: 'Import session' },
-  { name: '/doctor', hint: 'Diagnose setup' },
-  { name: '/usage', hint: 'Usage / cost' },
-  { name: '/known-good', hint: 'Record known-good baseline' },
-  { name: '/check', hint: 'Compare current state to baseline' },
-  { name: '/settings', hint: 'Show settings' },
-  { name: '/run', hint: 'Run shell command' },
-  { name: '/test', hint: 'Run tests' },
-  { name: '/new', hint: 'New session' },
-  { name: '/context', hint: 'Show context budget' },
-  { name: '/init', hint: 'Create MOCHI.md' },
-  { name: '/branch', hint: 'Show branch' },
-  { name: '/commit', hint: 'Create checkpoint commit' },
-  { name: '/undo', hint: 'Restore last checkpoint' },
+  { name: '/goal', hint: 'Create a multi-step objective' },
+  { name: '/tasks', hint: 'List current tasks and statuses' },
+  { name: '/status', hint: 'Show repository git status' },
+  { name: '/diff', hint: 'Show pending git changes' },
+  { name: '/commit', hint: 'Create a checkpoint commit' },
+  { name: '/undo', hint: 'Restore previous checkpoint' },
   { name: '/redo', hint: 'Reapply last checkpoint' },
-  { name: '/stop', hint: 'Stop current task' },
-  { name: '/history', hint: 'Command history' },
-  { name: '/tools', hint: 'List available tools' },
-  { name: '/compact', hint: 'Compact context' },
-  { name: '/yolo', hint: 'Toggle unrestricted (bypass permissions)' },
-  { name: '/dangerously-skip-permissions', hint: 'Alias for /yolo' },
-  { name: '/workspace-safe', hint: 'Auto-approve workspace edits, prompt for shell' },
   { name: '/rewind', hint: 'Rollback to last checkpoint' },
-  { name: '/audit', hint: 'Show recent audit log entries' },
+  { name: '/yolo', hint: 'Toggle auto-approve for all tool actions' },
+  { name: '/workspace-safe', hint: 'Auto-approve edits, prompt for shell' },
+  { name: '/plugins', hint: 'List installed plugins' },
+  { name: '/profiles', hint: 'List specialized agent profiles' },
+  { name: '/memory', hint: 'Show project memory and learned rules' },
+  { name: '/history', hint: 'Interactive session manager & history' },
+  { name: '/rename', hint: 'Rename current conversation session' },
+  { name: '/export', hint: 'Export session transcript to JSON' },
+  { name: '/import', hint: 'Import session transcript' },
+  { name: '/usage', hint: 'Show token usage, costs, and cache hits' },
+  { name: '/doctor', hint: 'Diagnose workspace configuration' },
+  { name: '/init', hint: 'Create project MOCHI.md instructions' },
+  { name: '/new', hint: 'Start a fresh conversation session' },
+  { name: '/stop', hint: 'Interrupt current in-flight task' },
+  { name: '/exit', hint: 'Quit Mochi CLI' },
 ];
 
 const SPINNER = ['◐', '◓', '◑', '◒'];
@@ -109,6 +96,10 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   const projectName = basename(projectRoot);
   const branch = await gitBranch(projectRoot);
   let modelShort = runtime.config.model.model.split('/').pop() ?? runtime.config.model.model;
+
+  // Synchronize saved theme immediately on launch
+  const savedTheme = getCurrentTheme();
+  setTheme(savedTheme.id);
 
   const state = {
     input: '',
@@ -150,6 +141,8 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     /** splash animation tick + real startup progress (0..1) */
     splashTick: 0,
     splashProgress: 0,
+    splashBurst: 0,
+    splashDismissed: false,
     /** true while the user has scrolled up away from the bottom (prevents
      *  live events from yanking the view back to the newest line). */
     userScrolled: false,
@@ -171,13 +164,16 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
    *  so each frame only re-wraps lines whose text changed (the newly appended
    *  tail + the actively-streaming last line) instead of the whole 500-line
    *  transcript. This is the fix for the freeze while the agent works. */
-  let transCache: { text: string; out: string[] }[] = [];
+  let transCache: { text: string; kind: LineKind; out: string[] }[] = [];
   let transMw = 0;
 
   const width = () => process.stdout.columns || 100;
   const height = () => process.stdout.rows || 34;
 
   const push = (kind: LineKind, text: string) => {
+    state.splashDismissed = true;
+    const last = state.lines[state.lines.length - 1];
+    if (last && last.kind === kind && last.text === text) return;
     state.lines.push({ kind, text });
     state.chatVer++;
     if (state.lines.length > state.limit) state.lines.splice(0, state.lines.length - state.limit);
@@ -206,13 +202,18 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       state.spinner = (state.spinner + 1) % 60;
       if (state.splashTick < SPLASH_TICKS) {
         state.splashTick++;
-        // Ease toward done: fast at first, slower near 1; first user prompt
-        // or any runtime event jumps it to full so the splash never blocks.
-        state.splashProgress = Math.min(1, Math.max(state.splashProgress + 0.03, state.splashTick / SPLASH_TICKS));
-        if (state.splashTick >= SPLASH_TICKS) state.splashProgress = 1;
+        state.splashProgress = Math.min(1, state.splashTick / SPLASH_TICKS);
+        if (state.splashTick >= SPLASH_TICKS) {
+          state.splashProgress = 1;
+        }
+      } else {
+        state.splashTick = (state.splashTick + 1) % 60000;
+      }
+      if (state.splashDismissed && !state.busy && state.splashProgress >= 1) {
+        stopSpinner();
       }
       scheduleRender();
-    }, 80);
+    }, 60);
     // Freeze-guard: if something starves event-driven renders for > 800ms,
     // force a redraw so the TUI can never appear frozen mid-task.
     schedulerTimer = setInterval(() => {
@@ -306,11 +307,17 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     // Grow the cache to match lines, copying prior rows, then find the first
     // changed source line and re-wrap everything from there.
     const grow = transCache.length;
-    for (let i = grow; i < state.lines.length; i++) transCache.push({ text: '', out: [] });
+    for (let i = grow; i < state.lines.length; i++) transCache.push({ text: '', kind: 'plain' as LineKind, out: [] });
     let dirty = 0;
-    while (dirty < transCache.length && dirty < state.lines.length && transCache[dirty].text === state.lines[dirty].text) dirty++;
+    while (
+      dirty < transCache.length &&
+      dirty < state.lines.length &&
+      transCache[dirty].text === state.lines[dirty].text &&
+      (transCache[dirty] as any).kind === state.lines[dirty].kind
+    ) dirty++;
     for (let i = dirty; i < state.lines.length; i++) {
       transCache[i].text = state.lines[i].text;
+      (transCache[i] as any).kind = state.lines[i].kind;
       transCache[i].out = wrapLine(state.lines[i], maxWidth);
     }
     transCache.length = state.lines.length;
@@ -327,12 +334,66 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     if (line.kind === 'system' && line.text.startsWith('Tokens used:')) return [];
     const text = prettifyToolCall(line.text) ?? line.text;
     if (!text.trim()) return [];
+    const cleanText = text.replace(/\x1b\[[0-9;]*m/g, '');
     const rows: string[] = [];
-    const entries = renderEntry({ kind: line.kind, text }, false);
-    for (const e of entries) {
-      for (const seg of e.split('\n')) {
-        const wrapped = wrap(seg, Math.max(10, maxWidth));
-        for (const wLine of wrapped) rows.push(wLine);
+
+    switch (line.kind) {
+      case 'user': {
+        const wrapped = wrap(cleanText, Math.max(10, maxWidth - 4));
+        for (let i = 0; i < wrapped.length; i++) {
+          const w = wrapped[i];
+          if (i === 0) rows.push(`${T.magenta}❯${T.reset} ${T.bold}${T.fg}${w}${T.reset}`);
+          else rows.push(`  ${T.bold}${T.fg}${w}${T.reset}`);
+        }
+        break;
+      }
+      case 'assistant': {
+        const wrapped = wrap(cleanText, Math.max(10, maxWidth));
+        for (const w of wrapped) {
+          rows.push(`${T.fg}${w}${T.reset}`);
+        }
+        break;
+      }
+      case 'tool': {
+        const wrapped = wrap(cleanText, Math.max(10, maxWidth - 4));
+        for (let i = 0; i < wrapped.length; i++) {
+          const w = wrapped[i];
+          if (i === 0) rows.push(`${T.violet}◆${T.reset} ${T.grayDark}${w}${T.reset}`);
+          else rows.push(`  ${T.grayDark}${w}${T.reset}`);
+        }
+        break;
+      }
+      case 'error': {
+        const wrapped = wrap(cleanText, Math.max(10, maxWidth - 4));
+        for (let i = 0; i < wrapped.length; i++) {
+          const w = wrapped[i];
+          if (i === 0) rows.push(`${T.error}${T.bold}✗${T.reset} ${T.error}${w}${T.reset}`);
+          else rows.push(`  ${T.error}${w}${T.reset}`);
+        }
+        break;
+      }
+      case 'system': {
+        const wrapped = wrap(cleanText, Math.max(10, maxWidth));
+        for (const w of wrapped) {
+          rows.push(`${T.gray}${w}${T.reset}`);
+        }
+        break;
+      }
+      case 'task': {
+        const wrapped = wrap(cleanText, Math.max(10, maxWidth - 4));
+        for (let i = 0; i < wrapped.length; i++) {
+          const w = wrapped[i];
+          if (i === 0) rows.push(`${T.teal}▸${T.reset} ${T.teal}${w}${T.reset}`);
+          else rows.push(`  ${T.teal}${w}${T.reset}`);
+        }
+        break;
+      }
+      default: {
+        const wrapped = wrap(cleanText, Math.max(10, maxWidth));
+        for (const w of wrapped) {
+          rows.push(`${T.fg}${w}${T.reset}`);
+        }
+        break;
       }
     }
     rows.push('');
@@ -370,9 +431,9 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     const w = width();
     const h = height();
 
-    // 4 status rows when tall (model+toggle, ctx/cache bars, workspace+git,
-    // auto-approve); 3 when short (bars folded away).
-    const statusRows: number = h >= 24 ? 4 : 3;
+    // 4 status rows when terminal height is >= 20 (model+toggle, ctx/cache bars, workspace+git,
+    // auto-approve); 3 when very short (bars folded away).
+    const statusRows: number = h >= 20 ? 4 : 3;
     const composerRows = state.input ? Math.min(6, Math.ceil(state.input.length / Math.max(10, w - 8)) + 2) : 3;
     const bottomRows = composerRows + statusRows;
     const contentH = Math.max(1, h - bottomRows - 1);
@@ -386,10 +447,11 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
 
     const rows: string[] = new Array(h).fill('');
     const lead = ' '.repeat(indent);
-    if (state.splashTick < SPLASH_TICKS) {
+    const showSplash = !state.splashDismissed && state.lines.length === 0;
+    if (showSplash) {
       // Splash with REAL loading progress: providers/skills/graph milestones
       // push splashProgress; the bar fills with them and the sheen animates.
-      const splash = splashFrame(state.splashTick, w, pkg.version, state.splashProgress);
+      const splash = splashFrame(state.splashTick, w, pkg.version, state.splashProgress, state.splashBurst);
       const top = Math.max(0, Math.floor((contentH - splash.length) / 2));
       for (let i = 0; i < splash.length && i < contentH; i++) {
         rows[top + i] = splash[i];
@@ -476,23 +538,60 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     }
     rows[h - 1] = composerBottomRule(w, state.uiMode === 'plan' ? '⏎ send · Tab → act · esc stop' : '⏎ send · Tab → plan · esc stop');
 
-    // ---- centered menu overlay (kept from before) ----
+    // ---- Sleek centered modal menu overlay with scrolling window ----
     if (state.menuActive) {
-      const menuH = Math.min(state.menuItems.length + 4, h - 4);
+      const totalItems = state.menuItems.length;
+      const maxVisibleItems = Math.min(totalItems, Math.max(5, h - 8));
+      const menuH = maxVisibleItems + 3;
       const menuTop = Math.max(1, Math.floor((h - menuH) / 2));
-      const menuW = Math.min(Math.max(50, Math.floor(w * 0.6)), w - 6);
-      const mLeft = Math.floor((w - menuW) / 2);
-      rows[menuTop] = T.rule + '╭' + '─'.repeat(menuW - 2) + '╮' + T.reset;
-      rows[menuTop + 1] = T.rule + '│' + T.reset + ' ' + T.bold + state.menuTitle + T.reset + ' ' + T.grayDark + '↑/↓ · Enter · Esc' + T.reset + ' '.repeat(Math.max(0, menuW - 6 - visibleLen(state.menuTitle) - 18)) + T.rule + '│' + T.reset;
-      for (let mi = 0; mi < menuH - 3 && menuTop + 2 + mi < h - bottomRows; mi++) {
-        const r = menuTop + 2 + mi;
-        const sel = mi === state.menuSelected;
-        const item = state.menuItems[mi] ?? '';
-        const mark = state.menuMark.has(mi);
-        const body = (sel ? T.act + '❯ ' : '  ') + (mark ? T.pink + '● ' : '  ') + (sel ? T.bold : '') + item + T.reset;
-        rows[r] = T.rule + '│' + T.reset + ' ' + body + ' '.repeat(Math.max(0, menuW - 4 - visibleLen(item) - 3)) + T.rule + '│' + T.reset;
+      const menuW = Math.min(Math.max(68, Math.floor(w * 0.76)), w - 4);
+      const mLeft = Math.max(0, Math.floor((w - menuW) / 2));
+      const pad = ' '.repeat(mLeft);
+
+      // Windowed scrolling offset
+      let scrollOffset = 0;
+      if (totalItems > maxVisibleItems) {
+        scrollOffset = Math.max(0, Math.min(totalItems - maxVisibleItems, state.menuSelected - Math.floor(maxVisibleItems / 2)));
       }
-      rows[menuTop + menuH - 1] = T.rule + '╰' + '─'.repeat(menuW - 2) + '╯' + T.reset;
+
+      // Title bar: ╭── Title [count] ──────────────────────────╮
+      const titleText = ` ${state.menuTitle} `;
+      const countBadge = totalItems > 1 ? ` [${state.menuSelected + 1}/${totalItems}] ` : ' ';
+      const ruleWidth = Math.max(0, menuW - 2 - visibleLen(titleText) - visibleLen(countBadge));
+      rows[menuTop] = pad + T.rule + '╭─' + T.reset + T.bold + titleText + T.reset + T.grayDark + countBadge + T.reset + T.rule + '─'.repeat(ruleWidth) + '╮' + T.reset;
+
+      const innerW = menuW - 4;
+      for (let i = 0; i < maxVisibleItems; i++) {
+        const itemIdx = scrollOffset + i;
+        const r = menuTop + 1 + i;
+        if (r >= h) break;
+        const sel = itemIdx === state.menuSelected;
+        const rawItem = state.menuItems[itemIdx] ?? '';
+        const mark = state.menuMark.has(itemIdx);
+
+        const pointer = sel ? `${T.act}${T.bold}❯${T.reset} ` : '  ';
+        const activeDot = mark && !rawItem.includes('[ACTIVE]') ? `${T.lime}● ${T.reset}` : '';
+        const prefix = pointer + activeDot;
+        const availForItem = Math.max(10, innerW - visibleLen(prefix));
+
+        let formattedItem = rawItem;
+        if (visibleLen(rawItem) > availForItem) {
+          formattedItem = ellipsize(rawItem, availForItem);
+        }
+
+        const itemVis = visibleLen(formattedItem);
+        const trail = Math.max(0, availForItem - itemVis);
+        const content = prefix + (sel ? `${T.bold}${T.fg}` : '') + formattedItem + T.reset + ' '.repeat(trail);
+
+        rows[r] = pad + T.rule + '│' + T.reset + ' ' + content + ' ' + T.rule + '│' + T.reset;
+      }
+
+      // Footer bar: ╰── ↑/↓ scroll · ⏎ select · esc cancel ─────╯
+      const footerHint = ' ↑/↓ scroll · ⏎ select · esc cancel ';
+      const footerRule = Math.max(0, menuW - 2 - visibleLen(footerHint));
+      const rLeft = Math.floor(footerRule / 2);
+      const rRight = Math.max(0, footerRule - rLeft);
+      rows[menuTop + 1 + maxVisibleItems] = pad + T.rule + '╰' + '─'.repeat(rLeft) + T.reset + T.grayDark + footerHint + T.reset + T.rule + '─'.repeat(rRight) + '╯' + T.reset;
     }
 
     let out = HIDE;
@@ -535,7 +634,6 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     state.historyIndex = -1;
     state.input = '';
     state.cursor = 0;
-    push('user', line);
 
     if (line === '/exit' || line === '/quit') {
       exit();
@@ -608,7 +706,40 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       }
       return;
     }
-    if (line === '/sessions' || line === '/resume') { await run(async () => listSessions()); return; }
+    if (line === '/theme' || line.startsWith('/theme ') || line === '/themes') {
+      const specific = line.startsWith('/theme ') ? line.slice(7).trim() : '';
+      if (specific) {
+        const t = setTheme(specific);
+        push('system', `Theme switched to ${t.name} — ${t.description}`);
+        scheduleRender();
+      } else {
+        await themeMenu();
+      }
+      return;
+    }
+    if (line === '/history' || line === '/sessions' || line === '/resume') {
+      await historySessionMenu();
+      return;
+    }
+    if (line === '/rename' || line.startsWith('/rename ')) {
+      const specific = line.startsWith('/rename ') ? line.slice(8).trim() : '';
+      const { SessionStore } = await import('../session-store.js');
+      const store = new SessionStore(runtime.workspace.dir);
+      const list = store.list(1);
+      const target = list[0];
+      if (!target) {
+        push('system', 'No saved session found to rename.');
+        scheduleRender();
+        return;
+      }
+      const title = specific || await ask(`New title for session (${target.objective.slice(0, 20)}):`);
+      if (title && title.trim()) {
+        store.rename(target.id, title.trim());
+        push('system', `Session renamed to "${title.trim()}".`);
+        scheduleRender();
+      }
+      return;
+    }
     if (line === '/export') { await exportSession(); return; }
     if (line === '/import') { await importFlow(); return; }
     if (line === '/new' || line === '/clear-all') { state.lines = []; state.tasks.clear(); state.scroll = 0; push('system', 'New session.'); scheduleRender(); return; }
@@ -689,9 +820,9 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       return;
     }
     if (line === '/tools') { push('system', 'read, write, edit, delete, search, glob, shell, git, inspect, memory, get_function, find_callers, type_hierarchy'); return; }
-    if (line === '/history') { await run(async () => state.history.slice(-20).join('\n') || 'No history.'); return; }
 
     // Free-form prompt (already echo:false — agent pushes its own turns via events)
+    push('user', line);
     await run(() => runtime.runPrompt(line), false);
   }
 
@@ -775,41 +906,58 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   }
 
   async function loginFlow() {
-    const idx = await openMenu('Select a provider to login', PROVIDERS.map(p => `${p.id}  ·  ${p.name}`));
+    const activeProvider = runtime.config.model.provider;
+    const providerItems = PROVIDERS.map((p) => {
+      const active = p.id === activeProvider;
+      const badge = active ? `${T.lime}[ACTIVE]${T.reset} ` : '        ';
+      return `${p.name.padEnd(20)}  ${badge}${T.grayDark}${p.id} · ${p.baseUrl}${T.reset}`;
+    });
+    const curIdx = PROVIDERS.findIndex((p) => p.id === activeProvider);
+    state.menuSelected = Math.max(0, curIdx);
+    const idx = await openMenu('Authenticate Model Provider', providerItems);
     if (idx < 0) return;
     const prov = PROVIDERS[idx];
-    // Let them pick a model first (or skip to default).
-    const modelIdx = await openMenu(`Select a model (${prov.name})`, prov.models.map((m) => m), new Set([prov.models.indexOf(prov.defaultModel)]));
+
+    const modelItems = prov.models.map((m) => `${m.padEnd(36)}`);
+    const defIdx = prov.models.indexOf(prov.defaultModel);
+    state.menuSelected = Math.max(0, defIdx >= 0 ? defIdx : 0);
+    const modelIdx = await openMenu(`${prov.name} · Select Default Model`, modelItems);
     const model = modelIdx >= 0 ? prov.models[modelIdx] : prov.defaultModel;
     const envKey = prov.envKey ? process.env[prov.envKey] : undefined;
-    // Reuse an already-stored key for this provider so re-login doesn't force re-entry.
     const storedKey = runtime.config.model.provider === prov.id ? runtime.config.model.apiKey : undefined;
-    const apiKey = envKey || storedKey || await ask(`${prov.name}: API key`);
-    if (!apiKey && prov.envKey) { push('error', `No API key for ${prov.id}. Set $${prov.envKey} or type one.`); return; }
-    if (!apiKey) { push('error', 'No API key provided'); return; }
+    const apiKey = envKey || storedKey || await ask(`${prov.name} API Key:`);
+    if (!apiKey && prov.envKey) { push('error', `No API key for ${prov.id}. Set $${prov.envKey} or enter one.`); return; }
+    if (!apiKey) { push('error', 'No API key provided.'); return; }
     await run(async () => runtime.loginProvider(prov.id, apiKey, model || prov.defaultModel));
   }
 
   async function providerMenu() {
     const activeProvider = runtime.config.model.provider;
-    const mark = new Set(PROVIDERS.map((p, i) => (p.id === activeProvider ? i : -1)).filter((i) => i >= 0));
-    const idx = await openMenu('Providers (select to view)', PROVIDERS.map(p => `${p.id}  ·  ${p.name}${p.id === activeProvider ? '  (active)' : ''}`), mark);
+    const providerItems = PROVIDERS.map((p) => {
+      const active = p.id === activeProvider;
+      const badge = active ? `${T.lime}[ACTIVE]${T.reset} ` : '        ';
+      return `${p.name.padEnd(20)}  ${badge}${T.grayDark}${p.models.length} models · ${p.baseUrl}${T.reset}`;
+    });
+    const curIdx = PROVIDERS.findIndex((p) => p.id === activeProvider);
+    state.menuSelected = Math.max(0, curIdx);
+    const idx = await openMenu('Connected Model Providers', providerItems);
     if (idx < 0) return;
     const p = PROVIDERS[idx];
-    push('system', `${p.name}\nbase: ${p.baseUrl}\nmodels: ${p.models.join(', ') || 'none listed'}`);
+    push('system', `${p.name} (${p.id})\nBase URL: ${p.baseUrl}\nAvailable Models:\n  ${p.models.join('\n  ') || '(none listed)'}`);
     scheduleRender();
   }
 
   async function modelMenu() {
-    // Step 1: select a provider (current one marked)
+    // Step 1: select a provider
     const curProvider = runtime.config.model.provider;
     const providerItems = PROVIDERS.map((p) => {
       const active = p.id === curProvider;
-      return `${p.name}${active ? '  ● active' : ''}  ${T.grayDark}(${p.models.length} models)${T.reset}`;
+      const badge = active ? `${T.lime}[ACTIVE]${T.reset} ` : '        ';
+      return `${p.name.padEnd(20)}  ${badge}${T.grayDark}${p.models.length} models · ${p.baseUrl}${T.reset}`;
     });
     const curIdx = PROVIDERS.findIndex((p) => p.id === curProvider);
     state.menuSelected = Math.max(0, curIdx);
-    const pidx = await openMenu('Select provider', providerItems);
+    const pidx = await openMenu('Select AI Provider', providerItems);
     if (pidx < 0 || pidx >= PROVIDERS.length) return;
     const prov = PROVIDERS[pidx];
 
@@ -817,9 +965,12 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     const activeModel = runtime.config.model.model;
     const modelItems = prov.models.map((m) => {
       const active = prov.id === curProvider && m === activeModel;
-      return `${m}${active ? '  ● active' : ''}`;
+      const badge = active ? `${T.lime}[ACTIVE]${T.reset} ` : '        ';
+      return `${m.padEnd(36)}  ${badge}`;
     });
-    const midx = await openMenu(`${prov.name} · select model`, modelItems);
+    const curModelIdx = prov.models.indexOf(activeModel);
+    state.menuSelected = Math.max(0, curModelIdx >= 0 ? curModelIdx : 0);
+    const midx = await openMenu(`${prov.name} · Select Model`, modelItems);
     if (midx < 0 || midx >= prov.models.length) return;
     const model = prov.models[midx];
 
@@ -831,15 +982,102 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     });
   }
 
-  async function listSessions(): Promise<string> {
-    try {
-      const { readdirSync, existsSync } = await import('node:fs');
-      const dir = runtime.workspace.path('state');
-      if (!existsSync(dir)) return 'No sessions yet.';
-      const files = readdirSync(dir).filter((f) => f.endsWith('.json'));
-      return files.length ? files.join('\n') : 'No sessions yet.';
-    } catch (e) {
-      return 'Error listing sessions: ' + (e instanceof Error ? e.message : String(e));
+  async function themeMenu() {
+    const themes = getAllThemes();
+    const curTheme = getCurrentTheme();
+    const items = themes.map((t) => {
+      const active = t.id === curTheme.id;
+      const swatch = themeSwatch(t);
+      const name = t.name.padEnd(18);
+      const badge = active ? `${T.lime}[ACTIVE]${T.reset} ` : '        ';
+      return `${swatch}  ${name}  ${badge}${T.grayDark}· ${t.description}${T.reset}`;
+    });
+    const curIdx = themes.findIndex((t) => t.id === curTheme.id);
+    state.menuSelected = Math.max(0, curIdx);
+    const idx = await openMenu('Select Color Theme (15 Styles)', items);
+    if (idx < 0 || idx >= themes.length) return;
+    const chosen = themes[idx];
+    setTheme(chosen.id);
+    push('system', `Theme switched to ${chosen.name} — ${chosen.description}`);
+    scheduleRender();
+  }
+
+  function formatTimeAgo(ts: number): string {
+    const diff = Math.max(0, Date.now() - ts);
+    const secs = Math.floor(diff / 1000);
+    if (secs < 60) return `${secs}s ago`;
+    const mins = Math.floor(secs / 60);
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.floor(hrs / 24);
+    return `${days}d ago`;
+  }
+
+  async function historySessionMenu() {
+    const { SessionStore } = await import('../session-store.js');
+    const store = new SessionStore(runtime.workspace.dir);
+    const sessions = store.list(40);
+
+    const items: string[] = [
+      `${T.lime}✚ Start New Session${T.reset}`,
+    ];
+
+    for (let i = 0; i < sessions.length; i++) {
+      const s = sessions[i];
+      const msgs = store.messages(s.id);
+      const msgCount = `${msgs.length} msgs`.padEnd(9);
+      const timeAgo = formatTimeAgo(s.updatedAt);
+      const title = (s.objective || s.summary || `Session ${i + 1}`).slice(0, 36);
+      items.push(`${title.padEnd(38)}  ${T.grayDark}${msgCount} · ${timeAgo}${T.reset}`);
+    }
+
+    state.menuSelected = 0;
+    const idx = await openMenu('Conversation History & Sessions', items);
+    if (idx < 0) return;
+
+    if (idx === 0) {
+      state.lines = [];
+      state.tasks.clear();
+      state.scroll = 0;
+      push('system', 'Started a fresh session.');
+      scheduleRender();
+      return;
+    }
+
+    const chosen = sessions[idx - 1];
+    if (!chosen) return;
+
+    // Submenu for chosen session: Switch, Rename, Delete
+    const subActions = [
+      `▶  Switch to this Session`,
+      `✏  Rename Session ("${(chosen.objective || 'Session').slice(0, 20)}")`,
+      `✗  Delete Session`,
+    ];
+    const actIdx = await openMenu(`Manage: ${(chosen.objective || 'Session').slice(0, 30)}`, subActions);
+    if (actIdx === 0) {
+      const msgs = store.messages(chosen.id);
+      state.lines = [];
+      state.tasks.clear();
+      state.scroll = 0;
+      for (const m of msgs) {
+        if (m.role === 'user') push('user', m.content);
+        else if (m.role === 'assistant') push('assistant', m.content);
+        else if (m.role === 'system') push('system', m.content);
+      }
+      push('system', `Switched to session "${chosen.objective || 'Session'}" (${msgs.length} messages).`);
+      scheduleRender();
+    } else if (actIdx === 1) {
+      const newTitle = await ask(`New title for session:`);
+      if (newTitle && newTitle.trim()) {
+        store.rename(chosen.id, newTitle.trim());
+        push('system', `Session renamed to "${newTitle.trim()}".`);
+        scheduleRender();
+      }
+    } else if (actIdx === 2) {
+      store.delete(chosen.id);
+      push('system', `Deleted session "${chosen.objective || 'Session'}".`);
+      scheduleRender();
     }
   }
 
@@ -891,44 +1129,106 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
 
   function onKey(buf: Buffer) {
     const s = buf.toString('utf8');
-    // Real user input always re-arms rendering so a caught render error can't
-    // permanently leave the UI dark.
-    if (s.length > 0) renderPaused = false;
-    // Mouse wheel (SGR protocol): CSI < 64 ; row ; col M = scroll up,
-    // CSI < 65 ; row ; col M = scroll down. Only active when mouse tracking
-    // is enabled (see start()). Intercept before the generic escape router.
-    const wheel = s.match(/^\x1b\[<(\d+);\d+;\d+[Mm]$/);
-    if (wheel) {
-      scrollTranscript(Number(wheel[1]) === 64 ? 3 : -3);
-      return;
+    renderPaused = false;
+
+    if (s.length > 0) {
+      if (state.splashTick < SPLASH_TICKS) {
+        state.splashTick = SPLASH_TICKS;
+        state.splashProgress = 1;
+      }
     }
-    // Shift+Tab arrives as CSI Z — intercept before the escape router.
-    if (s.startsWith('\x1b[Z')) {
-      state.autoApprove = !state.autoApprove;
-      (runtime as any).__permPolicy = state.autoApprove ? 'yolo' : 'strict';
-      push('system', state.autoApprove ? '⏵⏵ Auto-approve ENABLED — all permission prompts bypassed.' : 'Auto-approve off — strict permissions restored.');
-      scheduleRender();
-      return;
-    }
+
     let i = 0;
-    // Menu mode: handle navigation keys only.
-    if (state.menuActive) {
-      if (s === '\x1b[A') { state.menuSelected = Math.max(0, state.menuSelected - 1); scheduleRender(); return; }
-      if (s === '\x1b[B') { state.menuSelected = Math.min(state.menuItems.length - 1, state.menuSelected + 1); scheduleRender(); return; }
-      if (s === '\x1b[C' || s === '\x1b[D') { scheduleRender(); return; }
-      if (s === '\r' || s === '\n') { const idx = state.menuSelected; closeMenu(idx); return; }
-      if (s === '\x1b') { closeMenu(-1); return; }
-      if (s === '\x1b[5~') { scheduleRender(); return; }
-      if (s === '\x1b[6~') { scheduleRender(); return; }
-      const n = parseInt(s, 10);
-      if (!Number.isNaN(n) && n >= 0 && n < state.menuItems.length) { state.menuSelected = n; scheduleRender(); return; }
-      return;
-    }
     while (i < s.length) {
+      const rest = s.slice(i);
+
+      // 1. SGR Mouse protocol: CSI < btn ; col ; row (M|m)
+      const sgrMouse = rest.match(/^\x1b\[<(\d+);(\d+);(\d+)([Mm])/);
+      if (sgrMouse) {
+        i += sgrMouse[0].length;
+        const btn = Number(sgrMouse[1]);
+        const row = Number(sgrMouse[3]);
+        const isPress = sgrMouse[4] === 'M';
+
+        if (state.menuActive) {
+          if (btn === 64 && isPress) {
+            state.menuSelected = Math.max(0, state.menuSelected - 1);
+            lastFrame = [];
+            scheduleRender();
+          } else if (btn === 65 && isPress) {
+            state.menuSelected = Math.min(state.menuItems.length - 1, state.menuSelected + 1);
+            lastFrame = [];
+            scheduleRender();
+          } else if (btn === 0 && isPress) {
+            const maxVisible = Math.min(state.menuItems.length, Math.max(5, height() - 8));
+            const menuH = maxVisible + 3;
+            const menuTop = Math.max(1, Math.floor((height() - menuH) / 2));
+            let scrollOffset = 0;
+            if (state.menuItems.length > maxVisible) {
+              scrollOffset = Math.max(0, Math.min(state.menuItems.length - maxVisible, state.menuSelected - Math.floor(maxVisible / 2)));
+            }
+            const clickedRow = row - 1;
+            const itemOffset = clickedRow - (menuTop + 1);
+            if (itemOffset >= 0 && itemOffset < maxVisible) {
+              const targetIdx = scrollOffset + itemOffset;
+              if (targetIdx >= 0 && targetIdx < state.menuItems.length) {
+                closeMenu(targetIdx);
+              }
+            }
+          }
+          continue;
+        }
+
+        if (btn === 64 && isPress) {
+          scrollTranscript(3);
+          continue;
+        } else if (btn === 65 && isPress) {
+          scrollTranscript(-3);
+          continue;
+        } else if (btn === 0 && isPress) {
+          process.stdout.write('\x07');
+          state.splashBurst = (state.splashBurst + 1) % 5;
+          state.splashTick += 8;
+          startSpinner();
+          scheduleRender();
+          continue;
+        }
+        continue;
+      }
+
+      // 2. X10 Mouse: \x1b[M... (3 trailing bytes)
+      if (rest.startsWith('\x1b[M') && rest.length >= 6) {
+        i += 6;
+        continue;
+      }
+
+      // 3. Shift+Tab: CSI Z
+      if (rest.startsWith('\x1b[Z')) {
+        i += 3;
+        state.autoApprove = !state.autoApprove;
+        (runtime as any).__permPolicy = state.autoApprove ? 'yolo' : 'strict';
+        push('system', state.autoApprove ? '⏵⏵ Auto-approve ENABLED — all permission prompts bypassed.' : 'Auto-approve off — strict permissions restored.');
+        scheduleRender();
+        continue;
+      }
+
+      // 4. Menu mode navigation
+      if (state.menuActive) {
+        if (rest.startsWith('\x1b[A')) { i += 3; state.menuSelected = Math.max(0, state.menuSelected - 1); lastFrame = []; scheduleRender(); continue; }
+        if (rest.startsWith('\x1b[B')) { i += 3; state.menuSelected = Math.min(state.menuItems.length - 1, state.menuSelected + 1); lastFrame = []; scheduleRender(); continue; }
+        if (rest.startsWith('\x1b[C') || rest.startsWith('\x1b[D')) { i += 3; scheduleRender(); continue; }
+        if (rest.startsWith('\x1b[5~') || rest.startsWith('\x1b[6~')) { i += 4; scheduleRender(); continue; }
+        const ch0 = s[i];
+        if (ch0 === '\r' || ch0 === '\n') { i++; const idx = state.menuSelected; closeMenu(idx); continue; }
+        if (ch0 === '\x1b') { i++; closeMenu(-1); continue; }
+        const n = parseInt(ch0, 10);
+        if (!Number.isNaN(n) && n >= 0 && n < state.menuItems.length) { i++; state.menuSelected = n; lastFrame = []; scheduleRender(); continue; }
+        i++;
+        continue;
+      }
+
       const c = s[i];
       if (c === '\r' || c === '\n') {
-        // Dropdown active: Enter completes the selected slash command — unless
-        // the input already IS that exact command, in which case run it.
         if (state.dropActive) {
           const items = currentDropItems();
           const pick = items[Math.min(state.dropSelected, items.length - 1)];
@@ -962,16 +1262,20 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         i++;
         continue;
       }
-      // Single ESC: clear input context (not a termination key)
+
+      // Escape sequence router
       if (c === '\x1b') {
-        const rest = s.slice(i);
-        const m = rest.match(/^\x1b\[[0-9]*[A-Za-z~]/);
-        if (m) {
-          handleEscape(m[0]);
-          i += m[0].length;
+        const csi = rest.match(/^\x1b\[[0-9;?<=]*[A-Za-z~]/);
+        if (csi) {
+          handleEscape(csi[0]);
+          i += csi[0].length;
           continue;
         }
-        // Double-tap ESC within 400ms: request clean abort (not immediate exit)
+        const osc = rest.match(/^\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/);
+        if (osc) {
+          i += osc[0].length;
+          continue;
+        }
         const now = Date.now();
         if (rest === '\x1b') {
           if (now - lastEscAt < 400 && !state.busy) {
@@ -985,9 +1289,14 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
           i++;
           continue;
         }
+        if (rest.length >= 2) {
+          i += 2;
+          continue;
+        }
         i++;
         continue;
       }
+
       if (c === '\u0003') {
         if (state.input.length > 0) {
           state.input = '';
@@ -999,11 +1308,13 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         i++;
         continue;
       }
+
       if (c === '\u0004') {
         exit();
         i++;
         continue;
       }
+
       if (c === '\u007f' || c === '\b') {
         if (state.cursor > 0) {
           state.input = state.input.slice(0, state.cursor - 1) + state.input.slice(state.cursor);
@@ -1013,8 +1324,8 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         i++;
         continue;
       }
+
       if (c === '\t') {
-        // Tab: cycle slash autocomplete when open, else toggle Plan/Act.
         const items = currentDropItems();
         if (items.length > 1 && state.input.startsWith('/')) {
           state.dropSelected = (state.dropSelected + 1) % Math.min(items.length, 6);
@@ -1024,9 +1335,11 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         }
         state.dropActive = currentDropItems().length > 0;
         scheduleRender();
+        i++;
         continue;
       }
-      // Accumulate a printable run.
+
+      // Accumulate standard printable characters (>= ' ')
       let j = i;
       while (j < s.length) {
         const ch = s[j];
@@ -1093,16 +1406,18 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
    *  negative scrolls back down. Reaching the bottom clears manual-scroll so
    *  live events auto-follow again. */
   function scrollTranscript(delta: number) {
-    const maxScroll = Math.max(0, state.lines.length);
-    // Up (delta > 0): scroll deeper into history, enter manual mode.
+    const chatMw = Math.min(width() - transcriptIndent(width()) * 2, Math.max(24, width() - 4));
+    const lines = transcriptLines(chatMw);
+    const availableH = Math.max(1, height() - 8);
+    const maxScroll = Math.max(0, lines.length - availableH);
     if (delta > 0) {
       state.scroll = Math.min(maxScroll, state.scroll + delta);
       if (state.scroll > 0) state.userScrolled = true;
     } else {
-      // Down (delta < 0): closer to bottom; exit manual mode at the newest line.
       state.scroll = Math.max(0, state.scroll + delta);
       if (state.scroll <= 0) state.userScrolled = false;
     }
+    lastFrame = [];
     scheduleRender();
   }
 
@@ -1152,6 +1467,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       () => process.stdout.off('resize', resizeListener),
       () => process.off('exit', exitListener),
     ];
+    startSpinner();
     scheduleRender();
     if (initialPrompt) {
       push('user', initialPrompt);

@@ -159,6 +159,19 @@ export class SessionStore {
     if (!this.available) return;
     this.db.prepare("UPDATE sessions SET status='completed', updated_at=? WHERE id=?").run(Date.now(), id);
   }
+
+  rename(id: string, objective: string): void {
+    if (!this.available) return;
+    this.db.prepare('UPDATE sessions SET objective=?, updated_at=? WHERE id=?').run(objective, Date.now(), id);
+  }
+
+  delete(id: string): void {
+    if (!this.available) return;
+    try {
+      this.db.prepare('DELETE FROM session_messages WHERE session_id=?').run(id);
+      this.db.prepare('DELETE FROM sessions WHERE id=?').run(id);
+    } catch {}
+  }
 }
 
 
