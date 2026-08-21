@@ -166,7 +166,12 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   let exited = false;
   let spinnerTimer: NodeJS.Timeout | undefined;
   let cleanupFns: Array<() => void> = [];
-  let chatCache: { ver: number; mw: number; lines: string[] } | null = null;
+  /** Incremental transcript cache: stores the wrapped output per source line,
+   *  so each frame only re-wraps lines whose text changed (the newly appended
+   *  tail + the actively-streaming last line) instead of the whole 500-line
+   *  transcript. This is the fix for the freeze while the agent works. */
+  let transCache: { text: string; out: string[] }[] = [];
+  let transMw = 0;
 
   const width = () => process.stdout.columns || 100;
   const height = () => process.stdout.rows || 34;
@@ -283,24 +288,47 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   }
 
   function transcriptLines(maxWidth: number): string[] {
-    const out: string[] = [];
-    for (const line of state.lines) {
-      if (line.kind === 'goal') continue;
-      if (line.kind === 'system' && line.text.startsWith('Tokens used:')) continue;
-      const text = prettifyToolCall(line.text) ?? line.text;
-      if (!text.trim()) continue;
-      const entries = renderEntry({ kind: line.kind, text }, false);
-      for (const e of entries) {
-        // wrap() measures visible length, so ANSI colors survive wrapping.
-        const segs = e.split('\n');
-        for (const seg of segs) {
-          const wrapped = wrap(seg, Math.max(10, maxWidth));
-          for (const wLine of wrapped) out.push(wLine);
-        }
-      }
-      out.push('');
+    // Scale the cache on resize or when the source shrank; otherwise keep the
+    // wrapped rows and only re-wrap whatever changed (appended lines and the
+    // actively-streaming last line), avoiding O(n) transcript rebuilds per frame.
+    if (transMw !== maxWidth || transCache.length > state.lines.length) {
+      transCache = [];
+      transMw = maxWidth;
     }
-    return out;
+    // Grow the cache to match lines, copying prior rows, then find the first
+    // changed source line and re-wrap everything from there.
+    const grow = transCache.length;
+    for (let i = grow; i < state.lines.length; i++) transCache.push({ text: '', out: [] });
+    let dirty = 0;
+    while (dirty < transCache.length && dirty < state.lines.length && transCache[dirty].text === state.lines[dirty].text) dirty++;
+    for (let i = dirty; i < state.lines.length; i++) {
+      transCache[i].text = state.lines[i].text;
+      transCache[i].out = wrapLine(state.lines[i], maxWidth);
+    }
+    transCache.length = state.lines.length;
+    const outLines: string[] = [];
+    for (const row of transCache) {
+      for (const l of row.out) outLines.push(l);
+    }
+    return outLines;
+  }
+
+  /** Wrap a single transcript line into rendered, wrapped output rows. */
+  function wrapLine(line: Line, maxWidth: number): string[] {
+    if (line.kind === 'goal') return [];
+    if (line.kind === 'system' && line.text.startsWith('Tokens used:')) return [];
+    const text = prettifyToolCall(line.text) ?? line.text;
+    if (!text.trim()) return [];
+    const rows: string[] = [];
+    const entries = renderEntry({ kind: line.kind, text }, false);
+    for (const e of entries) {
+      for (const seg of e.split('\n')) {
+        const wrapped = wrap(seg, Math.max(10, maxWidth));
+        for (const wLine of wrapped) rows.push(wLine);
+      }
+    }
+    rows.push('');
+    return rows;
   }
 
   function currentDropItems() {
@@ -339,10 +367,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     const indent = transcriptIndent(w);
     const chatMw = Math.min(w - indent * 2, Math.max(24, w - 4));
 
-    if (!chatCache || chatCache.ver !== state.chatVer || chatCache.mw !== chatMw) {
-      chatCache = { ver: state.chatVer, mw: chatMw, lines: transcriptLines(chatMw) };
-    }
-    const chatLines = chatCache.lines;
+    const chatLines = transcriptLines(chatMw);
     const visible = chatLines.slice(Math.max(0, chatLines.length - contentH - state.scroll), Math.max(0, chatLines.length - state.scroll));
 
     const rows: string[] = new Array(h).fill('');

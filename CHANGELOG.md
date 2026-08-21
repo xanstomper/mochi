@@ -33,6 +33,13 @@
   instead of live events yanking it back to the bottom. `git diff` stats in the
   status bar are throttled so heavy tool work no longer stutters or freezes the
   UI loop.
+- **TUI freeze fix.** The transcript render is now incremental: each frame only
+  re-wraps the lines that actually changed (the appended tail and the streaming
+  last line) instead of rebuilding the whole transcript O(n) per streamed token.
+  Combined with coalescing renders via a macrotask (instead of draining
+  microtasks synchronously), the spinner and UI stay responsive while the agent
+  explores code and runs tools. Render frames are guarded with a try/catch so a
+  single bad frame logs and recovers instead of permanently freezing the UI.
 - **`mochi daemon restart`.** Stop + start a fresh daemon on the same
   port/token. Cron jobs, sessions, and goal state persist across restarts
   (`.mochi/cron.json` plus the SQLite session store).
