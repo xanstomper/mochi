@@ -1275,7 +1275,19 @@ export class Agent {
       const response = await this.provider.chat(reviewMsg, [], { signal: this.abortSignal });
       const text = (response.content ?? '').trim();
       const tail = text.slice(0, 200);
-      if (/^NO_ISSUE$/i.test(text) || /no issue|cannot identify|looks (correct|good|fine)/i.test(text)) {
+      // A review only counts as a real problem when it actually cites a
+      // concrete defect. Cheap/neutral replies (the model echoing something
+      // terse like "done", "ok", "looks clean", or a review that never names a
+      // file) must NOT be treated as a blocking issue — doing so re-loops the
+      // agent through gatherStream and re-streams the same answer to the TUI
+      // ("spams the same message") until the self-review cap trips.
+      const mentionsFile = /\b[\w./-]+\.[a-zA-Z0-9]+:\d+/.test(text) || /\b(?:file|line|in)\b/.test(text);
+      const neutralNoIssue =
+        /^NO_ISSUE$/i.test(text) ||
+        /no issue|cannot identify|looks (correct|good|fine)|all good/i.test(text) ||
+        // terse affirmative/no-op verdicts with no cited location/problem
+        (!mentionsFile && (/^(done|ok|okay|clean|nothing|no problems|no problem|fine|lgtm)\b/i.test(text) || text.length < 40));
+      if (neutralNoIssue) {
         return { tail };
       }
       return { issue: text.slice(0, 800), tail };

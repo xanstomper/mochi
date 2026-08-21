@@ -444,6 +444,46 @@ describe('Agent', () => {
     rmSync(dir, { recursive: true, force: true });
   }, 60_000);
 
+  it('does not re-loop / re-stream when self-review returns a terse non-issue verdict', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-review-terse-'));
+    execSync('git init -q && git config user.email t@t && git config user.name t && git commit -q --allow-empty -m init', { cwd: dir, shell: '/bin/sh' });
+    writeFileSync(resolve(dir, 'lib.ts'), 'export const answer = 42;\n');
+    execSync('git add -A && git commit -qm base', { cwd: dir });
+    const writeCall = (id: string, path: string, content: string) => ({
+      id, type: 'function' as const,
+      function: { name: 'write', arguments: JSON.stringify({ path, content }) },
+    });
+    const fake = await startFakeOpenAI([
+      // 1: write a real change.
+      { content: 'Editing.', toolCalls: [writeCall('1', resolve(dir, 'lib.ts'), 'export const answer = 42;\nexport const extra = 1;\n')], finishReason: 'tool_calls' },
+      // 2: claim done -> verify (trivial) -> self-review is called.
+      { content: 'Done.', finishReason: 'stop' },
+      // 3: the REVIEW answer is terse and cites no file. It MUST be read as
+      //    "no issue", not as a blocking problem, or the agent re-loops and
+      //    keeps streaming "done" (the "spams the same message" bug).
+      { content: 'done', finishReason: 'stop' },
+    ]);
+    const config = makeConfig(dir, fake.url);
+    const workspace = new Workspace(dir, '.mochi');
+    workspace.ensure();
+    const context = new ContextEngine(config, dir);
+    context.setGoal('extend');
+    const task = createTask('Extend', 'Add an extra export.', { fileScope: ['lib.ts'], verificationCommand: 'true' });
+    const bus = new EventBus();
+    const chunks: string[] = [];
+    bus.on('message:chunk', (e: any) => chunks.push(String(e.content)));
+    const agent = new Agent({ id: 'review-terse', role: 'coder', config, workspace, events: bus, cwd: dir, context });
+    const result = await agent.run(task);
+    expect(result.success).toBe(true);
+    // The final "done" answer must be streamed exactly once (2 chunks from the
+    // fake's split), not repeated by a self-review misclassification loop.
+    expect(chunks.join('')).toBe('Done.');
+    // Only a handful of model calls: write turn, the answer, one self-review.
+    expect(fake.requests.length).toBeLessThanOrEqual(4);
+    await fake.close();
+    rmSync(dir, { recursive: true, force: true });
+  }, 60_000);
+
   it('plan mode fails when the model never produces a plan (nudge budget exhausted)', async () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-plan-giveup-'));
     // The fake replays its last entry forever, so the loop sees preambles on
