@@ -178,8 +178,9 @@ export function loadProjectSkills(projectDir: string, userDir?: string, extraDir
 }
 
 /** Format skills for injection into the system prompt (Agent Skills XML). */
-export function formatSkillsForPrompt(skills: Skill[]): string {
-  const visible = skills.filter((s) => !s.disableModelInvocation);
+export function formatSkillsForPrompt(skills: Skill[], limit?: number): string {
+  let visible = skills.filter((s) => !s.disableModelInvocation);
+  if (limit && limit > 0) visible = visible.slice(0, limit);
   if (visible.length === 0) return '';
   const lines = [
     '',

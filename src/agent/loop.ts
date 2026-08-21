@@ -437,8 +437,8 @@ export class Agent {
         // of "let me explore the repo…" (lots of entropy, no progress) and
         // never issues a tool call. Put a hard budget on one response so those
         // runaway generations are truncated too.
-        const MAX_STREAM_BYTES = 24_000;   // rough ~6k tokens of prose
-        const MAX_STREAM_CHUNKS = 800;
+        const MAX_STREAM_BYTES = 16_000;   // rough ~4k tokens of prose
+        const MAX_STREAM_CHUNKS = 400;
         let streamBytes = 0;
 
         for await (const chunk of activeProvider.streamChat(messages, this.toolDefs, { temperature: 0.2, signal: this.abortSignal })) {
@@ -456,11 +456,20 @@ export class Agent {
                 if (c > maxRep) maxRep = c;
               }
             }
-            if (maxRep >= 24 || streamBytes >= MAX_STREAM_BYTES || chunks.length >= MAX_STREAM_CHUNKS) {
+            if (maxRep >= 12 || streamBytes >= MAX_STREAM_BYTES || chunks.length >= MAX_STREAM_CHUNKS) {
               // High-confidence loop / runaway generation: stop streaming
               // before it floods output.
               looped = true;
               break;
+            }
+
+            // Early-warning suppression: once a line has repeated 6+ times,
+            // the model is likely degenerating. Stop emitting chunks to the
+            // TUI so the user doesn't see hundreds of identical lines, but
+            // keep collecting so the loop detector (maxRep >= 12) can trigger.
+            if (maxRep >= 6) {
+              streamBuf = '';
+              continue;
             }
 
             while (streamBuf.length > 0) {
@@ -578,15 +587,23 @@ export class Agent {
       if ((response as any).looped) {
         this.streamLoopNudges++;
         this.events.emit({ type: 'agent:log', agentId: this.id, message: '[stream-loop] model repeated the same content; bounding' });
+        // Truncate the degenerate content so it doesn't pollute the transcript
+        // and cause downstream context budget issues.
+        const truncatedContent = (response.content ?? '').slice(0, 200);
         if (this.streamLoopNudges >= 2) {
           return this.finish(task, false, 'The model repeatedly restreamed the same block and could not produce a clean answer. Try again or switch models.', 'model_error');
         }
-        const summary = (response.content ?? '').split('\n')[0].slice(0, 80);
+        // Don't add the looped content to the transcript — it's garbage.
+        // Instead, add a clean system message nudging the model.
+        this.context.addMessage({
+          role: 'assistant',
+          content: truncatedContent || '(looped output truncated)',
+        });
         this.context.addMessage({
           role: 'system',
-          content: 'Your previous response looped and repeated the same boilerplate many times. STOP repeating. Give a single short, direct answer now with no repetition and no tool calls.',
+          content: 'Your previous response looped and repeated the same text. STOP repeating. Give a SHORT, DIRECT answer now. Do NOT repeat any previous text. If you need to write code, use the write or edit tool. Do NOT output the code as prose.',
         });
-        this.events.emit({ type: 'agent:log', agentId: this.id, message: `[stream-loop] truncated: ${summary}` });
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: `[stream-loop] truncated looped response` });
         continue;
       }
       this.lastStrategy = response.toolCalls?.[0]?.function.name ?? response.content?.slice(0, 60) ?? '';

@@ -61,8 +61,10 @@ export class ContextEngine {
   private skillsCache = '';
   private skillsFingerprint = '';
   private skillsInitialized = false;
+  private config: MochiConfig;
 
   constructor(config: MochiConfig, projectRoot: string) {
+    this.config = config;
     this.budget = config.safety.contextBudgetTokens;
     this.projectRoot = projectRoot;
     this.state = {
@@ -150,6 +152,8 @@ export class ContextEngine {
     return this.rulesCache;
   }
 
+import { isWeakModel } from './tools/index.js';
+
   /** Advertise project and bundled skills in the system prompt so the model knows to load
    *  them. Recomputes only when the skills dir fingerprint changes. */
   private skills(): string {
@@ -162,7 +166,8 @@ export class ContextEngine {
       const { homedir } = require('node:os') as typeof import('node:os');
       const userSkills = resolve(homedir(), '.mochi', 'skills');
       const { skills } = loadAllSkills(this.projectRoot, userSkills);
-      this.skillsCache = formatSkillsForPrompt(skills);
+      const limit = isWeakModel(this.config) ? 3 : undefined;
+      this.skillsCache = formatSkillsForPrompt(skills, limit);
     } catch {
       this.skillsCache = '';
     }

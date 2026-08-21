@@ -151,6 +151,12 @@ export class Runtime {
     }));
   }
 
+  /** Return just the names of available tools (model-aware). */
+  getToolNames(): string[] {
+    const tools = buildTools(this.config);
+    return Array.from(tools.keys());
+  }
+
   memory() {
     return new MemoryStore(this.workspace.dir).load();
   }

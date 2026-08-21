@@ -50,12 +50,48 @@ export const ALL_TOOLS: Tool[] = [
   ...symbolTools, replaceSymbolTool, chameleonTool,
 ];
 
+/**
+ * Core tools that are ALWAYS included regardless of model tier. These are the
+ * essential tools every agent needs. Extra/advanced tools are only sent to
+ * models with sufficient context to handle them without degenerating.
+ */
+const CORE_TOOL_NAMES = new Set([
+  'read', 'write', 'edit', 'delete', 'shell', 'search', 'glob',
+  'git', 'inspect', 'memory', 'todo', 'skill', 'subagent', 'patch',
+  'fetch', 'diff', 'tree', 'verify', 'think',
+  'get_function', 'find_callers', 'replace_symbol',
+]);
+
+/** Extended tools included only when the model is not a known weak/free tier. */
+const EXTENDED_TOOL_NAMES = new Set([
+  'regex_replace', 'deepwiki', 'clipboard', 'sql_codebase_query',
+  'search_replace_multi', 'analyze_code', 'perf',
+  'web_search', 'get_diagnostics', 'create_directory', 'move_file', 'copy_file',
+  'git_blame', 'git_history', 'system_info', 'find_references', 'find_definitions',
+  'db_inspect', 'create_pr', 'type_hierarchy', 'chameleon',
+]);
+
+/** Detect whether a model name implies a weak/free-tier model that struggles
+ *  with large tool schemas (>20 tools). These models degenerate into repetition
+ *  loops when overwhelmed with too many tool definitions. */
+export function isWeakModel(config: MochiConfig): boolean {
+  const m = (config.model.model ?? '').toLowerCase();
+  return m.includes('free') || m.includes('nano') || m.includes('mini')
+    || m.includes('tiny') || m.includes('lite') || m.includes('small')
+    || m.includes('flash-free');
+}
+
 export function buildTools(config: MochiConfig, allowed?: string[]): Map<string, Tool> {
   const map = new Map<string, Tool>();
+  const weak = isWeakModel(config);
   for (const tool of ALL_TOOLS) {
-    if (!allowed || allowed.includes(tool.def.name) || tool.def.name === 'todo' || tool.def.name === 'skill' || tool.def.name === 'subagent') {
-      map.set(tool.def.name, tool);
-    }
+    const name = tool.def.name;
+    // Always-include tools (todo, skill, subagent) bypass filtering.
+    const alwaysInclude = name === 'todo' || name === 'skill' || name === 'subagent';
+    if (allowed && !allowed.includes(name) && !alwaysInclude) continue;
+    // For weak models, only include core tools to keep tool schema lean.
+    if (weak && !CORE_TOOL_NAMES.has(name) && !alwaysInclude) continue;
+    map.set(name, tool);
   }
   return map;
 }

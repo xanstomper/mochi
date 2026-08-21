@@ -963,7 +963,11 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       });
       return;
     }
-    if (line === '/tools') { push('system', 'read, write, edit, delete, search, glob, shell, git, inspect, memory, get_function, find_callers, type_hierarchy'); return; }
+    if (line === '/tools') {
+      const toolNames = runtime.getToolNames?.() ?? ['read', 'write', 'edit', 'delete', 'search', 'glob', 'shell', 'git', 'inspect', 'memory', 'skill', 'todo'];
+      push('system', `${toolNames.length} tools: ${toolNames.join(', ')}`);
+      return;
+    }
 
     // Free-form prompt (already echo:false — agent pushes its own turns via events)
     push('user', line);
