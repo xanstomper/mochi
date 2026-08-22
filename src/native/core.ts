@@ -61,6 +61,18 @@ function initNativeCore() {
           args: [FFIType.ptr, FFIType.usize],
           returns: FFIType.u64,
         },
+        mochi_estimate_cost_usd: {
+          args: [FFIType.cstring, FFIType.u64, FFIType.u64, FFIType.u64],
+          returns: FFIType.f64,
+        },
+        mochi_diff_numstat: {
+          args: [FFIType.cstring, FFIType.ptr, FFIType.ptr, FFIType.ptr],
+          returns: FFIType.i32,
+        },
+        mochi_classify_prompt: {
+          args: [FFIType.cstring],
+          returns: FFIType.i32,
+        },
       });
       ffiAvailable = Boolean(nativeLib);
     }
@@ -174,6 +186,81 @@ export function nativeHashPrompt(text: string): bigint | null {
     const { ptr } = (globalThis as any).Bun;
     const h = nativeLib.symbols.mochi_hash_prompt(ptr(buf), buf.length);
     return BigInt(h);
+  } catch {}
+  return null;
+}
+
+/**
+ * Fast in-process model cost estimation in USD.
+ */
+export function nativeEstimateCostUsd(
+  model: string,
+  promptTokens: number,
+  completionTokens: number,
+  cacheReadTokens = 0,
+): number | null {
+  initNativeCore();
+  if (!ffiAvailable || !nativeLib) return null;
+
+  try {
+    const cost = nativeLib.symbols.mochi_estimate_cost_usd(
+      Buffer.from(model + '\0'),
+      BigInt(promptTokens),
+      BigInt(completionTokens),
+      BigInt(cacheReadTokens),
+    );
+    return Number(cost);
+  } catch {}
+  return null;
+}
+
+/**
+ * Fast in-process git diff numstat line parser.
+ */
+export function nativeDiffNumstat(output: string): { files: number; additions: number; deletions: number } | null {
+  initNativeCore();
+  if (!ffiAvailable || !nativeLib) return null;
+
+  try {
+    const filesBuf = new BigUint64Array(1);
+    const addBuf = new BigUint64Array(1);
+    const delBuf = new BigUint64Array(1);
+    const { ptr } = (globalThis as any).Bun;
+    const res = nativeLib.symbols.mochi_diff_numstat(
+      Buffer.from(output + '\0'),
+      ptr(filesBuf),
+      ptr(addBuf),
+      ptr(delBuf),
+    );
+    if (res === 1) {
+      return {
+        files: Number(filesBuf[0]),
+        additions: Number(addBuf[0]),
+        deletions: Number(delBuf[0]),
+      };
+    }
+  } catch {}
+  return null;
+}
+
+/**
+ * Fast in-process task kind classifier.
+ */
+export function nativeClassifyPrompt(prompt: string): string | null {
+  initNativeCore();
+  if (!ffiAvailable || !nativeLib) return null;
+
+  try {
+    const code = nativeLib.symbols.mochi_classify_prompt(Buffer.from(prompt + '\0'));
+    switch (code) {
+      case 1: return 'code-edit';
+      case 2: return 'investigation';
+      case 3: return 'testing';
+      case 4: return 'refactor';
+      case 5: return 'architecture';
+      case 6: return 'one-shot-answer';
+      default: return null;
+    }
   } catch {}
   return null;
 }

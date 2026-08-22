@@ -197,3 +197,44 @@ pub unsafe extern "C" fn mochi_estimate_cost_usd(
     let tracker = budget::BudgetTracker::default();
     tracker.estimate_cost(model, prompt_tokens, completion_tokens, cache_read_tokens)
 }
+
+#[no_mangle]
+pub unsafe extern "C" fn mochi_diff_numstat(
+    output_ptr: *const c_char,
+    out_files: *mut usize,
+    out_additions: *mut usize,
+    out_deletions: *mut usize,
+) -> c_int {
+    if output_ptr.is_null() || out_files.is_null() || out_additions.is_null() || out_deletions.is_null() {
+        return -1;
+    }
+    let Ok(output) = (unsafe { CStr::from_ptr(output_ptr) }).to_str() else {
+        return -1;
+    };
+    let stats = diff::parse_diff_numstat(output);
+    unsafe {
+        *out_files = stats.files;
+        *out_additions = stats.additions;
+        *out_deletions = stats.deletions;
+    }
+    1
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mochi_classify_prompt(prompt_ptr: *const c_char) -> c_int {
+    if prompt_ptr.is_null() {
+        return 0;
+    }
+    let Ok(prompt) = (unsafe { CStr::from_ptr(prompt_ptr) }).to_str() else {
+        return 0;
+    };
+    match planner::PlanEngine::classify_prompt(prompt) {
+        planner::TaskKind::CodeEdit => 1,
+        planner::TaskKind::Investigation => 2,
+        planner::TaskKind::Testing => 3,
+        planner::TaskKind::Refactor => 4,
+        planner::TaskKind::Architecture => 5,
+        planner::TaskKind::OneShotAnswer => 6,
+    }
+}
+

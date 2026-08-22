@@ -47,8 +47,14 @@ export const DEFAULT_COST_PER_TOKEN: Record<string, { prompt: number; completion
   'opencode': { prompt: 0.00000014, completion: 0.00000028 },
 };
 
+import { nativeEstimateCostUsd } from './native/core.js';
+
 export function estimateCostUsd(tokens: number | { promptTokens?: number; completionTokens?: number }, model: string): number {
   if (model.toLowerCase().includes('free')) return 0;
+  if (typeof tokens !== 'number' && tokens.promptTokens !== undefined && tokens.completionTokens !== undefined) {
+    const nat = nativeEstimateCostUsd(model, tokens.promptTokens, tokens.completionTokens, 0);
+    if (nat !== null && nat > 0) return nat;
+  }
   const mLower = model.toLowerCase();
   const key = Object.keys(DEFAULT_COST_PER_TOKEN).find((k) => mLower.includes(k.toLowerCase()));
   if (!key) {

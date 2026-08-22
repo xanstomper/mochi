@@ -1766,7 +1766,7 @@ function formatDuration(ms: number): string {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
-import { nativeGitBranch } from '../native/core.js';
+import { nativeGitBranch, nativeDiffNumstat } from '../native/core.js';
 
 async function gitBranch(cwd: string): Promise<string> {
   const nat = nativeGitBranch(cwd);
@@ -1784,8 +1784,11 @@ async function gitDiffStats(cwd: string): Promise<{ files: number; additions: nu
   return new Promise(resolve => {
     execFile('git', ['diff', '--numstat'], { cwd, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
       if (error || !stdout) return resolve(null);
+      const str = stdout.toString();
+      const nat = nativeDiffNumstat(str);
+      if (nat && nat.files > 0) return resolve(nat);
       let files = 0, additions = 0, deletions = 0;
-      for (const line of stdout.toString().split('\n')) {
+      for (const line of str.split('\n')) {
         const m = line.match(/^(\d+|-)\s+(\d+|-)\s+/);
         if (!m) continue;
         files++;

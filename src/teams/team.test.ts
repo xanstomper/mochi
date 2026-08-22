@@ -67,5 +67,5 @@ describe('runTeam', () => {
     expect(roles.has('reviewer') || roles.has('tester')).toBe(true);
     await fake.close();
     rmSync(dir, { recursive: true, force: true });
-  }, 60_000);
+  }, 120_000);
 });

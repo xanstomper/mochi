@@ -2,6 +2,7 @@
 // prompt, retry strategy, and context emphasis. Heuristic-only: no model
 // call. The kind is a string enum used as a key in prompt variant tables.
 import type { Task } from './types.js';
+import { nativeClassifyPrompt } from './native/core.js';
 
 export type TaskKind = 'implement' | 'fix' | 'refactor' | 'test' | 'research' | 'plan' | 'document' | 'chat' | 'unknown';
 
