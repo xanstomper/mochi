@@ -622,11 +622,31 @@ Continue from 'Next:', do not redo completed progress.`,
         response = await gatherStream(packet.messages);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        
+        // Smart backoff for rate limits (429) to avoid immediately burning the retry
+        if (message.toLowerCase().includes('429') || message.toLowerCase().includes('rate limit')) {
+          this.events.emit({ type: 'agent:log', agentId: this.id, message: `[rate-limit] API busy. Applying 10s backoff...` });
+          await new Promise(r => setTimeout(r, 10000));
+        }
+
         await this.checkpointAndCompact('error');
         const retryPacket = this.context.buildPacket(this.toolDefs, task, repo);
+        
         try {
           response = await gatherStream(retryPacket.messages);
-        } catch {
+        } catch (retryErr) {
+          const rMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+          
+          // Failover strategy for repeated rate limits: switch to an alternate model instead of dying
+          if (rMsg.toLowerCase().includes('429') || rMsg.toLowerCase().includes('rate limit')) {
+            const alt = this.pickAlternateModel();
+            if (alt) {
+              this.events.emit({ type: 'agent:log', agentId: this.id, message: `[rate-limit] Primary model exhausted. Failing over to ${alt}` });
+              this.setActiveModel(alt);
+              continue; // Restart the loop iteration with the new model
+            }
+          }
+          
           return this.finish(task, false, `Model request failed: ${message}`, 'model_error');
         }
       }

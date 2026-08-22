@@ -88,10 +88,8 @@ export class KvCacheTracker {
   /** Format a compact badge for the TUI footer. */
   badge(): string {
     const s = this.status();
-    if (s.state === 'unknown') return '';
-    if (s.state === 'cold') return '🔴 cold';
-    if (s.state === 'cooling') return `🟡 ${s.remainingSecs}s`;
-    return `🟢 ${s.remainingSecs}s`;
+    if (s.state === 'unknown' || s.state === 'cold') return '';
+    return `⚡ Context Cached`;
   }
 
   reset(): void {
