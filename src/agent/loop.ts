@@ -221,6 +221,7 @@ export class Agent {
   private hooks: HookManager;
   private toolCallsTotal = 0;
   private streamLoopNudges = 0;
+  private triedFallbackModels = new Set<string>();
   private verifyCount = 0;
   private autopsy: Autopsy | undefined;
   private hypotheses: Hypothesis[] = [];
@@ -630,7 +631,7 @@ export class Agent {
       // Stream-loop guard: the model repeated the same boilerplate block dozens
       // of times in one response (common with overloaded free-tier models). Stop
       // flooding the transcript: nudge it once to answer briefly; if it loops
-      // again, fail cleanly instead of spewing hundreds of identical lines.
+      // again, FAIL OVER to an alternate model before giving up entirely.
       if ((response as any).looped) {
         this.streamLoopNudges++;
         this.events.emit({ type: 'agent:log', agentId: this.id, message: '[stream-loop] model repeated the same content; bounding' });
@@ -638,6 +639,17 @@ export class Agent {
         // and cause downstream context budget issues.
         const truncatedContent = (response.content ?? '').slice(0, 200);
         if (this.streamLoopNudges >= 2) {
+          // Fail over to an alternate model instead of dying. Many providers
+          // host several tool-capable models; a degenerate one shouldn't kill
+          // the whole task. Same provider+key, different model id.
+          const alt = this.pickAlternateModel();
+          if (alt) {
+            this.events.emit({ type: 'agent:log', agentId: this.id, message: `[stream-loop] primary model degenerated; failing over to ${alt}` });
+            this.setActiveModel(alt);
+            this.streamLoopNudges = 0;
+            this.context.addMessage({ role: 'system', content: `The previous model degenerated. You are now a fresh model continuing this task. Summarize nothing; just continue the task directly with a tool call or a direct answer.` });
+            continue;
+          }
           return this.finish(task, false, 'The model repeatedly restreamed the same block and could not produce a clean answer. Try again or switch models.', 'model_error');
         }
         // Don't add the looped content to the transcript — it's garbage.
@@ -850,6 +862,33 @@ export class Agent {
       this.providers.set(profile, p);
     }
     return p;
+  }
+
+  /** Alternate model ids on the same provider to fail over to when the
+   *  active model degenerates (repetition loops on weak free tiers). Ordered
+   *  by observed reliability for tool-calling tasks. */
+  private static FALLBACK_MODELS = ['qwen3.6-35b', 'minimax-m3', 'glm-5.3', 'glm-5.2', 'diffusiongemma', 'deepseek-v4-flash'];
+
+  /** Pick the next fallback model id, skipping the active one. Returns
+   *  undefined when every fallback has already been tried. */
+  private pickAlternateModel(): string | undefined {
+    const active = (this.config.model.model ?? '').toLowerCase();
+    for (const m of Agent.FALLBACK_MODELS) {
+      if (m.toLowerCase() === active) continue;
+      if (this.triedFallbackModels.has(m)) continue;
+      return m;
+    }
+    return undefined;
+  }
+
+  /** Swap the active model in-place: same provider/key/baseUrl, new model id.
+   *  Rebuilds the provider so the next iteration uses the fallback. */
+  private setActiveModel(modelId: string): void {
+    this.triedFallbackModels.add(modelId);
+    this.triedFallbackModels.add(this.config.model.model ?? '');
+    this.config.model = { ...this.config.model, model: modelId };
+    this.provider = createProvider(this.config.model, this.profile.defaultModel ?? 'coding');
+    this.providers.clear();
   }
 
   private isReadOnly(name: string): boolean {

@@ -5,14 +5,14 @@ const ROLES: Record<AgentRole, AgentProfile> = {
     role: 'lead',
     name: 'Lead',
     defaultModel: 'reasoning',
-    tools: ['read', 'search', 'glob', 'git', 'inspect', 'chameleon'],
+    tools: ['read', 'search', 'glob', 'git', 'inspect', 'chameleon', 'fetch', 'web_search', 'web_crawl', 'think'],
     systemPrompt: `You are the Lead agent. Do not write code. Your job is to decompose goals, prioritize tasks, coordinate other agents, resolve conflicts, evaluate results, and re-plan when progress stalls.`,
   },
   coder: {
     role: 'coder',
     name: 'Coder',
     defaultModel: 'coding',
-    tools: ['read', 'write', 'edit', 'delete', 'patch', 'shell', 'search', 'glob', 'git', 'inspect', 'chameleon', 'fetch', 'web_search', 'think', 'diff', 'tree'],
+    tools: ['read', 'write', 'edit', 'delete', 'patch', 'shell', 'search', 'glob', 'git', 'inspect', 'chameleon', 'fetch', 'web_search', 'web_crawl', 'think', 'diff', 'tree'],
     systemPrompt: `You are a Coder agent. Write clean, minimal code. Prefer surgical edits: one precise edit for a single change, one patch call for multi-file changes, full writes only for new files. Run tests/build/typecheck after changes. For multi-step work, track progress with the todo tool; delegate large self-contained subtasks to a subagent.`,
   },
   reviewer: {
@@ -33,7 +33,7 @@ const ROLES: Record<AgentRole, AgentProfile> = {
     role: 'researcher',
     name: 'Researcher',
     defaultModel: 'fast',
-    tools: ['read', 'search', 'glob', 'get_function', 'find_callers', 'type_hierarchy', 'inspect', 'fetch', 'web_search', 'think'],
+    tools: ['read', 'search', 'glob', 'get_function', 'find_callers', 'type_hierarchy', 'inspect', 'fetch', 'web_search', 'web_crawl', 'think'],
     systemPrompt: `You are a Researcher agent. Explore the codebase, find relevant files, summarize findings, and report minimal useful context. You have no edit tools; report findings, do not change code.`,
   },
   debugger: {

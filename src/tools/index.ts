@@ -30,6 +30,7 @@ import { analyzeCodeTool } from './analyze-code.js';
 import { verifyTool } from './verify.js';
 import { perfTool } from './perf-tool.js';
 import { webSearchTool } from './web-search.js';
+import { webCrawlTool } from './web-crawl.js';
 import { getDiagnosticsTool } from './diagnostics-tool.js';
 import { mkdirTool, moveFileTool, copyFileTool } from './file-ops.js';
 import { gitBlameTool, gitHistoryTool } from './git-blame.js';
@@ -46,7 +47,7 @@ export const ALL_TOOLS: Tool[] = [
   searchReplaceMultiTool, analyzeCodeTool, verifyTool, perfTool,
   webSearchTool, getDiagnosticsTool, mkdirTool, moveFileTool, copyFileTool,
   gitBlameTool, gitHistoryTool, systemInfoTool, findReferencesTool, findDefinitionsTool,
-  dbInspectTool, createPrTool, thinkTool,
+  dbInspectTool, createPrTool, thinkTool, webCrawlTool,
   ...symbolTools, replaceSymbolTool, chameleonTool,
 ];
 
@@ -57,7 +58,7 @@ export const ALL_TOOLS: Tool[] = [
  */
 const CORE_TOOL_NAMES = new Set([
   'read', 'write', 'edit', 'delete', 'shell', 'search', 'glob',
-  'git', 'inspect', 'todo', 'skill', 'subagent', 'fetch', 'think'
+  'git', 'inspect', 'todo', 'skill', 'subagent', 'fetch', 'web_search', 'web_crawl', 'think'
 ]);
 
 /** Extended tools included only when the model is not a known weak/free tier. */
