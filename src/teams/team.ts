@@ -14,10 +14,18 @@ const ROLE_HINTS: [RegExp, AgentRole][] = [
   [/review|verify|audit|check|inspect|regress/i, 'reviewer'],
   [/refactor|clean|rename|extract|dedupe/i, 'reviewer'],
   [/test|spec|cover|assert/i, 'tester'],
-  [/research|investigate|design|prototype|explore|compare/i, 'researcher'],
-  [/secur|threat|vuln|payload/i, 'security'],
-  [/architect|layout|interface|schema|api design/i, 'architect'],
-  [/debug|crash|fix|error|broken/i, 'debugger'],
+  [/research|investigate|explore|compare|prototype/i, 'researcher'],
+  [/debug|crash|fix|error|broken|exception|stack trace/i, 'debugger'],
+  [/secur|threat|vuln|payload|auth|cve/i, 'security'],
+  [/architect|layout|interface|schema|api design|system design/i, 'architect'],
+  [/docker|k8s|kubernetes|container|ci|cd|pipeline|deploy|terraform|github action|sre/i, 'devops'],
+  [/database|postgres|mysql|sqlite|migration|query plan|index|prisma|drizzle|sql/i, 'db_admin'],
+  [/e2e|playwright|cypress|selenium|visual regression|smoke test/i, 'qa_engineer'],
+  [/perf|profile|latency|throughput|memory leak|bottleneck|hotspot|bench/i, 'performance'],
+  [/readme|docs|markdown|guide|manual|adr|specification|documentation/i, 'tech_writer'],
+  [/dataset|pandas|polars|machine learning|pytorch|tensorflow|analytics|data science/i, 'data_scientist'],
+  [/frontend|ui|ux|css|tailwind|react|vue|svelte|component|html|style/i, 'frontend'],
+  [/backend|endpoint|rest api|restful|graphql|grpc|server|route|handler/i, 'backend'],
 ];
 
 export type TeamPlan = {

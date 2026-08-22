@@ -15,7 +15,7 @@ export const subagentTool: Tool = {
       'Delegate a well-scoped subtask to a fresh child agent. Provide a clear, self-contained prompt describing exactly what the subtask must produce. Use this to parallelize research or isolate a hard subproblem. Returns the child\'s summary (success, files changed, tokens).',
     parameters: [
       { name: 'prompt', type: 'string', description: 'Self-contained instructions for the subtask', required: true },
-      { name: 'role', type: 'string', description: 'Optional role for the child (coder, researcher, debugger, reviewer, etc.)', required: false },
+      { name: 'role', type: 'string', description: 'Specialized role for the child: lead, coder, reviewer, tester, researcher, debugger, security, architect, devops, db_admin, frontend, backend, performance, tech_writer, qa_engineer, data_scientist (defaults to coder)', required: false },
     ],
     permission: 'network',
   },

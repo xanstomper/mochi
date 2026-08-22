@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { AgentProfile, AgentRole, ModelProfile } from '../types.js';
-import { getProfile } from '../teams/roles.js';
+import { getProfile, listRoles } from '../teams/roles.js';
 
 export interface ParsedProfile {
   name: string;
@@ -59,7 +59,7 @@ export class AgentProfileService {
   private cache = new Map<string, AgentProfile>();
 
   constructor(private projectDir: string) {
-    const builtins: AgentRole[] = ['lead', 'coder', 'reviewer', 'tester', 'researcher', 'debugger', 'security', 'architect'];
+    const builtins = listRoles();
     for (const role of builtins) {
       const profile = getProfile(role);
       this.cache.set(role, profile);
@@ -114,5 +114,5 @@ export class AgentProfileService {
 }
 
 export function loadDefaultProfiles(): AgentProfile[] {
-  return (['lead', 'coder', 'reviewer', 'tester', 'researcher', 'debugger', 'security', 'architect'] as AgentRole[]).map(getProfile);
+  return listRoles().map(getProfile);
 }
