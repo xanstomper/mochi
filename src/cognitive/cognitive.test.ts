@@ -57,11 +57,12 @@ describe('ANCHOR (Operational Persistence)', () => {
   });
 });
 
-describe('Lazy Chameleon (In-Harness Baked Engine)', () => {
-  it('synthesizes deterministic synthetic parameters in 0ms without API calls', () => {
+describe('Lazy Chameleon (In-Harness Baked MoE Engine)', () => {
+  it('synthesizes dense real datasets in 0ms without API calls', () => {
     const context = synthesizeDeterministicContext('Implement an atomic token bucket rate limiter');
-    expect(context).toContain('CHAMELEON SYNTHETIC PARAMETERS');
-    expect(context).toContain('Execution Invariants');
+    expect(context).toContain('LAZY CHAMELEON DENSE SYNTHETIC DATASET');
+    expect(context).toContain('System Invariants');
+    expect(context).toContain('Cellular Execution DAG');
     expect(context).toContain('SISPIS');
   });
 
@@ -74,6 +75,6 @@ describe('Lazy Chameleon (In-Harness Baked Engine)', () => {
     const res = await engine.enhance({ task: 'Build a binary heap', mode: 'flash' });
     expect(res.mode).toBe('flash');
     expect(res.tokensUsed).toBe(0);
-    expect(res.context).toContain('CHAMELEON SYNTHETIC PARAMETERS');
+    expect(res.context).toContain('LAZY CHAMELEON DENSE SYNTHETIC DATASET');
   });
 });

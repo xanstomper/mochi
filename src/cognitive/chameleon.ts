@@ -113,18 +113,20 @@ function tierFor(mode: ChameleonMode): number {
   }
 }
 
+import { synthesizeDenseDataset } from '../chameleon/dense-dataset-synthesizer.js';
+
 /**
- * Deterministically generates instant synthetic parameter guidance in 0ms
- * without requiring any extra network round-trips or API tokens.
+ * Deterministically generates instant synthetic parameter guidance and dense real datasets in 0ms
+ * without requiring any extra network round-trips or API tokens, splitting through cellular MoEs.
  */
 export function synthesizeDeterministicContext(task: string, cwd = process.cwd()): string {
   const owl = evaluateOwl(task);
   const sispis = evaluateSispis(task, owl.cumulativeWeight);
   const dox = loadDoxContract(cwd);
+  const denseData = synthesizeDenseDataset(task);
 
   const sections: string[] = [
-    `[CHAMELEON SYNTHETIC PARAMETERS — ZERO-LATENCY IN-HARNESS]`,
-    `Target Objective: ${task}`,
+    denseData.rawDatasetText,
     `Cognitive Mode: SISPIS ${sispis.mode} (Entropy: ${sispis.entropy.toFixed(2)})`,
   ];
 
@@ -135,13 +137,6 @@ export function synthesizeDeterministicContext(task: string, cwd = process.cwd()
   if (dox.constraints.length > 0) {
     sections.push(`DOX Contracts:\n` + dox.constraints.slice(0, 4).map((c) => `  • ${c}`).join('\n'));
   }
-
-  sections.push(
-    `Execution Invariants:\n` +
-    `  1. Read before write: Inspect actual file reality prior to any modification.\n` +
-    `  2. Locality & Conservation: Modify the absolute minimal surface; preserve existing semantics.\n` +
-    `  3. Independent Verification: Prove correctness with automated tests or strict validation.`
-  );
 
   return sections.join('\n\n');
 }
