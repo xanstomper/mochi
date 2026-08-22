@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { MemoryStore } from './memory.js';
 import type { MemoryEntry } from './memory.js';
@@ -162,7 +163,6 @@ export class ContextEngine {
     try {
       this.skillsInitialized = true;
       this.skillsFingerprint = fp;
-      const { homedir } = require('node:os') as typeof import('node:os');
       const userSkills = resolve(homedir(), '.mochi', 'skills');
       const { skills } = loadAllSkills(this.projectRoot, userSkills);
       const limit = isWeakModel(this.config) ? 3 : undefined;
@@ -240,9 +240,17 @@ Repository:
    - subagent: delegate a self-contained, well-scoped subtask to a fresh child agent when it would take you many steps. Give it complete instructions; it cannot ask you questions.
    - todo: for multi-step work, record the plan as todo items and mark them done as you go. Cheap, shared, and keeps parallel work honest.
    - shell: for builds, tests, greps. Not for file mutation when edit/patch will do.
+   - web_search / web_crawl / fetch: for research. Search first; fetch a known URL; crawl a documentation site (same-host by default).
    - plan mode (when active): research with read-only tools and return a plan. Mutating calls are vetoed.
 
-10. Output Formatting (CRITICAL)
+10. Working style (CRITICAL for efficiency)
+    - BATCH INDEPENDENT CALLS: before using tools, identify every independent read, search, or command needed for the next step and emit ALL of them in one response. The harness executes independent calls in parallel. Do not wait for one read to request another.
+    - TRUNCATED TOOL OUTPUT: when a tool result is truncated, the full output path is given at the end of the result. Read or grep THAT file instead of re-running the tool.
+    - WHEN STUCK, escalate the ladder: (1) re-read the actual file/result you're reasoning about; (2) try a smaller experiment to isolate the failure; (3) search for how the codebase solves the same problem elsewhere; (4) delegate an isolated investigation to a subagent; (5) state what's blocking and what you'd need. Never repeat the same failing action unchanged.
+    - LONG commands (full suites, builds, installs): run with background:true and keep working; check with "bg status <id>".
+    - SKILLS: when a task matches a listed skill (debugging, testing, research, implementation, git-workflow), load it with the skill tool and follow its procedure.
+
+11. Output Formatting (CRITICAL)
     - Do NOT echo back your context, state, or instructions.
     - Do NOT generate markdown headers like "## Notes", "## Next Action", or "## Memory".
     - Respond strictly with a tool call, or a direct, terse answer if no tool is needed.
@@ -360,8 +368,27 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
     // Tier 1 (micro): drop everything but the recency window and distill small facts.
     if (this.messages.length <= 6) return;
     const keep = 6;
-    const dropped = this.messages.slice(0, this.messages.length - keep);
-    this.messages = this.messages.slice(-keep);
+
+    // VALID CUT POINTS (Pi insight): a tool result must stay attached to the
+    // assistant message that requested it. Walking back from the newest
+    // message, only cut at an assistant message WITHOUT pending tool_calls,
+    // or at a user/system message. This prevents compact() from producing a
+    // dangling tool result (orphaned tool_call_id) that confuses providers.
+    let cutIndex = this.messages.length - keep;
+    // Advance forward to the nearest valid boundary at/after the target.
+    while (cutIndex < this.messages.length - 1) {
+      const m = this.messages[cutIndex];
+      const isValid =
+        m.role === 'user' || m.role === 'system'
+          ? true
+          : m.role === 'assistant'
+            ? !m.tool_calls || m.tool_calls.length === 0
+            : false; // never cut directly at a tool result
+      if (isValid) break;
+      cutIndex++;
+    }
+    const dropped = this.messages.slice(0, cutIndex);
+    this.messages = this.messages.slice(cutIndex);
 
     const facts: string[] = [];
     for (const m of dropped) {

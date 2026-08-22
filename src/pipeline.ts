@@ -6,6 +6,7 @@
 //   git diff | mochi review --strict --json
 //   cat crash.log | mochi fix --auto-commit
 //   mochi review --diff-only          # print the raw unified diff
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
 export interface ReviewFinding {
@@ -108,7 +109,6 @@ export function loadDiff(files: string[], cwd: string): string {
 }
 
 function runGit(cwd: string, args: string[]): string {
-  const { execFileSync } = require('node:child_process') as typeof import('node:child_process');
   try {
     return execFileSync('git', args, { cwd, maxBuffer: 16 * 1024 * 1024 }).toString('utf8');
   } catch (e) {

@@ -12,6 +12,7 @@
 //   NEVER block the loop on failure.
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 
 export interface FileDiagnostics {
@@ -48,8 +49,9 @@ function getTsService(root: string): TsService | undefined {
   if (!existsSync(tsPath)) return undefined;
   let ts: typeof import('typescript');
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    ts = require(tsPath) as typeof import('typescript');
+    // createRequire (not bare require) so this works in real ESM contexts too.
+    const req = createRequire(import.meta.url);
+    ts = req(tsPath) as typeof import('typescript');
   } catch {
     return undefined;
   }

@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // Agent Skills support (agentskills.io spec), modeled on pi's loader. Skills are
 // markdown files (typically `SKILL.md` or `my-skill.md`) whose YAML frontmatter
@@ -223,7 +224,6 @@ export function bundledSkillsDir(): string | null {
   const candidates: string[] = [];
   // 1) Module-relative (source or compiled layout): .../src or .../dist -> root/skills
   try {
-    const { fileURLToPath } = require('node:url') as typeof import('node:url');
     const here = fileURLToPath(import.meta.url);
     candidates.push(join(dirname(dirname(here)), 'skills'));
   } catch { /* no import.meta (bundled) */ }

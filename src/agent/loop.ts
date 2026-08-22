@@ -50,7 +50,7 @@ import { classifyOneShot } from '../one-shot.js';
 import { classifyContentOnly } from '../one-shot.js';
 import { buildMcpTools } from '../mcp/tools.js';
 import { preEditSnapshot as gitPreEditSnapshot, rollbackToSnapshot as gitRollback, type CheckpointResult } from '../git.js';
-import { foldToolResult } from '../core/context-budget.js';
+import { applyToolOutputPolicy } from '../core/tool-output.js';
 
 export function stripThinkTags(text: string): string {
   if (!text) return '';
@@ -1104,7 +1104,12 @@ export class Agent {
       error,
       durationMs,
     };
-    const foldedOutput = result.output.length > 6000 ? foldToolResult(result.output, 1500) : result.output;
+    // Uniform output policy (Harness V2): dual-limit truncation preserving
+    // head+tail whole lines, with the FULL output spilled to a temp file the
+    // model can re-read. Replaces the old 6k-char fold that could lose the
+    // one line the model needed with no recovery path.
+    const pol = applyToolOutputPolicy(result.output, { toolName: tc.function.name });
+    const foldedOutput = pol.content;
     this.context.addMessage({ role: 'tool', tool_call_id: tc.id, content: foldedOutput, name: tc.function.name });
     this.events.emit({ type: 'tool:completed', tool: tc.function.name, result, agentId: this.id });
     await this.hooks.runAfter('after_tool', { tool: tc.function.name });
