@@ -86,6 +86,19 @@ Changes are incremental inside the existing files — no rewrite.
 - Truncation telemetry counters per tool. **SHIPPED (phase 3)**
 
 ## Phases 2–10 (shipped in docs/harness-v2-phases.md)
+- Phase 1 (core runtime, from harness-v2-roadmap.md): **instrumentation
+  shipped.** `src/agent/loop-state.ts` defines `LoopPhase`,
+  `IterationTrace`, and `LoopStateMachine`; every loop turn now flows
+  preflight → model-call → stream-guard → tool-exec → verify → finish and
+  emits exactly one typed `agent:iteration` event (`IterationTrace`:
+  iteration, stopReason, toolCalls, streamBytes, durationMs, end phase).
+  Abort/timeout/budget exits from ANY phase are captured by `finish()`
+  flushing the final trace with the stop reason. Illegal transitions are
+  recorded (never thrown) and asserted in
+  `src/agent/loop-state.test.ts` alongside characterization coverage in
+  `src/agent/loop.test.ts` (plan veto, stream-loop bounding, self-review,
+  rollback, warm start). Remaining Phase 1 work: physically extracting
+  `run()`'s body into the state machine (move-don't-rewrite refactor).
 - Phase 4: real-usage context accounting (provider promptTokens drive the
   compaction floor; chars/3.8 estimate is the fallback).
 - Phase 5: stuck-signal counters surfaced in the volatile state prompt.

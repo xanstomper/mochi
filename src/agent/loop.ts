@@ -52,6 +52,7 @@ import { buildMcpTools } from '../mcp/tools.js';
 import { preEditSnapshot as gitPreEditSnapshot, rollbackToSnapshot as gitRollback, type CheckpointResult } from '../git.js';
 import { applyToolOutputPolicy } from '../core/tool-output.js';
 import { nativeStripThinkTags } from '../native/core.js';
+import { LoopStateMachine } from './loop-state.js';
 
 export function stripThinkTags(text: string): string {
   if (!text) return '';
@@ -254,6 +255,8 @@ export class Agent {
   private lastVerifyPassed = false;
   private subagentDepth: number;
   private mcpClose?: () => void;
+  /** Harness-v2 Phase 1: per-run iteration lifecycle tracker (created in run()). */
+  private sm?: LoopStateMachine;
 
   constructor(opts: AgentOptions) {
     this.id = opts.id ?? randomUUID();
@@ -290,6 +293,10 @@ export class Agent {
   async run(task: Task): Promise<AgentResult> {
     this.startTime = performance.now();
     this.events.emit({ type: 'task:started', task, agentId: this.id });
+    // Harness-v2 Phase 1: deterministic iteration lifecycle. Every loop turn
+    // flows preflight → model-call → stream-guard → tool-exec → verify →
+    // finish and emits exactly one typed IterationTrace event.
+    const sm = this.sm = new LoopStateMachine(this.events, this.id);
     this.context.updateState({ nextAction: `Start task: ${task.title}` });
     // Active execution mode (modeInstruction from modes.ts) is injected here so
     // spec/security/codemod/chaos directives reach the model every turn.
@@ -389,6 +396,7 @@ Continue from 'Next:', do not redo completed progress.`,
     // so each completion is injected exactly once.
     const bgDelivered = new Set<string>();
     for (let i = 0; i < maxIterations; i++) {
+      sm.beginIteration(i);
       // Deliver completed background tasks as events into the transcript.
       try {
         const { listTasks, describeTask } = await import('../background-tasks.js');
@@ -442,6 +450,7 @@ Continue from 'Next:', do not redo completed progress.`,
       if (this.toolCallsTotal >= 12 && !this.fileChanged && !this.planMode) {
         this.context.addMessage({ role: 'system', content: 'You have gathered sufficient context. Provide your answer directly now without further tool calls.' });
       }
+      sm.enter('model-call');
       const activeProvider = this.pickProvider();
       let response;
       const gatherStream = async (messages: any) => {
@@ -477,12 +486,14 @@ Continue from 'Next:', do not redo completed progress.`,
         let tailCheckedAt = 0;
         let runawayFlagged = false;
 
+        sm.enter('stream-guard');
         for await (const chunk of activeProvider.streamChat(messages, this.toolDefs, { temperature: 0.2, signal: this.abortSignal })) {
           chunks.push(chunk);
           if (chunk.content) {
             const newChunk = chunk.content;
             streamBuf += newChunk;
             streamBytes += newChunk.length;
+            sm.addStreamBytes(newChunk.length);
             recentTail = (recentTail + newChunk).slice(-360);
             if (streamBytes - tailCheckedAt >= 120) {
               tailCheckedAt = streamBytes;
@@ -739,6 +750,8 @@ Continue from 'Next:', do not redo completed progress.`,
       }
 
       if (response.toolCalls && response.toolCalls.length > 0) {
+        sm.enter('tool-exec');
+        sm.recordToolCalls(response.toolCalls.length);
         this.context.addMessage({ role: 'assistant', content: response.content ?? '', tool_calls: response.toolCalls });
         // Plan mode: allow read-only research, but veto any mutating tool and
         // steer the model back to producing a plan. Every vetoed call still
@@ -871,6 +884,7 @@ Continue from 'Next:', do not redo completed progress.`,
         continue;
       }
 
+      sm.enter('verify');
       const verification = await this.verify(task, repo);
       this.verifyCount++;
       if (verification.passed) {
@@ -1650,6 +1664,11 @@ Continue from 'Next:', do not redo completed progress.`,
   }
 
   private finish(task: Task, success: boolean, summary: string, stopReason: AgentStopReason = success ? 'completed' : 'aborted'): AgentResult {
+    // Harness-v2 Phase 1: close the lifecycle — emit the final iteration's
+    // trace with the run's stop reason (abort/timeout from ANY phase lands
+    // here, so the trace records where the run actually stopped).
+    this.sm?.enter('finish');
+    this.sm?.flush(stopReason);
     this.mcpClose?.();
     this.mcpClose = undefined;
     this.budget?.recordAgentEnd();

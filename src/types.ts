@@ -1,3 +1,5 @@
+import type { IterationTrace } from './agent/loop-state.js';
+
 export type ModelProfile = 'fast' | 'coding' | 'reasoning' | 'review';
 
 export interface ModelConfig {
@@ -218,6 +220,7 @@ export type MochiEvent =
   | { type: 'agent:spawned'; id: string; role: AgentRole; taskId: string }
   | { type: 'agent:completed'; id: string; taskId: string }
   | { type: 'agent:log'; agentId: string; message: string }
+  | { type: 'agent:iteration'; agentId: string; trace: IterationTrace }
   | { type: 'tool:called'; tool: string; args: unknown; agentId: string }
   | { type: 'tool:completed'; tool: string; result: ToolResult; agentId: string }
   | { type: 'tool:failed'; tool: string; error: string; agentId: string }

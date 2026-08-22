@@ -21,6 +21,15 @@
 - **Light mode.** `MOCHI_LIGHT=1` (or `MOCHI_NO_EMBED=1` / `MOCHI_NO_INDEX=1`)
   disables the embedded SQLite symbol index for ultra-lightweight execution;
   the codegraph degrades to "no symbol index" instead of throwing.
+- **Iteration lifecycle traces (harness-v2 Phase 1).** New
+  `src/agent/loop-state.ts`: a `LoopStateMachine` walks every loop turn
+  through `preflight → model-call → stream-guard → tool-exec → verify →
+  finish` and emits exactly one typed `agent:iteration` event per turn
+  (`IterationTrace`: iteration, stopReason, toolCalls, streamBytes,
+  durationMs, end phase). Abort/timeout/budget exits from any phase are
+  captured with their stop reason; illegal transitions are recorded for
+  diagnostics, never thrown. Eight new tests cover the transition contract
+  and a live end-to-end trace run.
 
 ## 0.10.5
 
