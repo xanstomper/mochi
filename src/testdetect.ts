@@ -65,7 +65,8 @@ export function autoTestCommand(cwd: string, fileScope: string[] | undefined): s
         const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { scripts?: Record<string, string>; devDependencies?: Record<string, string>; dependencies?: Record<string, string> };
         const hasVitest = pkg.devDependencies?.vitest || pkg.dependencies?.vitest;
         const hasJest = pkg.devDependencies?.jest || pkg.dependencies?.jest;
-        if (!hasVitest && !hasJest) return null;
+        const hasNodeTest = typeof pkg.scripts?.test === 'string' && pkg.scripts.test.includes('node --test');
+        if (!hasVitest && !hasJest && !hasNodeTest) return null;
       }
     } catch {
       return null;
@@ -87,7 +88,7 @@ export function autoTestCommand(cwd: string, fileScope: string[] | undefined): s
           // back to whatever the script says.
           if (hasVitest) return `cd ${probe} && npx vitest run --reporter=basic`;
           if (hasJest) return `cd ${probe} && npx jest --silent`;
-          return `cd ${probe} && npm test --silent`;
+          return `cd ${probe} && npm test --silent`; // includes node --test scripts
         }
         if (hasVitest) return `cd ${probe} && npx vitest run --reporter=basic`;
         if (hasJest) return `cd ${probe} && npx jest --silent`;
@@ -154,7 +155,7 @@ export function isWeakVerification(command: string | undefined): boolean {
   if (/\bgrep\b/.test(c) || /\bfind\b/.test(c) || /\bcat\b/.test(c) || /\bls\b/.test(c)) return true;
   if (/\bwc\b/.test(c) || /\bhead\b/.test(c) || /\btail\b/.test(c)) return true;
   // Anything that actually invokes a runner is not weak.
-  if (/\bvitest\b|\bjest\b|\bpytest\b|\bmocha\b|\btap\b|\bnode\s+-e\b|\bnode\s+\S+\.test/i.test(c)) return false;
+  if (/\bvitest\b|\bjest\b|\bpytest\b|\bmocha\b|\btap\b|\bnode\s+-e\b|\bnode\s+--test\b|\bnode\s+\S+\.test/i.test(c)) return false;
   if (/\bnode\b|\btsx\b|\bts-node\b|\bdeno\b|\bbun\b/.test(c)) return false;
   if (/\bnpm\s+test|\bnpx\s+test|\bpnpm\s+test|\byarn\s+test/.test(c)) return false;
   // Polyglot runners (Go, Rust, Python module) are real evidence too.

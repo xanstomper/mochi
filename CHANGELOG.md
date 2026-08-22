@@ -65,6 +65,19 @@
   never blocks finishing on git/shell failures. New
   `src/core/diff-hygiene.ts` (pure scanner) + `src/agent/hygiene.test.ts`
   (end-to-end: junky write → nudge → clean write → complete).
+- **Dogfood fixes (mochi-dogfood3 battery, head-to-head vs jcode on the same
+  model):** (1) `node --test` scripts are now recognized as real runners by
+  `isWeakVerification` and `autoTestCommand`, so Node built-in test projects
+  get their suite auto-run instead of being treated as weak checks;
+  (2) verification debt-masking is disabled when the task demands green
+  checks ("make npm test pass" / "fix so pytest passes") — previously a
+  pre-existing identical failure let an UNFIXED broken runner count as done.
+  Results on 3 tasks (CSV greenfield / Python bugfix / Go feature), same
+  model both sides: mochi 7/7, 3/3, go-ok with clean diffs; wall-clock
+  10.6s/5.6s/7.1s vs jcode 8.6s/5.4s/17.0s (2.4× faster on the Go task);
+  both agents' outputs pass the hygiene scanner. Known next lever: system
+  prompt is ~5.1k tokens re-sent every turn — trim/cache for jcode-class
+  token efficiency.
 
 ## 0.10.5
 

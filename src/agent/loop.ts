@@ -1416,6 +1416,13 @@ Continue from 'Next:', do not redo completed progress.`,
     if (checks.length === 0) return { passed: true, summary: 'No verification configured.' };
 
     const baseline = await this.verifyBaseline;
+    // Intent gate on debt-masking: when the TASK ITSELF demands green checks
+    // ("make npm test pass", "fix so pytest passes"), a failing check IS the
+    // success criterion - pre-existing identical failure must NOT mask it.
+    // Dogfood finding: masking let an unfixed broken runner count as done.
+    const wantsGreen = /\b(make|get|turn)\b[^.\n]{0,60}\b(pass|green)\b|\b(tests?|suite)\b[^.\n]{0,40}\b(must|should|to)\b[^.\n]{0,20}\bpass\b|\ball tests?\b|\b(pytest|npm test|node --test|go test|vitest|jest)\b[^.\n]{0,40}\b(pass(ing|es)?|green)\b/i.test(
+      `${task.title} ${task.description} ${(task.acceptanceCriteria ?? []).join(' ')}`,
+    );
 
     // Independent commands run in PARALLEL: test/typecheck/lint/build share no
     // state, so wall-clock per verification is the slowest check, not the sum.
@@ -1429,7 +1436,7 @@ Continue from 'Next:', do not redo completed progress.`,
       }
       // Pre-existing failure: identical failure captured before this run
       // started. It is repo debt, not agent breakage; do not fail the task.
-      if (matchesBaseline(baseline, cmd, out)) {
+      if (!wantsGreen && matchesBaseline(baseline, cmd, out)) {
         continue;
       }
       return { passed: false, summary: `Check failed: ${cmd}\n${truncateMiddle(out, 1200)}` };
