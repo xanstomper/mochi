@@ -1,148 +1,65 @@
 ---
 name: mochi-architecture
-description: Mochi internal architecture design
+description: Mochi internal architecture, dual Rust runtime core, 16 agent roles, tool suite, and orchestration design
 ---
 
-# Desk System Architecture
+# Mochi System Architecture & Engineering Protocol
 
-Architecture for the desk system, defining components, modules, interfaces,
-data models, and APIs. Built on the research in `docs/desk-research.md`.
+Mochi is an autonomous, high-performance software engineering agent harness designed with a dual-engine architecture:
 
-## 1. High-Level Architecture Diagram
+## 1. Dual-Engine Runtime Design
 
 ```
-+--------------------------------------------------------------+
-|                        UI Layer (src/ui)                      |
-|  Control Panel  |  Status Display  |  Preset Manager          |
-+----------------------------+---------------------------------+
-                             |  commands / events
-+----------------------------v---------------------------------+
-|                     Application Layer (src/core)             |
-|  DeskController  |  HeightManager  |  SurfaceManager          |
-|  StabilityManager|  ErgonomicsEngine                         |
-+----------------------------+---------------------------------+
-                             |  domain calls
-+----------------------------v---------------------------------+
-|                      Domain Layer (src/domain)               |
-|  Desk  Height  Surface  Stability  Preset  Material           |
-+----------------------------+---------------------------------+
-                             |  persistence
-+----------------------------v---------------------------------+
-|                   Infrastructure Layer (src/infra)           |
-|  MotorDriver  SensorAdapter  PersistenceStore  EventBus       |
-+--------------------------------------------------------------+
+┌─────────────────────────────────────────────────────────────┐
+│                    TypeScript Frontend                      │
+│   (Model Streaming, 15 Themes, TUI View, MCP/ACP Protocol)  │
+└──────────────────────────────┬──────────────────────────────┘
+                               │ N-API / stdio JSON-lines
+┌──────────────────────────────▼──────────────────────────────┐
+│                  Native Rust Core Runtime                   │
+│         (BPE Tokenizer, Compaction Math, Fast Indexer)      │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-## 2. Component Responsibilities & Interactions
+### A. Compiled Rust Core (`native/mochi_core`)
+- Zero third-party dependencies; compiles in <0.1s using `cargo build --release`.
+- **BPE Tokenization (`nativeCountTokens`)**: Sub-millisecond byte-pair encoding estimates.
+- **Compaction Math (`plan_compaction_cut`)**: Calculates valid transcript cuts (never leaves dangling tool results) with zero GC pressure.
+- **Native Workspace Indexing (`nativeSearchDir`)**: N-API C-ABI bindings for fast regex/substring file searching across 50,000+ files in ~3.8ms.
 
-### Presentation Layer (`src/ui`)
-- **ControlPanel**: renders height up/down buttons, mode toggle (sit/stand/adjustable).
-- **StatusDisplay**: shows current height, mode, load, and stability status.
-- **SettingsManager**: manages presets, ergonomic defaults, and preferences.
-- Interacts with the Application layer by dispatching commands and subscribing to events.
+### B. TypeScript Orchestration Layer (`src/`)
+- **Agent Loop (`src/agent/loop.ts`)**: Preflight → Model Stream → Tool Dispatch → Verify → Recovery.
+- **Task DAG Scheduler (`src/goals/scheduler.ts`)**: Manages dependency-aware task graphs and parallel agent execution.
+- **Context Engine (`src/context.ts`)**: Assembles surgical token-budgeted prompts, loads project rules, and prunes stale history.
+- **Session Persistence (`src/session-store.ts`)**: SQLite+FTS5 full-text indexed session storage.
 
-### Application Layer (`src/core`)
-- **DeskController**: orchestrates user commands into domain operations; the public facade.
-- **HeightRequest**: validates and queues height-change requests (with limits + anti-collision).
-- **Ergonomics**: computes recommended heights from user body metrics and enforces defaults.
-- **StabilityManager**: monitors load distribution and wobble; flags unsafe states.
-- Emits typed events for every state change (see `src/events.ts`).
+---
 
-### Domain Layer (`src/domain`)
-- **Desk**: aggregate root; owns Height, Surface, Stability, and Presets.
-- **Height**: value object with min/max range and current/target values.
-- **Surface**: dimensions (width/depth/thickness) and material.
-- **Stability**: load capacity, base width, center-of-gravity constraints.
-- **Preset**: named height configuration (e.g., "sitting", "standing").
-- **Material**: material properties (strength, weight, cost).
+## 2. The 16 Specialized Subagents
 
-### Infrastructure Layer (`src/infra`)
-- **MotorDriver**: interface to the physical height-adjustment motor.
-- **SensorAdapter**: reads load/position sensors.
-- **PresetStore**: persists presets to `.mochi/`.
-- **ConfigStore**: persists user preferences and ergonomic settings.
+Mochi dynamically dispatches tasks across 16 specialized agent roles:
+1. **`lead`**: Decomposes complex goals, coordinates swarms, evaluates outputs.
+2. **`coder`**: Writes surgical code changes, runs compiler & test suite verifications.
+3. **`reviewer`**: Read-only diff inspector, SOLID/DRY auditor, regression catcher.
+4. **`tester`**: Writes unit/integration tests and headless bug reproduction scripts.
+5. **`researcher`**: Read-only AST inspector (`get_function`, `find_callers`), web search & crawling.
+6. **`debugger`**: Root-cause diagnostic specialist, hypothesis testing, telemetry injection.
+7. **`security`**: OWASP Top 10 auditor, data-flow threat modeler, CVE checker.
+8. **`architect`**: API contract designer, schema definer, system boundary validator.
+9. **`devops`**: Docker, Kubernetes, CI/CD pipelines (GitHub Actions), Terraform.
+10. **`db_admin`**: SQL migrations, normalized schemas, query plan optimization.
+11. **`frontend`**: React/Vue/Svelte, CSS Grid/Tailwind, responsive design, a11y.
+12. **`backend`**: RESTful/GraphQL/gRPC APIs, concurrency, distributed locking.
+13. **`performance`**: CPU hotspot profiling, memory leak detection, Big-O optimization.
+14. **`tech_writer`**: Architecture Decision Records (ADRs), READMEs, Mermaid diagrams.
+15. **`qa_engineer`**: End-to-end automation (Playwright/Cypress), visual regression.
+16. **`data_scientist`**: Pandas/Polars wrangling, PyTorch/TensorFlow modeling, analytics.
 
-## 3. Data Models & APIs
+---
 
-### Domain types (TypeScript)
+## 3. Tool Dispatch & Operating Rules
 
-```ts
-type DeskMode = "sitting" | "standing" | "adjustable";
-
-interface Height {
-  current: number;   // cm
-  target: number;    // cm
-  min: number;       // cm
-  max: number;       // cm
-}
-
-interface Surface {
-  width: number;     // cm
-  depth: number;     // cm
-  thickness: number; // cm
-  material: Material;
-}
-
-interface Material {
-  id: string;
-  name: string;
-  weightKg: number;
-  loadCapacityKg: number;
-  cost: number;
-}
-
-interface Stability {
-  loadCapacityKg: number;
-  stable: boolean;
-  wobble: number;    // 0..1
-}
-
-interface Preset {
-  id: string;
-  name: string;      // "sitting" | "standing" | custom
-  heightCm: number;
-}
-
-interface DeskState {
-  mode: DeskMode;
-  height: Height;
-  surface: Surface;
-  stability: Stability;
-  presets: Preset[];
-}
-```
-
-### Public API (DeskController facade)
-
-```ts
-class DeskController {
-  getState(): DeskState;
-  setHeight(cm: number): Promise<DeskState>;
-  setMode(mode: DeskMode): Promise<DeskState>;
-  applyPreset(id: string): Promise<DeskState>;
-  savePreset(name: string, heightCm: number): Preset;
-  setErgonomics(metrics: UserMetrics): void;
-  on(event: DeskEvent, handler: (s: DeskState) => void): void;
-}
-```
-
-### Events (`src/events.ts`)
-- `height.changed` — emitted when height changes.
-- `mode.changed` — emitted when mode changes.
-- `stability.warning` — emitted when stability degrades.
-- `preset.applied` — emitted when a preset is applied.
-- `error` — emitted on motor/sensor failures.
-
-## 4. Design Decisions
-- **Layered architecture** keeps UI independent from core logic and hardware.
-- **Event-driven** state changes (per project convention) for testability and decoupling.
-- **Domain model** is pure TypeScript with no I/O, enabling unit testing.
-- **Infrastructure adapters** isolate hardware so the core runs in tests without a motor.
-- Persistence of presets/config to `.mochi/` per project convention.
-
-## 5. Defaults (from research)
-- Surface: 152 cm wide × 76 cm deep × 3 cm thick.
-- Sitting height: 74 cm; standing height: 102 cm.
-- Height range: 60–125 cm.
-- Load capacity: 100 kg.
-- Materials: steel legs + MDF/wood top.
+1. **Information Density**: Batch independent tool calls in parallel. Do not read entire files when symbol lookup (`get_function`) or targeted search will suffice.
+2. **Surgical Modifications**: Prefer `edit` or `patch` over full-file rewrites.
+3. **Verification First**: Never mark a task complete without executing a concrete verification command.
+4. **Zero-Chatter**: Keep user-facing explanations minimal, concise, and direct. Reason internally.

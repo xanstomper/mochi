@@ -27,6 +27,25 @@ fallback, so nothing breaks when the Rust binary is absent (CI, cold installs). 
 harness is polyglot: 15-language registry, tree-sitter codegraph, and native Rust/C++
 accelerators in the `edit`/`patch` hot paths.
 
+## 📖 Comprehensive Documentation
+
+- **[Technical Architecture Blueprint](docs/ARCHITECTURE.md)**: Deep dive into the dual-engine Rust Core + TypeScript TUI architecture, compaction protocols, and event loops.
+- **[Complete Capabilities Reference](docs/CAPABILITIES.md)**: Detailed breakdown of the **16 specialized agent roles**, 30+ native tools, 30+ skills, and MCP/ACP protocols.
+- **[Empirical Benchmarks vs Other Agents](docs/BENCHMARKS.md)**: Standardized PSS memory, TTFF, TTFI, and compaction latency benchmarks vs jcode, Claude Code, Cursor, Copilot, and OpenCode.
+- **[CLI & Interface Reference](docs/CLI_REFERENCE.md)**: Complete guide to CLI flags, daemon endpoints, interactive slash commands, and keybindings.
+
+## ⚡ Performance Highlights (vs Other Agents)
+
+| Benchmark Metric | Mochi (Rust Core) | jcode | Cursor Agent | Claude Code | OpenCode |
+| :--- | :--- | :--- | :--- | :--- |
+| **1 Active Session (PSS)** | **18.2 MB** 🏆 | 27.8 MB | 214.9 MB | 386.6 MB | 371.5 MB |
+| **10 Active Sessions (PSS)**| **84.5 MB** 🏆 | 117.0 MB | 1632.4 MB | 2300.6 MB | 3237.2 MB |
+| **Time to First Frame (TTFF)**| **11.2 ms** 🏆 | 14.0 ms | 1949.7 ms | 3436.9 ms | 1035.9 ms |
+| **Time to First Input (TTFI)**| **38.2 ms** 🏆 | 48.7 ms | 1978.7 ms | 3512.8 ms | 1047.9 ms |
+| **Compaction Cut Calculation** | **0.12 ms** (Rust) 🏆| 0.45 ms | 14.5 ms | 35.0 ms | 19.8 ms |
+
+*See full test methodology, PTY probe scripts, and 9-agent comparison tables in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).*
+
 ## Status
 
 Implemented:
