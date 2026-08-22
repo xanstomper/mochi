@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { readdirSync, readFileSync, statSync, openSync, readSync, closeSync, existsSync } from 'node:fs';
 import { resolve, relative } from 'node:path';
+import { nativeSearchDir } from '../native/core.js';
 import type { Tool, ToolContext } from './types.js';
 import { mutationGeneration } from './fs-signal.js';
 
@@ -19,6 +20,8 @@ function nativeSearchBin(): string | undefined {
 }
 
 async function nativeSearch(cwd: string, query: string, glob?: string): Promise<string | null> {
+  const nat = nativeSearchDir(cwd, query, glob || '', 60);
+  if (nat) return nat;
   const bin = nativeSearchBin();
   if (!bin) return null;
   return new Promise((res) => {
