@@ -24,6 +24,19 @@ describe('classifyTaskKind', () => {
     expect(classifyTaskKind({ title: 'hey there', description: 'how are you doing?' })).toBe('chat');
     expect(classifyTaskKind({ title: 'who are you', description: 'who are you' })).toBe('chat');
   });
+  it('routes short casual/typo messages to chat, not the coding pipeline', () => {
+    // Real user messages from the live session that used to fall through to
+    // 'implement' (git preflight + coding focus) and produced canned replies.
+    expect(classifyTaskKind({ title: 'hewwo', description: 'hewwo' })).toBe('chat');
+    expect(classifyTaskKind({ title: 'whats can u do', description: 'whats can u do' })).toBe('chat');
+    expect(classifyTaskKind({ title: 'you there?', description: 'you there?' })).toBe('chat');
+    expect(classifyTaskKind({ title: 'wassup', description: 'wassup' })).toBe('chat');
+  });
+  it('still routes short action messages to implement', () => {
+    expect(classifyTaskKind({ title: 'Code a calculator.', description: 'Code a calculator.' })).toBe('implement');
+    expect(classifyTaskKind({ title: 'open the calculator', description: 'open the calculator' })).toBe('implement');
+    expect(classifyTaskKind({ title: 'code a game', description: 'code a game' })).toBe('implement');
+  });
   it('falls back to implement for unknown shapes', () => {
     expect(classifyTaskKind({ title: 'Add export to foo', description: 'export const x' })).toBe('implement');
     expect(classifyTaskKind({ title: '', description: '' })).toBe('unknown');

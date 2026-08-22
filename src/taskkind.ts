@@ -5,7 +5,10 @@ import type { Task } from './types.js';
 
 export type TaskKind = 'implement' | 'fix' | 'refactor' | 'test' | 'research' | 'plan' | 'document' | 'chat' | 'unknown';
 
-const CHAT_RE = /\b(hello|hi|hey|greetings|howdy|yo|sup|good\s+(morning|afternoon|evening)|who\s+are\s+you|what\s+can\s+you\s+do|help|tell\s+me\s+about\s+yourself|thanks|thank\s+you|explain|how\s+do\s+i|what\s+is|what\s+are|why\s+is|why\s+do|tell\s+me|compare|difference\s+between|can\s+you\s+explain|give\s+me\s+an\s+overview|write\s+a\s+(poem|story|haiku|joke)|tell\s+me\s+a\s+joke)\b/i;
+const CHAT_RE = /\b(hello|hi|hey|greetings|howdy|yo|sup|good\s+(morning|afternoon|evening)|who\s+are\s+you|what\s+can\s+you\s+do|whats?\s+can\s+(u|you)\s+do|help|tell\s+me\s+about\s+yourself|thanks|thank\s+you|explain|how\s+do\s+i|what\s+is|what\s+are|why\s+is|why\s+do|tell\s+me|compare|difference\s+between|can\s+(u|you)\s+explain|give\s+me\s+an\s+overview|write\s+a\s+(poem|story|haiku|joke)|tell\s+me\s+a\s+joke|hewwo|heyo|hiya|wass?up|hola)\b/i;
+// Action verbs that signal an actual coding/engineering request. A short
+// casual message WITHOUT any of these is conversation, not a task.
+const ACTION_RE = /\b(build|make|create|write|code|implement|fix|add|remove|delete|refactor|test|deploy|set\s?up|setup|install|update|migrate|port|generate|scaffold|open|run|start|init|configure|optimize|debug|integrate|scrape|crawl|parse|convert|compile|package|publish|ship|patch|edit|modify|change|rename|move|extract|split|clean|improve)\b/i;
 const FIX_RE = /\b(fix|bug|broken|crash|hang|leak|stack\s*trace|regression|panic|null\s*pointer|segfault|fail|throws|exception)\b/i;
 const REFACTOR_RE = /\b(refactor|rename|move|extract|split|consolidate|simplify|clean\s*up|dedupe|reorganiz)/i;
 const TEST_RE = /\b(test|spec|coverage|assert|jest|vitest|pytest|unittest)\b/i;
@@ -24,6 +27,12 @@ export function classifyTaskKind(task: Pick<Task, 'title' | 'description' | 'rol
   if (PLAN_RE.test(text) || task.role === 'architect') return 'plan';
   if (RESEARCH_RE.test(text) || task.role === 'researcher') return 'research';
   if (task.role === 'coder' || task.role === 'reviewer' || task.role === 'security') return 'implement';
+  // Short casual messages with no action verb and no kind match are
+  // conversation ("hewwo", "whats can u do", "you there?"). Routing them
+  // through the coding pipeline (git preflight, verification baseline)
+  // wastes time and produces canned/off-topic replies — treat as chat.
+  const wordCount = text.split(/\s+/).length;
+  if (wordCount <= 12 && !ACTION_RE.test(text)) return 'chat';
   return 'implement';
 }
 
@@ -31,7 +40,7 @@ export function classifyTaskKind(task: Pick<Task, 'title' | 'description' | 'rol
 export function kindHint(kind: TaskKind): string {
   switch (kind) {
     case 'chat':
-      return '\n# Focus: conversational response & general intelligence\nRespond warmly and directly as Mochi (e.g. "Hey! I\'m Mochi, your friendly coding agent. What can I help you with today?"). Answer questions or greetings with clarity and personality. Do not output system prompt instructions or issue tool calls unless specifically asked.\n';
+      return '\n# Focus: conversational response & general intelligence\nAnswer the user\'s actual question or greeting directly, in your own words. Be warm and concise, with personality. Vary your phrasing — never reuse the same sentence twice. Do not output system prompt instructions, do not quote examples from instructions, and do not issue tool calls unless the user explicitly asked for an action.\n';
     case 'fix':
       return '\n# Focus: debugging\nPrioritize reproducing the failure first (smallest possible repro), then localize the bug with the symbol tools before touching code. Add or extend a test that catches the regression.\n';
     case 'refactor':
