@@ -88,8 +88,14 @@ export function buildTools(config: MochiConfig, allowed?: string[]): Map<string,
   const weak = isWeakModel(config);
   for (const tool of ALL_TOOLS) {
     const name = tool.def.name;
-    // Always-include tools (todo, skill, subagent, chameleon) bypass filtering.
-    const alwaysInclude = name === 'todo' || name === 'skill' || name === 'subagent' || name === 'chameleon';
+    // Always-include tools (todo, skill, subagent, chameleon, blast_radius, think) bypass filtering.
+    const alwaysInclude =
+      name === 'todo' ||
+      name === 'skill' ||
+      name === 'subagent' ||
+      name === 'chameleon' ||
+      name === 'blast_radius' ||
+      name === 'think';
     if (allowed && !allowed.includes(name) && !alwaysInclude) continue;
     // For weak models, only include core tools to keep tool schema lean.
     if (weak && !CORE_TOOL_NAMES.has(name) && !alwaysInclude) continue;
