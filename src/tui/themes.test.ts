@@ -45,37 +45,37 @@ describe('mochi themes', () => {
   });
 
   it('can look up themes by id or name', () => {
-    expect(getTheme('sakura')?.name).toBe('Sakura Bloom');
-    expect(getTheme('Cyberpunk 2077')?.id).toBe('cyberpunk');
-    expect(getTheme('dracula')?.name).toBe('Dracula');
-    expect(getTheme('nord')?.name).toBe('Nordic Frost');
-    expect(getTheme('monokai')?.name).toBe('Monokai Pro');
-    expect(getTheme('matrix')?.name).toBe('Matrix Phosphor');
-    expect(getTheme('matcha')?.name).toBe('Matcha Latte');
+    expect(getTheme('cyber-void')?.name).toBe('Cyber Void');
+    expect(getTheme('Vaporwave')?.id).toBe('vaporwave');
+    expect(getTheme('solar-flare')?.name).toBe('Solar Flare');
+    expect(getTheme('deep-sea')?.name).toBe('Deep Sea');
+    expect(getTheme('retro-arcade')?.name).toBe('Retro Arcade');
+    expect(getTheme('hacker-terminal')?.name).toBe('Hacker Terminal');
+    expect(getTheme('midnight-jazz')?.name).toBe('Midnight Jazz');
   });
 
   it('dynamically switches theme and updates T palette in place', () => {
-    const sakura = setTheme('sakura');
-    expect(sakura.id).toBe('sakura');
-    expect(T.act).toBe(sakura.colors.act);
-    expect(T.bgUser).toBe(sakura.colors.bgUser);
+    const vapor = setTheme('vaporwave');
+    expect(vapor.id).toBe('vaporwave');
+    expect(T.act).toBe(vapor.colors.act);
+    expect(T.bgUser).toBe(vapor.colors.bgUser);
 
-    const cyberpunk = setTheme('cyberpunk');
-    expect(cyberpunk.id).toBe('cyberpunk');
-    expect(T.act).toBe(cyberpunk.colors.act);
+    const solar = setTheme('solar-flare');
+    expect(solar.id).toBe('solar-flare');
+    expect(T.act).toBe(solar.colors.act);
 
-    // Reset back to classic
-    setTheme('classic');
-    expect(getCurrentTheme().id).toBe('classic');
+    // Reset back to cyber-void
+    setTheme('cyber-void');
+    expect(getCurrentTheme().id).toBe('cyber-void');
   });
 
   it('persists chosen theme to disk and restores it across sessions', () => {
-    applyTheme('cyberpunk');
-    expect(process.env.MOCHI_THEME).toBe('cyberpunk');
-    expect(getCurrentTheme().id).toBe('cyberpunk');
+    applyTheme('retro-arcade');
+    expect(process.env.MOCHI_THEME).toBe('retro-arcade');
+    expect(getCurrentTheme().id).toBe('retro-arcade');
 
-    // Reset to classic for subsequent test runs
-    applyTheme('classic');
-    expect(getCurrentTheme().id).toBe('classic');
+    // Reset to cyber-void for subsequent test runs
+    applyTheme('cyber-void');
+    expect(getCurrentTheme().id).toBe('cyber-void');
   });
 });

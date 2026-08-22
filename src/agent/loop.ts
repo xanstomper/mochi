@@ -16,7 +16,7 @@ import { matchesBaseline, type VerificationBaseline } from '../verification.js';
 import { diagnoseFile, renderDiagnostics } from '../diagnostics.js';
 import type { AgentProfile } from '../types.js';
 import { AgentProfileService } from '../agents/profile.js';
-import { BudgetEngine } from '../budget.js';
+import { BudgetEngine, estimateCostUsd } from '../budget.js';
 import { LearningStore } from '../learning.js';
 import { classifyFailure as classifyErrorPattern } from '../learning.js';
 import {
@@ -51,9 +51,12 @@ import { classifyContentOnly } from '../one-shot.js';
 import { buildMcpTools } from '../mcp/tools.js';
 import { preEditSnapshot as gitPreEditSnapshot, rollbackToSnapshot as gitRollback, type CheckpointResult } from '../git.js';
 import { applyToolOutputPolicy } from '../core/tool-output.js';
+import { nativeStripThinkTags } from '../native/core.js';
 
 export function stripThinkTags(text: string): string {
   if (!text) return '';
+  const nat = nativeStripThinkTags(text);
+  if (nat !== null) return nat;
   return text
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
     .replace(/<thought>[\s\S]*?<\/thought>/gi, '')
@@ -167,7 +170,7 @@ export interface AgentOptions {
   subagentDepth?: number;
   /** Repo-check failures captured before this run. A verify failure matching
    *  it is pre-existing debt and must not fail the task. */
-  verifyBaseline?: VerificationBaseline;
+  verifyBaseline?: VerificationBaseline | Promise<VerificationBaseline | undefined>;
 }
 
 export type AgentStopReason =
@@ -201,7 +204,7 @@ export class Agent {
   private events: EventBus;
   private cwd: string;
   private context: ContextEngine;
-  private verifyBaseline?: VerificationBaseline;
+  private verifyBaseline?: VerificationBaseline | Promise<VerificationBaseline | undefined>;
   /** True when the task's deliverable is file content with no behavior change
    *  (docs/config/data): repo-wide suites are vetoed for such tasks. */
   private contentOnly = false;
@@ -584,7 +587,7 @@ Continue from 'Next:', do not redo completed progress.`,
         }
 
         const rawContent = chunks.map((c) => c.content).join('');
-        const content = stripThinkTags(rawContent);
+        let content = stripThinkTags(rawContent);
         const callsByIndex = new Map<number, any>();
         for (const chunk of chunks) {
           if (chunk.toolCalls) {
@@ -598,6 +601,14 @@ Continue from 'Next:', do not redo completed progress.`,
           }
         }
         const tool_calls = [...callsByIndex.values()].map((a) => ({ id: a.id, type: 'function' as const, function: { name: a.name, arguments: a.args } }));
+        // If content is empty after stripping think tags, but the model did emit reasoning (and no tools),
+        // extract the thinking body so we don't treat it as a dead empty response that triggers an endless loop.
+        if (!content && !tool_calls.length && rawContent.trim()) {
+          const thinkText = rawContent.replace(/<\/?(?:think|thought)>/gi, '').trim();
+          if (thinkText) {
+            content = thinkText;
+          }
+        }
         return {
           content,
           toolCalls: tool_calls.length ? tool_calls : undefined,
@@ -625,11 +636,10 @@ Continue from 'Next:', do not redo completed progress.`,
         // Phase 4 (VNext): feed REAL provider usage into the context engine so
         // the compaction floor triggers on actuals instead of the chars/3.8 guess.
         this.context.recordReportedUsage((response.usage as { promptTokens?: number }).promptTokens);
-        // Surface REAL provider usage to the TUI: input, output, cache reads.
-        // prompt_tokens already includes cache-hit tokens on most providers;
-        // subtract them for the honest "new input" figure the status bar shows.
+        // Surface REAL provider usage to the TUI: input, output, cache reads, and cost in USD.
         const u = response.usage as { promptTokens?: number; completionTokens?: number; totalTokens?: number };
         const cacheRead = kvCache.totalCacheSaved || kvCache.lastCacheSaved;
+        const cost = estimateCostUsd({ promptTokens: u.promptTokens, completionTokens: u.completionTokens }, this.config.model.model);
         this.events.emit({
           type: 'usage:updated' as any,
           agentId: this.id,
@@ -637,6 +647,7 @@ Continue from 'Next:', do not redo completed progress.`,
           outputTokens: u.completionTokens ?? 0,
           cacheTokens: cacheRead,
           totalTokens: u.totalTokens ?? 0,
+          costUsd: this.budget?.snapshot(this.config.model.model).usedCostUsd ?? cost,
         });
       }
       // Reset empty-response counter on any successful model output.
@@ -692,16 +703,12 @@ Continue from 'Next:', do not redo completed progress.`,
       this.lastStrategy = response.toolCalls?.[0]?.function.name ?? response.content?.slice(0, 60) ?? '';
 
       // Anti-"same message" guard: if the model returns the exact same
-      // no-tool-call answer again (typically a stalled verification/loop that
-      // would otherwise re-stream the identical text to the TUI forever),
-      // stop instead of re-printing it — but ONLY when nothing real is pending:
-      // the fix is already verified (or it's a pure answer with no file work),
-      // and never in plan mode (where a plan preamble must still be nudged).
-      if (!this.planMode && (!response.toolCalls || response.toolCalls.length === 0)) {
+      // no-tool-call answer again without making file changes, finish immediately rather than looping.
+      if (!this.planMode && (!response.toolCalls || response.toolCalls.length === 0) && !this.fileChanged) {
         const text = (response.content ?? '').trim();
-        if (text && text === this.lastCompletionAnswer && this.lastVerifyPassed) {
+        if (text && text === this.lastCompletionAnswer) {
           this.sameAnswerStreak++;
-          if (this.sameAnswerStreak >= 2) {
+          if (this.sameAnswerStreak >= 1) {
             return this.finish(task, true, text, 'completed');
           }
         } else {
@@ -803,6 +810,22 @@ Continue from 'Next:', do not redo completed progress.`,
             this.events.emit({ type: 'agent:log', agentId: this.id, message: '[prose-guard] answer over 12k chars; requesting terse rewrite' });
             continue;
           }
+
+          // If the task specifically expected file changes (fileScope or acceptanceCriteria)
+          // and no files were modified yet, nudge the model to execute the tool rather than
+          // completing prematurely on conversational preamble.
+          const expectsFiles = (task.fileScope && task.fileScope.length > 0) ||
+                               (task.acceptanceCriteria && task.acceptanceCriteria.length > 0);
+          if (expectsFiles && !this.planMode && taskKind !== 'chat' && this.planNudges < 2) {
+            this.planNudges++;
+            this.context.addMessage({
+              role: 'system',
+              content: 'You responded with text, but no files have been created or modified yet for this task. Please use the write or edit tool to make the required file changes now.',
+            });
+            this.events.emit({ type: 'agent:log', agentId: this.id, message: '[file-guard] expected file changes; nudging to call write/edit tool' });
+            continue;
+          }
+
           return this.finish(task, true, response.content, 'completed');
         }
         // Empty response: the model returned nothing (common with overloaded
@@ -823,7 +846,7 @@ Continue from 'Next:', do not redo completed progress.`,
         if (this.abortSignal?.aborted) {
           return this.finish(task, false, 'Aborted during empty-response backoff.', 'aborted');
         }
-        this.context.addMessage({ role: 'system', content: 'Your last response was empty. Please respond with either a tool call or a direct text answer.' });
+        this.context.addMessage({ role: 'system', content: 'Your last response was empty. Please respond with either a tool call or a direct text answer without <think> tags.' });
         continue;
       }
 
@@ -1181,6 +1204,7 @@ Continue from 'Next:', do not redo completed progress.`,
         ? { spawnSubagent: (prompt: string, opts?: { role?: string }) => this.spawnSubagent(prompt, opts?.role) }
         : {}),
     };
+    this.events.emit({ type: 'tool:called', tool: tc.function.name, args, agentId: this.id });
     const { output, error, durationMs } = await executeTool(tc.function.name, args, ctx, this.tools);
     // Instant diagnostics (the Crush LSP insight): after every edit, surface
     // type/syntax errors for the touched file in the SAME turn so the model
@@ -1327,6 +1351,8 @@ Continue from 'Next:', do not redo completed progress.`,
     }
     if (checks.length === 0) return { passed: true, summary: 'No verification configured.' };
 
+    const baseline = await this.verifyBaseline;
+
     for (const cmd of checks) {
       const out = await this.runShell(cmd, 180);
       if (out.includes('exit_code: 0') || out.trim().endsWith('PASS')) {
@@ -1334,7 +1360,7 @@ Continue from 'Next:', do not redo completed progress.`,
       }
       // Pre-existing failure: identical failure captured before this run
       // started. It is repo debt, not agent breakage; do not fail the task.
-      if (matchesBaseline(this.verifyBaseline, cmd, out)) {
+      if (matchesBaseline(baseline, cmd, out)) {
         continue;
       }
       return { passed: false, summary: `Check failed: ${cmd}\n${truncateMiddle(out, 1200)}` };

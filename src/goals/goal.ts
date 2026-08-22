@@ -35,7 +35,7 @@ export class GoalEngine {
   private cwd: string;
   private goalStats = { tokens: 0, duration: 0 };
   /** Baseline for the in-flight run (undefined outside runGoal). */
-  private runBaseline: VerificationBaseline | undefined;
+  private runBaseline: VerificationBaseline | Promise<VerificationBaseline | undefined> | undefined;
   private baselineCache?: { baseline: VerificationBaseline; cachedAt: number };
   /** Lazy-initialized Hermes-style session store for transcript search. */
   private sessionStoreInstance: SessionStore | undefined;
@@ -203,30 +203,28 @@ Return ONLY the JSON array, no markdown.`;
     });
 
     const BASELINE_TTL_MS = 5 * 60 * 1000;
-    let baseline: VerificationBaseline | undefined;
+    let baselinePromise: Promise<VerificationBaseline | undefined> | undefined;
     if (isOnlyChatOrResearch) {
-      baseline = undefined;
+      baselinePromise = undefined;
     } else if (this.baselineCache && Date.now() - this.baselineCache.cachedAt < BASELINE_TTL_MS) {
-      baseline = this.baselineCache.baseline;
+      baselinePromise = Promise.resolve(this.baselineCache.baseline);
     } else {
-      this.events.emit({ type: 'agent:log', agentId: 'system', message: 'Capturing verification baseline…' } as any);
-      try {
-        baseline = await captureBaseline(this.cwd, async (cmd) => {
-          const { execFile } = await import('node:child_process');
-          return await new Promise<string>((res) => {
-            execFile('sh', ['-c', cmd], { cwd: this.cwd, timeout: 60_000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
-              const code = err && 'code' in err ? Number((err as { code?: number }).code ?? 1) : err ? 1 : 0;
-              res(`exit_code: ${code}\n${stdout ?? ''}\n${stderr ?? ''}`);
-            });
+      // Capture baseline concurrently in the background so prompt execution starts immediately without 15-30s lag.
+      baselinePromise = captureBaseline(this.cwd, async (cmd) => {
+        const { execFile } = await import('node:child_process');
+        return await new Promise<string>((res) => {
+          execFile('sh', ['-c', cmd], { cwd: this.cwd, timeout: 30_000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+            const code = err && 'code' in err ? Number((err as { code?: number }).code ?? 1) : err ? 1 : 0;
+            res(`exit_code: ${code}\n${stdout ?? ''}\n${stderr ?? ''}`);
           });
         });
-        this.baselineCache = { baseline, cachedAt: Date.now() };
-      } catch {
-        baseline = undefined;
-      }
+      }).then((b) => {
+        this.baselineCache = { baseline: b, cachedAt: Date.now() };
+        return b;
+      }).catch(() => undefined);
     }
-    const verifier = new VerifierEngine({ cwd: this.cwd, workspace: this.workspace, config: this.config, events: this.events, budget, baseline });
-    this.runBaseline = baseline;
+    const verifier = new VerifierEngine({ cwd: this.cwd, workspace: this.workspace, config: this.config, events: this.events, budget, baseline: baselinePromise });
+    this.runBaseline = baselinePromise;
     const scheduler = new TaskScheduler(allTasks, this.events);
     const maxConcurrency = this.config.safety.maxConcurrentAgents;
     // Prefer an externally-created signal (user hit Ctrl-C in the CLI or the
@@ -241,6 +239,7 @@ Return ONLY the JSON array, no markdown.`;
     const readCache: ReadCache = new Map();
 
     while (!scheduler.isDone()) {
+      if (abortController.signal.aborted) break;
       const ready = scheduler.readyTasks();
       if (ready.length === 0) {
         if (this.runningCount(scheduler) > 0) {

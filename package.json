@@ -17,7 +17,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && chmod +x dist/cli.js",
     "build:bin": "bun build src/cli.ts --compile --outfile dist/mochi-bin --target=bun",
-    "build:native": "mkdir -p native/bin && (rustc -O -o native/bin/fuzzy_rust native/rust/fuzzy.rs || true) && (g++ -O2 -std=c++17 -o native/bin/fuzzy_cpp native/cpp/fuzzy.cpp || true)",
+    "build:native": "mkdir -p native/bin && (cargo build --release --manifest-path native/mochi_core/Cargo.toml && cp native/mochi_core/target/release/libmochi_core.so native/bin/ || true) && (rustc -O -o native/bin/fuzzy_rust native/rust/fuzzy.rs || true) && (rustc -O -o native/bin/search_rust native/rust/search.rs || true) && (g++ -O2 -std=c++17 -o native/bin/fuzzy_cpp native/cpp/fuzzy.cpp || true)",
     "dev": "tsx src/cli.ts",
     "test": "vitest run",
     "test:verbose": "vitest run --reporter=dot",

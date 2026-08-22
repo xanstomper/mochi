@@ -21,13 +21,13 @@ import {
   SPLASH_TICKS,
   statusBarRow1,
   statusBarRow2,
-  statusBarRow3,
   renderEntry,
   renderDropdown,
   composerRow,
   composerPlaceholderRow,
   composerTopRule,
   composerBottomRule,
+  composerHintRow,
   transcriptIndent,
   thinkingLine,
   spinnerFrame,
@@ -89,6 +89,7 @@ const COMMANDS = [
   { name: '/doctor', hint: 'Diagnose workspace configuration' },
   { name: '/init', hint: 'Create project MOCHI.md instructions' },
   { name: '/new', hint: 'Start a fresh conversation session' },
+  { name: '/skip', hint: 'Skip/interrupt current in-flight task' },
   { name: '/stop', hint: 'Interrupt current in-flight task' },
   { name: '/exit', hint: 'Quit Mochi CLI' },
 ];
@@ -98,7 +99,11 @@ const SPINNER = ['◐', '◓', '◑', '◒'];
 export async function launchTui(runtime: Runtime, initialPrompt?: string): Promise<void> {
   const projectRoot = findProjectRoot(runtime.cwd);
   const projectName = basename(projectRoot);
-  const branch = await gitBranch(projectRoot);
+  let branch = '';
+  void gitBranch(projectRoot).then((b) => {
+    branch = b;
+    scheduleRender();
+  });
   let modelShort = runtime.config.model.model.split('/').pop() ?? runtime.config.model.model;
 
   // Synchronize saved theme immediately on launch
@@ -163,6 +168,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   let pendingPrompt: string | undefined;
   let menuResolver: ((i: number) => void) | undefined;
   let lastEscAt = 0;
+  let lastCtrlCAt = 0;
 
   let schedulerTimer: NodeJS.Timeout | undefined;
   let renderQueued = false;
@@ -418,8 +424,11 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   function transcriptGeometry(w: number): { chatMw: number; availableH: number } {
     const h = height();
     const statusRows = h >= 20 ? 4 : 3;
-    const composerRows = state.input ? Math.min(6, Math.ceil(state.input.length / Math.max(10, w - 8)) + 2) : 3;
-    const contentH = Math.max(1, h - statusRows - composerRows - 1);
+    const innerW = Math.max(1, w - 6);
+    const textRows = state.input ? wrap(state.input, innerW).length : 1;
+    const composerRows = Math.min(Math.max(4, Math.floor(h / 3)), textRows + 2);
+    const bottomRows = composerRows + statusRows;
+    const contentH = Math.max(1, h - bottomRows);
     const availableH = state.busy ? Math.max(1, contentH - 1) : contentH;
     const indent = transcriptIndent(w);
     const chatMw = Math.min(w - indent * 2, Math.max(24, w - 4));
@@ -556,26 +565,31 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     const w = width();
     const h = height();
 
-    // 4 status rows when terminal height is >= 20 (model+toggle, ctx/cache bars, workspace+git,
-    // auto-approve); 3 when very short (bars folded away).
-    const statusRows: number = h >= 20 ? 4 : 3;
-    const composerRows = state.input ? Math.min(6, Math.ceil(state.input.length / Math.max(10, w - 8)) + 2) : 3;
-    const bottomRows = composerRows + statusRows;
-    const contentH = Math.max(1, h - bottomRows - 1);
+    // Refactored layout
+    const statusRows: number = h >= 20 ? 3 : 2; 
+    const innerW = Math.max(1, w - 6);
+    const rawRows = state.input ? wrap(state.input, innerW) : [''];
+    
+    // Composer expands as user types, up to 1/3 of screen height
+    const composerBoxRows = Math.min(Math.max(4, Math.floor(h / 3)), rawRows.length + 2);
+    const composerRows = composerBoxRows;
+    
+    // Bottom consists of composer, status bars, and auto-approve row
+    const bottomRows = composerRows + statusRows + 1;
+    const contentH = Math.max(1, h - bottomRows);
 
     const indent = transcriptIndent(w);
     const chatMw = Math.min(w - indent * 2, Math.max(24, w - 4));
-
+    
     const availableH = state.busy ? Math.max(1, contentH - 1) : contentH;
     const chatLines = transcriptLines(chatMw);
     const visible = chatLines.slice(Math.max(0, chatLines.length - availableH - state.scroll), Math.max(0, chatLines.length - state.scroll));
 
     const rows: string[] = new Array(h).fill('');
     const lead = ' '.repeat(indent);
+    
     const showSplash = !state.splashDismissed && state.lines.length === 0;
     if (showSplash) {
-      // Splash with REAL loading progress: providers/skills/graph milestones
-      // push splashProgress; the bar fills with them and the sheen animates.
       const splash = splashFrame(state.splashTick, w, pkg.version, state.splashProgress, state.splashBurst);
       const top = Math.max(0, Math.floor((contentH - splash.length) / 2));
       for (let i = 0; i < splash.length && i < contentH; i++) {
@@ -588,7 +602,6 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       }
     }
 
-    // thinking line pinned under the transcript while busy (aligned to left margin)
     if (state.busy) {
       const r = Math.max(0, contentH - 1);
       rows[r] = '  ' + thinkingLine(state.spinner, state.currentTool || state.currentTask || '');
@@ -605,7 +618,6 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       }
     }
 
-    // ---- 3-row status bar (cline StatusBar) ----
     const extra: string[] = [];
     if (kvCache.badge()) extra.push(kvCache.badge());
     const queued = [...state.tasks.values()].filter((t) => t.status === 'pending').length;
@@ -623,46 +635,45 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       autoApprove: state.autoApprove,
       extra,
     };
-    const s1 = h - bottomRows;          // model + context + Plan/Act
-    const s2 = s1 + 1;                  // animated ctx + cache bars
-    const s3 = s2 + 1;                  // workspace (branch) | git stats
-    const s4 = s3 + 1;                  // auto-approve
+
+    const s1 = h - bottomRows;
     rows[s1] = statusBarRow1(statusModel, w);
-    // jcode-style animated gradient bars, shimmering while busy.
-    const ctx = gradientContextBar(state.inTokens + state.outTokens, runtime.config.safety.contextBudgetTokens, 12, state.busy ? state.spinner + 1 : 0);
-    // Cache bar: share of prompt tokens served from cache this session.
-    const promptTotal = state.inTokens + state.cacheTokens;
-    const cacheRate = promptTotal > 0 ? Math.min(1, state.cacheTokens / promptTotal) : 0;
-    const cache = gradientCacheBar(cacheRate, 10, state.busy ? state.spinner + 1 : 0);
-    const fmt = (n: number) => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
-    const cachePctText = cacheRate > 0 ? ` ${T.gray}(${Math.round(cacheRate * 100)}%)${T.reset}` : '';
-    const barsRow = ` ${T.gray}in${T.reset} ${T.cyan}${fmt(state.inTokens)}${T.reset} ${T.gray}out${T.reset} ${T.orange}${fmt(state.outTokens)}${T.reset}  ${ctx.text} ${T.gray}${Math.round(ctx.pct * 100)}%${T.reset}  ${T.gray}cache${T.reset} ${cache.text} ${T.lime}${fmt(state.cacheTokens)}${T.reset}${cachePctText}`;
-    if (statusRows === 4) {
-      rows[s2] = barsRow;
-      rows[s3] = statusBarRow2(statusModel, w);
-      rows[s4] = statusBarRow3(state.autoApprove, w);
+    let cTop = s1 + 1;
+    
+    if (statusRows === 3) {
+      const promptTotal = state.inTokens + state.cacheTokens;
+      const cacheRate = promptTotal > 0 ? Math.min(1, state.cacheTokens / promptTotal) : 0;
+      const ctx = gradientContextBar(state.inTokens + state.outTokens, runtime.config.safety.contextBudgetTokens, 12, state.busy ? state.spinner + 1 : 0);
+      const cache = gradientCacheBar(cacheRate, 10, state.busy ? state.spinner + 1 : 0);
+      const fmt = (n: number) => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
+      const cachePctText = cacheRate > 0 ? ` ${T.gray}(${Math.round(cacheRate * 100)}%)${T.reset}` : '';
+      const barsRow = ` ${T.gray}in${T.reset} ${T.cyan}${fmt(state.inTokens)}${T.reset} ${T.gray}out${T.reset} ${T.orange}${fmt(state.outTokens)}${T.reset}  ${ctx.text} ${T.gray}${Math.round(ctx.pct * 100)}%${T.reset}  ${T.gray}cache${T.reset} ${cache.text} ${T.lime}${fmt(state.cacheTokens)}${T.reset}${cachePctText}`;
+      
+      rows[s1 + 1] = barsRow;
+      rows[s1 + 2] = statusBarRow2(statusModel, w);
+      cTop = s1 + 3;
     } else {
-      // short terminal: drop the bars row, keep the classic 3-row layout
-      rows[s2] = statusBarRow2(statusModel, w);
-      rows[s3] = statusBarRow3(state.autoApprove, w);
+      rows[s1 + 1] = statusBarRow2(statusModel, w);
+      cTop = s1 + 2;
     }
 
-    // ---- composer (cline InputBar) ----
-    const cTop = s1 + statusRows;
     rows[cTop] = composerTopRule(w);
-    const innerW = Math.max(1, w - 6);
-    const rawRows = state.input ? wrap(state.input, innerW) : [''];
-    const shownRows = rawRows.slice(-4);
-    for (let i = 0; i < shownRows.length; i++) {
+    const visibleTextRows = composerBoxRows - 2;
+    const shownRows = rawRows.slice(-visibleTextRows);
+    for (let i = 0; i < visibleTextRows; i++) {
       const r = cTop + 1 + i;
       if (r < h) {
-        rows[r] = state.input
-          ? composerRow(shownRows[i], w)
-          : composerPlaceholderRow('Message mochi… (type / for commands)', w);
+        if (i < shownRows.length) {
+          rows[r] = composerRow(shownRows[i], w);
+        } else if (i === 0 && !state.input) {
+          rows[r] = composerPlaceholderRow('Message mochi… (type / for commands)', w);
+        } else {
+          rows[r] = composerRow('', w);
+        }
       }
     }
-    rows[h - 1] = composerBottomRule(w, state.uiMode === 'plan' ? '⏎ send · Tab → act · esc stop' : '⏎ send · Tab → plan · esc stop');
-
+    rows[cTop + visibleTextRows + 1] = composerBottomRule(w);
+    
     // ---- Sleek centered modal menu overlay with scrolling window ----
     if (state.menuActive) {
       const totalItems = state.menuItems.length;
@@ -910,7 +921,14 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       await runTest(extra);
       return;
     }
-    if (line === '/stop' || line === '/abort') { state.busy = false; stopSpinner(); scheduleRender(); return; }
+    if (line === '/stop' || line === '/abort' || line === '/skip') {
+      runtime.abort('User stopped/skipped in-flight task');
+      push('system', '⏹️  Skipped / stopped thinking.');
+      state.busy = false;
+      stopSpinner();
+      scheduleRender();
+      return;
+    }
     if (line === '/undo' || line === '/redo') {
       const cp = runtime.workspace.readJson<{ ref: string; type: 'commit' | 'stash'; message: string }>('checkpoints/latest.json');
       if (!cp) { push('system', 'No checkpoint yet. Run /checkpoint first.'); return; }
@@ -1346,6 +1364,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     }
 
     if (s.length > 0) {
+      state.splashDismissed = true;
       if (state.splashTick < SPLASH_TICKS) {
         state.splashTick = SPLASH_TICKS;
         state.splashProgress = 1;
@@ -1495,12 +1514,20 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         }
         const now = Date.now();
         if (rest === '\x1b') {
-          if (now - lastEscAt < 400 && !state.busy) {
-            runtime.abort('User requested exit via double ESC');
+          if (state.busy) {
+            runtime.abort('User skipped/cancelled task via ESC');
+            push('system', '⏹️  Skipped / stopped thinking.');
+            state.busy = false;
+            stopSpinner();
+            scheduleRender();
+            i++;
+            continue;
           }
-          lastEscAt = now;
+          // Never exit application on ESC; only cancel tasks, close menus/drop, or clear input
           state.input = '';
           state.cursor = 0;
+          state.dropActive = false;
+          clearSelection();
           if (state.menuActive) closeMenu(-1);
           scheduleRender();
           i++;
@@ -1515,13 +1542,30 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       }
 
       if (c === '\u0003') {
+        if (state.busy) {
+          runtime.abort('User cancelled task via Ctrl+C');
+          push('system', '⏹️  Cancelled thinking.');
+          state.busy = false;
+          stopSpinner();
+          scheduleRender();
+          i++;
+          continue;
+        }
         if (state.input.length > 0) {
           state.input = '';
           state.cursor = 0;
-        } else {
-          exit();
+          scheduleRender();
+          i++;
+          continue;
         }
-        scheduleRender();
+        const now = Date.now();
+        if (now - lastCtrlCAt < 1000) {
+          exit();
+        } else {
+          lastCtrlCAt = now;
+          push('system', `${T.grayDark}Press Ctrl+C again to exit.${T.reset}`);
+          scheduleRender();
+        }
         i++;
         continue;
       }
@@ -1663,11 +1707,14 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     const type = String((event as any).type);
     if (type === 'file:changed' || type === 'tool:completed') void refreshGitStats();
     if (type === 'usage:updated') {
-      // REAL provider numbers: input (net of cache hits), output, cache reads.
+      // REAL provider numbers: input (net of cache hits), output, cache reads, and USD cost.
       state.inTokens = Number((event as any).inputTokens ?? 0);
       state.outTokens = Number((event as any).outputTokens ?? 0);
       state.cacheTokens = Number((event as any).cacheTokens ?? 0);
       state.totalTokens = Number((event as any).totalTokens ?? 0);
+      if ((event as any).costUsd !== undefined) {
+        state.totalCost = Number((event as any).costUsd ?? 0);
+      }
       scheduleRender();
     }
   }
@@ -1719,7 +1766,11 @@ function formatDuration(ms: number): string {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
+import { nativeGitBranch } from '../native/core.js';
+
 async function gitBranch(cwd: string): Promise<string> {
+  const nat = nativeGitBranch(cwd);
+  if (nat) return nat;
   return new Promise(resolve => {
     execFile('git', ['branch', '--show-current'], { cwd }, (error, stdout) => {
       if (error || !stdout) return resolve('');

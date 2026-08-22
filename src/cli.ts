@@ -181,6 +181,11 @@ function srcFileNewer(dir: string, mtime: number): boolean {
 
 async function main() {
   const { flags, positional } = parseArgs(process.argv.slice(2));
+
+  // Ultra-fast path for info queries (version, help): exit immediately in <3ms
+  if (flags.h || flags.help) { printHelp(); return; }
+  if (flags.version || positional[0] === 'version') { console.log(VERSION); return; }
+
   // Dist freshness guard: when running the compiled dist/ tree (the global
   // `mochi` shim) and src/*.ts is newer than the last build, rebuild once so
   // the user never runs a stale TUI/harness after pulling changes. The guard
@@ -204,7 +209,7 @@ async function main() {
           await new Promise<void>((res, rej) => {
             execFile(process.execPath, [tscJs, '-p', 'tsconfig.json'], { cwd: repoRoot, timeout: 180_000 }, (err) => (err ? rej(err) : res()));
           });
-          console.error('[38;2;163;230;53mmochi[0m dist rebuilt.');
+          console.error('\x1b[38;2;163;230;53mmochi\x1b[0m dist rebuilt.');
         } catch (e) {
           console.error(`[mochi] auto-rebuild failed (${e instanceof Error ? e.message.split('\n')[0] : 'unknown'}); running the previous build`);
         }
@@ -215,9 +220,6 @@ async function main() {
   // subsystem probes it: sessions, codegraph, and search all check
   // synchronously on first use.
   try { await (await import('./sqlite.js')).sqliteDriverAsync(); } catch {}
-
-  if (flags.h || flags.help) { printHelp(); return; }
-  if (flags.version) { console.log(VERSION); return; }
 
   const cwd = process.cwd();
   const configOverrides = configFromFlags(flags);

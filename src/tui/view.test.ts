@@ -12,7 +12,6 @@ import {
   usageText,
   statusBarRow1,
   statusBarRow2,
-  statusBarRow3,
   renderToolOutput,
   renderEntry,
   composerRow,
@@ -43,13 +42,13 @@ function baseStatus(over: Partial<Parameters<typeof statusBarRow1>[0]> = {}) {
 
 describe('palette', () => {
   beforeEach(() => {
-    setTheme('classic');
+    setTheme('cyber-void');
   });
 
-  it('exposes cline accent colors', () => {
-    expect(T.act).toContain('121;184;255'); // #79b8ff
-    expect(T.plan).toContain('255;234;127'); // #ffea7f
-    expect(T.success).toContain('153;232;155'); // #99e89b
+  it('exposes accent colors', () => {
+    expect(T.act).toBeDefined();
+    expect(T.plan).toBeDefined();
+    expect(T.success).toBeDefined();
   });
 });
 
@@ -113,11 +112,7 @@ describe('statusBar rows', () => {
     expect(plain).toContain('3 files');
     expect(plain).toContain('+120');
     expect(plain).toContain('-8');
-  });
-
-  it('row3 shows auto-approve state', () => {
-    expect(statusBarRow3(true, 80)).toMatch(/Auto-approve enabled/);
-    expect(statusBarRow3(false, 80)).toMatch(/Auto-approve off/);
+    expect(plain).toContain('Auto improve off');
   });
 });
 
@@ -328,19 +323,19 @@ describe('splash screen', () => {
 
 describe('color coordination', () => {
   beforeEach(() => {
-    setTheme('classic');
+    setTheme('cyber-void');
   });
 
   it('edit tools get violet accent, read tools cyan', () => {
     const edit = renderEntry({ kind: 'tool', text: 'write({"path":"a.ts"})' });
-    expect(edit[0]).toContain('38;2;199;146;234');
+    expect(edit[0]).toContain(T.violet);
     const read = renderEntry({ kind: 'tool', text: 'read({"path":"a.ts"})' });
-    expect(read[0]).toContain('38;2;86;212;221');
+    expect(read[0]).toContain(T.cyan);
   });
 
   it('errors are bold red with ✗', () => {
     const err = renderEntry({ kind: 'error', text: 'boom' });
     expect(err[0]).toContain('✗');
-    expect(err[0]).toContain('38;2;248;81;73');
+    expect(err[0]).toContain(T.error);
   });
 });

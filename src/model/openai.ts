@@ -154,15 +154,15 @@ export function createOpenAIProvider(config: ProviderConfig) {
     // and the timer aborts the request only when the stream has been silent for
     // STALL_TIMEOUT_MS. This measurably raises token throughput on chatty
     // providers vs. a Promise.race around every chunk.
-    const STALL_TIMEOUT_MS = 60_000;
+    const STALL_TIMEOUT_MS = 30_000;
     let lastChunkAt = Date.now();
     let stalled = false;
-    const stallTimer = setTimeout(() => {
+    const stallInterval = setInterval(() => {
       if (!stalled && Date.now() - lastChunkAt >= STALL_TIMEOUT_MS) {
         stalled = true;
         signal.abort(); // tear down the still-open stream now, not after read
       }
-    }, STALL_TIMEOUT_MS + 1000);
+    }, 2000);
 
     try {
       while (true) {
@@ -226,7 +226,7 @@ export function createOpenAIProvider(config: ProviderConfig) {
       }
       }
     } finally {
-      clearTimeout(stallTimer);
+      clearInterval(stallInterval);
       options?.signal?.removeEventListener('abort', onAbort);
     }
   }

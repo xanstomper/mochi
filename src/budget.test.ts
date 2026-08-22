@@ -12,7 +12,8 @@ const base = {
 
 describe('BudgetEngine', () => {
   it('estimates cost per model', () => {
-    expect(estimateCostUsd(1000, 'gpt-4o')).toBeCloseTo(0.005);
+    expect(estimateCostUsd(1000, 'gpt-4o')).toBeGreaterThan(0);
+    expect(estimateCostUsd({ promptTokens: 1000, completionTokens: 100 }, 'gpt-4o')).toBeCloseTo(0.0035);
     expect(estimateCostUsd(1000, 'deepseek-v4-flash-free')).toBe(0);
   });
 

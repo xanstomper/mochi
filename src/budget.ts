@@ -25,23 +25,46 @@ export interface BudgetSnapshot {
   ratio: number;
 }
 
-export const DEFAULT_COST_PER_TOKEN: Record<string, number> = {
-  'gpt-4o': 0.000005,
-  'gpt-4o-mini': 0.00000015,
-  'gpt-4.1': 0.000004,
-  'gpt-4.1-mini': 0.0000004,
-  'gpt-5': 0.000005,
-  'claude-3-5-sonnet': 0.000003,
-  'claude-3-5-haiku': 0.000001,
-  'deepseek-v4-flash': 0.00000014,
+export const DEFAULT_COST_PER_TOKEN: Record<string, { prompt: number; completion: number } | number> = {
+  'gpt-4o': { prompt: 0.0000025, completion: 0.00001 },
+  'gpt-4o-mini': { prompt: 0.00000015, completion: 0.0000006 },
+  'gpt-4.1': { prompt: 0.000002, completion: 0.000008 },
+  'gpt-4.1-mini': { prompt: 0.0000004, completion: 0.0000016 },
+  'gpt-5': { prompt: 0.000003, completion: 0.000012 },
+  'claude-3-7-sonnet': { prompt: 0.000003, completion: 0.000015 },
+  'claude-3-5-sonnet': { prompt: 0.000003, completion: 0.000015 },
+  'claude-3-5-haiku': { prompt: 0.0000008, completion: 0.000004 },
+  'deepseek-v4-flash': { prompt: 0.00000014, completion: 0.00000028 },
   'deepseek-v4-flash-free': 0,
+  'deepseek-chat': { prompt: 0.00000014, completion: 0.00000028 },
+  'deepseek-reasoner': { prompt: 0.00000055, completion: 0.00000219 },
+  'deepseek-r1': { prompt: 0.00000055, completion: 0.00000219 },
+  'deepseek-v3': { prompt: 0.00000014, completion: 0.00000028 },
+  'gemini-2.0-flash': { prompt: 0.0000001, completion: 0.0000004 },
+  'gemini-1.5-pro': { prompt: 0.00000125, completion: 0.000005 },
+  'qwen': { prompt: 0.0000002, completion: 0.0000006 },
+  'zen': { prompt: 0.00000014, completion: 0.00000028 },
+  'opencode': { prompt: 0.00000014, completion: 0.00000028 },
 };
 
-export function estimateCostUsd(tokens: number, model: string): number {
+export function estimateCostUsd(tokens: number | { promptTokens?: number; completionTokens?: number }, model: string): number {
   if (model.toLowerCase().includes('free')) return 0;
-  const key = Object.keys(DEFAULT_COST_PER_TOKEN).find((k) => model.toLowerCase().includes(k));
-  if (!key) return 0;
-  return tokens * DEFAULT_COST_PER_TOKEN[key];
+  const mLower = model.toLowerCase();
+  const key = Object.keys(DEFAULT_COST_PER_TOKEN).find((k) => mLower.includes(k.toLowerCase()));
+  if (!key) {
+    const rate = 0.0000005;
+    if (typeof tokens === 'number') return tokens * rate;
+    return ((tokens.promptTokens ?? 0) + (tokens.completionTokens ?? 0)) * rate;
+  }
+  const pricing = DEFAULT_COST_PER_TOKEN[key];
+  if (typeof pricing === 'number') {
+    if (typeof tokens === 'number') return tokens * pricing;
+    return ((tokens.promptTokens ?? 0) + (tokens.completionTokens ?? 0)) * pricing;
+  }
+  if (typeof tokens === 'number') {
+    return tokens * ((pricing.prompt + pricing.completion) / 2);
+  }
+  return (tokens.promptTokens ?? 0) * pricing.prompt + (tokens.completionTokens ?? 0) * pricing.completion;
 }
 
 export class BudgetEngine {

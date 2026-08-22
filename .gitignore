@@ -5,4 +5,7 @@ dogfood
 *.log
 .DS_Store
 native/bin
+native/mochi_core/target
 skills/skills.json
+__pycache__
+*.pyc

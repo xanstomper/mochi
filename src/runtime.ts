@@ -70,6 +70,12 @@ export class Runtime {
     if (!this.abortController.signal.aborted) this.abortController.abort(new Error(reason));
   }
 
+  /** Reset abort controller so a new prompt can run after an abort. */
+  resetAbort(): void {
+    this.abortController = new AbortController();
+    this.abortSignal = this.abortController.signal;
+  }
+
   /** True after abort() — used by callers (e.g. ACP session/cancel) to learn
    *  the run ended early and report the correct stop reason. */
   get aborted(): boolean {
@@ -289,6 +295,7 @@ export class Runtime {
   }
 
   async runPrompt(prompt: string): Promise<string> {
+    if (this.abortController.signal.aborted) this.resetAbort();
     // Single-agent one-shot task: create task directly without waiting for decompose LLM call.
     const { createTask } = await import('./goals/task.js');
     const goal = await this.goals.createGoal(prompt);

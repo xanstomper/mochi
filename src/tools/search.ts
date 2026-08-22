@@ -1,16 +1,47 @@
 import { spawn } from 'node:child_process';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync, openSync, readSync, closeSync, existsSync } from 'node:fs';
 import { resolve, relative } from 'node:path';
 import type { Tool, ToolContext } from './types.js';
 import { mutationGeneration } from './fs-signal.js';
 
+import { fileURLToPath } from 'node:url';
+import { dirname } from 'node:path';
+
 const MAX_TOTAL = 256_000;
+
+function nativeSearchBin(): string | undefined {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const p = resolve(here, '..', '..', 'native', 'bin', 'search_rust');
+    if (existsSync(p)) return p;
+  } catch {}
+  return undefined;
+}
+
+async function nativeSearch(cwd: string, query: string, glob?: string): Promise<string | null> {
+  const bin = nativeSearchBin();
+  if (!bin) return null;
+  return new Promise((res) => {
+    const args = [cwd, query];
+    if (glob) args.push(glob);
+    const proc = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    proc.stdout.on('data', (c) => { out += String(c); if (out.length > MAX_TOTAL) out = out.slice(0, MAX_TOTAL) + '\n... [truncated]'; });
+    proc.on('close', (code) => {
+      if (code !== 0 && out.length === 0) return res(null);
+      res(out.trim() || null);
+    });
+    proc.on('error', () => res(null));
+  });
+}
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 async function ripgrep(cwd: string, query: string, glob?: string): Promise<string | null> {
+  const nat = await nativeSearch(cwd, query, glob);
+  if (nat) return nat;
   return new Promise((resolve) => {
     const args = ['-n', '--no-heading', '--color=never', '-F', query];
     if (glob) args.push('-g', glob);
@@ -53,16 +84,26 @@ const DECL_RE =
 
 function fileOutline(cwd: string, rel: string): string {
   let content: string;
-  try { content = readFileSync(resolve(cwd, rel), 'utf8'); } catch { return ''; }
+  try {
+    // Read up to 8KB to quickly get the header/declarations without reading multi-MB files
+    const buf = Buffer.alloc(8192);
+    const fd = openSync(resolve(cwd, rel), 'r');
+    const bytesRead = readSync(fd, buf, 0, 8192, 0);
+    closeSync(fd);
+    content = buf.toString('utf8', 0, bytesRead);
+  } catch {
+    try { content = readFileSync(resolve(cwd, rel), 'utf8').slice(0, 8192); } catch { return ''; }
+  }
   const decls: string[] = [];
   let i = 0;
   for (const line of content.split('\n')) {
     i++;
+    if (i > 150) break;
     const t = line.trim();
     if (!t || t.startsWith('//') || t.startsWith('*') || t.startsWith('/*')) continue;
     if (t.startsWith('export function') || t.startsWith('function') || DECL_RE.test(t)) {
       decls.push(`${i}:${t.slice(0, 70)}`);
-      if (decls.length >= 12) break;
+      if (decls.length >= 8) break;
     }
   }
   return decls.length ? `  decl: ${decls.join(' | ')}` : '';

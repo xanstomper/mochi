@@ -223,7 +223,7 @@ export type MochiEvent =
   | { type: 'tool:failed'; tool: string; error: string; agentId: string }
   | { type: 'file:changed'; path: string; operation: 'write' | 'edit' | 'delete'; agentId: string }
   | { type: 'message:chunk'; content: string; agentId: string }
-  | { type: 'usage:updated'; agentId: string; inputTokens: number; outputTokens: number; cacheTokens: number; totalTokens: number }
+  | { type: 'usage:updated'; agentId: string; inputTokens: number; outputTokens: number; cacheTokens: number; totalTokens: number; costUsd?: number }
   | { type: 'error'; error: string; agentId?: string }
   | { type: 'pulse'; state: AgentState }
   | { type: 'message'; role: 'user' | 'assistant' | 'system'; content: string; agentId?: string };

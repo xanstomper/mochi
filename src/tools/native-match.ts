@@ -10,6 +10,7 @@ import { existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fuzzyFindUnique, type FuzzyMatch } from './fuzzy-match.js';
+import { nativeFuzzyMatch } from '../native/core.js';
 
 function nativeBin(): string | undefined {
   const here = dirname(fileURLToPath(import.meta.url));
@@ -22,15 +23,12 @@ function nativeBin(): string | undefined {
 }
 
 /**
- * Find the unique region in `text` matching `needle`, preferring the native
- * binary and falling back to the TypeScript matcher. Same semantics: null when
- * no match, or when the match is ambiguous.
- *
- * Fails soft: any native error (missing binary, crash, protocol surprise) is
- * treated as "no match", then we fall back to TS which either matches or
- * returns null with the error surfaced by the edit tool's own handling.
+ * Find the unique region in `text` matching `needle`, preferring the in-process
+ * Rust FFI matcher, then native binary, and falling back to the TypeScript matcher.
  */
 export function fuzzyFindUniqueNative(text: string, needle: string): FuzzyMatch | null {
+  const inMemory = nativeFuzzyMatch(text, needle);
+  if (inMemory) return inMemory;
   const bin = nativeBin();
   if (!bin) return fuzzyFindUnique(text, needle);
   try {

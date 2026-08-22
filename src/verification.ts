@@ -49,17 +49,17 @@ export interface VerifierOptions {
   budget: BudgetEngine;
   /** Failures captured before agents edit anything. A post-work failure
    *  matching the baseline is pre-existing repo rot, not agent breakage. */
-  baseline?: VerificationBaseline;
+  baseline?: VerificationBaseline | Promise<VerificationBaseline | undefined>;
 }
 
 export class VerifierEngine {
   private cwd: string;
   private workspace: Workspace;
   private config: MochiConfig;
-  private events: EventBus;
+  events: EventBus;
   private budget: BudgetEngine;
   private hooks: HookManager;
-  private baseline: VerificationBaseline | undefined;
+  private baseline: VerificationBaseline | Promise<VerificationBaseline | undefined> | undefined;
 
   constructor(opts: VerifierOptions) {
     this.cwd = opts.cwd;
@@ -72,6 +72,7 @@ export class VerifierEngine {
   }
 
   async verify(task: Task, agentSummary: string): Promise<VerificationResult> {
+    const resolvedBaseline = await this.baseline;
     const before = await this.hooks.runBefore('before_verify', { task: task.id });
     if (!before.allowed) {
       return this.build('BLOCKED', [], ['Verification hook vetoed the action'], 'Resolve the hook failure and retry.', [
@@ -125,7 +126,7 @@ export class VerifierEngine {
       // agent touched anything. This is repo rot, not agent breakage — treat it
       // as a passed-with-note so good work is not failed by unrelated debt.
       const passedNow = result.includes('exit_code: 0');
-      if (!passedNow && matchesBaseline(this.baseline, command, result)) {
+      if (!passedNow && matchesBaseline(resolvedBaseline, command, result)) {
         evidence.push({
           source: `command:${command}`,
           result: `[PRE-EXISTING FAILURE, identical before this task ran] ${result.slice(0, 2000)}`,

@@ -218,6 +218,8 @@ export function contextBar(used: number, total: number | undefined, width = 6): 
 }
 
 export function formatCost(cost: number): string {
+  if (cost === 0) return '$0.00';
+  if (cost < 0.01) return `$${cost.toFixed(4)}`;
   return `$${cost.toFixed(2)}`;
 }
 
@@ -284,22 +286,18 @@ export function statusBarRow1(m: StatusBarModel, width: number): string {
   return padEnd(`${modelOnly}${' '.repeat(Math.max(1, width - visibleLen(modelOnly) - toggleLen))}${toggle}`, width);
 }
 
-/** Row 2: workspace (branch) | N files +X -Y */
+/** Row 2: workspace (branch) | auto-approve | N files +X -Y */
 export function statusBarRow2(m: StatusBarModel, width: number): string {
   const hasDiff = m.gitDiff && m.gitDiff.files > 0;
   const suffix = hasDiff
     ? ` ${T.grayDark}|${T.reset} ${T.gray}${m.gitDiff!.files} file${m.gitDiff!.files !== 1 ? 's' : ''}${T.reset} ${T.success}+${m.gitDiff!.additions}${T.reset} ${T.error}-${m.gitDiff!.deletions}${T.reset}`
     : '';
+  const autoApproveText = m.autoApprove
+    ? `${T.success}⏵⏵ Auto improve enabled${T.reset} ${T.grayDark}(Shift+Tab)${T.reset}`
+    : `${T.gray}Auto improve off ${T.grayDark}(Shift+Tab to do so)${T.reset}`;
   const path = m.workspaceName + (m.gitBranch ? ` (${m.gitBranch})` : '');
-  return padEnd(`${T.fg}${ellipsize(path, Math.max(5, width - visibleLen(suffix) - 1))}${T.reset}${suffix}`, width);
-}
-
-/** Row 3: auto-approve state. */
-export function statusBarRow3(autoApprove: boolean, width: number): string {
-  const text = autoApprove
-    ? `${T.success}⏵⏵ Auto-approve enabled${T.reset} ${T.grayDark}(Shift+Tab)${T.reset}`
-    : `${T.gray}Auto-approve off ${T.grayDark}(Shift+Tab to toggle ⏵⏵)${T.reset}`;
-  return padEnd(text, width);
+  const middle = ` ${T.grayDark}·${T.reset} ${autoApproveText}`;
+  return padEnd(`${T.fg}${ellipsize(path, Math.max(5, width - visibleLen(suffix) - visibleLen(middle) - 1))}${T.reset}${middle}${suffix}`, width);
 }
 
 // ---- Transcript entries ----------------------------------------------------
@@ -334,12 +332,128 @@ const TOOL_ACCENTS: Array<[RegExp, string]> = [
   [/^(memory|skill|subagent|chameleon|analyze_code|sql_codebase_query)\b/, 'magenta'],
 ];
 
-function accentToolPrefix(text: string): string {
-  const name = text.split(/[(:]/)[0] ?? '';
+export function accentToolPrefix(text: string): string {
+  if (text.startsWith('⚡')) {
+    return `${T.orange}${T.bold}⚡${T.reset} ${T.cyan}${text.slice(2)}${T.reset}`;
+  }
+  if (text.startsWith('✓')) {
+    return `${T.success}${T.bold}✓${T.reset} ${T.fg}${text.slice(2)}${T.reset}`;
+  }
+  if (text.startsWith('✗')) {
+    return `${T.error}${T.bold}✗${T.reset} ${T.error}${text.slice(2)}${T.reset}`;
+  }
+  const name = text.split(/[(:\s]/)[0] ?? '';
   for (const [re, color] of TOOL_ACCENTS) {
     if (re.test(name)) return `${(T as any)[color]}${name}${T.reset}${T.grayDark}${text.slice(name.length)}${T.reset}`;
   }
   return `${T.violet}${name}${T.reset}${T.grayDark}${text.slice(name.length)}${T.reset}`;
+}
+
+export function formatInlineMarkdown(text: string): string {
+  // Bold: **text**
+  let s = text.replace(/\*\*(.+?)\*\*/g, `${T.bold}${T.fg}$1${T.reset}${T.fg}`);
+  // Inline code: `code`
+  s = s.replace(/`([^`]+)`/g, `${T.violet}${T.bold}$1${T.reset}${T.fg}`);
+  // Italic: *text* (when not preceded or followed by *)
+  s = s.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, `${T.italic}$1${T.reset}${T.fg}`);
+  return `${T.fg}${s}${T.reset}`;
+}
+
+function highlightCodeLine(line: string): string {
+  let s = line;
+  // Keywords
+  s = s.replace(/\b(const|let|var|function|return|import|export|from|class|extends|interface|type|async|await|if|else|switch|case|break|for|while|try|catch|throw|finally|new|typeof|instanceof)\b/g, `${T.magenta}$1${T.reset}${T.fg}`);
+  // Types & builtins
+  s = s.replace(/\b(string|number|boolean|void|any|unknown|never|null|undefined|Promise|Array|Record|Set|Map|Object|Function)\b/g, `${T.cyan}$1${T.reset}${T.fg}`);
+  // Strings
+  s = s.replace(/(['"`])(.*?)\1/g, `${T.lime}$1$2$1${T.reset}${T.fg}`);
+  // Numbers
+  s = s.replace(/\b(\d+)\b/g, `${T.orange}$1${T.reset}${T.fg}`);
+  // Comments
+  s = s.replace(/(\/\/.*$)/g, `${T.grayDark}$1${T.reset}`);
+  return `${T.fg}${s}${T.reset}`;
+}
+
+/**
+ * Fast, ANSI-enhanced terminal markdown renderer.
+ * Formats headers, code blocks with syntax highlighting, inline code,
+ * bold, italic, bullet lists, blockquotes, and dividers.
+ */
+export function renderMarkdown(text: string): string[] {
+  const rawLines = text.split('\n');
+  const out: string[] = [];
+  let inCodeBlock = false;
+  let codeBlockLang = '';
+
+  for (let i = 0; i < rawLines.length; i++) {
+    const raw = rawLines[i];
+    const trimmed = raw.trim();
+
+    // Fenced code blocks
+    if (trimmed.startsWith('```')) {
+      if (!inCodeBlock) {
+        inCodeBlock = true;
+        codeBlockLang = trimmed.slice(3).trim();
+        const tag = codeBlockLang ? ` ${T.cyan}${codeBlockLang}${T.reset} ` : ' ';
+        out.push(`${T.rule}┌──${tag}${'─'.repeat(Math.max(0, 36 - (codeBlockLang?.length || 0)))}┐${T.reset}`);
+      } else {
+        inCodeBlock = false;
+        codeBlockLang = '';
+        out.push(`${T.rule}└──${'─'.repeat(38)}┘${T.reset}`);
+      }
+      continue;
+    }
+
+    if (inCodeBlock) {
+      out.push(`${T.rule}│${T.reset} ${highlightCodeLine(raw)}`);
+      continue;
+    }
+
+    // Markdown Headers
+    if (trimmed.startsWith('### ')) {
+      out.push(`${T.pink}${T.bold}### ${formatInlineMarkdown(trimmed.slice(4))}${T.reset}`);
+      continue;
+    }
+    if (trimmed.startsWith('## ')) {
+      out.push(`${T.cyan}${T.bold}## ${formatInlineMarkdown(trimmed.slice(3))}${T.reset}`);
+      continue;
+    }
+    if (trimmed.startsWith('# ')) {
+      out.push(`${T.magenta}${T.bold}# ${formatInlineMarkdown(trimmed.slice(2))}${T.reset}`);
+      continue;
+    }
+
+    // Horizontal divider
+    if (/^(\-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+      out.push(`${T.rule}${'─'.repeat(40)}${T.reset}`);
+      continue;
+    }
+
+    // Blockquote
+    if (trimmed.startsWith('> ') || trimmed === '>') {
+      out.push(`  ${T.grayDark}│${T.reset} ${T.gray}${formatInlineMarkdown(trimmed.slice(2))}${T.reset}`);
+      continue;
+    }
+
+    // Unordered bullet lists
+    if (/^[\*\-\+]\s+/.test(trimmed)) {
+      const content = trimmed.replace(/^[\*\-\+]\s+/, '');
+      out.push(`  ${T.cyan}•${T.reset} ${formatInlineMarkdown(content)}`);
+      continue;
+    }
+
+    // Numbered lists
+    const numMatch = trimmed.match(/^(\d+)\.\s+(.*)$/);
+    if (numMatch) {
+      out.push(`  ${T.magenta}${numMatch[1]}.${T.reset} ${formatInlineMarkdown(numMatch[2])}`);
+      continue;
+    }
+
+    // Standard paragraph line with inline formatting
+    out.push(formatInlineMarkdown(raw));
+  }
+
+  return out;
 }
 
 /** Render one transcript entry with mochi color coordination. */
@@ -350,9 +464,9 @@ export function renderEntry(entry: RenderEntry, expandTools = false): string[] {
     case 'user':
       return [`${T.magenta}❯${T.reset} ${T.bgUser}${T.fg}${T.bold}${text}${T.reset}`];
     case 'assistant':
-      return [`${T.cyan}${text}${T.reset}`];
+      return renderMarkdown(text);
     case 'tool':
-      return expandTools ? [accentToolPrefix(text)] : renderToolOutput(text);
+      return [accentToolPrefix(text)];
     case 'error':
       return [`${T.error}${T.bold}✗${T.reset} ${T.error}${text}${T.reset}`];
     case 'system':
@@ -545,4 +659,4 @@ export function splashFrame(tick: number, width: number, version: string, progre
   return lines;
 }
 
-export const SPLASH_TICKS = 30;
+export const SPLASH_TICKS = 10;

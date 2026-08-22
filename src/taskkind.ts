@@ -19,6 +19,15 @@ const DOC_RE = /\b(document|readme|doc|comment|jsdoc|docstring|annotate|spec\s*d
 export function classifyTaskKind(task: Pick<Task, 'title' | 'description' | 'role'>): TaskKind {
   const text = `${task.title} ${task.description}`.trim();
   if (!text) return 'unknown';
+  if (ACTION_RE.test(text)) {
+    if (FIX_RE.test(text) || task.role === 'debugger') return 'fix';
+    if (TEST_RE.test(text) || task.role === 'tester') return 'test';
+    if (REFACTOR_RE.test(text)) return 'refactor';
+    if (DOC_RE.test(text)) return 'document';
+    if (PLAN_RE.test(text) || task.role === 'architect') return 'plan';
+    if (RESEARCH_RE.test(text) || task.role === 'researcher') return 'research';
+    return 'implement';
+  }
   if (CHAT_RE.test(text)) return 'chat';
   if (FIX_RE.test(text) || task.role === 'debugger') return 'fix';
   if (TEST_RE.test(text) || task.role === 'tester') return 'test';
