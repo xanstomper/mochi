@@ -6,7 +6,7 @@
  * Phase 2: Update After Editing (Closeout audit)
  */
 
-import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, statSync } from 'node:fs';
 import { resolve, dirname, relative, join } from 'node:path';
 
 export interface DoxContract {
@@ -21,7 +21,14 @@ export interface DoxContract {
 export function findDoxChain(cwd: string, targetPath: string): string[] {
   const fullTarget = resolve(cwd, targetPath);
   const chain: string[] = [];
-  let curr = existsSync(fullTarget) && !fullTarget.endsWith('/') ? dirname(fullTarget) : fullTarget;
+  let curr = fullTarget;
+  try {
+    if (existsSync(fullTarget) && statSync(fullTarget).isFile()) {
+      curr = dirname(fullTarget);
+    }
+  } catch {
+    curr = fullTarget;
+  }
   const root = resolve(cwd);
 
   const checkedDirs = new Set<string>();
