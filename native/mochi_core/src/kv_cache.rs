@@ -72,9 +72,9 @@ impl KvCacheTracker {
     pub fn badge(&self) -> String {
         match self.state() {
             CacheState::Unknown => String::new(),
-            CacheState::Cold => "🔴 cold".to_string(),
-            CacheState::Cooling => format!("🟡 {}s", self.remaining_secs()),
-            CacheState::Warm => format!("🟢 {}s", self.remaining_secs()),
+            CacheState::Cold => "[COLD]".to_string(),
+            CacheState::Cooling => format!("[COOL] {}s", self.remaining_secs()),
+            CacheState::Warm => format!("[WARM] {}s", self.remaining_secs()),
         }
     }
 }

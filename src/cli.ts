@@ -235,7 +235,7 @@ async function main() {
   (runtime as any).__permPolicy = isYolo ? 'yolo'
     : (configOverrides.safety?.mode === 'auto' ? 'workspace-safe' : 'strict');
   if (isYolo) {
-    console.error('⚡ YOLO mode: all permission prompts bypassed. Proceeding autonomously.');
+    console.error('[YOLO] YOLO mode: all permission prompts bypassed. Proceeding autonomously.');
   }
 
   // Ctrl-C / SIGTERM aborts the active run cleanly instead of SIGKILLing the

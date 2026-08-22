@@ -4,7 +4,7 @@ Mochi is an autonomous, high-performance software engineering agent and multi-ag
 
 ---
 
-## 🤖 1. The 16 Specialized Subagent Roles
+## 1. The 16 Specialized Subagent Roles
 
 Mochi can dynamically spawn specialized child agents via the `subagent` tool, or orchestrate multi-agent swarms using `mochi team "<goal>"`. Each role is assigned a specific model capability profile (`reasoning`, `coding`, `fast`, `review`) and a scoped tool allowlist:
 
@@ -29,7 +29,7 @@ Mochi can dynamically spawn specialized child agents via the `subagent` tool, or
 
 ---
 
-## 🛠️ 2. Native Tools Suite
+## 2. Native Tools Suite
 
 Mochi ships with 30+ built-in tools covering file operations, AST intelligence, shell execution, web crawling, and diagnostic tools:
 
@@ -81,7 +81,7 @@ Mochi ships with 30+ built-in tools covering file operations, AST intelligence, 
 
 ---
 
-## 📚 3. Specialized Skills Catalog
+## 3. Specialized Skills Catalog
 
 Mochi includes 30+ bundled `SKILL.md` workflows that can be invoked via the `skill` tool or command palette:
 
@@ -91,7 +91,7 @@ Mochi includes 30+ bundled `SKILL.md` workflows that can be invoked via the `ski
 
 ---
 
-## 🔌 4. MCP & ACP Protocol Support
+## 4. MCP & ACP Protocol Support
 
 ### Model Context Protocol (MCP)
 Mochi can connect to any external MCP server (Postgres, GitHub, SQLite, Sentry) configured in `~/.mochi/config.json`:

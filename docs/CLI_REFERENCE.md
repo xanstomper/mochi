@@ -4,7 +4,7 @@ Complete command-line interface, interactive TUI, slash commands, and hotkey ref
 
 ---
 
-## 💻 1. CLI Commands
+## 1. CLI Commands
 
 ```bash
 # Interactive TUI Mode
@@ -43,7 +43,7 @@ mochi trace <goalId>                 # Replay and inspect execution trace of a g
 
 ---
 
-## ⚡ 2. Interactive TUI Slash Commands
+## 2. Interactive TUI Slash Commands
 
 When inside the Mochi terminal UI, type `/` to open the autocomplete menu:
 
@@ -74,7 +74,7 @@ When inside the Mochi terminal UI, type `/` to open the autocomplete menu:
 
 ---
 
-## ⌨️ 3. Keyboard Shortcuts
+## 3. Keyboard Shortcuts
 
 | Keybinding | Action |
 | :--- | :--- |

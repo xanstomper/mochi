@@ -74,15 +74,15 @@ export const verifyTool: Tool = {
         const truncated = output.slice(0, 8000);
 
         if (code === 0) {
-          resolve(`✅ Verification PASSED (${Math.round(duration / 1000)}s)\n${truncated}`);
+          resolve(`[PASS] Verification PASSED (${Math.round(duration / 1000)}s)\n${truncated}`);
         } else {
-          resolve(`❌ Verification FAILED (exit ${code}, ${Math.round(duration / 1000)}s)\n${truncated}`);
+          resolve(`[FAIL] Verification FAILED (exit ${code}, ${Math.round(duration / 1000)}s)\n${truncated}`);
         }
       });
 
       child.on('error', (err) => {
         clearTimeout(timer);
-        resolve(`❌ Verification ERROR: ${err.message}`);
+        resolve(`[ERR] Verification ERROR: ${err.message}`);
       });
     });
   },

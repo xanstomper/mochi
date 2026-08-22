@@ -6,18 +6,18 @@ All tests were executed on Linux x86_64 (6.11 Kernel, AMD Ryzen 9 / 64 GB DDR5 R
 
 ---
 
-## 📊 Summary Benchmark Matrix
+## Summary Benchmark Matrix
 
 | Metric | Mochi (Rust Core) | jcode | Pi | Codex CLI | Antigravity CLI | Cursor Agent | Copilot CLI | Claude Code | OpenCode |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **1 Active Session (PSS)** | **18.2 MB** 🏆 | 27.8 MB | 144.4 MB | 140.0 MB | 243.7 MB | 214.9 MB | 333.3 MB | 386.6 MB | 371.5 MB |
-| **10 Active Sessions (PSS)**| **84.5 MB** 🏆 | 117.0 MB | 833.0 MB | 334.8 MB | 1021.2 MB | 1632.4 MB | 1756.5 MB | 2300.6 MB | 3237.2 MB |
-| **Memory / Added Session** | **~6.8 MB** 🏆 | ~9.9 MB | ~76.5 MB | ~21.6 MB | ~86.4 MB | ~157.5 MB | ~158.1 MB | ~212.7 MB | ~318.4 MB |
-| **Time to First Frame (TTFF)**| **11.2 ms** 🏆 | 14.0 ms | 590.7 ms | 882.8 ms | 383.5 ms | 1949.7 ms | 1518.6 ms | 3436.9 ms | 1035.9 ms |
-| **Time to First Input (TTFI)**| **38.2 ms** 🏆 | 48.7 ms | 596.4 ms | 905.8 ms | 383.7 ms | 1978.7 ms | 1583.4 ms | 3512.8 ms | 1047.9 ms |
-| **Compaction Cut Latency** | **0.12 ms** (Rust) 🏆| 0.45 ms | 12.8 ms | 18.2 ms | 8.4 ms | 14.5 ms | 22.1 ms | 35.0 ms | 19.8 ms |
-| **Fuzzy Search 50k Files** | **3.8 ms** (N-API) 🏆 | 8.2 ms | 142.0 ms | 98.4 ms | 64.2 ms | 112.0 ms | 185.0 ms | 310.0 ms | 195.0 ms |
-| **Tool Dispatch Latency** | **0.08 ms** 🏆 | 0.22 ms | 2.4 ms | 1.8 ms | 1.2 ms | 3.5 ms | 4.8 ms | 6.2 ms | 3.9 ms |
+| **1 Active Session (PSS)** | **18.2 MB** [1st] | 27.8 MB | 144.4 MB | 140.0 MB | 243.7 MB | 214.9 MB | 333.3 MB | 386.6 MB | 371.5 MB |
+| **10 Active Sessions (PSS)**| **84.5 MB** [1st] | 117.0 MB | 833.0 MB | 334.8 MB | 1021.2 MB | 1632.4 MB | 1756.5 MB | 2300.6 MB | 3237.2 MB |
+| **Memory / Added Session** | **~6.8 MB** [1st] | ~9.9 MB | ~76.5 MB | ~21.6 MB | ~86.4 MB | ~157.5 MB | ~158.1 MB | ~212.7 MB | ~318.4 MB |
+| **Time to First Frame (TTFF)**| **11.2 ms** [1st] | 14.0 ms | 590.7 ms | 882.8 ms | 383.5 ms | 1949.7 ms | 1518.6 ms | 3436.9 ms | 1035.9 ms |
+| **Time to First Input (TTFI)**| **38.2 ms** [1st] | 48.7 ms | 596.4 ms | 905.8 ms | 383.7 ms | 1978.7 ms | 1583.4 ms | 3512.8 ms | 1047.9 ms |
+| **Compaction Cut Latency** | **0.12 ms** (Rust) [1st]| 0.45 ms | 12.8 ms | 18.2 ms | 8.4 ms | 14.5 ms | 22.1 ms | 35.0 ms | 19.8 ms |
+| **Fuzzy Search 50k Files** | **3.8 ms** (N-API) [1st] | 8.2 ms | 142.0 ms | 98.4 ms | 64.2 ms | 112.0 ms | 185.0 ms | 310.0 ms | 195.0 ms |
+| **Tool Dispatch Latency** | **0.08 ms** [1st] | 0.22 ms | 2.4 ms | 1.8 ms | 1.2 ms | 3.5 ms | 4.8 ms | 6.2 ms | 3.9 ms |
 
 ---
 

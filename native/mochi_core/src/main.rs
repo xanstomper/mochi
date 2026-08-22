@@ -29,7 +29,7 @@ use mochi_core::tokenizer::BpeTokenizer;
 const VERSION: &str = "0.10.6";
 
 fn print_banner() {
-    println!("\x1b[1;38;2;163;230;53m  🍡 mochi-agent (Native Rust Runtime v{})\x1b[0m", VERSION);
+    println!("\x1b[1;38;2;163;230;53m  [MOCHI] mochi-agent (Native Rust Runtime v{})\x1b[0m", VERSION);
     println!("\x1b[90m  High-performance compiled agent core • Zero GC pressure\x1b[0m\n");
 }
 

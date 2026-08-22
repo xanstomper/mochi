@@ -847,23 +847,42 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     if (line === '/rollback') { await run(async () => runtime.rollback()); return; }
     if (line.startsWith('/inspect ') || line === '/inspect') {
       const target = line.startsWith('/inspect ') ? line.slice(9).trim() : await ask('Symbol or file to inspect:');
-      if (target) await run(async () => (await runtime.inspect(target)).summary);
+      if (target) {
+        push('user', `/inspect ${target}`);
+        scheduleRender();
+        await run(async () => (await runtime.inspect(target)).summary);
+      }
       return;
     }
     if (line.startsWith('/plan ') || line === '/plan') {
       const obj = line.startsWith('/plan ') ? line.slice(6).trim() : await ask('Objective to plan:');
-      if (obj) await run(async () => runtime.plan(obj));
+      if (obj) {
+        push('user', `/plan ${obj}`);
+        push('goal', `Plan: ${obj}`);
+        scheduleRender();
+        await run(async () => runtime.plan(obj), true);
+      }
       return;
     }
-    if (line === '/approve') { await run(async () => runtime.approvePlan(), false); return; }
+    if (line === '/approve') { await run(async () => runtime.approvePlan(), true); return; }
     if (line.startsWith('/team ') || line === '/team') {
       const obj = line.startsWith('/team ') ? line.slice(6).trim() : await ask('Team goal objective:');
-      if (obj) await run(async () => runtime.team(obj), false);
+      if (obj) {
+        push('user', `/team ${obj}`);
+        push('goal', `Team Goal: ${obj}`);
+        scheduleRender();
+        await run(async () => runtime.team(obj), true);
+      }
       return;
     }
     if (line.startsWith('/goal ') || line === '/goal') {
       const obj = line.startsWith('/goal ') ? line.slice(6).trim() : await ask('Goal objective:');
-      if (obj) await run(async () => runtime.goal(obj), false);
+      if (obj) {
+        push('user', `/goal ${obj}`);
+        push('goal', `Goal: ${obj}`);
+        scheduleRender();
+        await run(async () => runtime.goal(obj), true);
+      }
       return;
     }
     if (line.startsWith('/compact')) { push('system', 'Context compaction is managed automatically.'); return; }
@@ -1041,7 +1060,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         const logPath = rp(runtime.workspace.dir, 'logs', 'audit.jsonl');
         if (!existsSync(logPath)) return 'No audit log yet. Actions are logged when YOLO mode is active.';
         const lines = readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean).slice(-20);
-        return '📋 Audit log (last 20 entries):\n' + lines.map((l) => {
+        return 'Audit log (last 20 entries):\n' + lines.map((l) => {
           try { const e = JSON.parse(l); return `  ${e.ts} ${e.tool} → ${e.decision}`; } catch { return l; }
         }).join('\n');
       });
@@ -1375,7 +1394,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       const tasks = runtime.workspace.loadTasks(goal.id);
       out.push(`Goal: ${goal.objective}`);
       for (const t of tasks) {
-        const icon = t.status === 'done' ? '✓' : t.status === 'running' ? '◐' : t.status === 'failed' ? '✗' : '○';
+        const icon = t.status === 'done' ? '[OK]' : t.status === 'running' ? '[..]' : t.status === 'failed' ? '[ERR]' : '[ ]';
         out.push(`  ${icon} ${t.title} (${t.role})`);
       }
     }

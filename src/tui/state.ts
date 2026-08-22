@@ -43,28 +43,28 @@ export function formatToolInvocation(tool: string, args: unknown): string {
   if (typeof args === 'object' && args !== null) {
     const a = args as Record<string, unknown>;
     if (a.path) {
-      if (a.oldText && a.newText) return `⚡ edit ${a.path}`;
-      if (a.content !== undefined) return `⚡ write ${a.path}`;
-      return `⚡ ${tool} ${a.path}`;
+      if (a.oldText && a.newText) return `edit: ${a.path}`;
+      if (a.content !== undefined) return `write: ${a.path}`;
+      return `${tool}: ${a.path}`;
     }
-    if (a.command) return `⚡ shell ${truncateArgs(a.command)}`;
-    if (a.query) return `⚡ search "${truncateArgs(a.query)}"`;
-    if (a.pattern) return `⚡ glob "${truncateArgs(a.pattern)}"`;
+    if (a.command) return `shell: ${truncateArgs(a.command)}`;
+    if (a.query) return `search: "${truncateArgs(a.query)}"`;
+    if (a.pattern) return `glob: "${truncateArgs(a.pattern)}"`;
   }
-  return `⚡ ${tool}(${truncateArgs(args)})`;
+  return `${tool}: (${truncateArgs(args)})`;
 }
 
 export function formatToolCompleted(tool: string, result?: { output?: string; error?: string; durationMs?: number }): string {
   const dur = result?.durationMs ? ` (${Math.round(result.durationMs)}ms)` : '';
   if (result?.error) {
-    return `✗ ${tool} failed: ${String(result.error).slice(0, 120)}${dur}`;
+    return `[ERR] ${tool} failed: ${String(result.error).slice(0, 120)}${dur}`;
   }
   const out = (result?.output ?? '').trim();
   const firstLine = out.split('\n')[0] ?? '';
   if (firstLine.length > 0 && firstLine.length < 90 && !firstLine.includes('exit_code:') && !firstLine.startsWith('{')) {
-    return `✓ ${firstLine}${dur}`;
+    return `[OK] ${firstLine}${dur}`;
   }
-  return `✓ ${tool} completed${dur}`;
+  return `[OK] ${tool} completed${dur}`;
 }
 
 export function pushLine(state: TuiState, kind: LineKind, text: string): void {
@@ -72,7 +72,7 @@ export function pushLine(state: TuiState, kind: LineKind, text: string): void {
   // in place instead of stacking one line per call).
   if (kind === 'tool' && state.lines.length && state.lines[state.lines.length - 1].kind === 'tool') {
     const prev = state.lines[state.lines.length - 1];
-    if (prev.text.startsWith('⚡') || prev.text.startsWith(text.slice(0, 8))) {
+    if (prev.text.includes(':') || prev.text.startsWith(text.slice(0, 8))) {
       prev.text = text;
       return;
     }
@@ -116,7 +116,7 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
       state.currentTool = '';
       const formatted = formatToolCompleted(String(event.tool ?? ''), event.result as any);
       const last = state.lines[state.lines.length - 1];
-      if (last && last.kind === 'tool' && last.text.startsWith('⚡')) {
+      if (last && last.kind === 'tool') {
         last.text = formatted;
       } else {
         pushLine(state, 'tool', formatted);
@@ -125,7 +125,7 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
     }
     case 'tool:failed':
       state.currentTool = '';
-      pushLine(state, 'error', `✗ ${event.tool} failed: ${String(event.error).slice(0, 400)}`);
+      pushLine(state, 'error', `[ERR] ${event.tool} failed: ${String(event.error).slice(0, 400)}`);
       return true;
     case 'goal:created': {
       const objective = (event.goal as { objective?: string } | undefined)?.objective;
