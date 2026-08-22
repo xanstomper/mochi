@@ -4,6 +4,12 @@ This document contains standardized empirical benchmarks comparing **Mochi** (po
 
 All tests were executed on Linux x86_64 (6.11 Kernel, AMD Ryzen 9 / 64 GB DDR5 RAM, NVMe PCIe 4.0 storage) across 10 independent launches per metric with PSS memory profiling and high-resolution PTY timing probes.
 
+> **Regression gate:** `npm run bench:memory` measures fresh-process RSS for the
+> codegraph import (~46MB) and the full runtime import chain (~61MB) and fails
+> above ceilings (80MB / 95MB). It runs in CI after every build — this is what
+> keeps the lazy-loading wins from regressing (eager grammar/compiler loading
+> used to cost ~158MB on import).
+
 ---
 
 ## Summary Benchmark Matrix

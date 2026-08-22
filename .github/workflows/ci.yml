@@ -37,6 +37,8 @@ jobs:
         run: npx vitest run
       - name: Build
         run: npm run build
+      - name: Memory regression gate
+        run: npm run bench:memory
       - name: Smoke test the CLI
         run: |
           node dist/cli.js --version

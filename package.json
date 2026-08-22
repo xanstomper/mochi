@@ -26,7 +26,8 @@
     "bench:efficiency": "node bench/efficiency.mjs",
     "bench:task": "node bench/task.mjs",
     "bench:stream": "tsx bench/streaming.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "bench:memory": "node bench/memory.mjs"
   },
   "engines": {
     "node": ">=22.0.0"

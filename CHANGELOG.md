@@ -42,6 +42,15 @@
   `sql_codebase_query`) are async and self-warming; a sync
   `querySymbolGraphSync` serves hot prompt-build paths, primed once per task
   by the agent preflight via `primeScaffold` (cached Chameleon scaffold).
+- **Memory regression gate.** New `npm run bench:memory`
+  (`bench/memory.mjs`) measures fresh-process RSS for the codegraph import
+  and the full runtime chain against ceilings (80MB / 95MB) and fails above
+  them; wired into CI after build so eager heavy imports can never silently
+  return. Measured today: 46MB / 61MB (eager era was ~158MB on import).
+- **Lean installs.** All tree-sitter grammar packages are now
+  `optionalDependencies`: `npm i @mochi/agent --omit=optional` skips ~250MB
+  of grammars on disk; missing grammars degrade gracefully to the tsc
+  backend. Default installs are unchanged.
 
 ## 0.10.5
 
