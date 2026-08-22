@@ -17,6 +17,7 @@ import {
   renderEntry,
   composerRow,
   composerBottomRule,
+  composerHintRow,
   renderDropdown,
   transcriptIndent,
   spinnerFrame,
@@ -162,10 +163,22 @@ describe('composer', () => {
     expect(plain).toContain('fix the bug');
   });
 
-  it('bottom rule carries the hint', () => {
-    const rule = composerBottomRule(60, '⏎ send · / commands · esc stop');
+  it('bottom rule is a plain rule (hint moved above the box)', () => {
+    const rule = composerBottomRule(60);
     const plain = rule.replace(/\x1b\[[0-9;]*m/g, '');
-    expect(plain).toContain('⏎ send');
+    expect(plain).toBe('└' + '─'.repeat(58) + '┘');
+    expect(plain).not.toContain('send');
+  });
+
+  it('hint row is left-aligned above the composer box', () => {
+    const row = composerHintRow('⏎ send · Tab → plan · esc stop', 60);
+    const plain = row.replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).toContain('⏎ send · Tab → plan · esc stop');
+    // left-aligned: starts at column 0, under the auto-approve row
+    expect(plain.startsWith('⏎')).toBe(true);
+    // fits any width without overflow math
+    const cramped = composerHintRow('⏎ send · Tab → plan · esc stop', 10);
+    expect(cramped.replace(/\x1b\[[0-9;]*m/g, '').length).toBeGreaterThan(0);
   });
 });
 
