@@ -29,6 +29,7 @@ pub mod tokens;
 pub mod tui_renderer;
 pub mod tui_state;
 pub mod verification;
+pub mod napi;
 
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};

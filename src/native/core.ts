@@ -1,46 +1,86 @@
-// Mochi Native Core FFI Bridge (Rust <-> Node/Bun)
-// Zero-copy in-process acceleration for fuzzy matching, git status, and search.
+// Mochi Native Core Engine Bridge (Rust <-> Node/Bun)
+// Zero-copy in-process acceleration for fuzzy matching, git status, search, token estimation, and reasoning stripping.
 
 import { existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
 export interface NativeFuzzyResult {
   start: number;
   end: number;
 }
 
-let nativeLib: any = null;
+export interface NativeDiffStats {
+  files: number;
+  additions: number;
+  deletions: number;
+}
+
+let napiModule: any = null;
+let bunLib: any = null;
 let ffiAvailable = false;
 let probed = false;
 
-function findNativeLibPath(): string | null {
+function findNativePaths(): { nodeAddon: string | null; sharedLib: string | null } {
   try {
     const here = dirname(fileURLToPath(import.meta.url));
-    const candidates = [
+    const addonCandidates = [
+      resolve(here, '..', '..', 'native', 'bin', 'mochi_core.node'),
       resolve(here, '..', '..', 'native', 'mochi_core', 'target', 'release', 'libmochi_core.so'),
       resolve(here, '..', '..', 'native', 'mochi_core', 'target', 'release', 'libmochi_core.dylib'),
       resolve(here, '..', '..', 'native', 'mochi_core', 'target', 'release', 'mochi_core.dll'),
-      resolve(here, '..', '..', 'native', 'bin', 'libmochi_core.so'),
     ];
-    for (const p of candidates) {
-      if (existsSync(p)) return p;
+    let nodeAddon: string | null = null;
+    for (const p of addonCandidates) {
+      if (existsSync(p)) {
+        nodeAddon = p;
+        break;
+      }
     }
-  } catch {}
-  return null;
+
+    const libCandidates = [
+      resolve(here, '..', '..', 'native', 'bin', 'libmochi_core.so'),
+      resolve(here, '..', '..', 'native', 'mochi_core', 'target', 'release', 'libmochi_core.so'),
+      resolve(here, '..', '..', 'native', 'mochi_core', 'target', 'release', 'libmochi_core.dylib'),
+      resolve(here, '..', '..', 'native', 'mochi_core', 'target', 'release', 'mochi_core.dll'),
+    ];
+    let sharedLib: string | null = null;
+    for (const p of libCandidates) {
+      if (existsSync(p)) {
+        sharedLib = p;
+        break;
+      }
+    }
+
+    return { nodeAddon, sharedLib };
+  } catch {
+    return { nodeAddon: null, sharedLib: null };
+  }
 }
 
 function initNativeCore() {
   if (probed) return;
   probed = true;
-  const libPath = findNativeLibPath();
-  if (!libPath) return;
+  const { nodeAddon, sharedLib } = findNativePaths();
 
-  try {
-    // Check if running under Bun with native bun:ffi
-    if (typeof (globalThis as any).Bun !== 'undefined') {
-      const { dlopen, FFIType, CString, ptr } = (globalThis as any).Bun;
-      nativeLib = dlopen(libPath, {
+  // 1. Try Node.js in-process N-API module (works in Node.js v18, v20, v22+)
+  if (nodeAddon) {
+    try {
+      const require = createRequire(import.meta.url);
+      napiModule = require(nodeAddon);
+      if (napiModule && typeof napiModule.gitBranch === 'function') {
+        ffiAvailable = true;
+        return;
+      }
+    } catch {}
+  }
+
+  // 2. Try Bun native FFI (if running under Bun runtime)
+  if (sharedLib && typeof (globalThis as any).Bun !== 'undefined') {
+    try {
+      const { dlopen, FFIType } = (globalThis as any).Bun;
+      bunLib = dlopen(sharedLib, {
         mochi_fuzzy_match: {
           args: [FFIType.cstring, FFIType.cstring, FFIType.ptr, FFIType.ptr],
           returns: FFIType.i32,
@@ -74,10 +114,11 @@ function initNativeCore() {
           returns: FFIType.i32,
         },
       });
-      ffiAvailable = Boolean(nativeLib);
-    }
-  } catch {
-    ffiAvailable = false;
+      if (bunLib) {
+        ffiAvailable = true;
+        return;
+      }
+    } catch {}
   }
 }
 
@@ -86,44 +127,66 @@ function initNativeCore() {
  */
 export function nativeFuzzyMatch(text: string, needle: string): NativeFuzzyResult | null {
   initNativeCore();
-  if (!ffiAvailable || !nativeLib) return null;
+  if (!ffiAvailable) return null;
 
-  try {
-    const startBuf = new BigUint64Array(1);
-    const endBuf = new BigUint64Array(1);
-    const { ptr } = (globalThis as any).Bun;
-    const res = nativeLib.symbols.mochi_fuzzy_match(
-      Buffer.from(text + '\0'),
-      Buffer.from(needle + '\0'),
-      ptr(startBuf),
-      ptr(endBuf),
-    );
-    if (res === 1) {
-      return { start: Number(startBuf[0]), end: Number(endBuf[0]) };
+  if (napiModule && typeof napiModule.fuzzyMatch === 'function') {
+    try {
+      return napiModule.fuzzyMatch(text, needle) ?? null;
+    } catch {
+      return null;
     }
-  } catch {}
+  }
+
+  if (bunLib) {
+    try {
+      const startBuf = new BigUint64Array(1);
+      const endBuf = new BigUint64Array(1);
+      const { ptr } = (globalThis as any).Bun;
+      const res = bunLib.symbols.mochi_fuzzy_match(
+        Buffer.from(text + '\0'),
+        Buffer.from(needle + '\0'),
+        ptr(startBuf),
+        ptr(endBuf),
+      );
+      if (res === 1) {
+        return { start: Number(startBuf[0]), end: Number(endBuf[0]) };
+      }
+    } catch {}
+  }
+
   return null;
 }
 
 /**
- * Fast in-process Rust git branch discovery (<0.1ms).
+ * Fast in-process Rust git branch discovery (<0.05ms).
  */
 export function nativeGitBranch(dir: string): string | null {
   initNativeCore();
-  if (!ffiAvailable || !nativeLib) return null;
+  if (!ffiAvailable) return null;
 
-  try {
-    const buf = Buffer.alloc(256);
-    const { ptr } = (globalThis as any).Bun;
-    const len = nativeLib.symbols.mochi_git_branch(
-      Buffer.from(dir + '\0'),
-      ptr(buf),
-      buf.length,
-    );
-    if (len > 0) {
-      return buf.toString('utf8', 0, len);
+  if (napiModule && typeof napiModule.gitBranch === 'function') {
+    try {
+      return napiModule.gitBranch(dir) ?? null;
+    } catch {
+      return null;
     }
-  } catch {}
+  }
+
+  if (bunLib) {
+    try {
+      const buf = Buffer.alloc(256);
+      const { ptr } = (globalThis as any).Bun;
+      const len = bunLib.symbols.mochi_git_branch(
+        Buffer.from(dir + '\0'),
+        ptr(buf),
+        buf.length,
+      );
+      if (len > 0) {
+        return buf.toString('utf8', 0, len);
+      }
+    } catch {}
+  }
+
   return null;
 }
 
@@ -132,23 +195,34 @@ export function nativeGitBranch(dir: string): string | null {
  */
 export function nativeSearchDir(dir: string, query: string, glob = '', limit = 60): string | null {
   initNativeCore();
-  if (!ffiAvailable || !nativeLib) return null;
+  if (!ffiAvailable) return null;
 
-  try {
-    const buf = Buffer.alloc(256_000);
-    const { ptr } = (globalThis as any).Bun;
-    const len = nativeLib.symbols.mochi_search(
-      Buffer.from(dir + '\0'),
-      Buffer.from(query + '\0'),
-      Buffer.from(glob + '\0'),
-      limit,
-      ptr(buf),
-      buf.length,
-    );
-    if (len > 0) {
-      return buf.toString('utf8', 0, len);
+  if (napiModule && typeof napiModule.searchDir === 'function') {
+    try {
+      return napiModule.searchDir(dir, query, glob, limit) ?? null;
+    } catch {
+      return null;
     }
-  } catch {}
+  }
+
+  if (bunLib) {
+    try {
+      const buf = Buffer.alloc(256_000);
+      const { ptr } = (globalThis as any).Bun;
+      const len = bunLib.symbols.mochi_search(
+        Buffer.from(dir + '\0'),
+        Buffer.from(query + '\0'),
+        Buffer.from(glob + '\0'),
+        limit,
+        ptr(buf),
+        buf.length,
+      );
+      if (len > 0) {
+        return buf.toString('utf8', 0, len);
+      }
+    } catch {}
+  }
+
   return null;
 }
 
@@ -157,20 +231,31 @@ export function nativeSearchDir(dir: string, query: string, glob = '', limit = 6
  */
 export function nativeStripThinkTags(text: string): string | null {
   initNativeCore();
-  if (!ffiAvailable || !nativeLib) return null;
+  if (!ffiAvailable) return null;
 
-  try {
-    const buf = Buffer.alloc(Math.max(4096, text.length + 128));
-    const { ptr } = (globalThis as any).Bun;
-    const len = nativeLib.symbols.mochi_strip_think_tags(
-      Buffer.from(text + '\0'),
-      ptr(buf),
-      buf.length,
-    );
-    if (len >= 0) {
-      return buf.toString('utf8', 0, len);
+  if (napiModule && typeof napiModule.stripThinkTags === 'function') {
+    try {
+      return napiModule.stripThinkTags(text) ?? null;
+    } catch {
+      return null;
     }
-  } catch {}
+  }
+
+  if (bunLib) {
+    try {
+      const buf = Buffer.alloc(Math.max(4096, text.length + 128));
+      const { ptr } = (globalThis as any).Bun;
+      const len = bunLib.symbols.mochi_strip_think_tags(
+        Buffer.from(text + '\0'),
+        ptr(buf),
+        buf.length,
+      );
+      if (len >= 0) {
+        return buf.toString('utf8', 0, len);
+      }
+    } catch {}
+  }
+
   return null;
 }
 
@@ -179,14 +264,24 @@ export function nativeStripThinkTags(text: string): string | null {
  */
 export function nativeHashPrompt(text: string): bigint | null {
   initNativeCore();
-  if (!ffiAvailable || !nativeLib) return null;
+  if (!ffiAvailable) return null;
 
-  try {
-    const buf = Buffer.from(text, 'utf8');
-    const { ptr } = (globalThis as any).Bun;
-    const h = nativeLib.symbols.mochi_hash_prompt(ptr(buf), buf.length);
-    return BigInt(h);
-  } catch {}
+  if (napiModule && typeof napiModule.hashPrompt === 'function') {
+    try {
+      const h = napiModule.hashPrompt(text);
+      if (h !== null && h !== undefined) return BigInt(h);
+    } catch {}
+  }
+
+  if (bunLib) {
+    try {
+      const buf = Buffer.from(text, 'utf8');
+      const { ptr } = (globalThis as any).Bun;
+      const h = bunLib.symbols.mochi_hash_prompt(ptr(buf), buf.length);
+      return BigInt(h);
+    } catch {}
+  }
+
   return null;
 }
 
@@ -200,46 +295,68 @@ export function nativeEstimateCostUsd(
   cacheReadTokens = 0,
 ): number | null {
   initNativeCore();
-  if (!ffiAvailable || !nativeLib) return null;
+  if (!ffiAvailable) return null;
 
-  try {
-    const cost = nativeLib.symbols.mochi_estimate_cost_usd(
-      Buffer.from(model + '\0'),
-      BigInt(promptTokens),
-      BigInt(completionTokens),
-      BigInt(cacheReadTokens),
-    );
-    return Number(cost);
-  } catch {}
+  if (napiModule && typeof napiModule.estimateCost === 'function') {
+    try {
+      return napiModule.estimateCost(model, promptTokens, completionTokens, cacheReadTokens);
+    } catch {
+      return null;
+    }
+  }
+
+  if (bunLib) {
+    try {
+      const cost = bunLib.symbols.mochi_estimate_cost_usd(
+        Buffer.from(model + '\0'),
+        BigInt(promptTokens),
+        BigInt(completionTokens),
+        BigInt(cacheReadTokens),
+      );
+      return Number(cost);
+    } catch {}
+  }
+
   return null;
 }
 
 /**
  * Fast in-process git diff numstat line parser.
  */
-export function nativeDiffNumstat(output: string): { files: number; additions: number; deletions: number } | null {
+export function nativeDiffNumstat(output: string): NativeDiffStats | null {
   initNativeCore();
-  if (!ffiAvailable || !nativeLib) return null;
+  if (!ffiAvailable) return null;
 
-  try {
-    const filesBuf = new BigUint64Array(1);
-    const addBuf = new BigUint64Array(1);
-    const delBuf = new BigUint64Array(1);
-    const { ptr } = (globalThis as any).Bun;
-    const res = nativeLib.symbols.mochi_diff_numstat(
-      Buffer.from(output + '\0'),
-      ptr(filesBuf),
-      ptr(addBuf),
-      ptr(delBuf),
-    );
-    if (res === 1) {
-      return {
-        files: Number(filesBuf[0]),
-        additions: Number(addBuf[0]),
-        deletions: Number(delBuf[0]),
-      };
+  if (napiModule && typeof napiModule.diffNumstat === 'function') {
+    try {
+      return napiModule.diffNumstat(output) ?? null;
+    } catch {
+      return null;
     }
-  } catch {}
+  }
+
+  if (bunLib) {
+    try {
+      const filesBuf = new BigUint64Array(1);
+      const addBuf = new BigUint64Array(1);
+      const delBuf = new BigUint64Array(1);
+      const { ptr } = (globalThis as any).Bun;
+      const res = bunLib.symbols.mochi_diff_numstat(
+        Buffer.from(output + '\0'),
+        ptr(filesBuf),
+        ptr(addBuf),
+        ptr(delBuf),
+      );
+      if (res === 1) {
+        return {
+          files: Number(filesBuf[0]),
+          additions: Number(addBuf[0]),
+          deletions: Number(delBuf[0]),
+        };
+      }
+    } catch {}
+  }
+
   return null;
 }
 
@@ -248,20 +365,31 @@ export function nativeDiffNumstat(output: string): { files: number; additions: n
  */
 export function nativeClassifyPrompt(prompt: string): string | null {
   initNativeCore();
-  if (!ffiAvailable || !nativeLib) return null;
+  if (!ffiAvailable) return null;
 
-  try {
-    const code = nativeLib.symbols.mochi_classify_prompt(Buffer.from(prompt + '\0'));
-    switch (code) {
-      case 1: return 'code-edit';
-      case 2: return 'investigation';
-      case 3: return 'testing';
-      case 4: return 'refactor';
-      case 5: return 'architecture';
-      case 6: return 'one-shot-answer';
-      default: return null;
+  if (napiModule && typeof napiModule.classifyPrompt === 'function') {
+    try {
+      return napiModule.classifyPrompt(prompt) ?? null;
+    } catch {
+      return null;
     }
-  } catch {}
+  }
+
+  if (bunLib) {
+    try {
+      const code = bunLib.symbols.mochi_classify_prompt(Buffer.from(prompt + '\0'));
+      switch (code) {
+        case 1: return 'code-edit';
+        case 2: return 'investigation';
+        case 3: return 'testing';
+        case 4: return 'refactor';
+        case 5: return 'architecture';
+        case 6: return 'one-shot-answer';
+        default: return null;
+      }
+    } catch {}
+  }
+
   return null;
 }
 
