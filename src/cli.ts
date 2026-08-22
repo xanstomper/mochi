@@ -812,16 +812,19 @@ async function main() {
   if (first === 'usage') { console.log(runtime.usage.summary()); return; }
   if (first === 'known-good') { console.log(await runtime.recordGood()); return; }
   if (first === 'check') { console.log(await runtime.knownGood()); return; }
-  if (first === 'enhance') {
+  if (first === 'enhance' || first === 'chameleon') {
     const question = positional.slice(1).join(' ');
-    if (!question) { console.error('Usage: mochi enhance "<task>" [--mode <mode>]'); process.exit(1); }
+    if (!question) { console.error('Usage: mochi chameleon "<task>" [--mode <mode>] [--strategy <strategy>]'); process.exit(1); }
     const mode = flags.mode ? String(flags.mode) : 'auto';
+    const strategy = flags.strategy ? String(flags.strategy) : 'hybrid';
     try {
-      const r = await runtime.enhance(question, mode as never);
-      console.log(`# Chameleon enhancement (mode ${r.mode}, ${r.strategies.length} strategies, ${r.tokensUsed} tokens, $${r.costUsd.toFixed(4)})\n`);
+      const { ChameleonEngine } = await import('./chameleon.js');
+      const engine = new ChameleonEngine(runtime.config);
+      const r = await engine.enhance({ task: question, mode: mode as any, strategy: strategy as any, cwd: runtime.cwd });
+      console.log(`[Lazy Chameleon v2.4 — Mode: ${r.mode}, Strategy: ${r.strategy}, ${r.strategies.length} passes, ${r.tokensUsed} tokens, ${r.durationMs}ms]\n`);
       console.log(r.context);
     } catch (e) {
-      console.error('Enhance failed:', e instanceof Error ? e.message : e);
+      console.error('Chameleon enhancement failed:', e instanceof Error ? e.message : e);
       process.exit(1);
     }
     return;

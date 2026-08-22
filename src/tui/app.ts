@@ -88,6 +88,7 @@ const COMMANDS = [
   { name: '/usage', hint: 'Show token usage, costs, and cache hits' },
   { name: '/tokens', hint: 'Show token breakdown and prompt cache efficiency' },
   { name: '/stats', hint: 'Show real-time performance and cost statistics' },
+  { name: '/chameleon', hint: 'Synthesize Chameleon synthetic reasoning parameters for a task' },
   { name: '/doctor', hint: 'Diagnose workspace configuration' },
   { name: '/init', hint: 'Create project MOCHI.md instructions' },
   { name: '/new', hint: 'Start a fresh conversation session' },
@@ -884,6 +885,24 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         push('goal', `Goal: ${obj}`);
         scheduleRender();
         await run(async () => runtime.goal(obj), true);
+      }
+      return;
+    }
+    if (line.startsWith('/chameleon ') || line === '/chameleon' || line.startsWith('/enhance ') || line === '/enhance') {
+      const task = line.startsWith('/chameleon ')
+        ? line.slice(11).trim()
+        : line.startsWith('/enhance ')
+        ? line.slice(9).trim()
+        : await ask('Task to synthesize reasoning parameters for:');
+      if (task) {
+        push('user', `/chameleon ${task}`);
+        scheduleRender();
+        await run(async () => {
+          const { ChameleonEngine } = await import('../chameleon.js');
+          const engine = new ChameleonEngine(runtime.config);
+          const r = await engine.enhance({ task, mode: 'auto', cwd: runtime.cwd });
+          return `[Lazy Chameleon v2.4 — Mode: ${r.mode}, Strategy: ${r.strategy}, ${r.strategies.length} passes, ${r.tokensUsed} tokens, ${r.durationMs}ms]\n\n${r.context}`;
+        });
       }
       return;
     }

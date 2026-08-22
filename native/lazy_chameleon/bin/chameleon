@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Lazy Chameleon v2.x — Synthetic Parameter Generator
+#
+# Repo-relative launcher. Works regardless of where the repo is cloned,
+# as long as this file lives at <repo-root>/bin/chameleon.
+#
+# Usage:
+#   chameleon enhance "Build a REST API" --mode hard
+#   echo "Fix this bug" | chameleon enhance --mode extreme
+#   chameleon enhance "Design system" --mode genius --verbose
+#   chameleon enhance "Quick question" --mode auto
+#   chameleon modes
+#   chameleon providers
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+
+export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"
+cd "$REPO_ROOT"
+
+exec python3 -m lazy_chameleon.main "$@"
