@@ -5,6 +5,9 @@ import { MemoryStore } from './memory.js';
 import type { MemoryEntry } from './memory.js';
 import { selectRelevant } from './relevance.js';
 import { loadAllSkills, formatSkillsForPrompt } from './skills.js';
+import { nativeCountTokens } from './native/core.js';
+import { nativePlanCompaction } from './native/agent-protocol.js';
+import type { PlanRequestMessage } from './native/agent-protocol.js';
 import { classifyTaskKind, kindHint } from './taskkind.js';
 import type { ChatMessage, MochiConfig, RepoInfo, Task, ToolDefinition } from './types.js';
 import { isWeakModel } from './tools/index.js';
@@ -29,7 +32,10 @@ function rulesSource(path: string, label: string): string {
 }
 
 export function approxTokens(text: string): number {
-  // Fast approximation: ~4 chars per token for code/English.
+  // Native Rust tokenizer (heuristic BPE) when available; ~4 chars/token
+  // approximation otherwise. Same contract either way: fast, deterministic.
+  const native = nativeCountTokens(text);
+  if (native !== null) return native;
   return Math.ceil(text.length / 4);
 }
 
@@ -397,13 +403,17 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
     return parts.join('\n');
   }
 
-  /** Non-destructive preview of what compact() would drop: the valid-cut-point
-   *  slice that would be removed. Returns null when nothing would be dropped
-   *  (already at the recency floor). Lets the caller summarize it with an LLM
-   *  BEFORE committing to the compaction (Pi's structured checkpoint). */
-  previewCompact(): ChatMessage[] | null {
+  /** Compute the valid cut index for compaction: prefer the native Rust
+   *  planner (identical invariant, computed off the JS hot path) and fall
+   *  back to the inlined TS walk when the binary is unavailable (CI, cold
+   *  installs). Never orphans a tool result. */
+  private async planCutIndex(): Promise<number | null> {
     if (this.messages.length <= 6) return null;
     const keep = 6;
+    const native = await nativePlanCompaction(this.messages as PlanRequestMessage[], keep);
+    if (typeof native?.cut === 'number' && native.cut > 0 && native.cut < this.messages.length) {
+      return native.cut;
+    }
     let cutIndex = this.messages.length - keep;
     while (cutIndex < this.messages.length - 1) {
       const m = this.messages[cutIndex];
@@ -417,34 +427,33 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
       cutIndex++;
     }
     if (cutIndex <= 0) return null;
+    return cutIndex;
+  }
+
+  /** Non-destructive preview of what compact() would drop: the valid-cut-point
+   *  slice that would be removed. Returns null when nothing would be dropped
+   *  (already at the recency floor). Lets the caller summarize it with an LLM
+   *  BEFORE committing to the compaction (Pi's structured checkpoint). */
+  async previewCompact(): Promise<ChatMessage[] | null> {
+    const cutIndex = await this.planCutIndex();
+    if (cutIndex === null) return null;
     return this.messages.slice(0, cutIndex);
   }
 
-  compact(checkpoint?: string) {
+  async compact(checkpoint?: string) {
     // Tier 1 (micro): drop everything but the recency window and distill small facts.
     if (this.messages.length <= 6) return;
     const keep = 6;
 
     // VALID CUT POINTS (Pi insight): a tool result must stay attached to the
-    // assistant message that requested it. Walking back from the newest
-    // message, only cut at an assistant message WITHOUT pending tool_calls,
-    // or at a user/system message. This prevents compact() from producing a
-    // dangling tool result (orphaned tool_call_id) that confuses providers.
-    let cutIndex = this.messages.length - keep;
-    // Advance forward to the nearest valid boundary at/after the target.
-    while (cutIndex < this.messages.length - 1) {
-      const m = this.messages[cutIndex];
-      const isValid =
-        m.role === 'user' || m.role === 'system'
-          ? true
-          : m.role === 'assistant'
-            ? !m.tool_calls || m.tool_calls.length === 0
-            : false; // never cut directly at a tool result
-      if (isValid) break;
-      cutIndex++;
-    }
+    // assistant message that requested it. planCutIndex() enforces that
+    // invariant (native Rust planner first, TS walk as fallback) and never
+    // orphans a tool result.
+    const cutIndex = await this.planCutIndex();
+    if (cutIndex === null) return;
     const dropped = this.messages.slice(0, cutIndex);
     this.messages = this.messages.slice(cutIndex);
+
 
     const facts: string[] = [];
     for (const m of dropped) {

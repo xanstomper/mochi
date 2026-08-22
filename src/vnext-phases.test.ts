@@ -39,7 +39,7 @@ describe('Phase 2: file-op carryover across compaction', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('compaction ledger re-injects the read/edited sets', () => {
+  it('compaction ledger re-injects the read/edited sets', async () => {
     const { ctx, dir } = makeContext();
     for (let i = 0; i < 6; i++) {
       ctx.addMessage(call(`r${i}`, 'read', { path: `src/f${i}.ts` }));
@@ -47,7 +47,7 @@ describe('Phase 2: file-op carryover across compaction', () => {
       ctx.addMessage(call(`w${i}`, 'edit', { path: `src/g${i}.ts` }));
       ctx.addMessage({ role: 'tool', tool_call_id: `w${i}`, content: 'done' } as any);
     }
-    ctx.compact();
+    await ctx.compact();
     const msgs = (ctx as any).messages as ChatMessage[];
     const ledger = msgs.find((m) => m.role === 'system' && String(m.content).includes('(compacted)'));
     expect(ledger).toBeTruthy();

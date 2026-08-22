@@ -5,7 +5,7 @@ use std::ffi::CString;
 use std::os::raw::c_char;
 use std::path::Path;
 
-use crate::{budget, diff, fuzzy, git, planner, search, stream, tokens};
+use crate::{budget, diff, fuzzy, git, planner, search, stream, tokens, tokenizer};
 
 pub type NapiEnv = *mut std::ffi::c_void;
 pub type NapiValue = *mut std::ffi::c_void;
@@ -308,6 +308,52 @@ unsafe extern "C" fn js_hash_prompt(env: NapiEnv, info: NapiCallbackInfo) -> Nap
     val
 }
 
+unsafe extern "C" fn js_count_tokens(env: NapiEnv, info: NapiCallbackInfo) -> NapiValue {
+    let mut argc = 1;
+    let mut argv = [std::ptr::null_mut(); 1];
+    napi_get_cb_info(env, info, &mut argc, argv.as_mut_ptr(), std::ptr::null_mut(), std::ptr::null_mut());
+
+    let mut null_val = std::ptr::null_mut();
+    napi_get_null(env, &mut null_val);
+
+    if argc < 1 {
+        return null_val;
+    }
+    let Some(text) = get_string_arg(env, argv[0]) else {
+        return null_val;
+    };
+    let tok = tokenizer::BpeTokenizer::new();
+    let mut val = std::ptr::null_mut();
+    napi_create_int64(env, tok.count_tokens(&text) as i64, &mut val);
+    val
+}
+
+unsafe extern "C" fn js_truncate_to_tokens(env: NapiEnv, info: NapiCallbackInfo) -> NapiValue {
+    let mut argc = 2;
+    let mut argv = [std::ptr::null_mut(); 2];
+    napi_get_cb_info(env, info, &mut argc, argv.as_mut_ptr(), std::ptr::null_mut(), std::ptr::null_mut());
+
+    let mut null_val = std::ptr::null_mut();
+    napi_get_null(env, &mut null_val);
+
+    if argc < 2 {
+        return null_val;
+    }
+    let Some(text) = get_string_arg(env, argv[0]) else {
+        return null_val;
+    };
+    let max_tokens = get_int64_arg(env, argv[1]).max(0) as usize;
+    if max_tokens == 0 {
+        return null_val;
+    }
+    let tok = tokenizer::BpeTokenizer::new();
+    let truncated = tok.truncate_to_tokens(&text, max_tokens);
+    let c_str = CString::new(truncated).unwrap();
+    let mut str_val = std::ptr::null_mut();
+    napi_create_string_utf8(env, c_str.as_ptr(), c_str.as_bytes().len(), &mut str_val);
+    str_val
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn napi_register_module_v1(env: NapiEnv, exports: NapiValue) -> NapiValue {
     let funcs: &[(&str, NapiCallback)] = &[
@@ -319,6 +365,8 @@ pub unsafe extern "C" fn napi_register_module_v1(env: NapiEnv, exports: NapiValu
         ("estimateCost", js_estimate_cost),
         ("diffNumstat", js_diff_numstat),
         ("classifyPrompt", js_classify_prompt),
+        ("countTokens", js_count_tokens),
+        ("truncateToTokens", js_truncate_to_tokens),
     ];
 
     for &(name, cb) in funcs {

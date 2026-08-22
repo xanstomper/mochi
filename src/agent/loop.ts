@@ -956,9 +956,9 @@ Continue from 'Next:', do not redo completed progress.`,
    *  Decisions/Next steps. On any failure (timeout, empty answer, weak model)
    *  fall back to the heuristic ledger so compaction NEVER blocks the loop. */
   private async checkpointAndCompact(reason: 'periodic' | 'floor' | 'error'): Promise<void> {
-    const dropped = this.context.previewCompact();
+    const dropped = await this.context.previewCompact();
     if (!dropped || dropped.length === 0) {
-      this.context.compact();
+      this.context.compact().catch(() => {});
       return;
     }
     // Render the to-be-dropped slice compactly. Tool outputs carry most of the
@@ -1002,7 +1002,7 @@ Continue from 'Next:', do not redo completed progress.`,
     } catch {
       checkpoint = undefined; // heuristic fallback inside compact()
     }
-    this.context.compact(checkpoint);
+    await this.context.compact(checkpoint);
     // Phase 7: durable checkpoint — survives process restarts for resume.
     if (checkpoint) {
       try { this.workspace.saveCheckpoint('', checkpoint); } catch { /* best-effort */ }

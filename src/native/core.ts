@@ -67,8 +67,8 @@ function initNativeCore() {
   // 1. Try Node.js in-process N-API module (works in Node.js v18, v20, v22+)
   if (nodeAddon) {
     try {
-      const require = createRequire(import.meta.url);
-      napiModule = require(nodeAddon);
+      const nodeRequire = createRequire(import.meta.url);
+      napiModule = nodeRequire(nodeAddon);
       if (napiModule && typeof napiModule.gitBranch === 'function') {
         ffiAvailable = true;
         return;
@@ -396,4 +396,40 @@ export function nativeClassifyPrompt(prompt: string): string | null {
 export function isNativeCoreAvailable(): boolean {
   initNativeCore();
   return ffiAvailable;
+}
+
+/**
+ * Rust BPE token counting (heuristic vocabulary). Returns null when the
+ * native core is unavailable; callers fall back to approxTokens.
+ */
+export function nativeCountTokens(text: string): number | null {
+  initNativeCore();
+  if (!ffiAvailable) return null;
+  if (napiModule && typeof napiModule.countTokens === 'function') {
+    try {
+      const n = napiModule.countTokens(text);
+      return typeof n === 'number' && n >= 0 ? n : null;
+    } catch {
+      return null;
+    }
+  }
+  return null; // Bun FFI path not wired for tokenizer; falls back to TS.
+}
+
+/**
+ * Rust token-budget truncation: keeps the head of `text` within `maxTokens`.
+ * Returns null when native is unavailable; caller falls back to char slicing.
+ */
+export function nativeTruncateToTokens(text: string, maxTokens: number): string | null {
+  initNativeCore();
+  if (!ffiAvailable) return null;
+  if (napiModule && typeof napiModule.truncateToTokens === 'function') {
+    try {
+      const out = napiModule.truncateToTokens(text, maxTokens);
+      return typeof out === 'string' ? out : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }

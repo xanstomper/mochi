@@ -1,5 +1,24 @@
 # Mochi Changelog
 
+## 0.10.6
+
+- **Rust runtime core.** Pure compute now lives in a zero-dependency Rust crate
+  (`native/mochi_core`): tokenizer, budget math, context compaction planning,
+  and agent-loop decision logic, exposed both as a N-API module and a stdio
+  JSON-line protocol (`mochi-agent plan`). The TypeScript frontend keeps model
+  I/O, the TUI, and tool execution. Every native path has a parity-tested TS
+  fallback (null-return contract), so the harness runs identically on machines
+  without a Rust toolchain (CI, cold installs).
+- **Native tokenizer + compaction planner wired in.** `approxTokens()` prefers
+  `countTokens` from the native module; `ContextEngine.compact()`/
+  `previewCompact()` compute their valid cut points via the native planner
+  (never orphaning a tool result), falling back to the inlined TS walk.
+- **Team roster expanded.** Specialist roles (devops, db_admin, frontend,
+  backend, performance, tech_writer, qa_engineer, data_scientist) join the
+  roster; tester/debugger now carry edit tools to write tests and
+  instrumentation. Review-only roles (lead, reviewer, researcher, security,
+  architect) remain shell-free.
+
 ## 0.10.5
 
 - **Terminal copy / paste / highlight.** Mouse click-drag now selects

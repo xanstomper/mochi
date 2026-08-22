@@ -6,6 +6,8 @@ import {
   nativeStripThinkTags,
   nativeHashPrompt,
   isNativeCoreAvailable,
+  nativeCountTokens,
+  nativeTruncateToTokens,
 } from './core.js';
 import { fuzzyFindUnique } from '../tools/fuzzy-match.js';
 
@@ -58,6 +60,30 @@ describe('mochi_core native Rust engine', () => {
       expect(typeof h1).toBe('bigint');
       expect(h1).toEqual(h2);
       expect(h1).not.toEqual(h3);
+    }
+  });
+});
+
+describe('tokenizer bridge (Rust native, parity-checked)', () => {
+  it('nativeCountTokens returns sane counts and falls back cleanly', () => {
+    const n = nativeCountTokens('hello world foo bar baz qux');
+    if (n === null) {
+      // Native core absent in this environment: contract is a clean null,
+      // never a throw, and approxTokens still works.
+      expect(n).toBeNull();
+    } else {
+      expect(n).toBeGreaterThan(0);
+      // Parity: close to the ~4 chars/token heuristic within 3x
+      const approx = Math.ceil('hello world foo bar baz qux'.length / 4);
+      expect(n).toBeGreaterThan(approx / 3);
+      expect(n).toBeLessThan(approx * 3);
+    }
+  });
+
+  it('nativeTruncateToTokens shortens text and never throws', () => {
+    const out = nativeTruncateToTokens('word '.repeat(100), 5);
+    if (out !== null) {
+      expect(out.length).toBeLessThan('word '.repeat(100).length);
     }
   });
 });

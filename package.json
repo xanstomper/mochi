@@ -1,7 +1,7 @@
 {
   "name": "@mochi/agent",
   "version": "0.10.6",
-  "description": "Minimal, fast, autonomous coding agent for the terminal.",
+  "description": "Minimal, fast, autonomous coding agent: Rust runtime core with a TypeScript frontend.",
   "type": "module",
   "bin": {
     "mochi": "./dist/cli.js"

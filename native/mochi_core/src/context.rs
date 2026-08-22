@@ -66,4 +66,35 @@ impl ContextManager {
             keep
         }
     }
+
+    /// VALID CUT POINTS (mirrors the TS ContextEngine invariant): never cut
+    /// between an assistant tool_call message and its tool results. Given the
+    /// full transcript and a recency window, returns the index at which the
+    /// older history may be dropped such that the kept suffix starts at a
+    /// valid boundary (user/system message, or an assistant message with no
+    /// pending tool_calls). Returns None when nothing should be dropped.
+    pub fn plan_compaction_cut(&self, messages: &[Message], keep_window: usize) -> Option<usize> {
+        if messages.len() <= keep_window {
+            return None;
+        }
+        let target = messages.len() - keep_window;
+        let mut cut = target;
+        while cut < messages.len() - 1 {
+            let m = &messages[cut];
+            let valid = match m.role.as_str() {
+                "user" | "system" => true,
+                "assistant" => m.tool_calls.is_empty(),
+                _ => false, // never cut AT a tool result
+            };
+            if valid {
+                break;
+            }
+            cut += 1;
+        }
+        if cut == 0 {
+            None
+        } else {
+            Some(cut)
+        }
+    }
 }

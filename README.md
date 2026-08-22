@@ -1,7 +1,8 @@
 # Mochi
 
 > Minimal, fast, autonomous coding agent for the terminal. Goals, task DAGs, teams,
-> a persistent daemon, and deep run traces in a single TypeScript harness.
+> a persistent daemon, and deep run traces on a Rust runtime core with a TypeScript
+> frontend.
 
 Mochi is a from-scratch re-imagining of the terminal coding-agent harness. It keeps the
 best ideas from Pi (tools, sessions, context files, minimal TUI) and adds first-class
@@ -17,10 +18,14 @@ mochi team "ship the payments refactor"           # role-diverse agent team
 mochi trace <goalId>                               # replay any run end to end
 ```
 
-Zero runtime dependencies; runs under Node 22 or Bun, and ships a standalone native
-binary (`npm run build:bin`) that needs no runtime at all. The harness is polyglot:
-15-language registry, tree-sitter codegraph, and native Rust/C++ accelerators in the
-`edit`/`patch` hot paths.
+Zero runtime JS dependencies; runs under Node 22 or Bun, and ships a standalone native
+binary (`npm run build:bin`) that needs no runtime at all. The performance core is a
+zero-dependency Rust crate (`native/mochi_core`): tokenization, budget math, context
+compaction planning, and agent-loop decisions run natively, with the TypeScript frontend
+handling model I/O, TUI, and tool execution. Every native path has a parity-tested TS
+fallback, so nothing breaks when the Rust binary is absent (CI, cold installs). The
+harness is polyglot: 15-language registry, tree-sitter codegraph, and native Rust/C++
+accelerators in the `edit`/`patch` hot paths.
 
 ## Status
 
@@ -324,7 +329,8 @@ it can be dropped onto a low-spec or headless box without a JS runtime.
 
 ### Cold-start / memory footprint
 
-Mochi is a Node 22 TypeScript harness with **zero runtime dependencies**. Cold start and peak
+Mochi is a Rust runtime core with a TypeScript frontend and **zero runtime JS
+dependencies**. Cold start and peak
 RSS are measured by `bench/efficiency.mjs` (`npm run bench:efficiency`), and the CLI runs
 unmodified under Bun for a lower footprint (useful on low-RAM, hardware-friendly boxes):
 

@@ -2,6 +2,10 @@
 
 ## Conventions
 
+- Architecture: Rust runtime core (`native/mochi_core`, zero-dependency crate)
+  for pure compute (tokenization, budgets, compaction planning, loop
+  decisions), TypeScript frontend for model I/O, TUI, and tool execution.
+  Every native path must keep a parity-tested TS fallback.
 - Use TypeScript with strict mode enabled.
 - Prefer the Node standard library over dependencies.
 - Prefer small, targeted patches over whole-file rewrites.

@@ -44,14 +44,17 @@ impl BpeTokenizer {
         let mut i = 0;
 
         while i < bytes.len() {
-            // Check special tokens
+            // Check special tokens (skip non-boundary indices safely: stepping
+            // below always lands on a UTF-8 boundary, but guard regardless)
             let mut matched_special = false;
-            for (st, _) in &self.special_tokens {
-                if text[i..].starts_with(st) {
-                    count += 1;
-                    i += st.len();
-                    matched_special = true;
-                    break;
+            if text.is_char_boundary(i) {
+                for (st, _) in &self.special_tokens {
+                    if text[i..].starts_with(st) {
+                        count += 1;
+                        i += st.len();
+                        matched_special = true;
+                        break;
+                    }
                 }
             }
             if matched_special {
@@ -61,26 +64,50 @@ impl BpeTokenizer {
             // Word / Subword chunking heuristic
             let b = bytes[i];
             if b.is_ascii_whitespace() {
-                count += 1;
+                // Whitespace runs are ~free in real BPE (merged into the
+                // following token); consumed here, charged with the word.
                 while i < bytes.len() && bytes[i].is_ascii_whitespace() {
                     i += 1;
                 }
             } else if b.is_ascii_alphanumeric() || b == b'_' {
-                let mut word_len = 0;
+                let mut word_len: usize = 0;
                 while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
                     i += 1;
                     word_len += 1;
                 }
-                // Approx 4-5 chars per BPE token in alphanumeric words
-                count += (word_len + 3) / 4;
+                // Calibrated for aggregate parity with the chars/4 fallback:
+                // charge ceil(L/5) per word and nothing for whitespace, so
+                // short-word prose and dense skill XML both land near
+                // chars/4 overall instead of inflating 1.3-2x.
+                count += word_len.div_ceil(5).max(1);
+            } else if b.is_ascii_punctuation() || b.is_ascii_graphic() {
+                // Denser punctuation: group adjacent symbol chars (real BPE
+                // merges common digraphs like ->, ::, ()).
+                let mut sym_len: usize = 0;
+                while i < bytes.len()
+                    && (bytes[i].is_ascii_punctuation() || bytes[i].is_ascii_graphic())
+                    && !bytes[i].is_ascii_alphanumeric()
+                {
+                    i += 1;
+                    sym_len += 1;
+                }
+                count += sym_len.div_ceil(3);
             } else {
-                // Symbols / punctuation count individually or pairwise
+                // Symbols / punctuation: multibyte UTF-8 chars advance whole.
                 count += 1;
-                i += 1;
+                let mut adv = 1;
+                while i + adv < bytes.len() && !text.is_char_boundary(i + adv) {
+                    adv += 1;
+                }
+                i += adv;
             }
         }
 
-        count.max(1)
+        // Budget parity clamp: the TS fallback estimator is ceil(chars/4).
+        // The native tokenizer refines that estimate (word/punct structure,
+        // merged whitespace) but must never EXCEED it, so context-budget
+        // behavior is identical whether the native core is present or not.
+        count.min(text.len().div_ceil(4)).max(1)
     }
 
     pub fn truncate_to_tokens(&self, text: &str, max_tokens: usize) -> String {
@@ -94,15 +121,21 @@ impl BpeTokenizer {
 
         while low <= high {
             let mid = (low + high) / 2;
-            let sub = &text[..mid];
+            // The midpoint can land inside a multibyte char; snapping down to
+            // the nearest boundary keeps every probe a valid &str slice.
+            let mut probe = mid;
+            while probe > 0 && !text.is_char_boundary(probe) {
+                probe -= 1;
+            }
+            let sub = &text[..probe];
             if self.count_tokens(sub) <= max_tokens {
-                best = mid;
-                low = mid + 1;
+                best = probe;
+                low = probe + 1;
             } else {
-                if mid == 0 {
+                if probe == 0 {
                     break;
                 }
-                high = mid - 1;
+                high = probe - 1;
             }
         }
 

@@ -19,7 +19,7 @@ function makeContext(): { ctx: ContextEngine; dir: string } {
 }
 
 describe('ContextEngine compact cut points', () => {
-  it('never leaves a tool result orphaned from its assistant call', () => {
+  it('never leaves a tool result orphaned from its assistant call', async () => {
     const { ctx, dir } = makeContext();
     const msgs: ChatMessage[] = [
       { role: 'system', content: 'sys' },
@@ -35,7 +35,7 @@ describe('ContextEngine compact cut points', () => {
       { role: 'assistant', content: 'all done' },
     ];
     for (const m of msgs) ctx.addMessage(m as any);
-    ctx.compact();
+    await ctx.compact();
     const kept = (ctx as any).messages as ChatMessage[];
     // Invariant: every kept tool message's tool_call_id must reference a kept
     // assistant message's tool_calls.
@@ -47,13 +47,13 @@ describe('ContextEngine compact cut points', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('keeps the recency window when all cut candidates are valid', () => {
+  it('keeps the recency window when all cut candidates are valid', async () => {
     const { ctx, dir } = makeContext();
     for (let i = 0; i < 12; i++) {
       ctx.addMessage({ role: 'user', content: `q${i}` } as any);
       ctx.addMessage({ role: 'assistant', content: `a${i}` } as any);
     }
-    ctx.compact();
+    await ctx.compact();
     const kept = (ctx as any).messages as ChatMessage[];
     // keep window (6) + possible compacted-ledger system message
     expect(kept.length).toBeLessThanOrEqual(7);
@@ -61,19 +61,19 @@ describe('ContextEngine compact cut points', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('previewCompact returns the exact slice compact() drops (non-destructive)', () => {
+  it('previewCompact returns the exact slice compact() drops (non-destructive)', async () => {
     const { ctx, dir } = makeContext();
     for (let i = 0; i < 10; i++) {
       ctx.addMessage({ role: 'user', content: `q${i}` } as any);
       ctx.addMessage({ role: 'assistant', content: `a${i}` } as any);
     }
     const before = ((ctx as any).messages as ChatMessage[]).length;
-    const preview = ctx.previewCompact();
+    const preview = await ctx.previewCompact();
     expect(preview).not.toBeNull();
     expect(preview!.length).toBeGreaterThan(0);
     expect(((ctx as any).messages as ChatMessage[]).length).toBe(before); // untouched
-    const compacted = ctx.previewCompact();
-    ctx.compact();
+    const compacted = await ctx.previewCompact();
+    await ctx.compact();
     const kept = (ctx as any).messages as ChatMessage[];
     // Every dropped message in the preview is gone from the live transcript
     // (the compacted ledger replaces them wholesale).
@@ -85,14 +85,14 @@ describe('ContextEngine compact cut points', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('LLM checkpoint leads the compacted ledger when provided', () => {
+  it('LLM checkpoint leads the compacted ledger when provided', async () => {
     const { ctx, dir } = makeContext();
     for (let i = 0; i < 10; i++) {
       ctx.addMessage({ role: 'user', content: `q${i}` } as any);
       ctx.addMessage({ role: 'assistant', content: `a${i}` } as any);
     }
     const checkpoint = 'Goal: fix login bug\nProgress: edited src/auth.ts\nDecisions: use JWT\nNext: run tests';
-    ctx.compact(checkpoint);
+    await ctx.compact(checkpoint);
     const kept = (ctx as any).messages as ChatMessage[];
     const ledger = kept.find((m) => m.role === 'system' && typeof m.content === 'string' && m.content.includes('(compacted)'));
     expect(ledger).toBeTruthy();

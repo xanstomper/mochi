@@ -36,17 +36,11 @@ beforeAll(() => {
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 const SECTION_HEADERS = [
-  '1. Identity & mindset',
-  '2. Move with intent, not noise',
-  '3. Small, reviewable changes',
-  '4. Verify proportionate to the change',
-  '5. Safety and permission',
-  '6. Work within your budget',
-  '7. Stay correct, even on hard problems',
-  '8. Learn from the codebase',
-  '9. Use the right tool for each job',
-  '10. Working style (CRITICAL for efficiency)',
-  '11. Output Formatting (CRITICAL)',
+  '# I. Core Directives',
+  '# II. Execution Protocol',
+  '# III. Advanced Orchestration',
+  '# IV. Tool-Specific Guidelines',
+  '# V. Output Constraints (CRITICAL)',
 ];
 
 describe('system prompt structural invariants (VNext phase 8)', () => {
