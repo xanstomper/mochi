@@ -110,9 +110,9 @@ export class PermissionManager {
   /** Produce a display badge string for the TUI status bar. */
   badge(): string {
     switch (this.policy) {
-      case 'yolo': return '⚡ YOLO';
-      case 'workspace-safe': return '🔓 AUTO';
-      case 'strict': return '🛡️  SAFE';
+      case 'yolo': return '[YOLO]';
+      case 'workspace-safe': return '[AUTO]';
+      case 'strict': return '[SAFE]';
     }
   }
 }
@@ -132,13 +132,13 @@ export function parsePermissionSlashCommand(
   const trimmed = input.trim().toLowerCase();
   if (trimmed === '/yolo' || trimmed === '/dangerously-skip-permissions on') {
     if (current === 'yolo') return { newPolicy: 'yolo', message: 'Already in YOLO mode. All confirmations bypassed.' };
-    return { newPolicy: 'yolo', message: '⚡ YOLO mode ENABLED — all permission prompts bypassed. Use /yolo off to restore.' };
+    return { newPolicy: 'yolo', message: '[YOLO] YOLO mode ENABLED — all permission prompts bypassed. Use /yolo off to restore.' };
   }
   if (trimmed === '/yolo off' || trimmed === '/dangerously-skip-permissions off') {
-    return { newPolicy: 'strict', message: '🛡️  YOLO mode disabled. Strict permission prompts restored.' };
+    return { newPolicy: 'strict', message: '[SAFE] YOLO mode disabled. Strict permission prompts restored.' };
   }
   if (trimmed === '/workspace-safe') {
-    return { newPolicy: 'workspace-safe', message: '🔓 Workspace-safe mode: reads + workspace edits auto-approved.' };
+    return { newPolicy: 'workspace-safe', message: '[AUTO] Workspace-safe mode: reads + workspace edits auto-approved.' };
   }
   return undefined;
 }

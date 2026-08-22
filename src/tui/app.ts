@@ -809,11 +809,27 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     if (line === '/tasks') { await run(async () => listTasks()); return; }
     if (line === '/checkpoint') { await run(async () => { const cp = await runtime.checkpoint(); return `${cp.type} ${cp.ref}`; }); return; }
     if (line === '/rollback') { await run(async () => runtime.rollback()); return; }
-    if (line.startsWith('/inspect ')) { await run(async () => (await runtime.inspect(line.slice(9).trim())).summary); return; }
-    if (line.startsWith('/plan ')) { await run(async () => runtime.plan(line.slice(6).trim())); return; }
+    if (line.startsWith('/inspect ') || line === '/inspect') {
+      const target = line.startsWith('/inspect ') ? line.slice(9).trim() : await ask('Symbol or file to inspect:');
+      if (target) await run(async () => (await runtime.inspect(target)).summary);
+      return;
+    }
+    if (line.startsWith('/plan ') || line === '/plan') {
+      const obj = line.startsWith('/plan ') ? line.slice(6).trim() : await ask('Objective to plan:');
+      if (obj) await run(async () => runtime.plan(obj));
+      return;
+    }
     if (line === '/approve') { await run(async () => runtime.approvePlan(), false); return; }
-    if (line.startsWith('/team ')) { await run(async () => runtime.team(line.slice(6).trim()), false); return; }
-    if (line.startsWith('/goal ')) { await run(async () => runtime.goal(line.slice(6).trim()), false); return; }
+    if (line.startsWith('/team ') || line === '/team') {
+      const obj = line.startsWith('/team ') ? line.slice(6).trim() : await ask('Team goal objective:');
+      if (obj) await run(async () => runtime.team(obj), false);
+      return;
+    }
+    if (line.startsWith('/goal ') || line === '/goal') {
+      const obj = line.startsWith('/goal ') ? line.slice(6).trim() : await ask('Goal objective:');
+      if (obj) await run(async () => runtime.goal(obj), false);
+      return;
+    }
     if (line.startsWith('/compact')) { push('system', 'Context compaction is managed automatically.'); return; }
     if (line === '/doctor' || line === '/settings') {
       await run(async () => {
@@ -908,7 +924,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       state.outTokens = 0;
       state.cacheTokens = 0;
       state.chatVer++;
-      push('system', '⚡ Started a completely fresh session.');
+      push('system', 'Started a completely fresh session.');
       scheduleRender();
       return;
     }
@@ -937,7 +953,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     }
     if (line === '/stop' || line === '/abort' || line === '/skip') {
       runtime.abort('User stopped/skipped in-flight task');
-      push('system', '⏹️  Skipped / stopped thinking.');
+      push('system', '[STOP] Skipped / stopped in-flight task.');
       state.busy = false;
       stopSpinner();
       scheduleRender();
@@ -956,19 +972,19 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     // Permission policy slash commands
     if (line === '/yolo' || line === '/yolo on' || line === '/dangerously-skip-permissions' || line === '/dangerously-skip-permissions on') {
       (runtime as any).__permPolicy = 'yolo';
-      push('system', '⚡ YOLO mode ENABLED — all permission prompts bypassed. Type /yolo off to restore.');
+      push('system', '[YOLO] YOLO mode ENABLED — all permission prompts bypassed. Type /yolo off to restore.');
       scheduleRender();
       return;
     }
     if (line === '/yolo off' || line === '/dangerously-skip-permissions off') {
       (runtime as any).__permPolicy = 'strict';
-      push('system', '🛡️  YOLO mode disabled. Strict permissions restored.');
+      push('system', '[SAFE] YOLO mode disabled. Strict permissions restored.');
       scheduleRender();
       return;
     }
     if (line === '/workspace-safe') {
       (runtime as any).__permPolicy = 'workspace-safe';
-      push('system', '🔓 Workspace-safe mode: reads + workspace edits auto-approved, shell requires approval.');
+      push('system', '[AUTO] Workspace-safe mode: reads + workspace edits auto-approved, shell requires approval.');
       scheduleRender();
       return;
     }
@@ -1204,7 +1220,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     const chosen = skills[idx];
     const subActions = [
       `▶  Activate & Load into Context`,
-      `📖 View Full Skill Instructions`,
+      `[DOC] View Full Skill Instructions`,
     ];
     const actIdx = await openMenu(`Skill: ${chosen.name}`, subActions);
     if (actIdx === 0) {
@@ -1237,7 +1253,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     const sessions = store.list(40);
 
     const items: string[] = [
-      `${T.lime}✚ Start New Session${T.reset}`,
+      `${T.lime}+ Start New Session${T.reset}`,
     ];
 
     for (let i = 0; i < sessions.length; i++) {
@@ -1268,8 +1284,8 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     // Submenu for chosen session: Switch, Rename, Delete
     const subActions = [
       `▶  Switch to this Session`,
-      `✏  Rename Session ("${(chosen.objective || 'Session').slice(0, 20)}")`,
-      `✗  Delete Session`,
+      `[EDIT] Rename Session ("${(chosen.objective || 'Session').slice(0, 20)}")`,
+      `[DEL]  Delete Session`,
     ];
     const actIdx = await openMenu(`Manage: ${(chosen.objective || 'Session').slice(0, 30)}`, subActions);
     if (actIdx === 0) {
@@ -1457,7 +1473,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         i += 3;
         state.autoApprove = !state.autoApprove;
         (runtime as any).__permPolicy = state.autoApprove ? 'yolo' : 'strict';
-        push('system', state.autoApprove ? '⏵⏵ Auto-approve ENABLED — all permission prompts bypassed.' : 'Auto-approve off — strict permissions restored.');
+        push('system', state.autoApprove ? 'Auto improve: ON — autonomous continuous execution and verification active.' : 'Auto improve: OFF — strict permissions restored.');
         scheduleRender();
         continue;
       }
@@ -1483,7 +1499,8 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
           const items = currentDropItems();
           const pick = items[Math.min(state.dropSelected, items.length - 1)];
           const exactMatch = items.length === 1 && state.input.trim() === items[0].name;
-          if (pick && state.input.startsWith('/') && !exactMatch) {
+          const takesArg = pick && ['/goal', '/plan', '/team', '/model', '/theme', '/inspect', '/run', '/shell', '/login', '/import', '/rename'].includes(pick.name);
+          if (pick && state.input.startsWith('/') && (!exactMatch || (takesArg && state.input === pick.name))) {
             state.input = pick.name + ' ';
             state.cursor = state.input.length;
             state.dropActive = false;
@@ -1604,6 +1621,11 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         const items = currentDropItems();
         if (items.length > 1 && state.input.startsWith('/')) {
           state.dropSelected = (state.dropSelected + 1) % Math.min(items.length, 6);
+        } else if (items.length === 1 && state.input.startsWith('/') && state.input.trim() !== items[0].name) {
+          state.input = items[0].name + ' ';
+          state.cursor = state.input.length;
+          state.dropActive = false;
+          state.dropSelected = 0;
         } else {
           state.uiMode = state.uiMode === 'plan' ? 'act' : 'plan';
           runtime.config.planMode = state.uiMode === 'plan';

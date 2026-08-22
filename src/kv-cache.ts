@@ -73,13 +73,13 @@ export class KvCacheTracker {
     let label: string;
     if (remainingMs <= 0) {
       state = 'cold';
-      label = '🔴 Cache cold';
+      label = '[COLD] Cache cold';
     } else if (remainingMs < COOLING_THRESHOLD_MS) {
       state = 'cooling';
-      label = `🟡 Cache cooling (${remainingSecs}s)`;
+      label = `[COOL] Cache cooling (${remainingSecs}s)`;
     } else {
       state = 'warm';
-      label = `🟢 Cache warm (${remainingSecs}s)`;
+      label = `[WARM] Cache warm (${remainingSecs}s)`;
     }
 
     return { state, ageSecs, remainingSecs, lastSavedTokens: this.lastSavedTokens, totalSavedTokens: this.totalSavedTokens, label };
@@ -89,7 +89,7 @@ export class KvCacheTracker {
   badge(): string {
     const s = this.status();
     if (s.state === 'unknown' || s.state === 'cold') return '';
-    return `⚡ Context Cached`;
+    return `[CACHED]`;
   }
 
   reset(): void {

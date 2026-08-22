@@ -114,7 +114,7 @@ describe('statusBar rows', () => {
     expect(plain).toContain('3 files');
     expect(plain).toContain('+120');
     expect(plain).toContain('-8');
-    expect(plain).toContain('Auto improve off');
+    expect(plain).toContain('Auto improve: OFF');
   });
 });
 
@@ -318,8 +318,8 @@ describe('splash screen', () => {
     expect(a.join('|')).not.toBe(b.join('|'));
   });
 
-  it('phase list ends at The Dango Is Ready!', () => {
-    expect(SPLASH_PHASES[SPLASH_PHASES.length - 1]).toBe('The Dango Is Ready!');
+  it('phase list ends at Runtime Ready', () => {
+    expect(SPLASH_PHASES[SPLASH_PHASES.length - 1]).toBe('Runtime Ready');
   });
 });
 

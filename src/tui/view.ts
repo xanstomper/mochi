@@ -293,8 +293,8 @@ export function statusBarRow2(m: StatusBarModel, width: number): string {
     ? ` ${T.grayDark}|${T.reset} ${T.gray}${m.gitDiff!.files} file${m.gitDiff!.files !== 1 ? 's' : ''}${T.reset} ${T.success}+${m.gitDiff!.additions}${T.reset} ${T.error}-${m.gitDiff!.deletions}${T.reset}`
     : '';
   const autoApproveText = m.autoApprove
-    ? `${T.success}⏵⏵ Auto improve enabled${T.reset} ${T.grayDark}(Shift+Tab)${T.reset}`
-    : `${T.gray}Auto improve off ${T.grayDark}(Shift+Tab to do so)${T.reset}`;
+    ? `${T.success}Auto improve: ON${T.reset} ${T.grayDark}(Shift+Tab to toggle)${T.reset}`
+    : `${T.gray}Auto improve: OFF${T.reset} ${T.grayDark}(Shift+Tab to toggle)${T.reset}`;
   const path = m.workspaceName + (m.gitBranch ? ` (${m.gitBranch})` : '');
   const middle = ` ${T.grayDark}·${T.reset} ${autoApproveText}`;
   return padEnd(`${T.fg}${ellipsize(path, Math.max(5, width - visibleLen(suffix) - visibleLen(middle) - 1))}${T.reset}${middle}${suffix}`, width);
@@ -389,14 +389,17 @@ export function renderMetricGauge(label: string, value: number, max: number, uni
 }
 
 export function accentToolPrefix(text: string): string {
-  if (text.startsWith('⚡')) {
-    return `${T.orange}${T.bold}⚡${T.reset} ${T.cyan}${text.slice(2)}${T.reset}`;
+  if (text.startsWith('⚡') || text.startsWith('[TOOL]')) {
+    const rest = text.replace(/^(⚡|\[TOOL\])\s*/, '');
+    return `${T.orange}${T.bold}[TOOL]${T.reset} ${T.cyan}${rest}${T.reset}`;
   }
-  if (text.startsWith('✓')) {
-    return `${T.success}${T.bold}✓${T.reset} ${T.fg}${text.slice(2)}${T.reset}`;
+  if (text.startsWith('✓') || text.startsWith('[OK]')) {
+    const rest = text.replace(/^(✓|\[OK\])\s*/, '');
+    return `${T.success}${T.bold}[OK]${T.reset} ${T.fg}${rest}${T.reset}`;
   }
-  if (text.startsWith('✗')) {
-    return `${T.error}${T.bold}✗${T.reset} ${T.error}${text.slice(2)}${T.reset}`;
+  if (text.startsWith('✗') || text.startsWith('[ERR]')) {
+    const rest = text.replace(/^(✗|\[ERR\])\s*/, '');
+    return `${T.error}${T.bold}[ERR]${T.reset} ${T.error}${rest}${T.reset}`;
   }
   const colonIdx = text.indexOf(':');
   if (colonIdx !== -1) {
@@ -640,11 +643,11 @@ const SPLASH_PALETTES: Array<Array<[number, number, number]>> = [
 
 /** Loading progress messages shown under the logo, one per phase. */
 export const SPLASH_PHASES = [
-  'warming up the dango…',
+  'initializing core…',
   'loading skills + memory…',
-  'indexing code graph…',
-  'connecting model provider…',
-  'The Dango Is Ready!',
+  'indexing workspace…',
+  'connecting provider…',
+  'Runtime Ready',
 ] as const;
 
 /** One frame of the animated splash.
@@ -697,8 +700,8 @@ export function splashFrame(tick: number, width: number, version: string, progre
 
   // Subtitle
   lines.push('');
-  const sub = `${T.gray}minimal autonomous coding agent${T.reset}`;
-  lines.push(center(sub, 32));
+  const sub = `${T.gray}autonomous coding agent${T.reset}`;
+  lines.push(center(sub, 23));
   lines.push('');
 
   // Animated loading bar with gradient fill + shimmer head
@@ -717,9 +720,9 @@ export function splashFrame(tick: number, width: number, version: string, progre
   const phase = SPLASH_PHASES[phaseIdx];
   const pct = Math.min(100, Math.max(0, Math.round(clampedProg * 100)));
   const statusText = clampedProg >= 1
-    ? `${T.lime}${T.bold}🍡 The Dango Is Ready!${T.reset}`
+    ? `${T.lime}${T.bold}Runtime Ready${T.reset}`
     : `${T.gray}${phase}${T.reset}  ${T.pink}${pct}%${T.reset}`;
-  lines.push(center(statusText, clampedProg >= 1 ? 23 : phase.length + 5 + String(pct).length));
+  lines.push(center(statusText, clampedProg >= 1 ? 13 : phase.length + 5 + String(pct).length));
 
   // Version footer
   lines.push('');
