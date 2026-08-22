@@ -1,0 +1,7 @@
+# Linguistic and repository language overrides for GitHub
+*.test.ts linguist-generated=true
+*.test.js linguist-generated=true
+tests/** linguist-generated=true
+test/** linguist-generated=true
+native/mochi_core/** linguist-detectable=true
+native/rust/** linguist-detectable=true

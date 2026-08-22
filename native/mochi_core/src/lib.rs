@@ -1,9 +1,14 @@
 //! Mochi Core Native Rust Engine
-//! High-performance native hot-paths for fuzzy matching, search, git detection, outline extraction, and streaming.
+//! High-performance native hot-paths for fuzzy matching, search, git detection, outline extraction, streaming, and data handling.
 
+pub mod autopsy;
+pub mod budget;
+pub mod codegraph;
 pub mod diff;
 pub mod fuzzy;
 pub mod git;
+pub mod kv_cache;
+pub mod planner;
 pub mod search;
 pub mod stream;
 pub mod tokens;
@@ -13,9 +18,14 @@ use std::os::raw::{c_char, c_int};
 use std::path::Path;
 use std::slice;
 
+pub use autopsy::*;
+pub use budget::*;
+pub use codegraph::*;
 pub use diff::*;
 pub use fuzzy::*;
 pub use git::*;
+pub use kv_cache::*;
+pub use planner::*;
 pub use search::*;
 pub use stream::*;
 pub use tokens::*;
@@ -154,4 +164,20 @@ pub unsafe extern "C" fn mochi_hash_prompt(
     }
     let slice = unsafe { slice::from_raw_parts(data_ptr, data_len) };
     tokens::fnv1a_64_hash(slice)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mochi_estimate_cost_usd(
+    model_ptr: *const c_char,
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    cache_read_tokens: u64,
+) -> f64 {
+    let model = if model_ptr.is_null() {
+        "default"
+    } else {
+        (unsafe { CStr::from_ptr(model_ptr) }).to_str().unwrap_or("default")
+    };
+    let tracker = budget::BudgetTracker::default();
+    tracker.estimate_cost(model, prompt_tokens, completion_tokens, cache_read_tokens)
 }
