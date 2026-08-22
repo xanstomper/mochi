@@ -751,12 +751,22 @@ export class Agent {
         }
         // Empty response: the model returned nothing (common with overloaded
         // free providers or reasoning models that only emit thinking tokens).
-        // Retry a few times, then give up instead of spinning to maxIterations.
+        // Retry with real exponential backoff — free-tier queues routinely
+        // drop one or two requests in a row and recover within seconds —
+        // then give up instead of spinning to maxIterations.
         this.emptyResponseCount++;
-        if (this.emptyResponseCount >= 3) {
+        if (this.emptyResponseCount >= 4) {
           return this.finish(task, false, 'Model returned empty responses repeatedly. The provider may be overloaded — try again or switch models with /model.', 'model_error');
         }
-        this.context.addMessage({ role: 'assistant', content: '(no output)' });
+        const backoffMs = [1500, 4000, 9000][this.emptyResponseCount - 1] ?? 9000;
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: `[empty-response] retry ${this.emptyResponseCount}/3 in ${backoffMs}ms (provider returned no content)` });
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, backoffMs);
+          this.abortSignal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+        });
+        if (this.abortSignal?.aborted) {
+          return this.finish(task, false, 'Aborted during empty-response backoff.', 'aborted');
+        }
         this.context.addMessage({ role: 'system', content: 'Your last response was empty. Please respond with either a tool call or a direct text answer.' });
         continue;
       }
@@ -1193,7 +1203,7 @@ export class Agent {
       return { abort: false, message: `Pulse: ${iteration} iterations. Verify progress and switch approach if blocked.` };
     }
     // Abort if the model keeps producing empty responses or no-op iterations.
-    if (this.emptyResponseCount >= 3) {
+    if (this.emptyResponseCount >= 4) {
       return { abort: true, reason: 'Model returning empty responses repeatedly.' };
     }
     if (this.errors.length >= 6) {

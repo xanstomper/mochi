@@ -72,12 +72,24 @@ export function createOpenAIProvider(config: ProviderConfig) {
   async function* streamChat(messages: ChatMessage[], tools: ToolDefinition[], options?: { temperature?: number; maxTokens?: number; signal?: AbortSignal }): AsyncGenerator<StreamChunk> {
     const body: Record<string, unknown> = {
       model,
-      messages: messages.map((m) => {
+      messages: messages.map((m, i) => {
         if (m.role === 'tool') {
           return { role: 'tool', tool_call_id: m.tool_call_id, content: m.content ?? '' };
         }
         if (m.role === 'assistant' && m.tool_calls) {
           return { role: 'assistant', content: m.content ?? null, tool_calls: m.tool_calls };
+        }
+        // Some OpenAI-compatible models (observed: qwen3.6-35b on
+        // freeinference.org) silently return an EMPTY response
+        // (finish=stop, 0 completion tokens) when a `system` message appears
+        // AFTER the user turn. Mochi appends runtime context (preflight,
+        // focus nudges) as mid-conversation system messages, which reliably
+        // killed those requests. Send mid-conversation system notices as
+        // user-role text with explicit framing instead — same information,
+        // compatible shape.
+        const seenUserTurn = messages.slice(0, i).some((x) => x.role === 'user');
+        if (m.role === 'system' && seenUserTurn) {
+          return { role: 'user', content: `[system notice] ${m.content ?? ''}` };
         }
         return { role: m.role, content: m.content ?? '' };
       }),
