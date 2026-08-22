@@ -441,11 +441,13 @@ Return ONLY the JSON array, no markdown.`;
     const profile = this.profiles.get(task.role) ?? this.profiles.get('coder')!;
     const modelProfile = profile.defaultModel ?? 'coding';
     const context = new ContextEngine(this.config, this.cwd);
+    const goalTasks = this.workspace.loadTasks(goal.id);
+    const goalDone = goalTasks.filter((t) => t.status === 'done').map((t) => t.title);
     context.setGoal(goal.objective);
     context.updateState({
       constraints: goal.constraints,
       nextAction: task.title,
-      completedTasks: this.workspace.loadState().completedTasks,
+      completedTasks: goalDone,
     });
     const modeStamp = this.config.planMode
       ? '[MODE: plan — research and produce a written plan only; do NOT edit files or run mutating commands]\n'

@@ -323,15 +323,16 @@ export class Agent {
       });
     }
 
-    // Phase 7 (VNext): resume with the last durable checkpoint if one exists.
-    // A killed/restarted session continues from the distilled summary rather
-    // than a cold start (the Hermes/Pi session-continuity insight).
+    // Phase 7 (VNext): resume with the last durable checkpoint if one exists
+    // for THIS specific goal (e.g. on resume or post-compaction restart).
+    // Fresh sessions and unrelated goals do not load old checkpoints.
     try {
-      const durable = this.workspace.loadCheckpoint();
-      if (durable && durable.checkpoint.trim()) {
+      const activeGoal = this.context.state.goal;
+      const durable = this.workspace.loadCheckpoint(activeGoal);
+      if (durable && durable.checkpoint.trim() && durable.goalId && activeGoal && durable.goalId === activeGoal) {
         this.context.addMessage({
           role: 'system',
-          content: `RESUMED SESSION CHECKPOINT (from a previous run, saved ${new Date(durable.savedAt).toISOString()}):
+          content: `RESUMED SESSION CHECKPOINT (from active goal, saved ${new Date(durable.savedAt).toISOString()}):
 ${durable.checkpoint}
 Continue from 'Next:', do not redo completed progress.`,
         });

@@ -897,7 +897,21 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     }
     if (line === '/export') { await exportSession(); return; }
     if (line === '/import') { await importFlow(); return; }
-    if (line === '/new' || line === '/clear-all') { state.lines = []; state.tasks.clear(); state.scroll = 0; push('system', 'New session.'); scheduleRender(); return; }
+    if (line === '/new' || line === '/clear-all') {
+      runtime.workspace.clearCheckpoint();
+      state.lines = [];
+      state.tasks.clear();
+      state.scroll = 0;
+      state.totalTokens = 0;
+      state.totalCost = 0;
+      state.inTokens = 0;
+      state.outTokens = 0;
+      state.cacheTokens = 0;
+      state.chatVer++;
+      push('system', '⚡ Started a completely fresh session.');
+      scheduleRender();
+      return;
+    }
     if (line === '/compact') { await run(async () => { const res = await (await import('../context.js')).approxTokens(state.lines.map(l=>l.text).join('\n')); return `Entire transcript ≈ ${res} tokens. Compaction is managed automatically per-turn.`; }); return; }
     if (line === '/init') { await run(async () => { const { existsSync, writeFileSync } = await import('node:fs'); const { resolve: rp } = await import('node:path'); const p = rp(projectRoot, 'MOCHI.md'); if (existsSync(p)) return 'MOCHI.md already exists.'; writeFileSync(p, `# MOCHI.md\n\nProject instructions for the Mochi coding agent.\n`); return 'Created ' + p; }); return; }
     if (line === '/context') { push('system', `ctx budget: ${runtime.config.safety.contextBudgetTokens.toLocaleString()} tokens · agents: ${runtime.config.safety.maxConcurrentAgents}`); return; }

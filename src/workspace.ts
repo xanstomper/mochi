@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, unlinkSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Goal, Task, AgentState } from './types.js';
 
@@ -111,10 +111,19 @@ export class Workspace {
     this.writeJson('state/checkpoint.json', { goalId, checkpoint, savedAt: Date.now() });
   }
 
-  loadCheckpoint(): { goalId: string; checkpoint: string; savedAt: number } | null {
+  clearCheckpoint() {
+    try {
+      const full = this.path('state/checkpoint.json');
+      if (existsSync(full)) unlinkSync(full);
+    } catch { /* best effort */ }
+  }
+
+  loadCheckpoint(goalId?: string): { goalId: string; checkpoint: string; savedAt: number } | null {
     const raw = this.readJson<{ goalId?: string; checkpoint?: string; savedAt?: number } | null>('state/checkpoint.json', null);
     if (!raw || typeof raw.checkpoint !== 'string' || !raw.checkpoint.trim()) return null;
-    return { goalId: raw.goalId ?? '', checkpoint: raw.checkpoint, savedAt: raw.savedAt ?? 0 };
+    const gid = raw.goalId ?? '';
+    if (goalId && gid && gid !== goalId) return null;
+    return { goalId: gid, checkpoint: raw.checkpoint, savedAt: raw.savedAt ?? 0 };
   }
 
   loadTodos(): import('./types.js').TodoItem[] {

@@ -332,6 +332,62 @@ const TOOL_ACCENTS: Array<[RegExp, string]> = [
   [/^(memory|skill|subagent|chameleon|analyze_code|sql_codebase_query)\b/, 'magenta'],
 ];
 
+export function highlightShellCommand(cmd: string): string {
+  if (!cmd || !cmd.trim()) return cmd;
+  const parts = cmd.trim().split(/(\s+|&&|\|\||\||;)/);
+  if (!parts.length) return cmd;
+
+  return parts.map((part, idx) => {
+    if (!part || /^\s+$/.test(part)) return part;
+    if (part === '&&' || part === '||' || part === '|' || part === ';') {
+      return `${T.orange}${T.bold}${part}${T.reset}`;
+    }
+    // Leading binary of each command pipe / chain
+    const prev = idx > 1 ? parts[idx - 2]?.trim() : '';
+    const isBin = idx === 0 || prev === '&&' || prev === '||' || prev === '|' || prev === ';';
+    if (isBin) {
+      return `${T.cyan}${T.bold}${part}${T.reset}`;
+    }
+    // Flags (e.g. -v, --release, -m, --filter=...)
+    if (part.startsWith('-')) {
+      if (part.includes('=')) {
+        const [flag, val] = part.split('=', 2);
+        return `${T.orange}${flag}${T.reset}=${T.lime}${val}${T.reset}`;
+      }
+      return `${T.orange}${part}${T.reset}`;
+    }
+    // Common subcommands / verbs
+    if (/^(build|test|run|check|status|commit|push|pull|checkout|branch|diff|log|add|rm|reset|install|update|publish|serve|start|stop|restart|daemon|team|exec|fmt|lint)\b/i.test(part)) {
+      return `${T.magenta}${T.bold}${part}${T.reset}`;
+    }
+    // Quoted strings
+    if (/^["'].*["']$/.test(part)) {
+      return `${T.lime}${part}${T.reset}`;
+    }
+    // File paths / extensions / numbers
+    if (part.includes('/') || (part.includes('.') && !/^\d+$/.test(part))) {
+      return `${T.teal}${part}${T.reset}`;
+    }
+    if (/^\d+$/.test(part)) {
+      return `${T.orange}${part}${T.reset}`;
+    }
+    return `${T.fg}${part}${T.reset}`;
+  }).join('');
+}
+
+/** Visual Unicode meter bar for token/budget/progress metrics. */
+export function renderMetricGauge(label: string, value: number, max: number, unit = '', width = 12): string {
+  const ratio = max > 0 ? Math.max(0, Math.min(1, value / max)) : 0;
+  const filled = Math.round(ratio * width);
+  const empty = Math.max(0, width - filled);
+  const color = ratio < 0.6 ? T.lime : ratio < 0.85 ? T.orange : T.error;
+  const bar = `${color}${'█'.repeat(filled)}${T.grayDark}${'░'.repeat(empty)}${T.reset}`;
+  const pct = Math.round(ratio * 100);
+  const formattedVal = value >= 1000 ? `${(value / 1000).toFixed(1)}k` : `${value}`;
+  const formattedMax = max >= 1000 ? `${(max / 1000).toFixed(1)}k` : `${max}`;
+  return `${T.gray}${label}:${T.reset} [${bar}] ${color}${pct}%${T.reset} ${T.grayDark}(${formattedVal}/${formattedMax}${unit ? ' ' + unit : ''})${T.reset}`;
+}
+
 export function accentToolPrefix(text: string): string {
   if (text.startsWith('⚡')) {
     return `${T.orange}${T.bold}⚡${T.reset} ${T.cyan}${text.slice(2)}${T.reset}`;
@@ -341,6 +397,20 @@ export function accentToolPrefix(text: string): string {
   }
   if (text.startsWith('✗')) {
     return `${T.error}${T.bold}✗${T.reset} ${T.error}${text.slice(2)}${T.reset}`;
+  }
+  const colonIdx = text.indexOf(':');
+  if (colonIdx !== -1) {
+    const name = text.slice(0, colonIdx).trim();
+    const rest = text.slice(colonIdx + 1);
+    let color = 'violet';
+    for (const [re, c] of TOOL_ACCENTS) {
+      if (re.test(name)) { color = c; break; }
+    }
+    const coloredName = `${(T as any)[color] ?? T.violet}${T.bold}${name}${T.reset}:`;
+    if (name === 'shell' || name === 'git') {
+      return `${coloredName} ${highlightShellCommand(rest.trimStart())}`;
+    }
+    return `${coloredName}${T.fg}${rest}${T.reset}`;
   }
   const name = text.split(/[(:\s]/)[0] ?? '';
   for (const [re, color] of TOOL_ACCENTS) {

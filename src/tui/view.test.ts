@@ -23,6 +23,8 @@ import {
   thinkingLine,
   ellipsize,
   visibleLen,
+  highlightShellCommand,
+  renderMetricGauge,
 } from './view.js';
 
 function baseStatus(over: Partial<Parameters<typeof statusBarRow1>[0]> = {}) {
@@ -337,5 +339,31 @@ describe('color coordination', () => {
     const err = renderEntry({ kind: 'error', text: 'boom' });
     expect(err[0]).toContain('✗');
     expect(err[0]).toContain(T.error);
+  });
+});
+
+describe('highlightShellCommand', () => {
+  it('highlights binary, subcommands, flags, and paths', () => {
+    const hl = highlightShellCommand('cargo build --release src/main.rs');
+    expect(hl).toContain('cargo');
+    expect(hl).toContain('build');
+    expect(hl).toContain('--release');
+    expect(hl).toContain('src/main.rs');
+  });
+
+  it('handles chained commands with && and |', () => {
+    const hl = highlightShellCommand('git status && npm test');
+    expect(hl).toContain('&&');
+    expect(hl).toContain('npm');
+  });
+});
+
+describe('renderMetricGauge', () => {
+  it('renders a progress bar with percentage and token values', () => {
+    const gauge = renderMetricGauge('Tokens', 4000, 8000, 'tok', 10);
+    const plain = gauge.replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).toContain('Tokens:');
+    expect(plain).toContain('50%');
+    expect(plain).toContain('4.0k/8.0k tok');
   });
 });
