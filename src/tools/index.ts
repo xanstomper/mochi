@@ -60,7 +60,7 @@ export const ALL_TOOLS: Tool[] = [
  */
 const CORE_TOOL_NAMES = new Set([
   'read', 'write', 'edit', 'delete', 'shell', 'search', 'glob',
-  'git', 'inspect', 'todo', 'skill', 'subagent', 'fetch', 'web_search', 'web_crawl', 'think'
+  'git', 'inspect', 'todo', 'skill', 'subagent', 'fetch', 'web_search', 'web_crawl', 'think', 'chameleon'
 ]);
 
 /** Extended tools included only when the model is not a known weak/free tier. */
@@ -86,8 +86,8 @@ export function buildTools(config: MochiConfig, allowed?: string[]): Map<string,
   const weak = isWeakModel(config);
   for (const tool of ALL_TOOLS) {
     const name = tool.def.name;
-    // Always-include tools (todo, skill, subagent) bypass filtering.
-    const alwaysInclude = name === 'todo' || name === 'skill' || name === 'subagent';
+    // Always-include tools (todo, skill, subagent, chameleon) bypass filtering.
+    const alwaysInclude = name === 'todo' || name === 'skill' || name === 'subagent' || name === 'chameleon';
     if (allowed && !allowed.includes(name) && !alwaysInclude) continue;
     // For weak models, only include core tools to keep tool schema lean.
     if (weak && !CORE_TOOL_NAMES.has(name) && !alwaysInclude) continue;
