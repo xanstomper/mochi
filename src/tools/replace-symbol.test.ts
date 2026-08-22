@@ -26,8 +26,8 @@ maybeDescribe('replaceSymbol', () => {
     ].join('\n'));
     // warm the index for this dir
     ensureParserLoaded?.();
-    getFunctionSynapse(dir, 'target');
-    const r = replaceSymbol(dir, 'target', 'export function target(a: number): number {\n  return a * 10;\n}');
+    await getFunctionSynapse(dir, 'target');
+    const r = await replaceSymbol(dir, 'target', 'export function target(a: number): number {\n  return a * 10;\n}');
     expect(r.ok).toBe(true);
     const out = readFileSync(resolve(dir, 'sample.ts'), 'utf8');
     expect(out).toContain('return a * 10;');
@@ -36,9 +36,9 @@ maybeDescribe('replaceSymbol', () => {
     expect(out).not.toContain('return a + 1;');
   }, 30_000);
 
-  it('fails clearly for unknown symbols', () => {
+  it('fails clearly for unknown symbols', async () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-rs-'));
-    const r = replaceSymbol(dir, 'doesNotExist', 'fn x() {}');
+    const r = await replaceSymbol(dir, 'doesNotExist', 'fn x() {}');
     expect(r.ok).toBe(false);
     expect(r.message).toMatch(/No definition|Could not resolve/);
   });

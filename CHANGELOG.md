@@ -30,6 +30,18 @@
   captured with their stop reason; illegal transitions are recorded for
   diagnostics, never thrown. Eight new tests cover the transition contract
   and a live end-to-end trace run.
+- **Lazy codegraph (harness-v2 perf).** Importing the codegraph no longer
+  loads web-tree-sitter + all ten language grammars (~110MB RSS) or the
+  TypeScript compiler (~75MB RSS) at module scope. The parser core and each
+  grammar now load on first use, and only for languages actually present in
+  the repo; the tsc fallback compiler loads only if that backend runs.
+  Measured: full runtime import chain ~62MB RSS (was ~130MB+), startup 52ms
+  → 47ms. `MOCHI_LIGHT` / `MOCHI_NO_EMBED` / `MOCHI_NO_INDEX` now skip the
+  WASM parser entirely (true zero-parser light mode). Read paths
+  (`get_function`, `find_callers`, `type_hierarchy`, `blast_radius`,
+  `sql_codebase_query`) are async and self-warming; a sync
+  `querySymbolGraphSync` serves hot prompt-build paths, primed once per task
+  by the agent preflight via `primeScaffold` (cached Chameleon scaffold).
 
 ## 0.10.5
 

@@ -3,7 +3,7 @@ import { evaluateOwl, OWL_PRINCIPLES } from './owl.js';
 import { evaluateSispis } from './sispis.js';
 import { AnchorEngine } from './anchor.js';
 import { loadDoxContract } from './dox.js';
-import { ChameleonEngine, synthesizeDeterministicContext } from './chameleon.js';
+import { ChameleonEngine, synthesizeDeterministicContext, primeScaffold } from './chameleon.js';
 
 describe('OWL (Operational Wisdom Layer)', () => {
   it('defines 9 core engineering principles', () => {
@@ -58,8 +58,8 @@ describe('ANCHOR (Operational Persistence)', () => {
 });
 
 describe('Lazy Chameleon (In-Harness Baked MoE Engine)', () => {
-  it('synthesizes dense real datasets in 0ms without API calls', () => {
-    const context = synthesizeDeterministicContext('Implement an atomic token bucket rate limiter');
+  it('synthesizes dense real datasets in 0ms without API calls', async () => {
+    const context = await primeScaffold('Implement an atomic token bucket rate limiter');
     expect(context).toContain('LAZY CHAMELEON DENSE SYNTHETIC DATASET');
     expect(context).toContain('System Invariants');
     expect(context).toContain('Cellular Execution DAG');

@@ -7,6 +7,8 @@ import {
   findCallers,
   hasSqlite,
   ensureParserLoaded,
+  ensureLanguage,
+  LANGUAGES,
   loadTreeSitter,
   getParserBackend,
 } from './codegraph.js';
@@ -25,8 +27,13 @@ maybeDescribe('codegraph multi-language indexing (tree-sitter default)', () => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
-  it('loads grammars for all supported languages', async () => {
+  it('loads every supported grammar on demand', async () => {
+    // Lazy loading (harness-v2 perf): nothing loads at import time; each
+    // grammar initializes on first need. Exercise all of them explicitly.
     await ensureParserLoaded();
+    for (const lang of LANGUAGES) {
+      expect(await ensureLanguage(lang)).toBe(true);
+    }
     const st = loadTreeSitter();
     expect(getParserBackend()).toBe('tree-sitter');
     expect(st.ok).toBe(true);
@@ -48,9 +55,9 @@ maybeDescribe('codegraph multi-language indexing (tree-sitter default)', () => {
       '        return "yo"',
     ].join('\n'));
 
-    expect(getFunctionSynapse(cwd, 'greet')).toContain('def greet');
-    expect(getFunctionSynapse(cwd, 'Greeter')).toContain('class Greeter');
-    expect(getFunctionSynapse(cwd, 'hello')).toContain('def hello');
+    expect(await getFunctionSynapse(cwd, 'greet')).toContain('def greet');
+    expect(await getFunctionSynapse(cwd, 'Greeter')).toContain('class Greeter');
+    expect(await getFunctionSynapse(cwd, 'hello')).toContain('def hello');
   });
 
   it('indexes Rust symbols (fn/struct)', async () => {
@@ -64,9 +71,9 @@ maybeDescribe('codegraph multi-language indexing (tree-sitter default)', () => {
       'pub fn area(w: i32, h: i32) -> i32 { w * h }',
     ].join('\n'));
 
-    expect(getFunctionSynapse(cwd, 'Point')).toContain('struct Point');
-    expect(getFunctionSynapse(cwd, 'area')).toContain('fn area');
-    expect(getFunctionSynapse(cwd, 'dist')).toContain('fn dist');
+    expect(await getFunctionSynapse(cwd, 'Point')).toContain('struct Point');
+    expect(await getFunctionSynapse(cwd, 'area')).toContain('fn area');
+    expect(await getFunctionSynapse(cwd, 'dist')).toContain('fn dist');
   });
 
   it('skips polyglot build/cache dirs when indexing (venv, target, vendor, __pycache__)', async () => {
@@ -83,7 +90,7 @@ maybeDescribe('codegraph multi-language indexing (tree-sitter default)', () => {
     mkdirSync(resolve(cwd, 'vendor'), { recursive: true });
     writeFileSync(resolve(cwd, 'vendor', 'main.go'), 'func real_fn() {}\n');
 
-    const hit = getFunctionSynapse(cwd, 'real_fn');
+    const hit = await getFunctionSynapse(cwd, 'real_fn');
     expect(hit).toContain('def real_fn');
     // If the walker descended into the junk dirs, the pyc/vendor/target rows
     // could shadow the real one; ensure the real source body wins.
@@ -104,9 +111,9 @@ maybeDescribe('codegraph multi-language indexing (tree-sitter default)', () => {
       'func (r Rectangle) Area() int { return r.W * r.H }',
     ].join('\n') + '\n');
 
-    expect(getFunctionSynapse(cwd, 'add')).toContain('func add');
-    expect(getFunctionSynapse(cwd, 'Rectangle')).toContain('struct');
-    expect(getFunctionSynapse(cwd, 'Area')).toContain('func');
+    expect(await getFunctionSynapse(cwd, 'add')).toContain('func add');
+    expect(await getFunctionSynapse(cwd, 'Rectangle')).toContain('struct');
+    expect(await getFunctionSynapse(cwd, 'Area')).toContain('func');
   });
 
   it('indexes Java and C++ symbols in one repo', async () => {
@@ -114,9 +121,9 @@ maybeDescribe('codegraph multi-language indexing (tree-sitter default)', () => {
     writeFileSync(resolve(cwd, 'App.java'), 'public class App {\n  public int add(int a, int b) { return a + b; }\n}\n');
     writeFileSync(resolve(cwd, 'math.cpp'), 'struct Vec2 { double x, y; };\nclass Shape {\n  int sides() { return 3; }\n};\n');
 
-    expect(getFunctionSynapse(cwd, 'App')).toContain('class App');
-    expect(getFunctionSynapse(cwd, 'Shape')).toContain('class Shape');
-    expect(getFunctionSynapse(cwd, 'add')).toContain('int add');
+    expect(await getFunctionSynapse(cwd, 'App')).toContain('class App');
+    expect(await getFunctionSynapse(cwd, 'Shape')).toContain('class Shape');
+    expect(await getFunctionSynapse(cwd, 'add')).toContain('int add');
   });
 
   it('indexes Ruby, PHP, and C# symbols in one repo', async () => {
@@ -125,11 +132,11 @@ maybeDescribe('codegraph multi-language indexing (tree-sitter default)', () => {
     writeFileSync(resolve(cwd, 'f.php'), '<?php\nfunction phpfn($x) { return $x * 2; }\nclass PhpCls { function m() {} }\n');
     writeFileSync(resolve(cwd, 'App.cs'), 'class CsCls {\n  int M() { return 1; }\n}\npublic class CsOther { public int N() => 2; }\n');
 
-    expect(getFunctionSynapse(cwd, 'Greeter')).toContain('class Greeter');
-    expect(getFunctionSynapse(cwd, 'hello')).toContain('def hello');
-    expect(getFunctionSynapse(cwd, 'phpfn')).toContain('function phpfn');
-    expect(getFunctionSynapse(cwd, 'PhpCls')).toContain('class PhpCls');
-    expect(getFunctionSynapse(cwd, 'CsCls')).toContain('class CsCls');
+    expect(await getFunctionSynapse(cwd, 'Greeter')).toContain('class Greeter');
+    expect(await getFunctionSynapse(cwd, 'hello')).toContain('def hello');
+    expect(await getFunctionSynapse(cwd, 'phpfn')).toContain('function phpfn');
+    expect(await getFunctionSynapse(cwd, 'PhpCls')).toContain('class PhpCls');
+    expect(await getFunctionSynapse(cwd, 'CsCls')).toContain('class CsCls');
   });
 
   it('records call edges and resolves cross-file callers from the graph', async () => {
@@ -138,7 +145,7 @@ maybeDescribe('codegraph multi-language indexing (tree-sitter default)', () => {
     writeFileSync(resolve(cwd, 'a.ts'), 'import { dep } from "./dep";\nexport function callerA() { dep(); }\n');
     writeFileSync(resolve(cwd, 'b.ts'), 'import { dep } from "./dep";\nexport function callerB() { dep(); dep(); }\n');
 
-    const callers = findCallers(cwd, 'dep');
+    const callers = await findCallers(cwd, 'dep');
     // Graph edges attribute the call site with its enclosing caller symbol.
     expect(callers).toMatch(/called from callerA/);
     expect(callers).toMatch(/called from callerB/);
@@ -150,7 +157,7 @@ maybeDescribe('codegraph multi-language indexing (tree-sitter default)', () => {
     await ensureParserLoaded();
     writeFileSync(resolve(cwd, 'lib.py'), 'def util():\n    return 1\n');
     writeFileSync(resolve(cwd, 'main.py'), 'from lib import util\ndef run():\n    util()\n');
-    const callers = findCallers(cwd, 'util');
+    const callers = await findCallers(cwd, 'util');
     expect(callers).toMatch(/called from run/);
     expect(callers).toMatch(/main\.py:\d/);
   });
@@ -175,7 +182,7 @@ maybeDescribe('codegraph tsc fallback backend', () => {
       await mod.ensureParserLoaded();
       expect(mod.getParserBackend()).toBe('tsc');
       writeFileSync(resolve(cwd, 'lib.ts'), 'export function tscFn(x: number): number { return x * 2; }\n');
-      expect(mod.getFunctionSynapse(cwd, 'tscFn')).toContain('function tscFn');
+      expect(await mod.getFunctionSynapse(cwd, 'tscFn')).toContain('function tscFn');
     } finally {
       if (prev === undefined) delete process.env.MOCHI_CPG_BACKEND;
       else process.env.MOCHI_CPG_BACKEND = prev;

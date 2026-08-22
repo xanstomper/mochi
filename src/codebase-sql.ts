@@ -19,7 +19,7 @@ export const sqlCodebaseTool: Tool = {
     const sql = String(args.sql ?? '');
     if (!sql) throw new Error('sql required');
     if (!hasSqlite()) throw new Error('node:sqlite unavailable (Node >= 22.5)');
-    const out = querySymbolGraph(ctx.cwd, sql);
+    const out = await querySymbolGraph(ctx.cwd, sql);
     if ('error' in out) throw new Error(out.error);
     return 'Rows: ' + out.rows.length + '\n' + JSON.stringify(out.rows, null, 2);
   },

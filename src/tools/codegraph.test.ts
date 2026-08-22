@@ -35,13 +35,13 @@ maybeDescribe('codegraph incremental revalidation', () => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
-  it('invalidates symbol rows after a real write (no stale defs served)', () => {
+  it('invalidates symbol rows after a real write (no stale defs served)', async () => {
     const lib = `${cwd}/lib.ts`;
     writeFileSync(lib, `export function greet(name: string): string {\n  return "hi " + name;\n}\n`);
     bumpMtime(lib);
 
     // First read returns the ORIGINAL signature.
-    expect(getFunctionSynapse(cwd, 'greet')).toContain('return "hi " + name;');
+    expect(await getFunctionSynapse(cwd, 'greet')).toContain('return "hi " + name;');
 
     // Agent edits through the REAL write tool (exact path that bumps the fence).
     writeTool.execute(
@@ -51,36 +51,36 @@ maybeDescribe('codegraph incremental revalidation', () => {
     bumpMtime(`${cwd}/lib.ts`);
 
     // Incremental reindex must serve the NEW definition, not the stale one.
-    const after = getFunctionSynapse(cwd, 'greet');
+    const after = await getFunctionSynapse(cwd, 'greet');
     expect(after).toContain('return "<new>";');
     expect(after).not.toContain('return "hi " + name;');
   });
 
-  it('survives repeated edits (each write stays visible, not just the last)', () => {
+  it('survives repeated edits (each write stays visible, not just the last)', async () => {
     const lib = `${cwd}/lib.ts`;
     writeFileSync(lib, `export function greet(name: string): string {\n  return "v1";\n}\n`);
     bumpMtime(lib);
-    expect(getFunctionSynapse(cwd, 'greet')).toContain('return "v1";');
+    expect(await getFunctionSynapse(cwd, 'greet')).toContain('return "v1";');
 
     writeTool.execute({ path: 'lib.ts', content: `export function greet(name: string): string {\n  return "v2";\n}\n` }, makeCtx(cwd));
     bumpMtime(lib);
-    expect(getFunctionSynapse(cwd, 'greet')).toContain('return "v2";');
+    expect(await getFunctionSynapse(cwd, 'greet')).toContain('return "v2";');
 
     // A second, consecutive edit must ALSO invalidate -- this regressed when a
     // changed file was mis-treated as "gone" and its inserted rows purged.
     writeTool.execute({ path: 'lib.ts', content: `export function greet(name: string): string {\n  return "v3";\n}\n` }, makeCtx(cwd));
     bumpMtime(lib);
-    const last = getFunctionSynapse(cwd, 'greet');
+    const last = await getFunctionSynapse(cwd, 'greet');
     expect(last).toContain('return "v3";');
   });
 
-  it('picks up new call sites in findCallers after an edit', () => {
+  it('picks up new call sites in findCallers after an edit', async () => {
     writeFileSync(`${cwd}/a.ts`, `import { greet } from "./b";\ngreet();\n`);
     writeFileSync(`${cwd}/b.ts`, `export function greet(name: string): string { return "hi"; }\n`);
     bumpMtime(`${cwd}/a.ts`);
     bumpMtime(`${cwd}/b.ts`);
 
-    const before = findCallers(cwd, 'greet');
+    const before = await findCallers(cwd, 'greet');
     expect(before).toContain('a.ts:2');
 
     writeTool.execute(
@@ -89,7 +89,7 @@ maybeDescribe('codegraph incremental revalidation', () => {
     );
     bumpMtime(`${cwd}/a.ts`);
 
-    const after = findCallers(cwd, 'greet');
+    const after = await findCallers(cwd, 'greet');
     expect(after).toContain('a.ts:3');
   });
 });

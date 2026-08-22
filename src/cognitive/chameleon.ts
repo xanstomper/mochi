@@ -119,6 +119,36 @@ import { synthesizeDenseDataset } from '../chameleon/dense-dataset-synthesizer.j
  * Deterministically generates instant synthetic parameter guidance and dense real datasets in 0ms
  * without requiring any extra network round-trips or API tokens, splitting through cellular MoEs.
  */
+// Scaffold cache (harness-v2 perf): the deterministic scaffold is task-derived
+// and immutable, so prime it ONCE asynchronously (codegraph grammar load is
+// lazy) and let the HOT sync prompt-builder read the cached string for free.
+const _scaffoldCache = new Map<string, string>();
+
+export function getCachedScaffold(task: string, cwd = process.cwd()): string | undefined {
+  const v = _scaffoldCache.get(`${cwd}::${task}`);
+  if (v !== undefined) return v;
+  // The same task may have been primed under a different root (daemon, TUI):
+  // the scaffold is derived from the task text, so any entry matches.
+  for (const [k, val] of _scaffoldCache) {
+    if (k.endsWith(`::${task}`)) return val;
+  }
+  return undefined;
+}
+
+/** Prime the scaffold for a task: warms the lazy codegraph grammars first so
+ *  the cached scaffold includes real AST symbol grounding. Safe to call twice.
+ */
+export async function primeScaffold(task: string, cwd = process.cwd()): Promise<string> {
+  const key = `${cwd}::${task}`;
+  let s = _scaffoldCache.get(key);
+  if (s === undefined) {
+    try { const cg = await import('../codegraph.js'); await cg.warmCodegraph(cwd); } catch { /* best-effort */ }
+    s = synthesizeDeterministicContext(task, cwd);
+    _scaffoldCache.set(key, s);
+  }
+  return s;
+}
+
 export function synthesizeDeterministicContext(task: string, cwd = process.cwd()): string {
   const owl = evaluateOwl(task);
   const sispis = evaluateSispis(task, owl.cumulativeWeight);

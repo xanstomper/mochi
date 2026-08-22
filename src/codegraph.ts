@@ -2,9 +2,18 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { resolve, relative, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
-import ts from 'typescript';
+import type * as ts from 'typescript';
 import { hasSqlite as driverAvailable, openDb, type SqliteDb } from './sqlite.js';
 import { mutationGeneration } from './tools/fs-signal.js';
+
+// The TypeScript compiler costs ~75MB RSS to load; it is only needed by the
+// tsc FALLBACK indexer, so load it on first use instead of at import time
+// (tree-sitter is the default backend and never touches this).
+let _tsc: typeof import('typescript') | null = null;
+function tsc(): typeof import('typescript') {
+  if (!_tsc) _tsc = createRequire(import.meta.url)('typescript') as typeof import('typescript');
+  return _tsc;
+}
 
 /** True when any SQLite driver is available (node:sqlite on Node >= 22.5 or
  *  bun:sqlite in the compiled binary). Without it the codegraph degrades to
@@ -71,9 +80,9 @@ function* walkFiles(root: string, dir: string): Generator<string> {
 
 // ---------------------------- tsc backend ----------------------------------
 const scriptKind = (f: string): ts.ScriptKind =>
-  f.endsWith('.tsx') ? ts.ScriptKind.TSX : f.endsWith('.jsx') ? ts.ScriptKind.JSX
-    : f.endsWith('.js') || f.endsWith('.mjs') ? ts.ScriptKind.JS
-      : f.endsWith('.mts') ? ts.ScriptKind.TS : ts.ScriptKind.TS;
+  f.endsWith('.tsx') ? tsc().ScriptKind.TSX : f.endsWith('.jsx') ? tsc().ScriptKind.JSX
+    : f.endsWith('.js') || f.endsWith('.mjs') ? tsc().ScriptKind.JS
+      : f.endsWith('.mts') ? tsc().ScriptKind.TS : tsc().ScriptKind.TS;
 
 function heritage(node: ts.ClassLikeDeclaration | ts.InterfaceDeclaration): string[] {
   if (!node.heritageClauses) return [];
@@ -81,8 +90,8 @@ function heritage(node: ts.ClassLikeDeclaration | ts.InterfaceDeclaration): stri
   for (const hc of node.heritageClauses) {
     for (const t of hc.types) {
       const expr = t.expression;
-      if (ts.isIdentifier(expr)) out.push(expr.text);
-      else if (ts.isPropertyAccessExpression(expr)) out.push(expr.name.text);
+      if (tsc().isIdentifier(expr)) out.push(expr.text);
+      else if (tsc().isPropertyAccessExpression(expr)) out.push(expr.name.text);
     }
   }
   return out;
@@ -91,7 +100,7 @@ function heritage(node: ts.ClassLikeDeclaration | ts.InterfaceDeclaration): stri
 function indexFile(file: string, rel: string, database: SqliteDb): void {
   let text: string;
   try { text = readFileSync(file, 'utf8'); } catch { return; }
-  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, scriptKind(file));
+  const sf = tsc().createSourceFile(file, text, tsc().ScriptTarget.Latest, true, scriptKind(file));
   const lineOf = (p: number) => sf.getLineAndCharacterOfPosition(p).line + 1;
   const ins = database.prepare('INSERT INTO symbols(name,line,kind,file,rel,body) VALUES (?,?,?,?,?,?)');
   const relIns = database.prepare('INSERT INTO relations(src,dst,kind,file) VALUES (?,?,?,?)');
@@ -101,28 +110,28 @@ function indexFile(file: string, rel: string, database: SqliteDb): void {
   };
 
   function visit(node: ts.Node): void {
-    if (ts.isFunctionDeclaration(node) && node.name) {
+    if (tsc().isFunctionDeclaration(node) && node.name) {
       emit(node.name.text, 'function', node.getStart(), node.getText(sf));
-    } else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer &&
-      (node.initializer.kind === ts.SyntaxKind.ArrowFunction || node.initializer.kind === ts.SyntaxKind.FunctionExpression)) {
+    } else if (tsc().isVariableDeclaration(node) && tsc().isIdentifier(node.name) && node.initializer &&
+      (node.initializer.kind === tsc().SyntaxKind.ArrowFunction || node.initializer.kind === tsc().SyntaxKind.FunctionExpression)) {
       emit(node.name.text, 'function', node.getStart(), node.getText(sf));
-    } else if (ts.isClassDeclaration(node) && node.name) {
+    } else if (tsc().isClassDeclaration(node) && node.name) {
       const name = node.name.text;
       emit(name, 'class', node.getStart(), node.getText(sf));
       for (const h of heritage(node)) { try { relIns.run(name, h, 'extends', rel); } catch {} }
       for (const m of node.members) {
-        if ((ts.isMethodDeclaration(m) || ts.isPropertyDeclaration(m)) && ts.isIdentifier(m.name)) {
+        if ((tsc().isMethodDeclaration(m) || tsc().isPropertyDeclaration(m)) && tsc().isIdentifier(m.name)) {
           emit(m.name.text, 'method', m.name.getStart(sf), m.getText(sf));
         }
       }
-    } else if (ts.isInterfaceDeclaration(node) && node.name) {
+    } else if (tsc().isInterfaceDeclaration(node) && node.name) {
       const name = node.name.text;
       emit(name, 'interface', node.getStart(), node.getText(sf));
       for (const h of heritage(node)) { try { relIns.run(name, h, 'extends', rel); } catch {} }
-    } else if (ts.isTypeAliasDeclaration(node) && node.name) {
+    } else if (tsc().isTypeAliasDeclaration(node) && node.name) {
       emit(node.name.text, 'type', node.getStart(), node.getText(sf));
     }
-    ts.forEachChild(node, visit);
+    tsc().forEachChild(node, visit);
   }
   visit(sf);
 }
@@ -184,53 +193,131 @@ function nameOf(node: any): string | undefined {
   return undefined;
 }
 
-const _initPromise: Promise<boolean> = (async () => {
-  if (process.env.MOCHI_CPG_BACKEND === 'tsc') return false;
-  const _req = createRequire(import.meta.url);
+// LAZY loading (harness-v2 perf): importing this module no longer compiles
+// web-tree-sitter or ANY grammar into memory. Previously a module-scope promise
+// eagerly loaded the core WASM plus all ten language grammars (~110MB RSS and
+// tens of ms of CPU on every single run, even ones that never touch the
+// codegraph tools). Now the core initializes on first indexing use and each
+// language's grammar loads on first need — a typical single-language repo pays
+// for exactly one grammar. MOCHI_LIGHT / MOCHI_NO_EMBED / MOCHI_NO_INDEX skip
+// the parser entirely, making light mode genuinely zero-parser + zero-embed.
+
+let _mod: any = null;                 // web-tree-sitter module (post-init)
+let _corePromise: Promise<boolean> | null = null;
+const _grammarPromises = new Map<string, Promise<boolean>>();
+let _availableCache: boolean | null = null;
+
+/** True when the user asked for minimal footprint (no parser, no index). */
+export function isLightMode(): boolean {
+  return process.env.MOCHI_LIGHT === '1' || process.env.MOCHI_NO_EMBED === '1' || process.env.MOCHI_NO_INDEX === '1';
+}
+
+/** Cheap availability probe: resolves the wasm paths WITHOUT loading them. */
+function treeSitterAvailable(): boolean {
+  if (_mod) return true;
+  if (_availableCache !== null) return _availableCache;
   try {
-    const mod = await import('web-tree-sitter' as any);
-    const Parser = mod.Parser as any;
-    const wasmPath = _req.resolve('web-tree-sitter/web-tree-sitter.wasm');
-    await Parser.init({ locateFile: () => wasmPath });
-    _Parser = Parser;
-    for (const lang of LANGUAGES) {
-      const spec = GRAMMAR_SPECS[lang];
-      if (!spec) continue;
+    const req = createRequire(import.meta.url);
+    req.resolve('web-tree-sitter/web-tree-sitter.wasm');
+    req.resolve(`${GRAMMAR_SPECS.typescript.pkg}/package.json`);
+    _availableCache = true;
+  } catch {
+    _availableCache = false;
+  }
+  return _availableCache;
+}
+
+async function ensureCore(): Promise<boolean> {
+  if (_mod) return true;
+  if (process.env.MOCHI_CPG_BACKEND === 'tsc' || isLightMode()) return false;
+  if (!_corePromise) {
+    _corePromise = (async () => {
       try {
-        const pkgJson = _req.resolve(`${spec.pkg}/package.json`);
+        const req = createRequire(import.meta.url);
+        const mod = await import('web-tree-sitter' as any);
+        const Parser = mod.Parser as any;
+        const wasmPath = req.resolve('web-tree-sitter/web-tree-sitter.wasm');
+        await Parser.init({ locateFile: () => wasmPath });
+        _mod = mod;
+        _Parser = Parser;
+        return true;
+      } catch (e) {
+        _tsInitError += String((e as Error)?.message ?? e);
+        return false;
+      }
+    })();
+  }
+  return _corePromise;
+}
+
+/** Load ONE language's grammar on first need. Memoized per language. */
+export async function ensureLanguage(lang: LanguageId | string): Promise<boolean> {
+  if (_languages.has(lang as LanguageId)) return true;
+  if (!(await ensureCore())) return false;
+  const spec = GRAMMAR_SPECS[lang];
+  if (!spec) return false;
+  let p = _grammarPromises.get(lang);
+  if (!p) {
+    p = (async () => {
+      try {
+        const req = createRequire(import.meta.url);
+        const pkgJson = req.resolve(`${spec.pkg}/package.json`);
         const wasmFile = resolve(dirname(pkgJson), spec.file);
         const grammarBuf = readFileSync(wasmFile);
-        const grammar = await mod.Language.load(grammarBuf);
-        _languages.set(lang, grammar);
+        const grammar = await _mod.Language.load(grammarBuf);
+        _languages.set(lang as LanguageId, grammar);
+        return true;
       } catch (e) {
         // Individual grammar load failure only disables that language.
         const msg = (e as Error)?.message || String(e);
         _tsInitError += `[${lang}] ${msg}; `;
+        return false;
       }
-    }
-    return _languages.size > 0;
-  } catch (e) {
-    _tsInitError += String((e as Error)?.message ?? e);
-    return false;
+    })();
+    _grammarPromises.set(lang, p);
   }
-})();
+  return p;
+}
+
+/**
+ * Preload the core plus ONLY the grammars for languages actually present
+ * under cwd. Awaited by every read path, so any entry point gets a correctly
+ * populated index without paying eager module-load cost.
+ */
+async function preloadGrammars(cwd: string): Promise<void> {
+  if (getParserBackend() !== 'tree-sitter') return;
+  if (!(await ensureCore())) return;
+  const langs = new Set<string>();
+  for (const full of walkFiles(cwd, cwd)) {
+    const l = langOf(full);
+    if (l) langs.add(l);
+  }
+  await Promise.all([...langs].map((l) => ensureLanguage(l)));
+}
 
 export function loadTreeSitter(): { ok: boolean; message: string } {
   if (_Parser && _languages.size > 0) {
     const langs = [..._languages.keys()].join(', ');
     return { ok: true, message: `loaded (${langs})` };
   }
+  if (!_Parser && treeSitterAvailable() && !isLightMode() && process.env.MOCHI_CPG_BACKEND !== 'tsc') {
+    return { ok: true, message: 'lazy (loads on first symbol-index use)' };
+  }
   return { ok: false, message: _tsInitError || 'tree-sitter backend unavailable (npm i web-tree-sitter + tree-sitter-<lang>)' };
 }
 
 export function getParserBackend(): ParserBackend {
-  // Explicit opt-in to the tsc backend wins; else default is tree-sitter.
+  // Explicit opt-in to the tsc backend wins; light mode forces tsc too
+  // (zero-parser); otherwise tree-sitter whenever the packages resolve.
   if (process.env.MOCHI_CPG_BACKEND === 'tsc') return 'tsc';
-  return _Parser && _languages.size > 0 ? 'tree-sitter' : 'tsc';
+  if (isLightMode()) return 'tsc';
+  return treeSitterAvailable() ? 'tree-sitter' : 'tsc';
 }
 
-// Wait for the async init to settle so backend checks are correct.
-export async function ensureParserLoaded(): Promise<void> { await _initPromise; }
+// Wait for the async CORE init so backend checks are correct. Grammars now
+// load per-language on demand (ensureLanguage); every codegraph read path
+// preloads the languages present in the target repo before indexing.
+export async function ensureParserLoaded(): Promise<void> { await ensureCore(); }
 
 function namedChildren(node: any): any[] {
   return Array.isArray(node?.namedChildren) ? node.namedChildren : [];
@@ -372,8 +459,9 @@ function db(cwd: string): SqliteDb {
   return database;
 }
 
-export function getFunctionSynapse(cwd: string, name: string): string {
+export async function getFunctionSynapse(cwd: string, name: string): Promise<string> {
   if (!hasSqlite()) return `Code index unavailable on this Node runtime (needs node:sqlite, Node >= 22.5).`;
+  await preloadGrammars(cwd);
   const database = db(cwd);
   const rows = database.prepare('SELECT * FROM symbols WHERE name=? ORDER BY line').all(name) as unknown as Sym[];
   if (rows.length === 0) return `No definition found for "${name}".`;
@@ -382,8 +470,9 @@ export function getFunctionSynapse(cwd: string, name: string): string {
   return `# ${r.kind} ${r.name} — ${r.rel}:${r.line}\n${r.body}${more}`;
 }
 
-export function findCallers(cwd: string, name: string): string {
+export async function findCallers(cwd: string, name: string): Promise<string> {
   if (!hasSqlite()) return `Code index unavailable on this machine (needs node:sqlite, Node >= 22.5).`;
+  await preloadGrammars(cwd);
   const database = db(cwd);
 
   // Graph answer first: exact call edges recorded at index time. This catches
@@ -422,8 +511,9 @@ export function findCallers(cwd: string, name: string): string {
   return hits.length ? [...new Set(hits)].join('\n') : `No references to "${name}" found.`;
 }
 
-export function typeHierarchy(cwd: string, name: string): string {
+export async function typeHierarchy(cwd: string, name: string): Promise<string> {
   if (!hasSqlite()) return `Code index unavailable on this machine (needs node:sqlite, Node >= 22.5).`;
+  await preloadGrammars(cwd);
   const database = db(cwd);
   const up = database.prepare('SELECT dst FROM relations WHERE src=? AND kind=?').all(name, 'extends') as any[];
   const down = database.prepare('SELECT src FROM relations WHERE dst=? AND kind=?').all(name, 'extends') as any[];
@@ -447,7 +537,7 @@ export interface BlastRadiusReport {
  * Computes the downstream AST blast radius (callers, affected files, type hierarchy)
  * for a symbol before modifying it, preventing unintended regressions across the repo.
  */
-export function computeSymbolBlastRadius(cwd: string, name: string): BlastRadiusReport {
+export async function computeSymbolBlastRadius(cwd: string, name: string): Promise<BlastRadiusReport> {
   if (!hasSqlite()) {
     return {
       symbol: name,
@@ -459,6 +549,7 @@ export function computeSymbolBlastRadius(cwd: string, name: string): BlastRadius
     };
   }
 
+  await preloadGrammars(cwd);
   const database = db(cwd);
   const edges = database.prepare('SELECT caller,rel,line FROM calls WHERE callee=? ORDER BY rel,line').all(name) as any[];
   const callers = edges.map((e) => ({ caller: String(e.caller || 'anonymous'), file: String(e.rel || ''), line: Number(e.line || 1) }));
@@ -493,8 +584,21 @@ export { Sym };
 /** Run a read-only SQL query against the live in-memory symbol graph. Only
  *  SELECT/WITH/PRAGMA allowed; LIMIT-capped. Returns rows or a descriptive
  *  error. Used by the sql_codebase_query tool (spec section 3). */
-export function querySymbolGraph(cwd: string, sql: string, maxRows = 50): { rows: unknown[] } | { error: string } {
+export function querySymbolGraph(cwd: string, sql: string, maxRows = 50): Promise<{ rows: unknown[] } | { error: string }> {
+  return (async () => {
+    if (!hasSqlite()) return { error: 'node:sqlite unavailable (Node >= 22.5)' };
+    await preloadGrammars(cwd);
+    // After preload the index is warm (or the tsc backend needs no grammars).
+    return querySymbolGraphSync(cwd, sql, maxRows) ?? { rows: [] };
+  })();
+}
+
+/** Sync variant for callers that cannot await (hot prompt-build paths).
+ *  Returns undefined when the lazy parser has not been warmed yet — call
+ *  warmCodegraph(cwd) first to make subsequent sync reads fully populated. */
+export function querySymbolGraphSync(cwd: string, sql: string, maxRows = 50): { rows: unknown[] } | { error: string } | undefined {
   if (!hasSqlite()) return { error: 'node:sqlite unavailable (Node >= 22.5)' };
+  if (getParserBackend() === 'tree-sitter' && _languages.size === 0) return undefined; // cold
   const first = sql.trim().split(/\s+/)[0]?.toLowerCase() ?? '';
   if (!['select', 'with', 'pragma'].includes(first)) {
     return { error: `Only read-only queries allowed (SELECT/WITH/PRAGMA). Got "${first}".` };
@@ -508,4 +612,11 @@ export function querySymbolGraph(cwd: string, sql: string, maxRows = 50): { rows
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) };
   }
+}
+
+/** Warm the lazy parser + the grammars present under cwd so that sync read
+ *  helpers (querySymbolGraphSync) return fully populated results. Cheap when
+ *  already warm; a no-op in light mode / tsc backend. */
+export async function warmCodegraph(cwd: string): Promise<void> {
+  await preloadGrammars(cwd);
 }

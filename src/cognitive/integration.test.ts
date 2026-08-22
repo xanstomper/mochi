@@ -49,12 +49,16 @@ describe('Mochi Cognitive & Chameleon End-to-End Proof', () => {
     expect(packet.systemPrompt).toContain('Test-Time Compute (Chameleon)');
   });
 
-  it('PROVE 2: Volatile context dynamically injects zero-latency MoE invariants & boundary DAGs for coding tasks', () => {
+  it('PROVE 2: Volatile context dynamically injects zero-latency MoE invariants & boundary DAGs for coding tasks', async () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-moe-proof-'));
     const config = makeTestConfig(dir);
     const context = new ContextEngine(config, dir);
     const tools = buildTools(config);
     const task = createTask('Implement Rate Limiter', 'Build a distributed token bucket in Redis with atomic Lua script.');
+
+    // Production parity: Agent.run primes the scaffold before the first packet.
+    const { primeScaffold } = await import('../cognitive/chameleon.js');
+    await primeScaffold(`${task.title} ${task.description ?? ''}`.trim(), dir);
 
     const packet = context.buildPacket(Array.from(tools.values()).map((t) => t.def), task);
     const stateMsg = packet.messages.find((m) => m.role === 'system' && m.content.includes('LAZY CHAMELEON DENSE SYNTHETIC DATASET'));

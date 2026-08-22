@@ -510,16 +510,20 @@ MOCHI_CPG_BACKEND=tree-sitter mochi inspect "SessionManager"
 The read paths (`getFunctionSynapse`, `findCallers`, `typeHierarchy`) are
 backend-agnostic, so either parser produces the same tool output.
 
-### Light mode (zero-embed)
+### Light mode (zero-embed, zero-parser)
 
-On very small boxes you can disable the embedded SQLite symbol index entirely
-(the codegraph degrades to "no symbol index" instead of throwing):
+On very small boxes you can disable the embedded SQLite symbol index AND the
+tree-sitter WASM parser entirely (both degrade gracefully instead of throwing):
 
 ```bash
-MOCHI_LIGHT=1 mochi            # no embedded index, minimal footprint
+MOCHI_LIGHT=1 mochi            # no embedded index, no WASM parser
 MOCHI_NO_EMBED=1 mochi         # same effect
 MOCHI_NO_INDEX=1 mochi         # same effect
 ```
+
+Even without the flag, the parser is lazy: grammars load on first symbol-index
+use and only for languages actually present in the repo, so runs that never
+touch codegraph tools pay nothing for them.
 
 ## Tests
 

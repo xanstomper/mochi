@@ -308,6 +308,15 @@ export class Agent {
     // loadOrCreateAutopsy) so failure trajectories are durable and inspectable.
     this.autopsy = loadOrCreateAutopsy(this.workspace.dir, task.id, this.id, task.title);
     this.contentOnly = classifyContentOnly({ title: task.title, description: task.description, acceptanceCriteria: task.acceptanceCriteria, verificationCommand: task.verificationCommand });
+    // Harness-v2 perf: warm the lazy codegraph grammars + deterministic Chameleon
+    // scaffold ONCE here (async zone) so the hot sync prompt-build path serves a
+    // fully grounded scaffold with zero per-iteration cost.
+    if (classifyTaskKind(task) !== 'chat') {
+      try {
+        const { primeScaffold } = await import('../cognitive/chameleon.js');
+        await primeScaffold(task.title + (task.description ? ` ${task.description}` : ''), this.cwd);
+      } catch { /* best-effort */ }
+    }
     // Warm start on resume: if a previous session already attempted this task
     // and failed, surface those attempts to the model so it does NOT retry the
     // same dead-end hypotheses. The autopsy is loaded (not created) but was

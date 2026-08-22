@@ -20,7 +20,7 @@ export const blastRadiusTool: Tool = {
     const symbol = String(args.symbol ?? '').trim();
     if (!symbol) throw new Error('symbol parameter is required');
 
-    const report = computeSymbolBlastRadius(ctx.cwd, symbol);
+    const report = await computeSymbolBlastRadius(ctx.cwd, symbol);
     const lines = [
       `# Blast Radius Analysis: ${report.symbol}`,
       `Risk Assessment: ${report.riskLevel} (${report.directCallers.length} call sites across ${report.affectedFiles.length} files)`,

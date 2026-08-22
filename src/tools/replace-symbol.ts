@@ -14,9 +14,9 @@ export interface ReplaceSymbolResult {
 /** Replace the body of a named symbol with new text, keeping the file's other
  *  content byte-identical. The index knows the symbol's start line; the end
  *  is the start of the next symbol at the same-or-lower depth (or EOF). */
-export function replaceSymbol(cwd: string, name: string, newBody: string): ReplaceSymbolResult {
+export async function replaceSymbol(cwd: string, name: string, newBody: string): Promise<ReplaceSymbolResult> {
   // Resolve via the symbol index: file + line.
-  const header = getFunctionSynapse(cwd, name);
+  const header = await getFunctionSynapse(cwd, name);
   const m = header.match(/^# \w+ ([\w$]+) — (.+):(\d+)$/m);
   if (!m) {
     return { ok: false, message: header.startsWith('No definition') ? header : `Could not resolve symbol "${name}" in the index. Re-index (any symbol query) and retry.` };
@@ -48,8 +48,8 @@ export function replaceSymbol(cwd: string, name: string, newBody: string): Repla
 }
 
 /** Insert a new symbol BEFORE an existing one (or at EOF when name is empty). */
-export function insertSymbolBefore(cwd: string, name: string, text: string): ReplaceSymbolResult {
-  const header = name ? getFunctionSynapse(cwd, name) : '';
+export async function insertSymbolBefore(cwd: string, name: string, text: string): Promise<ReplaceSymbolResult> {
+  const header = name ? await getFunctionSynapse(cwd, name) : '';
   const m = name ? header.match(/^# \w+ ([\w$]+) — (.+):(\d+)$/m) : null;
   const insertion = (text.endsWith('\n') ? text : text + '\n') + '\n';
   if (!m) {
@@ -86,7 +86,7 @@ export const replaceSymbolTool: Tool = {
     const name = String(args.name ?? '');
     const body = String(args.body ?? '');
     if (!name) throw new Error('name required');
-    const r = replaceSymbol(ctx.cwd, name, body);
+    const r = await replaceSymbol(ctx.cwd, name, body);
     if (!r.ok) throw new Error(r.message);
     return r.message;
   },

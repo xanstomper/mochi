@@ -19,22 +19,22 @@ beforeAll(() => {
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 maybe('codebase SQL', () => {
-  it('queries symbols by kind and name', () => {
-    const out = querySymbolGraph(dir, "SELECT file, name, line FROM symbols WHERE kind='function' ORDER BY name LIMIT 10");
+  it('queries symbols by kind and name', async () => {
+    const out = await querySymbolGraph(dir, "SELECT file, name, line FROM symbols WHERE kind='function' ORDER BY name LIMIT 10");
     if ('error' in out) { throw new Error(out.error); }
     const rows = out.rows as Array<{ name: string }>;
     expect(rows.some((r) => r.name === 'login')).toBe(true);
     expect(rows.some((r) => r.name === 'log')).toBe(true);
   });
 
-  it('refuses non-read-only statements', () => {
-    const out = querySymbolGraph(dir, 'DROP TABLE symbols');
+  it('refuses non-read-only statements', async () => {
+    const out = await querySymbolGraph(dir, 'DROP TABLE symbols');
     expect('error' in out).toBe(true);
     if ('error' in out) expect(out.error).toMatch(/read-only/);
   });
 
-  it('auto-applies a LIMIT', () => {
-    const out = querySymbolGraph(dir, 'SELECT * FROM symbols');
+  it('auto-applies a LIMIT', async () => {
+    const out = await querySymbolGraph(dir, 'SELECT * FROM symbols');
     expect('error' in out ? false : (out.rows as unknown[]).length <= 50).toBe(true);
   });
 

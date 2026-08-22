@@ -11,7 +11,7 @@ import { resolve, join } from 'node:path';
 import { AdaptiveMoE, MicroExpert } from './adaptive-moe.js';
 import { classifyTask, TaskDomain } from './task-classifier.js';
 import { detectRepo } from '../repo.js';
-import { querySymbolGraph, hasSqlite } from '../codegraph.js';
+import { querySymbolGraphSync, hasSqlite } from '../codegraph.js';
 
 export interface DenseSyntheticDataset {
   objective: string;
@@ -58,12 +58,11 @@ export function synthesizeDenseDataset(task: string, cwd?: string, difficultyMod
     try {
       const words = task.split(/\W+/).filter((w) => w.length >= 4 && !['implement', 'create', 'update', 'refactor', 'function', 'class', 'method'].includes(w.toLowerCase()));
       for (const word of words.slice(0, 3)) {
-        const res = querySymbolGraph(root, `SELECT file, name, line, kind FROM symbols WHERE name LIKE '%${word.replace(/['"]/g, '')}%' LIMIT 3`);
-        if ('rows' in res && Array.isArray(res.rows)) {
-          for (const row of res.rows as any[]) {
-            if (row?.file && row?.name) {
-              foundSymbols.push(`${row.file}:${row.line ?? 1} (${row.kind ?? 'symbol'} ${row.name})`);
-            }
+        const res = querySymbolGraphSync(root, `SELECT file, name, line, kind FROM symbols WHERE name LIKE '%${word.replace(/['"]/g, '')}%' LIMIT 3`);
+        if (!res || !('rows' in res) || !Array.isArray(res.rows)) continue;
+        for (const row of res.rows as any[]) {
+          if (row?.file && row?.name) {
+            foundSymbols.push(`${row.file}:${row.line ?? 1} (${row.kind ?? 'symbol'} ${row.name})`);
           }
         }
       }
