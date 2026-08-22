@@ -12,6 +12,7 @@ import { classifyTaskKind, kindHint } from './taskkind.js';
 import type { ChatMessage, MochiConfig, RepoInfo, Task, ToolDefinition } from './types.js';
 import { isWeakModel } from './tools/index.js';
 import { synthesizeDeterministicContext } from './cognitive/chameleon.js';
+import { isMode, modeInstruction } from './modes.js';
 
 const CANDIDATE_RULES = ['MOCHI.md', 'mochi.md', 'AGENTS.md', 'CLAUDE.md'];
 
@@ -264,6 +265,10 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
     const query = task ? `${task.title} ${task.description}` : this.state.goal ?? '';
     const memory = this.loadMemory(query);
     const parts: string[] = [];
+    if (this.config?.mode && isMode(this.config.mode)) {
+      const modeBlurb = modeInstruction(this.config.mode);
+      if (modeBlurb) parts.push(modeBlurb.trim());
+    }
     if (memory) parts.push(`Project memory:\n${memory}`);
     if (task) {
       parts.push(kindHint(classifyTaskKind(task)));
@@ -326,14 +331,14 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
 
     let remaining = this.budget - approxTokens(baseSystemPrompt);
 
-    // Add recent messages until budget exhausted; prefer latest. Reserve room
-    // for the trailing state note.
+    // Add recent messages until budget exhausted; prefer latest. Always retain
+    // at least the latest turn so active tool responses are never dropped.
     const recent: ChatMessage[] = [];
     for (let i = this.messages.length - 1; i >= 0; i--) {
       const m = this.messages[i];
       const text = JSON.stringify(m);
       const tokens = approxTokens(text);
-      if (remaining - tokens < 0) break;
+      if (recent.length > 0 && remaining - tokens < 0) break;
       remaining -= tokens;
       recent.unshift(m);
     }
