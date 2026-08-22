@@ -440,16 +440,35 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
    *  leading spacing applied at render. Returns the transformed content. */
   function applySelection(content: string, row: number, indent: number): string {
     if (!state.selActive || !state.selStart || !state.selEnd) return content;
+    const isStartTop = state.selStart.row <= state.selEnd.row;
     const top = Math.min(state.selStart.row, state.selEnd.row);
     const bottom = Math.max(state.selStart.row, state.selEnd.row);
     if (row < top || row > bottom) return content;
-    const left = Math.min(state.selStart.col, state.selEnd.col);
-    const right = Math.max(state.selStart.col, state.selEnd.col);
+
     const len = visibleLen(content);
-    const from = row === top ? Math.max(0, left - indent) : 0;
-    const to = row === bottom ? Math.min(len, right - indent) : len;
-    if (to <= from) return content;
-    return highlightRange(content, from, to);
+    if (top === bottom) {
+      const minCol = Math.min(state.selStart.col, state.selEnd.col);
+      const maxCol = Math.max(state.selStart.col, state.selEnd.col);
+      const from = Math.max(0, minCol - indent);
+      const to = Math.min(len, Math.max(0, maxCol - indent));
+      if (to <= from) return content;
+      return highlightRange(content, from, to);
+    }
+
+    const startCol = isStartTop ? state.selStart.col : state.selEnd.col;
+    const endCol = isStartTop ? state.selEnd.col : state.selStart.col;
+
+    if (row === top) {
+      const from = Math.max(0, startCol - indent);
+      if (from >= len) return content;
+      return highlightRange(content, from, len);
+    }
+    if (row === bottom) {
+      const to = Math.min(len, Math.max(0, endCol - indent));
+      if (to <= 0) return content;
+      return highlightRange(content, 0, to);
+    }
+    return highlightRange(content, 0, len);
   }
 
   /** Extract the visible text inside the current selection (plain, no ANSI). */
@@ -460,18 +479,32 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     const indent = transcriptIndent(w);
     const chatLines = transcriptLines(chatMw);
     const windowStart = Math.max(0, chatLines.length - availableH - state.scroll);
-    const top = Math.min(state.selStart.row, state.selEnd.row);
-    const bottom = Math.max(state.selStart.row, state.selEnd.row);
-    const left = Math.min(state.selStart.col, state.selEnd.col);
-    const right = Math.max(state.selStart.col, state.selEnd.col);
+    const isStartTop = state.selStart.row <= state.selEnd.row;
+    const topRow = Math.min(state.selStart.row, state.selEnd.row);
+    const bottomRow = Math.max(state.selStart.row, state.selEnd.row);
+    const startCol = isStartTop ? state.selStart.col : state.selEnd.col;
+    const endCol = isStartTop ? state.selEnd.col : state.selStart.col;
+
     const lines: string[] = [];
-    for (let r = top; r <= bottom; r++) {
+    for (let r = topRow; r <= bottomRow; r++) {
       const idx = windowStart + r;
       if (idx < 0 || idx >= chatLines.length) continue;
       const bare = stripAnsi(chatLines[idx]);
-      const from = r === top ? Math.max(0, left - indent) : 0;
-      const to = r === bottom ? Math.min(bare.length, right - indent) : bare.length;
-      lines.push(from < to ? bare.slice(from, to) : '');
+      if (topRow === bottomRow) {
+        const minCol = Math.min(state.selStart.col, state.selEnd.col);
+        const maxCol = Math.max(state.selStart.col, state.selEnd.col);
+        const from = Math.max(0, minCol - indent);
+        const to = Math.min(bare.length, Math.max(0, maxCol - indent));
+        lines.push(from < to ? bare.slice(from, to) : '');
+      } else if (r === topRow) {
+        const from = Math.max(0, startCol - indent);
+        lines.push(bare.slice(from));
+      } else if (r === bottomRow) {
+        const to = Math.min(bare.length, Math.max(0, endCol - indent));
+        lines.push(bare.slice(0, to));
+      } else {
+        lines.push(bare);
+      }
     }
     return lines.join('\n');
   }
@@ -523,8 +556,11 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   function endSelection() {
     if (state.selActive) {
       const t = selectedText();
-      copyToClipboard(t);
-      // keep the highlight visible until the next click/keypress clears it
+      if (t && t.length > 0) {
+        copyToClipboard(t);
+        push('system', `Copied ${t.length} character${t.length !== 1 ? 's' : ''} to clipboard.`);
+        scheduleRender();
+      }
     }
   }
 
@@ -759,7 +795,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   }
 
   function stripAnsi(s: string): string {
-    return s.replace(/\[[0-9;]*m/g, '');
+    return s.replace(/\x1b\[[0-9;]*m/g, '');
   }
 
   async function handleCommand(raw: string) {

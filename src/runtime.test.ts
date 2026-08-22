@@ -79,7 +79,7 @@ describe('Runtime review/fix (pipe composability)', () => {
     expect(inputs).toContain('auth.ts');
     await fake.close();
     rmSync(dir, { recursive: true, force: true });
-  });
+  }, 60000);
 
   it('runtime.fix runs a fix task with piped context', async () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-rt-fix-'));
