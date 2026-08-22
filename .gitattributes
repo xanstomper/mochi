@@ -1,27 +1,21 @@
 # GitHub Linguist overrides to reflect Rust core architecture
-*.test.ts linguist-vendored
-*.test.js linguist-vendored
-*.bench.ts linguist-vendored
-src/**/*.test.ts linguist-vendored
-src/testutil/** linguist-vendored
-bench/** linguist-vendored
-docs/** linguist-documentation
-package-lock.json linguist-generated
-CHANGELOG.md linguist-documentation
+*.test.ts linguist-vendored=true
+*.test.js linguist-vendored=true
+*.bench.ts linguist-vendored=true
+src/**/*.test.ts linguist-vendored=true
+src/testutil/** linguist-vendored=true
+bench/** linguist-vendored=true
+docs/** linguist-documentation=true
+package-lock.json linguist-generated=true
+CHANGELOG.md linguist-documentation=true
 
-# Mark legacy TS runtime as vendored to highlight Rust rewrite
-src/agent/** linguist-vendored
-src/core/** linguist-vendored
-src/goals/** linguist-vendored
-src/model/** linguist-vendored
-src/tools/** linguist-vendored
-src/mcp/** linguist-vendored
-src/teams/** linguist-vendored
-src/*.ts linguist-vendored
+# Mark legacy TS runtime as generated/vendored to highlight Rust rewrite
+src/**/*.ts linguist-generated=true
+src/**/*.js linguist-generated=true
 
 # TUI remains strictly TypeScript
-src/tui/** linguist-detectable
+src/tui/**/*.ts linguist-generated=false
 
-native/** linguist-detectable
-native/mochi_core/** linguist-detectable
-native/rust/** linguist-detectable
+native/** linguist-detectable=true
+native/mochi_core/** linguist-detectable=true
+native/rust/** linguist-detectable=true
