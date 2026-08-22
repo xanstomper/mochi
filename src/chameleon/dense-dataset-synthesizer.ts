@@ -6,8 +6,12 @@
  * algorithmic complexity proofs, and failure mitigations.
  */
 
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { resolve, join } from 'node:path';
 import { AdaptiveMoE, MicroExpert } from './adaptive-moe.js';
 import { classifyTask, TaskDomain } from './task-classifier.js';
+import { detectRepo } from '../repo.js';
+import { querySymbolGraph, hasSqlite } from '../codegraph.js';
 
 export interface DenseSyntheticDataset {
   objective: string;
@@ -24,9 +28,11 @@ export interface DenseSyntheticDataset {
 
 /**
  * Builds a dense, structured synthetic dataset for any engineering task
- * by executing cellular MoE decomposition.
+ * by executing cellular MoE decomposition grounded in the live codebase AST.
  */
-export function synthesizeDenseDataset(task: string, difficultyMode = 'medium'): DenseSyntheticDataset {
+export function synthesizeDenseDataset(task: string, cwd?: string, difficultyMode = 'medium'): DenseSyntheticDataset {
+  const root = cwd ?? process.cwd();
+  const repo = detectRepo(root);
   const classification = classifyTask(task);
   const moe = new AdaptiveMoE();
   const baseExperts = moe.scaleToTask(task, difficultyMode);
@@ -46,7 +52,27 @@ export function synthesizeDenseDataset(task: string, difficultyMode = 'medium'):
     activeExperts = baseExperts;
   }
 
-  // Generate dense domain invariants based on classified domain
+  // Extract real symbols matching task keywords from AST codegraph if available
+  const foundSymbols: string[] = [];
+  if (hasSqlite()) {
+    try {
+      const words = task.split(/\W+/).filter((w) => w.length >= 4 && !['implement', 'create', 'update', 'refactor', 'function', 'class', 'method'].includes(w.toLowerCase()));
+      for (const word of words.slice(0, 3)) {
+        const res = querySymbolGraph(root, `SELECT file, name, line, kind FROM symbols WHERE name LIKE '%${word.replace(/['"]/g, '')}%' LIMIT 3`);
+        if ('rows' in res && Array.isArray(res.rows)) {
+          for (const row of res.rows as any[]) {
+            if (row?.file && row?.name) {
+              foundSymbols.push(`${row.file}:${row.line ?? 1} (${row.kind ?? 'symbol'} ${row.name})`);
+            }
+          }
+        }
+      }
+    } catch {
+      /* continue */
+    }
+  }
+
+  // Generate dense domain invariants based on classified domain and repo language
   const invariants: string[] = [
     'Byte-level idempotency: operations must produce identical state when executed multiple times.',
     'Surgical locality: touch only strictly required symbols to preserve adjacent system stability.',
@@ -54,8 +80,16 @@ export function synthesizeDenseDataset(task: string, difficultyMode = 'medium'):
     'Verification parity: success is gated on automated test pass and static type conformance.',
   ];
 
-  if (classification.domain === 'systems_programming') {
+  if (repo.language === 'ts' || repo.language === 'typescript') {
+    invariants.push('Strict typing: zero implicit any, handle all nullish branches explicitly.');
+  } else if (repo.language === 'rust' || repo.language === 'rs') {
     invariants.push('Memory safety: zero out-of-bounds access, use-after-free, or unbounded heap growth.');
+    invariants.push('Rust ownership: satisfy borrow checker without superfluous clones.');
+  } else if (repo.language === 'go') {
+    invariants.push('Go error hygiene: explicitly check and wrap all returned err != nil.');
+  }
+
+  if (classification.domain === 'systems_programming') {
     invariants.push('Concurrency hygiene: prevent deadlocks via strict lock ordering and non-blocking channels.');
   } else if (classification.domain === 'database_infra') {
     invariants.push('ACID guarantee: multi-table updates wrapped in atomic transactions.');
@@ -63,6 +97,27 @@ export function synthesizeDenseDataset(task: string, difficultyMode = 'medium'):
   } else if (classification.domain === 'security_audit') {
     invariants.push('Zero-trust input sanitization: escape all user-controlled strings at parser boundaries.');
     invariants.push('Constant-time comparisons for cryptographic signatures and authentication tokens.');
+  }
+
+  // Check for prior failed attempts in autopsies to prevent repeating traps
+  const autopsyDir = resolve(root, '.mochi/autopsies');
+  const priorTraps: string[] = [];
+  if (existsSync(autopsyDir)) {
+    try {
+      const files = readdirSync(autopsyDir).filter((f) => f.endsWith('.json')).slice(-3);
+      for (const f of files) {
+        const raw = JSON.parse(readFileSync(join(autopsyDir, f), 'utf8'));
+        if (raw?.attempts && Array.isArray(raw.attempts)) {
+          for (const att of raw.attempts) {
+            if (att.outcome === 'still_failing' || att.statusAfter === 'refuted') {
+              priorTraps.push(`${att.hypothesisText || att.action} (Evidence: ${String(att.evidence).slice(0, 80)})`);
+            }
+          }
+        }
+      }
+    } catch {
+      /* continue */
+    }
   }
 
   // Generate realistic failure modes and mitigations
@@ -91,20 +146,25 @@ export function synthesizeDenseDataset(task: string, difficultyMode = 'medium'):
     'Unicode / multi-byte character strings preserved without offset corruption',
   ];
 
+  const buildCmd = repo.typecheckCommand ?? repo.buildCommand ?? 'typecheck';
+  const testCmd = repo.testCommand ?? 'automated test suite';
+
   const executionDag: DenseSyntheticDataset['executionDag'] = [
     {
       step: 1,
-      action: 'Inspect existing symbol definitions and AST contracts in workspace',
+      action: foundSymbols.length > 0
+        ? `Inspect existing AST contracts for: ${foundSymbols.slice(0, 3).join(', ')}`
+        : 'Inspect existing symbol definitions and AST contracts in workspace',
       validation: 'Verify target file existence, line numbers, and export signatures',
     },
     {
       step: 2,
       action: 'Derive atomic implementation following domain invariants',
-      validation: 'Compile source and verify zero lint or type errors',
+      validation: `Run \`${buildCmd}\` and verify zero lint or type errors`,
     },
     {
       step: 3,
-      action: 'Execute automated regression and verification suite',
+      action: `Execute automated verification with \`${testCmd}\``,
       validation: 'All assertions pass with 100% exit code 0 confirmation',
     },
   ];
@@ -114,12 +174,14 @@ export function synthesizeDenseDataset(task: string, difficultyMode = 'medium'):
     Difficulty: `${classification.difficulty}/10`,
     MoECells: `${activeExperts.length} active cellular experts`,
     Strategy: classification.recommendedStrategy,
+    Language: repo.language ?? 'unknown',
+    TestRunner: repo.testCommand ?? 'unknown',
   };
 
   const rawLines = [
     `# LAZY CHAMELEON DENSE SYNTHETIC DATASET [MOE EXPANSION: ${activeExperts.length} CELLS]`,
     `Objective: ${task}`,
-    `Domain: ${classification.domain} (Difficulty: ${classification.difficulty}/10)`,
+    `Domain: ${classification.domain} (Difficulty: ${classification.difficulty}/10 | Language: ${repo.language ?? 'generic'})`,
     '',
     `## 1. System Invariants`,
     ...invariants.map((inv, i) => `  ${i + 1}. [INV-${i + 1}] ${inv}`),
@@ -129,10 +191,23 @@ export function synthesizeDenseDataset(task: string, difficultyMode = 'medium'):
     '',
     `## 3. Hazard Mitigation Matrix`,
     ...failureModes.map((fm) => `  • Hazard: ${fm.hazard}\n    Mitigation: ${fm.mitigation} (${fm.severity.toUpperCase()} risk)`),
+  ];
+
+  if (priorTraps.length > 0) {
+    rawLines.push('', '## Known Failure Traps (From Autopsy)');
+    priorTraps.forEach((trap, i) => rawLines.push(`  ${i + 1}. [TRAP-${i + 1}] ${trap}`));
+  }
+
+  if (foundSymbols.length > 0) {
+    rawLines.push('', '## Grounded AST Symbols');
+    foundSymbols.slice(0, 4).forEach((sym, i) => rawLines.push(`  • Symbol ${i + 1}: ${sym}`));
+  }
+
+  rawLines.push(
     '',
     `## 4. Cellular Execution DAG`,
     ...executionDag.map((dag) => `  Step ${dag.step}: ${dag.action} -> Verify: ${dag.validation}`),
-  ];
+  );
 
   return {
     objective: task,

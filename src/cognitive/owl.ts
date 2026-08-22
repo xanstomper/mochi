@@ -120,6 +120,39 @@ export function evaluateOwl(task: string, knownContext = ''): OwlEvaluationResul
     });
   }
 
+  // 5. Invariants & Security: High-risk mutation guard
+  if (/\b(auth|token|jwt|credential|password|secret|key|crypto|permission)\b/.test(taskLower)) {
+    signals.push({
+      principle: 'invariants',
+      finding: 'Authentication / security sensitive boundary detected.',
+      implication: 'Never leak credentials, use constant-time comparisons, and verify authorization checks.',
+      weight: 0.6,
+      surface: true,
+    });
+  }
+
+  // 6. Concurrency / State Safety Guard
+  if (/\b(concurrency|race condition|deadlock|mutex|lock|atomic|async queue|worker)\b/.test(taskLower)) {
+    signals.push({
+      principle: 'invariants',
+      finding: 'Concurrent state mutation detected.',
+      implication: 'Enforce atomic updates, strict lock hierarchies, and comprehensive race condition tests.',
+      weight: 0.5,
+      surface: true,
+    });
+  }
+
+  // 7. Destructive Operation / Reversibility Guard
+  if (/\b(delete|drop|purge|truncate|rm|destroy|reset)\b/.test(taskLower)) {
+    signals.push({
+      principle: 'reversibility',
+      finding: 'Destructive data/code operation detected.',
+      implication: 'Require pre-mutation backup or transactional boundary before applying change.',
+      weight: 0.7,
+      surface: true,
+    });
+  }
+
   const cumulativeWeight = signals.reduce((sum, s) => sum + s.weight, 0);
   const mode = cumulativeWeight >= 1.0 ? 'surface' : 'silent';
   const formattedFindings = signals

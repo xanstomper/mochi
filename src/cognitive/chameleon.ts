@@ -123,7 +123,7 @@ export function synthesizeDeterministicContext(task: string, cwd = process.cwd()
   const owl = evaluateOwl(task);
   const sispis = evaluateSispis(task, owl.cumulativeWeight);
   const dox = loadDoxContract(cwd);
-  const denseData = synthesizeDenseDataset(task);
+  const denseData = synthesizeDenseDataset(task, cwd);
 
   const sections: string[] = [
     denseData.rawDatasetText,
