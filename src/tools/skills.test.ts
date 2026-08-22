@@ -109,7 +109,7 @@ describe('skill tool', () => {
     const list = await skillTool.execute({ name: 'list' }, ctx);
     expect(list).toContain('tdd-workflow');
     expect(list).toContain('git-wizard');
-    expect(list).toContain('debugger');
+    expect(list).toContain('debugging');
 
     const tdd = await skillTool.execute({ name: 'tdd-workflow' }, ctx);
     expect(tdd).toContain('Red-Green-Refactor');
