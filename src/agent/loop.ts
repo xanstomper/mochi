@@ -442,6 +442,14 @@ export class Agent {
         const MAX_STREAM_BYTES = 16_000;   // rough ~4k tokens of prose
         const MAX_STREAM_CHUNKS = 400;
         let streamBytes = 0;
+        // Some degenerate streams have no newline and no long phrase: one
+        // giant line like "open it, open it, open it, ..." (7-char phrase).
+        // Catch those with a periodicity check on a rolling tail: if a short
+        // period (2..24 chars) explains ~97% of the last 360 chars, the text
+        // is a runaway loop and must be cut off, not streamed to the user.
+        let recentTail = '';
+        let tailCheckedAt = 0;
+        let runawayFlagged = false;
 
         for await (const chunk of activeProvider.streamChat(messages, this.toolDefs, { temperature: 0.2, signal: this.abortSignal })) {
           chunks.push(chunk);
@@ -449,6 +457,24 @@ export class Agent {
             const newChunk = chunk.content;
             streamBuf += newChunk;
             streamBytes += newChunk.length;
+            recentTail = (recentTail + newChunk).slice(-360);
+            if (streamBytes - tailCheckedAt >= 120) {
+              tailCheckedAt = streamBytes;
+              const nonspace = recentTail.replace(/\s/g, '').length;
+              if (recentTail.length >= 240 && nonspace >= recentTail.length * 0.5) {
+                for (let p = 2; p <= 24; p++) {
+                  if (recentTail.length < p * 8) break; // need >=8 reps of the unit
+                  let match = 0;
+                  const total = recentTail.length - p;
+                  for (let i = 0; i < total; i++) if (recentTail[i] === recentTail[i + p]) match++;
+                  if (match / total >= 0.97) { runawayFlagged = true; break; }
+                }
+              }
+            }
+            if (runawayFlagged) {
+              looped = true;
+              break;
+            }
             
             for (let i = 0; i < newChunk.length; i++) {
               const char = newChunk[i];
@@ -469,7 +495,7 @@ export class Agent {
               }
             }
 
-            if (maxRep >= 8 || streamBytes >= MAX_STREAM_BYTES || chunks.length >= MAX_STREAM_CHUNKS) {
+            if (maxRep >= 8 || streamBytes >= MAX_STREAM_BYTES || chunks.length >= MAX_STREAM_CHUNKS || runawayFlagged) {
               // High-confidence loop / runaway generation: stop streaming
               // before it floods output.
               looped = true;

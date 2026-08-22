@@ -550,6 +550,38 @@ describe('Agent', () => {
     rmSync(dir, { recursive: true, force: true });
   }, 60_000);
 
+  it('bounds the exact live spam case: newline-less "open it, open it," flood (796 chunks, 14KB)', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-loop-openit-'));
+    // Reproduced from the user's real session trace: one giant line, no
+    // newlines at all, short 7-char phrases ("open it") below the old
+    // 12-char phrase threshold, 14KB total (under byte cap), 796 chunks
+    // (under chunk cap). Only a short-period runaway detector catches it.
+    const spam = 'open it, '.repeat(1800); // ~14.4KB, single line
+    const fake = await startFakeOpenAI([
+      { content: spam, finishReason: 'stop' },
+      { content: 'Done.', finishReason: 'stop', completionTokens: 8 },
+    ]);
+    const config = makeConfig(dir, fake.url);
+    const workspace = new Workspace(dir, '.mochi');
+    workspace.ensure();
+    const context = new ContextEngine(config, dir);
+    context.setGoal('answer');
+    const task = createTask('Answer', 'Give the result.');
+    const bus = new EventBus();
+    const chunks: string[] = [];
+    bus.on('message:chunk', (e: any) => chunks.push(String(e.content)));
+    const agent = new Agent({ id: 'loop-openit', role: 'coder', config, workspace, events: bus, cwd: dir, context });
+    const result = await agent.run(task);
+    expect(result.success).toBe(true);
+    // The flood must NOT reach the transcript. Only the clean retry answer.
+    const flat = chunks.join('');
+    const openCount = (flat.match(/open it/g) ?? []).length;
+    expect(openCount).toBeLessThan(5);
+    expect(flat.replace(/\s+/g, ' ')).toContain('Done');
+    await fake.close();
+    rmSync(dir, { recursive: true, force: true });
+  }, 60_000);
+
   it('plan mode fails when the model never produces a plan (nudge budget exhausted)', async () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-plan-giveup-'));
     // The fake replays its last entry forever, so the loop sees preambles on
