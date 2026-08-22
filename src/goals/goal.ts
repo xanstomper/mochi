@@ -448,9 +448,12 @@ Return ONLY the JSON array, no markdown.`;
       nextAction: task.title,
       completedTasks: this.workspace.loadState().completedTasks,
     });
-    const userPromptContent = task.acceptanceCriteria.length > 0
+    const modeStamp = this.config.planMode
+      ? '[MODE: plan — research and produce a written plan only; do NOT edit files or run mutating commands]\n'
+      : '[MODE: act — execute changes and verify them]\n';
+    const userPromptContent = modeStamp + (task.acceptanceCriteria.length > 0
       ? `Task: ${task.title}\n${task.description}\nAcceptance criteria: ${task.acceptanceCriteria.join('; ')}`
-      : (task.description || task.title);
+      : (task.description || task.title));
     context.addMessage({ role: 'user', content: userPromptContent });
     // Resumed-goal context: if this goal has prior session history, load the
     // most recent transcript (stored by the same goal id) so the model resumes

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { ContextEngine } from './context.js';
 import type { MochiConfig } from './types.js';
 
@@ -120,5 +120,30 @@ describe('ContextEngine cache-stable packet prefix', () => {
     const pA = engine.buildPacket(NO_TOOLS, task);
     const pB = engine.buildPacket(NO_TOOLS, task);
     expect(pA.messages[0].content).toBe(pB.messages[0].content);
+  });
+});
+
+describe('conditional tool guidelines (VNext P1.3)', () => {
+  const mk = (name: string) => ({ name, description: '', parameters: [] }) as any;
+
+  it('mentions only registered tools in section 9', () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-ctx2-'));
+    const engine = new ContextEngine({
+      model: { provider: 'x', baseUrl: 'http://l', model: 'm' },
+      safety: { contextBudgetTokens: 8000, mode: 'auto', commandTimeoutSeconds: 5, maxIterations: 5, maxRuntimeMinutes: 1, maxConcurrentAgents: 1 },
+      permissions: { read: true, write: true, shell: true, network: true, gitDestructive: false },
+    } as any, dir);
+    const narrow = engine.buildPacket([mk('read'), mk('shell')]);
+    const sys = String(narrow.messages[0].content);
+    expect(sys).toContain('shell:');
+    expect(sys).not.toContain('replace_symbol:');
+    expect(sys).not.toContain('web_search');
+    const full = engine.buildPacket([mk('edit'), mk('replace_symbol'), mk('web_search'), mk('web_crawl')]);
+    const sys2 = String(full.messages[0].content);
+    expect(sys2).toContain('replace_symbol:');
+    expect(sys2).toContain('web_search / web_crawl / fetch');
+    // Narrow prompt must be strictly smaller than the full one.
+    expect(sys.length).toBeLessThan(sys2.length);
+    rmSync(dir, { recursive: true, force: true });
   });
 });

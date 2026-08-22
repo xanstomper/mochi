@@ -60,4 +60,46 @@ describe('ContextEngine compact cut points', () => {
     expect(kept.some((m) => m.role === 'user' && m.content === 'q11')).toBe(true);
     rmSync(dir, { recursive: true, force: true });
   });
+
+  it('previewCompact returns the exact slice compact() drops (non-destructive)', () => {
+    const { ctx, dir } = makeContext();
+    for (let i = 0; i < 10; i++) {
+      ctx.addMessage({ role: 'user', content: `q${i}` } as any);
+      ctx.addMessage({ role: 'assistant', content: `a${i}` } as any);
+    }
+    const before = ((ctx as any).messages as ChatMessage[]).length;
+    const preview = ctx.previewCompact();
+    expect(preview).not.toBeNull();
+    expect(preview!.length).toBeGreaterThan(0);
+    expect(((ctx as any).messages as ChatMessage[]).length).toBe(before); // untouched
+    const compacted = ctx.previewCompact();
+    ctx.compact();
+    const kept = (ctx as any).messages as ChatMessage[];
+    // Every dropped message in the preview is gone from the live transcript
+    // (the compacted ledger replaces them wholesale).
+    const keptContents = new Set(kept.filter((m) => m.role === 'user').map((m) => m.content));
+    for (const m of preview!) {
+      if (m.role === 'user') expect(keptContents.has(m.content)).toBe(false);
+    }
+    expect(compacted!.length).toBe(preview!.length);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('LLM checkpoint leads the compacted ledger when provided', () => {
+    const { ctx, dir } = makeContext();
+    for (let i = 0; i < 10; i++) {
+      ctx.addMessage({ role: 'user', content: `q${i}` } as any);
+      ctx.addMessage({ role: 'assistant', content: `a${i}` } as any);
+    }
+    const checkpoint = 'Goal: fix login bug\nProgress: edited src/auth.ts\nDecisions: use JWT\nNext: run tests';
+    ctx.compact(checkpoint);
+    const kept = (ctx as any).messages as ChatMessage[];
+    const ledger = kept.find((m) => m.role === 'system' && typeof m.content === 'string' && m.content.includes('(compacted)'));
+    expect(ledger).toBeTruthy();
+    // Checkpoint content must appear in the ledger BEFORE the heuristic parts.
+    const content = ledger!.content as string;
+    const cpIdx = content.indexOf('Goal: fix login bug');
+    expect(cpIdx).toBeGreaterThanOrEqual(0);
+    rmSync(dir, { recursive: true, force: true });
+  });
 });

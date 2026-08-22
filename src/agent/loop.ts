@@ -391,7 +391,7 @@ export class Agent {
         this.budget.recordModelCall();
       }
 
-      if (i > 0 && i % 8 === 0) this.context.compact();
+      if (i > 0 && i % 8 === 0) await this.checkpointAndCompact('periodic');
 
       // Compact-first context floor: once the live transcript grows past a
       // fraction of the context budget, roll up old turns so the packet never
@@ -401,7 +401,7 @@ export class Agent {
       const ceiling = 32_000;
       const floor = Math.min(this.config.safety.contextBudgetTokens * 0.6, ceiling);
       if (i > 0 && this.context.estimateTokens() > floor) {
-        this.context.compact();
+        await this.checkpointAndCompact('floor');
       }
 
       const pulse = this.pulse(i, task);
@@ -590,7 +590,7 @@ export class Agent {
         response = await gatherStream(packet.messages);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        this.context.compact();
+        await this.checkpointAndCompact('error');
         const retryPacket = this.context.buildPacket(this.toolDefs, task, repo);
         try {
           response = await gatherStream(retryPacket.messages);
@@ -862,6 +862,63 @@ export class Agent {
       this.providers.set(profile, p);
     }
     return p;
+  }
+
+  /** Pi-style structured checkpoint on compaction: before dropping the older
+   *  transcript, ask the fast-profile model to distill it into Goal/Progress/
+   *  Decisions/Next steps. On any failure (timeout, empty answer, weak model)
+   *  fall back to the heuristic ledger so compaction NEVER blocks the loop. */
+  private async checkpointAndCompact(reason: 'periodic' | 'floor' | 'error'): Promise<void> {
+    const dropped = this.context.previewCompact();
+    if (!dropped || dropped.length === 0) {
+      this.context.compact();
+      return;
+    }
+    // Render the to-be-dropped slice compactly. Tool outputs carry most of the
+    // context mass, so aggressively cap them in the checkpoint input.
+    const render = (m: ChatMessage): string => {
+      if (m.role === 'tool') {
+        const c = typeof m.content === 'string' ? m.content : '';
+        return `[tool ${m.name ?? ''}] ${c.length > 300 ? c.slice(0, 150) + ' … ' + c.slice(-100) : c}`;
+      }
+      if (m.role === 'assistant' && m.tool_calls?.length) {
+        const calls = m.tool_calls.map((t) => `${t.function.name}(${JSON.stringify(t.function.arguments).slice(0, 120)})`).join('; ');
+        return `[assistant called] ${calls}`;
+      }
+      const c = typeof m.content === 'string' ? m.content : '';
+      return `[${m.role}] ${c.slice(0, 400)}`;
+    };
+    let checkpoint: string | undefined;
+    // Only spend a model call on real compactions (floor/error), skip the cheap
+    // periodic one at i%8==0 which usually has little new to distill... actually
+    // no: periodic compactions are where context drift starts. Use the model for
+    // all of them, but with a hard timeout.
+    try {
+      const input = dropped.map(render).join('\n').slice(0, 12_000);
+      const prompt: ChatMessage[] = [
+        { role: 'system', content: 'You maintain a session checkpoint for a coding agent. Summarize the conversation excerpt below in at most 150 words using exactly this format:\nGoal: <what the user ultimately wants>\nProgress: <what has been done, files touched>\nDecisions: <key choices made, max 3>\nNext: <immediate next step>\nBe specific (file paths, commands). No preamble.' },
+        { role: 'user', content: input },
+      ];
+      const fast = this.providers.get('fast') ?? this.provider;
+      const parts: string[] = [];
+      const timer = new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), 20_000));
+      const gen = (async () => {
+        for await (const chunk of fast.streamChat(prompt, [], { temperature: 0, maxTokens: 400 })) {
+          if (chunk.content) parts.push(chunk.content);
+        }
+      })();
+      const raced = await Promise.race([gen, timer]);
+      if (raced === 'timeout') throw new Error('checkpoint timeout');
+      const text = parts.join('').trim();
+      // Sanity: a usable checkpoint mentions at least Goal or Progress.
+      if (text.length > 40 && /(goal|progress)/i.test(text)) checkpoint = text;
+    } catch {
+      checkpoint = undefined; // heuristic fallback inside compact()
+    }
+    this.context.compact(checkpoint);
+    if (checkpoint && this.events) {
+      this.events.emit({ type: 'message', role: 'system', content: `Compacted (${reason}); checkpoint retained.`, agentId: this.id });
+    }
   }
 
   /** Alternate model ids on the same provider to fail over to when the

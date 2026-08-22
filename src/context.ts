@@ -233,15 +233,7 @@ Repository:
    - Carry forward what previous steps decided and learned; avoid re-deriving settled conclusions.
 
 9. Use the right tool for each job
-   - edit: use for a single precise replacement. oldText must be unique in the file; include surrounding context if it is not. Whitespace drift is tolerated, ambiguity is not.
-   - replace_symbol: use when REWRITING a whole function/class/method. Give the symbol name and the complete new source — boundaries come from the symbol index, so no anchor matching and no mismatch retries.
-   - patch: use for multi-file changes or several edits in one call (*** Begin Patch / Add File / Update File / Delete File / *** End Patch). Cheaper than several full writes.
-   - write: use only for new files or full rewrites. Appending existing files wastes tokens.
-   - subagent: delegate a self-contained, well-scoped subtask to a fresh child agent when it would take you many steps. Give it complete instructions; it cannot ask you questions.
-   - todo: for multi-step work, record the plan as todo items and mark them done as you go. Cheap, shared, and keeps parallel work honest.
-   - shell: for builds, tests, greps. Not for file mutation when edit/patch will do.
-   - web_search / web_crawl / fetch: for research. Search first; fetch a known URL; crawl a documentation site (same-host by default).
-   - plan mode (when active): research with read-only tools and return a plan. Mutating calls are vetoed.
+${this.toolGuidelines(tools)}
 
 10. Working style (CRITICAL for efficiency)
     - BATCH INDEPENDENT CALLS: before using tools, identify every independent read, search, or command needed for the next step and emit ALL of them in one response. The harness executes independent calls in parallel. Do not wait for one read to request another.
@@ -257,6 +249,28 @@ Repository:
 
 ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
 `.trim();
+  }
+
+  /** Section 9 rendered conditionally: only tools actually registered for this
+   *  agent (role allowlists, MCP wiring) get guidance lines. Cuts prompt bytes
+   *  for narrow roles and stops teaching the model about tools it cannot call
+   *  (a real confusion source on restricted subagents). */
+  private toolGuidelines(tools: ToolDefinition[]): string {
+    const have = new Set(tools.map((t) => t.name));
+    const lines: string[] = [];
+    const add = (names: string[], text: string) => {
+      if (names.some((n) => have.has(n))) lines.push('   - ' + text);
+    };
+    add(['edit'], 'edit: use for a single precise replacement. oldText must be unique in the file; include surrounding context if it is not. Whitespace drift is tolerated, ambiguity is not.');
+    add(['replace_symbol'], 'replace_symbol: use when REWRITING a whole function/class/method. Give the symbol name and the complete new source — boundaries come from the symbol index, so no anchor matching and no mismatch retries.');
+    add(['patch'], 'patch: use for multi-file changes or several edits in one call (*** Begin Patch / Add File / Update File / Delete File / *** End Patch). Cheaper than several full writes.');
+    add(['write'], 'write: use only for new files or full rewrites. Appending existing files wastes tokens.');
+    add(['subagent'], 'subagent: delegate a self-contained, well-scoped subtask to a fresh child agent when it would take you many steps. Give it complete instructions; it cannot ask you questions.');
+    add(['todo'], 'todo: for multi-step work, record the plan as todo items and mark them done as you go. Cheap, shared, and keeps parallel work honest.');
+    add(['shell'], 'shell: for builds, tests, greps. Not for file mutation when edit/patch will do.');
+    add(['web_search', 'web_crawl', 'fetch'], 'web_search / web_crawl / fetch: for research. Search first; fetch a known URL; crawl a documentation site (same-host by default).');
+    lines.push('   - plan mode (when active): research with read-only tools and return a plan. Mutating calls are vetoed.');
+    return lines.join('\n');
   }
 
   /** VOLATILE tier (task-dependent): memory query + task-kind hint. Kept OUT
@@ -364,7 +378,30 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
     return parts.join('\n');
   }
 
-  compact() {
+  /** Non-destructive preview of what compact() would drop: the valid-cut-point
+   *  slice that would be removed. Returns null when nothing would be dropped
+   *  (already at the recency floor). Lets the caller summarize it with an LLM
+   *  BEFORE committing to the compaction (Pi's structured checkpoint). */
+  previewCompact(): ChatMessage[] | null {
+    if (this.messages.length <= 6) return null;
+    const keep = 6;
+    let cutIndex = this.messages.length - keep;
+    while (cutIndex < this.messages.length - 1) {
+      const m = this.messages[cutIndex];
+      const isValid =
+        m.role === 'user' || m.role === 'system'
+          ? true
+          : m.role === 'assistant'
+            ? !m.tool_calls || m.tool_calls.length === 0
+            : false;
+      if (isValid) break;
+      cutIndex++;
+    }
+    if (cutIndex <= 0) return null;
+    return this.messages.slice(0, cutIndex);
+  }
+
+  compact(checkpoint?: string) {
     // Tier 1 (micro): drop everything but the recency window and distill small facts.
     if (this.messages.length <= 6) return;
     const keep = 6;
@@ -392,6 +429,13 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
 
     const facts: string[] = [];
     for (const m of dropped) {
+      // Mode stamps (plan/act) on user messages are contractual: carry the
+      // latest one forward so a long task in plan mode doesn't drift into
+      // editing after compaction eats the stamped user message.
+      if (m.role === 'user' && typeof m.content === 'string') {
+        const stamp = m.content.match(/^\[MODE: (plan|act)[^\]]*\]/);
+        if (stamp) facts.push(stamp[0] + ' — this mode is still in effect.');
+      }
       if (m.role === 'tool') {
         const c = typeof m.content === 'string' ? m.content : '';
         if (c.length !== 0 && c.length < 500) {
@@ -407,12 +451,12 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
     }
 
     // Tier 2 (semantic): re-inject a compact ledger so the model keeps high-level
-    // memory without the raw history (avoids over-thinking on long runs).
+    // memory without the raw history (avoids over-thinking on long runs). When the
+    // caller produced an LLM checkpoint (Goal/Progress/Decisions), it leads the
+    // ledger so semantic continuity survives compaction.
     const ledger = this.stateLedger();
-    if (facts.length || ledger) {
-      const body = [ledger, facts.length ? 'Session facts:\n' + facts.join('\n') : ''].filter(Boolean).join('\n');
-      if (body.trim()) this.messages.unshift({ role: 'system', content: `Earlier in this session (compacted):\n${body}` });
-    }
+    const body = [checkpoint?.trim(), ledger, facts.length ? 'Session facts:\n' + facts.join('\n') : ''].filter(Boolean).join('\n');
+    if (body.trim()) this.messages.unshift({ role: 'system', content: `Earlier in this session (compacted):\n${body}` });
   }
 }
 
