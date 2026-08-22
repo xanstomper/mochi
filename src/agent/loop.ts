@@ -242,6 +242,12 @@ export class Agent {
   private selfReviewCount = 0;
   private lastCompletionAnswer = '';
   private sameAnswerStreak = 0;
+  /** Phase 5 (VNext): stuck-signal counters surfaced in the volatile state
+   *  prompt so the model can see its own loop pattern and break it. */
+  private nudgeInjections = 0;
+  /** Phase 9 (VNext): how many times the prose-runaway rewrite was requested
+   *  (bounded at 1 so the guard can never itself loop). */
+  private proseRunwayNudges = 0;
   private lastVerifyPassed = false;
   private subagentDepth: number;
   private mcpClose?: () => void;
@@ -313,6 +319,21 @@ export class Agent {
         content: 'PLAN MODE: Research the codebase with read-only tools if needed, then your VERY NEXT message must be the complete plan itself: numbered steps, files to change, risks, and how to verify. Do NOT edit files or run mutating commands. Do NOT say "I will proceed" — output the plan directly.',
       });
     }
+
+    // Phase 7 (VNext): resume with the last durable checkpoint if one exists.
+    // A killed/restarted session continues from the distilled summary rather
+    // than a cold start (the Hermes/Pi session-continuity insight).
+    try {
+      const durable = this.workspace.loadCheckpoint();
+      if (durable && durable.checkpoint.trim()) {
+        this.context.addMessage({
+          role: 'system',
+          content: `RESUMED SESSION CHECKPOINT (from a previous run, saved ${new Date(durable.savedAt).toISOString()}):
+${durable.checkpoint}
+Continue from 'Next:', do not redo completed progress.`,
+        });
+      }
+    } catch { /* best-effort */ }
 
     const taskKind = classifyTaskKind(task);
     const repo = detectRepo(this.cwd);
@@ -400,7 +421,7 @@ export class Agent {
       // long runs stay lean no matter what the user's safety config says.
       const ceiling = 32_000;
       const floor = Math.min(this.config.safety.contextBudgetTokens * 0.6, ceiling);
-      if (i > 0 && this.context.estimateTokens() > floor) {
+      if (i > 0 && this.context.effectiveContextTokens() > floor) {
         await this.checkpointAndCompact('floor');
       }
 
@@ -601,6 +622,9 @@ export class Agent {
       if (response.usage) {
         this.tokensUsed += response.usage.totalTokens;
         this.budget?.recordTokens(response.usage.totalTokens, this.config.model.model);
+        // Phase 4 (VNext): feed REAL provider usage into the context engine so
+        // the compaction floor triggers on actuals instead of the chars/3.8 guess.
+        this.context.recordReportedUsage((response.usage as { promptTokens?: number }).promptTokens);
         // Surface REAL provider usage to the TUI: input, output, cache reads.
         // prompt_tokens already includes cache-hit tokens on most providers;
         // subtract them for the honest "new input" figure the status bar shows.
@@ -726,11 +750,19 @@ export class Agent {
         // Loop guard: repeated identical tool calls -> force the model to answer.
         const nowSig = response.toolCalls.map((c) => `${c.function.name}:${c.function.arguments}`).join('|');
         if (nowSig === this.lastSig) this.sigStreak++;
-        else { this.sigStreak = 1; }
+        else {
+          this.sigStreak = 1;
+          // Strategy changed: the stuck warning is no longer true.
+          if (this.context.stuckSignal) this.context.stuckSignal = null;
+        }
         this.lastSig = nowSig;
         if (this.sigStreak >= 3) {
           this.context.addMessage({ role: 'system', content: 'You are repeating the same tool call. Stop issuing tools and give a final answer now without any tool calls.' });
           this.sigStreak = 0;
+          this.nudgeInjections++;
+          // Phase 5: the state prompt now also carries the pattern so the
+          // model sees it even after the nudge message is far back.
+          this.context.stuckSignal = `You have issued ${this.nudgeInjections} repeated-tool-call nudges. Change strategy or answer now.`;
         }
         this.toolCallsTotal++;
         if (this.toolCallsTotal > 40) {
@@ -757,6 +789,18 @@ export class Agent {
               content: 'PLAN MODE: that was a preamble, not a plan. Your final message MUST be the actual plan: numbered steps, files to change, risks, and how to verify. Output the plan directly now, no tool calls, no "I will".',
             });
             this.events.emit({ type: 'agent:log', agentId: this.id, message: '[plan-mode] non-plan reply; nudging for the plan' });
+            continue;
+          }
+          // Phase 9 (VNext): prose runaway guard. A no-tool-call answer that
+          // huge is usually padding/repetition (the spam class of bug). Ask
+          // ONCE for a terse rewrite; accept whatever comes back after that.
+          if (response.content.length > 12_000 && this.proseRunwayNudges < 1) {
+            this.proseRunwayNudges++;
+            this.context.addMessage({
+              role: 'system',
+              content: 'Your answer was extremely long (over 12k characters). Reproduce it TERSELY: keep every concrete fact (files, commands, results) and cut all padding, restatement, and filler. One pass, no tool calls.',
+            });
+            this.events.emit({ type: 'agent:log', agentId: this.id, message: '[prose-guard] answer over 12k chars; requesting terse rewrite' });
             continue;
           }
           return this.finish(task, true, response.content, 'completed');
@@ -916,6 +960,10 @@ export class Agent {
       checkpoint = undefined; // heuristic fallback inside compact()
     }
     this.context.compact(checkpoint);
+    // Phase 7: durable checkpoint — survives process restarts for resume.
+    if (checkpoint) {
+      try { this.workspace.saveCheckpoint('', checkpoint); } catch { /* best-effort */ }
+    }
     if (checkpoint && this.events) {
       this.events.emit({ type: 'message', role: 'system', content: `Compacted (${reason}); checkpoint retained.`, agentId: this.id });
     }

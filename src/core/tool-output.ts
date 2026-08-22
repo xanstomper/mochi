@@ -35,6 +35,49 @@ export interface OutputPolicyResult {
 const DEFAULT_MAX_LINES = 400;
 const DEFAULT_MAX_BYTES = 20 * 1024;
 
+// ── Phase 3 (VNext): truncation telemetry ─────────────────────────────────
+// Per-tool counters so runs are debuggable: which tools truncate, how often,
+// and how many bytes the fold saved from the transcript. Module-level (per
+// process) — reset by tests, readable via mochi doctor / the perf tool.
+export interface ToolOutputStats {
+  calls: number;
+  truncated: number;
+  bytesTotal: number;
+  bytesKept: number;
+}
+
+const outputStats = new Map<string, ToolOutputStats>();
+
+export function getToolOutputStats(): ReadonlyMap<string, ToolOutputStats> {
+  return outputStats;
+}
+
+export function resetToolOutputStats(): void {
+  outputStats.clear();
+}
+
+function recordStats(toolName: string, r: { truncated: boolean; totalBytes: number; content: string }): void {
+  const key = toolName || '(unknown)';
+  const s = outputStats.get(key) ?? { calls: 0, truncated: 0, bytesTotal: 0, bytesKept: 0 };
+  s.calls += 1;
+  if (r.truncated) s.truncated += 1;
+  s.bytesTotal += r.totalBytes;
+  s.bytesKept += byteLen(r.content);
+  outputStats.set(key, s);
+}
+
+/** One-line human summary of the telemetry, e.g. for doctor/perf output. */
+export function formatToolOutputStats(): string {
+  if (outputStats.size === 0) return 'tool-output: no calls recorded';
+  const rows = [...outputStats.entries()]
+    .sort((a, b) => b[1].truncated - a[1].truncated || b[1].calls - a[1].calls)
+    .map(([tool, s]) => {
+      const saved = s.bytesTotal > 0 ? Math.round((1 - s.bytesKept / s.bytesTotal) * 100) : 0;
+      return `${tool}: ${s.calls} calls, ${s.truncated} truncated, ~${saved}% bytes saved`;
+    });
+  return 'tool-output telemetry:\n  ' + rows.join('\n  ');
+}
+
 function splitLines(content: string): string[] {
   if (content.length === 0) return [];
   const lines = content.split('\n');
@@ -61,7 +104,9 @@ export function applyToolOutputPolicy(content: string, options: OutputPolicyOpti
   const totalLines = lines.length;
 
   if (totalLines <= maxLines && totalBytes <= maxBytes) {
-    return { content, truncated: false, truncatedBy: null, totalLines, totalBytes };
+    const res = { content, truncated: false, truncatedBy: null, totalLines, totalBytes };
+    recordStats(options.toolName ?? '', res);
+    return res;
   }
 
   const truncatedBy: 'lines' | 'bytes' = totalLines > maxLines ? 'lines' : 'bytes';
@@ -111,7 +156,7 @@ export function applyToolOutputPolicy(content: string, options: OutputPolicyOpti
     : `[output truncated by ${truncatedBy}: showing first ${headLines.length} and last ${tailLines.length} of ${totalLines} lines (${formatSize(totalBytes)} total)]`;
 
   const body = `${headLines.join('\n')}\n\n[... ${omittedLines} lines omitted ...]\n\n${tailLines.join('\n')}`;
-  return {
+  const res = {
     content: `${body}\n${note}`,
     truncated: true,
     truncatedBy,
@@ -119,4 +164,6 @@ export function applyToolOutputPolicy(content: string, options: OutputPolicyOpti
     totalBytes,
     spillPath,
   };
+  recordStats(options.toolName ?? '', res);
+  return res;
 }

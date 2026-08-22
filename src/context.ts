@@ -41,6 +41,10 @@ export interface ContextState {
   knownErrors: string[];
   constraints: string[];
   nextAction?: string;
+  /** Phase 2 (VNext): file-op carryover. Files the agent has READ or EDITED
+   *  in this session, tracked from tool calls and re-injected by compact()
+   *  so post-compaction turns do not re-read known files. */
+  filesRead?: string[];
 }
 
 export interface ContextPacket {
@@ -90,7 +94,16 @@ export class ContextEngine {
     }
   }
 
+  private filesRead = new Set<string>();
+  private filesEdited = new Set<string>();
+  /** Phase 4 (VNext): last REAL provider-reported prompt usage, when the
+   *  provider sends usage at all. Beats the chars/3.8 estimate for compaction
+   *  triggering. */
+  private lastReportedPromptTokens: number | null = null;
+
   addMessage(message: ChatMessage) {
+    // Phase 2: mine file-op tool calls so read/edited sets survive compaction.
+    this.trackFileOp(message);
     if (message.role === 'tool' && typeof message.content === 'string' && message.content.length > 6000) {
       const head = message.content.slice(0, 3000);
       const tail = message.content.slice(-1500);
@@ -285,6 +298,11 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
     return parts.join('\n\n');
   }
 
+  /** Phase 5 (VNext): stuck-signal line injected by the loop. Set externally
+   *  (the loop owns the counters); rendered once in the state prompt when the
+   *  agent is visibly spinning so the model can see and break the pattern. */
+  stuckSignal: string | null = null;
+
   private buildStatePrompt(task?: Task): string {
     const isChat = task ? classifyTaskKind(task) === 'chat' : false;
     if (isChat) {
@@ -293,6 +311,7 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
     const lines: string[] = [];
     const volatile = this.buildVolatilePrompt(task);
     if (volatile) lines.push(volatile);
+    if (this.stuckSignal) lines.push(`WARNING (loop detected): ${this.stuckSignal}`);
     lines.push('## Current State');
     if (this.state.goal) lines.push(`Goal: ${this.state.goal}`);
     if (task) {
@@ -366,6 +385,42 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
       this.state.filesModified.push(path);
       if (this.state.filesModified.length > 20) this.state.filesModified.splice(0, this.state.filesModified.length - 20);
     }
+  }
+
+  /** Phase 2: extract `path` args from assistant file-op tool calls. Only
+   *  trusted harness tools are mined (read/write/edit/delete/patch/
+   *  replace_symbol/regex-replace); shell is not (path extraction from shell
+   *  strings is unreliable). */
+  private trackFileOp(message: ChatMessage) {
+    if (message.role !== 'assistant' || !message.tool_calls) return;
+    const FILE_TOOLS = new Set(['read', 'write', 'edit', 'delete', 'patch', 'replace_symbol', 'regex-replace', 'search-replace-multi']);
+    const READ_TOOLS = new Set(['read']);
+    for (const tc of message.tool_calls) {
+      if (!FILE_TOOLS.has(tc.function.name)) continue;
+      let args: Record<string, unknown> = {};
+      try { args = JSON.parse(tc.function.arguments || '{}'); } catch { continue; }
+      const p = typeof args.path === 'string' ? args.path : typeof args.file === 'string' ? args.file : typeof args.file_path === 'string' ? args.file_path : '';
+      if (!p) continue;
+      if (READ_TOOLS.has(tc.function.name)) this.filesRead.add(p);
+      else this.filesEdited.add(p);
+    }
+  }
+
+  /** Phase 4: record real provider usage so the compaction floor can trigger
+   *  on actuals. Callers pass the last response's promptTokens (0/undefined
+   *  ignored — some providers report no usage). */
+  recordReportedUsage(promptTokens: number | undefined) {
+    if (typeof promptTokens === 'number' && promptTokens > 0) {
+      this.lastReportedPromptTokens = promptTokens;
+    }
+  }
+
+  /** Best available transcript-size signal: real usage when the provider
+   *  reports it, else the chars/3.8 estimate. Used for the compaction floor. */
+  effectiveContextTokens(): number {
+    // The reported promptTokens include the system prompt + tools, which the
+    // estimate excludes; add a modest offset so the two scales are comparable.
+    return this.lastReportedPromptTokens ?? this.estimateTokens() + 1500;
   }
 
   private stateLedger(): string {
@@ -455,7 +510,12 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
     // caller produced an LLM checkpoint (Goal/Progress/Decisions), it leads the
     // ledger so semantic continuity survives compaction.
     const ledger = this.stateLedger();
-    const body = [checkpoint?.trim(), ledger, facts.length ? 'Session facts:\n' + facts.join('\n') : ''].filter(Boolean).join('\n');
+    // Phase 2: file-op carryover — the read/edited sets outlive the dropped
+    // messages. Post-compaction turns must not re-read known files.
+    const fileOps: string[] = [];
+    if (this.filesRead.size) fileOps.push(`Files already read (do not re-read unless changed): ${[...this.filesRead].slice(-30).join(', ')}`);
+    if (this.filesEdited.size) fileOps.push(`Files already edited in this session: ${[...this.filesEdited].slice(-30).join(', ')}`);
+    const body = [checkpoint?.trim(), ledger, fileOps.join('\n'), facts.length ? 'Session facts:\n' + facts.join('\n') : ''].filter(Boolean).join('\n');
     if (body.trim()) this.messages.unshift({ role: 'system', content: `Earlier in this session (compacted):\n${body}` });
   }
 }

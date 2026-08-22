@@ -82,8 +82,21 @@ Changes are incremental inside the existing files — no rewrite.
 - Conditional guidelines: only mention tools actually registered.
 
 ## P2
-- File-op carryover across compaction (read/edited sets).
-- Truncation telemetry counters per tool.
+- File-op carryover across compaction (read/edited sets). **SHIPPED (phase 2)**
+- Truncation telemetry counters per tool. **SHIPPED (phase 3)**
+
+## Phases 2–10 (shipped in docs/harness-v2-phases.md)
+- Phase 4: real-usage context accounting (provider promptTokens drive the
+  compaction floor; chars/3.8 estimate is the fallback).
+- Phase 5: stuck-signal counters surfaced in the volatile state prompt.
+- Phase 6: skill result caching (second load is a short reminder) + load counts.
+- Phase 7: durable checkpoints persisted to `.mochi/state/checkpoint.json`,
+  re-injected on resume.
+- Phase 8: prompt-quality regression suite (`src/prompt-quality.test.ts`)
+  asserting skills advertisement, section order/uniqueness, byte bounds.
+- Phase 9: prose-runaway guard (one terse-rewrite request when a no-tool-call
+  answer exceeds 12k chars).
+- Phase 10: this documentation refresh.
 
 ## Benchmark plan
 - Token per task: `mochi --print` on a fixed 10-task suite, sum tokens.

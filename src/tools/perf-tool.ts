@@ -32,6 +32,12 @@ export const perfTool: Tool = {
 
     switch (action) {
       case 'stats': {
+        const { formatToolOutputStats } = await import('../core/tool-output.js');
+        const { getSkillLoadCounts } = await import('./skill.js');
+        const skillLoads = [...getSkillLoadCounts().entries()];
+        const skillLine = skillLoads.length
+          ? `- Skill loads: ${skillLoads.map(([n, c]) => `${n}x${c}`).join(', ')}`
+          : '- Skill loads: none';
         const metrics: string[] = [
           `Performance Stats:`,
           `- Token approximation rate: ~${Math.round(1000 / (performance.now() - performance.now() + 1))} estimates/sec`,
@@ -40,6 +46,9 @@ export const perfTool: Tool = {
           `- Max iterations: ${maxIterations}`,
           `- Context budget: ${contextBudget} tokens`,
           `- Concurrent agents: ${maxConcurrent}`,
+          skillLine,
+          '',
+          formatToolOutputStats(),
         ];
         return metrics.join('\n');
       }

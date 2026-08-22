@@ -104,6 +104,19 @@ export class Workspace {
     this.writeJson('state/agent.json', state);
   }
 
+  /** Phase 7 (VNext): the compaction checkpoint (Goal/Progress/Decisions)
+   *  survives process restarts. Written on every compaction; re-injected on
+   *  resume so a killed session continues with distilled context, not zero. */
+  saveCheckpoint(goalId: string, checkpoint: string) {
+    this.writeJson('state/checkpoint.json', { goalId, checkpoint, savedAt: Date.now() });
+  }
+
+  loadCheckpoint(): { goalId: string; checkpoint: string; savedAt: number } | null {
+    const raw = this.readJson<{ goalId?: string; checkpoint?: string; savedAt?: number } | null>('state/checkpoint.json', null);
+    if (!raw || typeof raw.checkpoint !== 'string' || !raw.checkpoint.trim()) return null;
+    return { goalId: raw.goalId ?? '', checkpoint: raw.checkpoint, savedAt: raw.savedAt ?? 0 };
+  }
+
   loadTodos(): import('./types.js').TodoItem[] {
     return this.readJson<import('./types.js').TodoItem[]>('state/todo.json', []);
   }
