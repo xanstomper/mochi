@@ -1,34 +1,50 @@
 //! Mochi Core Native Rust Engine
-//! High-performance native hot-paths for fuzzy matching, search, git detection, outline extraction, streaming, and data handling.
+//! High-performance native hot-paths for agent loop, fuzzy matching, search, git detection, outline extraction, streaming, and data handling.
 
+pub mod acp;
+pub mod agent_loop;
 pub mod autopsy;
 pub mod budget;
 pub mod codegraph;
+pub mod context;
+pub mod daemon;
 pub mod diff;
 pub mod fuzzy;
 pub mod git;
 pub mod kv_cache;
 pub mod planner;
+pub mod repo;
 pub mod search;
+pub mod skills;
 pub mod stream;
 pub mod tokens;
+pub mod tui_state;
+pub mod verification;
 
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 use std::path::Path;
 use std::slice;
 
+pub use acp::*;
+pub use agent_loop::*;
 pub use autopsy::*;
 pub use budget::*;
 pub use codegraph::*;
+pub use context::*;
+pub use daemon::*;
 pub use diff::*;
 pub use fuzzy::*;
 pub use git::*;
 pub use kv_cache::*;
 pub use planner::*;
+pub use repo::*;
 pub use search::*;
+pub use skills::*;
 pub use stream::*;
 pub use tokens::*;
+pub use tui_state::*;
+pub use verification::*;
 
 // ============================================================================
 // C-ABI FFI Exports (Callable from Node & Bun in-process)
