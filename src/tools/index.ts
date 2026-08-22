@@ -75,9 +75,8 @@ const EXTENDED_TOOL_NAMES = new Set([
  *  loops when overwhelmed with too many tool definitions. */
 export function isWeakModel(config: MochiConfig): boolean {
   const m = (config.model.model ?? '').toLowerCase();
-  return m.includes('free') || m.includes('nano') || m.includes('mini')
-    || m.includes('tiny') || m.includes('lite') || m.includes('small')
-    || m.includes('flash-free');
+  // DeepSeek v4 Flash is powerful enough for all tools, do not penalize it
+  return m.includes('nano') || m.includes('tiny') || m.includes('lite');
 }
 
 export function buildTools(config: MochiConfig, allowed?: string[]): Map<string, Tool> {

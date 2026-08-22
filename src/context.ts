@@ -178,7 +178,8 @@ export class ContextEngine {
       this.skillsFingerprint = fp;
       const userSkills = resolve(homedir(), '.mochi', 'skills');
       const { skills } = loadAllSkills(this.projectRoot, userSkills);
-      const limit = isWeakModel(this.config) ? 3 : undefined;
+      // Allow the model to see all skills regardless of tier
+      const limit = undefined;
       this.skillsCache = formatSkillsForPrompt(skills, limit);
     } catch {
       this.skillsCache = '';
