@@ -11,6 +11,7 @@ import type { PlanRequestMessage } from './native/agent-protocol.js';
 import { classifyTaskKind, kindHint } from './taskkind.js';
 import type { ChatMessage, MochiConfig, RepoInfo, Task, ToolDefinition } from './types.js';
 import { isWeakModel } from './tools/index.js';
+import { synthesizeDeterministicContext } from './cognitive/chameleon.js';
 
 const CANDIDATE_RULES = ['MOCHI.md', 'mochi.md', 'AGENTS.md', 'CLAUDE.md'];
 
@@ -264,7 +265,18 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
     const memory = this.loadMemory(query);
     const parts: string[] = [];
     if (memory) parts.push(`Project memory:\n${memory}`);
-    if (task) parts.push(kindHint(classifyTaskKind(task)));
+    if (task) {
+      parts.push(kindHint(classifyTaskKind(task)));
+      const kind = classifyTaskKind(task);
+      if (kind === 'implement' || kind === 'fix' || kind === 'refactor' || kind === 'plan') {
+        try {
+          const scaffold = synthesizeDeterministicContext(task.title + (task.description ? ' ' + task.description : ''), process.cwd());
+          if (scaffold) parts.push(scaffold);
+        } catch {
+          /* continue */
+        }
+      }
+    }
     return parts.join('\n\n');
   }
 
