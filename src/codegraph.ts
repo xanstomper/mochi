@@ -437,6 +437,59 @@ export function typeHierarchy(cwd: string, name: string): string {
   return out.join('\n').slice(0, 4000);
 }
 
+export interface BlastRadiusReport {
+  symbol: string;
+  directCallers: { caller: string; file: string; line: number }[];
+  affectedFiles: string[];
+  typeRelations: { superTypes: string[]; subTypes: string[] };
+  riskLevel: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  summary: string;
+}
+
+/**
+ * Computes the downstream AST blast radius (callers, affected files, type hierarchy)
+ * for a symbol before modifying it, preventing unintended regressions across the repo.
+ */
+export function computeSymbolBlastRadius(cwd: string, name: string): BlastRadiusReport {
+  if (!hasSqlite()) {
+    return {
+      symbol: name,
+      directCallers: [],
+      affectedFiles: [],
+      typeRelations: { superTypes: [], subTypes: [] },
+      riskLevel: 'LOW',
+      summary: 'SQLite index unavailable for deep blast radius analysis.',
+    };
+  }
+
+  const database = db(cwd);
+  const edges = database.prepare('SELECT caller,rel,line FROM calls WHERE callee=? ORDER BY rel,line').all(name) as any[];
+  const callers = edges.map((e) => ({ caller: String(e.caller || 'anonymous'), file: String(e.rel || ''), line: Number(e.line || 1) }));
+  
+  const affectedFiles = [...new Set(callers.map((c) => c.file).filter(Boolean))];
+  
+  const up = database.prepare('SELECT dst FROM relations WHERE src=? AND kind=?').all(name, 'extends') as any[];
+  const down = database.prepare('SELECT src FROM relations WHERE dst=? AND kind=?').all(name, 'extends') as any[];
+  const superTypes = up.map((r: any) => String(r.dst));
+  const subTypes = down.map((r: any) => String(r.src));
+
+  let riskLevel: BlastRadiusReport['riskLevel'] = 'LOW';
+  if (affectedFiles.length > 8 || subTypes.length > 5) riskLevel = 'CRITICAL';
+  else if (affectedFiles.length > 3 || subTypes.length > 2) riskLevel = 'HIGH';
+  else if (affectedFiles.length > 0 || superTypes.length > 0) riskLevel = 'MEDIUM';
+
+  const summary = `Blast radius for "${name}": ${callers.length} call site(s) across ${affectedFiles.length} file(s). Risk: ${riskLevel}.`;
+
+  return {
+    symbol: name,
+    directCallers: callers,
+    affectedFiles,
+    typeRelations: { superTypes, subTypes },
+    riskLevel,
+    summary,
+  };
+}
+
 interface Sym { name: string; kind: string; file: string; rel: string; line: number; body: string; }
 export { Sym };
 

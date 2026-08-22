@@ -41,6 +41,7 @@ import { createPrTool } from './create-pr.js';
 import { thinkTool } from './think.js';
 import { renameSymbolTool } from './rename-symbol.js';
 import { replTool } from './repl.js';
+import { blastRadiusTool } from './blast-radius.js';
 
 export const ALL_TOOLS: Tool[] = [
   readTool, writeTool, editTool, deleteTool, shellTool, searchTool, globTool,
@@ -50,6 +51,7 @@ export const ALL_TOOLS: Tool[] = [
   webSearchTool, getDiagnosticsTool, mkdirTool, moveFileTool, copyFileTool,
   gitBlameTool, gitHistoryTool, systemInfoTool, findReferencesTool, findDefinitionsTool,
   dbInspectTool, createPrTool, thinkTool, webCrawlTool, renameSymbolTool, replTool,
+  blastRadiusTool,
   ...symbolTools, replaceSymbolTool, chameleonTool,
 ];
 
@@ -60,7 +62,7 @@ export const ALL_TOOLS: Tool[] = [
  */
 const CORE_TOOL_NAMES = new Set([
   'read', 'write', 'edit', 'delete', 'shell', 'search', 'glob',
-  'git', 'inspect', 'todo', 'skill', 'subagent', 'fetch', 'web_search', 'web_crawl', 'think', 'chameleon'
+  'git', 'inspect', 'todo', 'skill', 'subagent', 'fetch', 'web_search', 'web_crawl', 'think', 'chameleon', 'blast_radius'
 ]);
 
 /** Extended tools included only when the model is not a known weak/free tier. */
