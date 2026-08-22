@@ -510,6 +510,17 @@ MOCHI_CPG_BACKEND=tree-sitter mochi inspect "SessionManager"
 The read paths (`getFunctionSynapse`, `findCallers`, `typeHierarchy`) are
 backend-agnostic, so either parser produces the same tool output.
 
+### Light mode (zero-embed)
+
+On very small boxes you can disable the embedded SQLite symbol index entirely
+(the codegraph degrades to "no symbol index" instead of throwing):
+
+```bash
+MOCHI_LIGHT=1 mochi            # no embedded index, minimal footprint
+MOCHI_NO_EMBED=1 mochi         # same effect
+MOCHI_NO_INDEX=1 mochi         # same effect
+```
+
 ## Tests
 
 ```bash

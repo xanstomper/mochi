@@ -18,6 +18,9 @@
   roster; tester/debugger now carry edit tools to write tests and
   instrumentation. Review-only roles (lead, reviewer, researcher, security,
   architect) remain shell-free.
+- **Light mode.** `MOCHI_LIGHT=1` (or `MOCHI_NO_EMBED=1` / `MOCHI_NO_INDEX=1`)
+  disables the embedded SQLite symbol index for ultra-lightweight execution;
+  the codegraph degrades to "no symbol index" instead of throwing.
 
 ## 0.10.5
 
