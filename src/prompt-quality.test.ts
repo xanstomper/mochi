@@ -40,7 +40,8 @@ const SECTION_HEADERS = [
   '# II. Execution Protocol',
   '# III. Advanced Orchestration',
   '# IV. Tool-Specific Guidelines',
-  '# V. Output Constraints (CRITICAL)',
+  '# V. Cognitive & Engineering Discipline',
+  '# VI. Output Constraints (CRITICAL)',
 ];
 
 describe('system prompt structural invariants (VNext phase 8)', () => {

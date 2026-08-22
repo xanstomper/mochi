@@ -202,19 +202,17 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     scheduleRender();
   };
 
+  let lastRenderTime = 0;
   const scheduleRender = () => {
     if (renderQueued || renderPaused) return;
     renderQueued = true;
-    // Use a macrotask (setTimeout 0) instead of queueMicrotask so bursty
-    // updates (streaming message:chunk, tool events) coalesce into a single
-    // render per tick instead of draining N microtasks synchronously and
-    // pegging the event loop. That spinning was the source of the freeze
-    // during heavy work: every chunk scheduled a full O(n) transcript wrap
-    // that starved everything else.
+    const elapsed = Date.now() - lastRenderTime;
+    const delay = elapsed >= 30 ? 0 : 30 - elapsed;
     setTimeout(() => {
       renderQueued = false;
+      lastRenderTime = Date.now();
       render();
-    }, 0);
+    }, delay);
   };
 
   const startSpinner = () => {

@@ -8,8 +8,12 @@ import { mutationGeneration } from './tools/fs-signal.js';
 
 /** True when any SQLite driver is available (node:sqlite on Node >= 22.5 or
  *  bun:sqlite in the compiled binary). Without it the codegraph degrades to
- *  "no symbol index" instead of throwing. */
+ *  "no symbol index" instead of throwing. Can be explicitly disabled via
+ *  MOCHI_NO_EMBED=1 or MOCHI_LIGHT=1 for ultra-lightweight execution. */
 export function hasSqlite(): boolean {
+  if (process.env.MOCHI_NO_EMBED === '1' || process.env.MOCHI_LIGHT === '1' || process.env.MOCHI_NO_INDEX === '1') {
+    return false;
+  }
   return driverAvailable();
 }
 
@@ -312,15 +316,8 @@ const dbCache = new Map<string, CachedDb>();
 
 function fingerprint(full: string): string {
   try {
-    // Content-addressed fingerprint (adapted from OpenFable's content
-    // checksum): hash the file bytes so edits with identical mtime/size (or
-    // fast successive edits) are still seen as changed. Falls back to
-    // mtime+size for huge files to stay fast.
     const st = statSync(full);
-    if (st.size > 2_000_000 || st.size === 0) return `${st.mtimeMs}:${st.size}`;
-    const buf = readFileSync(full);
-    const h = createHash('sha1').update(buf).digest('hex');
-    return `${h}:${st.size}`;
+    return `${st.mtimeMs}:${st.size}`;
   } catch {
     return '';
   }
