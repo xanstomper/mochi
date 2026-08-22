@@ -53,6 +53,7 @@ import { preEditSnapshot as gitPreEditSnapshot, rollbackToSnapshot as gitRollbac
 import { applyToolOutputPolicy } from '../core/tool-output.js';
 import { nativeStripThinkTags } from '../native/core.js';
 import { LoopStateMachine } from './loop-state.js';
+import { scanDiffForHygiene, renderHygieneFindings, type HygieneFinding } from '../core/diff-hygiene.js';
 
 export function stripThinkTags(text: string): string {
   if (!text) return '';
@@ -252,6 +253,9 @@ export class Agent {
   /** Phase 9 (VNext): how many times the prose-runaway rewrite was requested
    *  (bounded at 1 so the guard can never itself loop). */
   private proseRunwayNudges = 0;
+  /** Diff-hygiene: one bounded cleanup nudge for debug logs / TODO /
+   *  suppressed-check debris the model added before we accept "done". */
+  private hygieneNudges = 0;
   private lastVerifyPassed = false;
   private subagentDepth: number;
   private mcpClose?: () => void;
@@ -902,6 +906,22 @@ Continue from 'Next:', do not redo completed progress.`,
         // refuted states and writes a procedural lesson so the next run has a
         // head start on this kind of failure.
         this.recordSuccess(task, repo);
+        // Diff-hygiene gate (harness-v2 quality): verification proves the code
+        // WORKS, not that it is CLEAN. One bounded pass catches debug logging,
+        // TODO markers, suppressed checks, and focused tests the model added,
+        // so shipped code never needs a human cleanup pass.
+        if (!this.planMode && this.hygieneNudges < 1) {
+          const findings = await this.collectHygieneFindings();
+          if (findings.length > 0) {
+            this.hygieneNudges++;
+            this.context.addMessage({
+              role: 'system',
+              content: 'HYGIENE CHECK — your change works, but you left debris behind. Remove it (keep the behavior), then finish:\n' + renderHygieneFindings(findings),
+            });
+            this.events.emit({ type: 'agent:log', agentId: this.id, message: `[hygiene] ${findings.length} finding(s); requesting cleanup` });
+            continue;
+          }
+        }
         // Verification passing only proves tests ran green; it does not prove
         // the DIFF is right. A cheap self-review read of the change catches
         // test-blind holes (accidental deletions, dead code, wrong constants,
@@ -1397,8 +1417,13 @@ Continue from 'Next:', do not redo completed progress.`,
 
     const baseline = await this.verifyBaseline;
 
-    for (const cmd of checks) {
-      const out = await this.runShell(cmd, 180);
+    // Independent commands run in PARALLEL: test/typecheck/lint/build share no
+    // state, so wall-clock per verification is the slowest check, not the sum.
+    // Reporting keeps deterministic first-failure-in-declared-order semantics.
+    const outcomes = await Promise.all(
+      checks.map(async (cmd) => ({ cmd, out: await this.runShell(cmd, 180) })),
+    );
+    for (const { cmd, out } of outcomes) {
       if (out.includes('exit_code: 0') || out.trim().endsWith('PASS')) {
         continue;
       }
@@ -1610,6 +1635,34 @@ Continue from 'Next:', do not redo completed progress.`,
 
   /** Self-review only pays off when the agent actually changed files this run.
    *  Pure answer/research tasks skip it (nothing to review). */
+  /** Gather hygiene findings from tracked diff + untracked new files. Best
+   *  effort: any git failure means no findings (never blocks finishing). */
+  private async collectHygieneFindings(): Promise<HygieneFinding[]> {
+    try {
+      let diff = await this.runShell('git diff HEAD --unified=0', 30);
+      if (diff.includes('exit_code:') && !diff.includes('exit_code: 0')) {
+        // Brand-new repo (no HEAD yet): unstaged tracked diff still works.
+        diff = await this.runShell('git diff --unified=0', 30);
+      }
+      // Fold untracked new files in: their entire content counts as added.
+      const others = await this.runShell('git ls-files --others --exclude-standard', 15);
+      if (!others.includes('exit_code:') || others.includes('exit_code: 0')) {
+        for (const f of others.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 20)) {
+          if (!/\.(tsx?|jsx?|mts|cts|mjs|cjs|py|rs|go|java|cs|php|rb)$/i.test(f)) continue;
+          try {
+            const { readFileSync } = await import('node:fs');
+            const content = readFileSync(resolve(this.cwd, f), 'utf8').slice(0, 200_000);
+            const nl = String.fromCharCode(10);
+            diff += `\n+++ b/${f}\n` + content.split(nl).map((l) => '+' + l).join(nl);
+          } catch { /* unreadable: skip file */ }
+        }
+      }
+      return scanDiffForHygiene(diff);
+    } catch {
+      return []; // no git / shell failure: never block finishing on hygiene infra
+    }
+  }
+
   private shouldSelfReview(task: Task): boolean {
     if (!this.fileChanged) return false;
     // Bound the cost: after two review cycles the model is clearly not going

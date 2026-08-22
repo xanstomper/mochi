@@ -51,6 +51,20 @@
   `optionalDependencies`: `npm i @mochi/agent --omit=optional` skips ~250MB
   of grammars on disk; missing grammars degrade gracefully to the tsc
   backend. Default installs are unchanged.
+- **Parallel verification.** `verify()` now runs the independent repo checks
+  (test / typecheck / lint / build) concurrently instead of serially, so
+  per-iteration verification wall-clock is the slowest check rather than
+  their sum. Failure reporting keeps deterministic declared-order semantics.
+- **Diff-hygiene gate (better shipped code).** After verification passes on a
+  file-changing task, a bounded pass scans the diff (tracked + untracked
+  files) for debug debris the model added — `console.log`/`debugger`,
+  TODO/FIXME/HACK markers, `@ts-ignore`/`eslint-disable`/`noqa`
+  suppressions, and focused `.only()` tests. Findings trigger ONE cleanup
+  nudge before completion, so Mochi ships clean code instead of leaving a
+  human cleanup pass. Test files and non-code files are exempt; the scan
+  never blocks finishing on git/shell failures. New
+  `src/core/diff-hygiene.ts` (pure scanner) + `src/agent/hygiene.test.ts`
+  (end-to-end: junky write → nudge → clean write → complete).
 
 ## 0.10.5
 

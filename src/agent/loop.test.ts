@@ -407,7 +407,7 @@ describe('Agent', () => {
     expect(sanitizeVerifyCommand('cd /tmp/proj && cargo test')).toBe('cd /tmp/proj && cargo test');
   });
 
-  it('self-review catches a real change problem and loops to fix it', async () => {
+  it('hygiene gate catches leftover TODO debris and loops to fix it', async () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-review-'));
     execSync('git init -q && git config user.email t@t && git config user.name t && git commit -q --allow-empty -m init', { cwd: dir, shell: '/bin/sh' });
     writeFileSync(resolve(dir, 'lib.ts'), 'export const answer = 42;\n');
@@ -418,15 +418,13 @@ describe('Agent', () => {
       function: { name: 'write', arguments: JSON.stringify({ path, content }) },
     });
     const fake = await startFakeOpenAI([
-      // 1: write a "fix" that accidentally drops the export.
+      // 1: write a "fix" that leaves TODO debris behind.
       { content: 'Editing.', toolCalls: [writeCall('1', resolve(dir, 'lib.ts'), 'export const answer = 42;\n// TODO: finish')], finishReason: 'tool_calls' },
-      // 2: claim done (this triggers verify which passes trivially).
+      // 2: claim done -> verify passes -> HYGIENE gate nudges (no model call).
       { content: 'Done.', finishReason: 'stop' },
-      // 3: SELF-REVIEW reply — finds the TODO leftover.
-      { content: 'The file lib.ts leaves a TODO comment; remove it before finishing.', finishReason: 'stop' },
-      // 4: after the nudge, fixes the file.
+      // 3: after the hygiene nudge, fixes the file.
       { content: 'Fixing the leftover.', toolCalls: [writeCall('2', resolve(dir, 'lib.ts'), 'export const answer = 42;\n')], finishReason: 'tool_calls' },
-      // 5: done again -> verify -> self-review says clean.
+      // 4: done again -> verify -> hygiene clean -> self-review says clean.
       { content: 'Done.', finishReason: 'stop' },
       { content: 'NO_ISSUE', finishReason: 'stop' },
     ]);
@@ -440,6 +438,40 @@ describe('Agent', () => {
     const result = await agent.run(task);
     expect(result.success).toBe(true);
     expect(readFileSync(resolve(dir, 'lib.ts'), 'utf8')).not.toContain('TODO');
+    await fake.close();
+    rmSync(dir, { recursive: true, force: true });
+  }, 60_000);
+
+  it('self-review catches a real correctness problem (wrong constant) and loops to fix it', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-review-const-'));
+    execSync('git init -q && git config user.email t@t && git config user.name t && git commit -q --allow-empty -m init', { cwd: dir, shell: '/bin/sh' });
+    writeFileSync(resolve(dir, 'lib.ts'), 'export const answer = 42;\n');
+    execSync('git add -A && git commit -qm base', { cwd: dir });
+    const writeCall = (id: string, path: string, content: string) => ({
+      id, type: 'function' as const,
+      function: { name: 'write', arguments: JSON.stringify({ path, content }) },
+    });
+    // The defect is a WRONG CONSTANT (answer = 0), which no scanner rule can
+    // see — this is exactly what the model-driven self-review exists for.
+    const fake = await startFakeOpenAI([
+      { content: 'Editing.', toolCalls: [writeCall('1', resolve(dir, 'lib.ts'), 'export const answer = 0;\n')], finishReason: 'tool_calls' },
+      { content: 'Done.', finishReason: 'stop' },
+      // SELF-REVIEW reply cites a concrete file+line defect.
+      { content: 'lib.ts:1 sets answer to 0; the task requires 42.', finishReason: 'stop' },
+      { content: 'Fixing.', toolCalls: [writeCall('2', resolve(dir, 'lib.ts'), 'export const answer = 42;\n')], finishReason: 'tool_calls' },
+      { content: 'Done.', finishReason: 'stop' },
+      { content: 'NO_ISSUE', finishReason: 'stop' },
+    ]);
+    const config = makeConfig(dir, fake.url);
+    const workspace = new Workspace(dir, '.mochi');
+    workspace.ensure();
+    const context = new ContextEngine(config, dir);
+    context.setGoal('fix');
+    const task = createTask('Fix', 'Make lib.ts export answer = 42.', { fileScope: ['lib.ts'], verificationCommand: 'true' });
+    const agent = new Agent({ id: 'review-agent-2', role: 'coder', config, workspace, events: new EventBus(), cwd: dir, context });
+    const result = await agent.run(task);
+    expect(result.success).toBe(true);
+    expect(readFileSync(resolve(dir, 'lib.ts'), 'utf8')).toContain('answer = 42');
     await fake.close();
     rmSync(dir, { recursive: true, force: true });
   }, 60_000);
