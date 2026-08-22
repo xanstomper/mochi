@@ -1,10 +1,14 @@
-# GitHub Linguist configuration: recognize Rust native core & vendor tests
-*.test.ts linguist-vendored=true
-*.test.js linguist-vendored=true
-src/**/*.test.ts linguist-vendored=true
-bench/** linguist-vendored=true
-docs/** linguist-documentation=true
+# GitHub Linguist overrides
+*.test.ts linguist-vendored
+*.test.js linguist-vendored
+*.bench.ts linguist-vendored
+src/**/*.test.ts linguist-vendored
+src/testutil/** linguist-vendored
+bench/** linguist-vendored
+docs/** linguist-documentation
+package-lock.json linguist-generated
+CHANGELOG.md linguist-documentation
 
-native/** linguist-detectable=true
-native/mochi_core/** linguist-detectable=true
-native/rust/** linguist-detectable=true
+native/** linguist-detectable
+native/mochi_core/** linguist-detectable
+native/rust/** linguist-detectable

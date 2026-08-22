@@ -1,5 +1,5 @@
 //! Mochi Core Native Rust Engine
-//! High-performance native hot-paths for agent loop, fuzzy matching, search, git detection, outline extraction, streaming, and data handling.
+//! Complete native runtime architecture for agent orchestration, streaming, fuzzy matching, search, git, PTY, tokenizer, SQLite, and data handling.
 
 pub mod acp;
 pub mod agent_loop;
@@ -11,13 +11,22 @@ pub mod daemon;
 pub mod diff;
 pub mod fuzzy;
 pub mod git;
+pub mod http_client;
 pub mod kv_cache;
+pub mod mcp_gateway;
+pub mod memory_index;
+pub mod patch_engine;
 pub mod planner;
+pub mod pty_manager;
 pub mod repo;
 pub mod search;
 pub mod skills;
+pub mod speculative_decoder;
 pub mod stream;
+pub mod symbol_analyzer;
+pub mod tokenizer;
 pub mod tokens;
+pub mod tui_renderer;
 pub mod tui_state;
 pub mod verification;
 
@@ -36,13 +45,22 @@ pub use daemon::*;
 pub use diff::*;
 pub use fuzzy::*;
 pub use git::*;
+pub use http_client::*;
 pub use kv_cache::*;
+pub use mcp_gateway::*;
+pub use memory_index::*;
+pub use patch_engine::*;
 pub use planner::*;
+pub use pty_manager::*;
 pub use repo::*;
 pub use search::*;
 pub use skills::*;
+pub use speculative_decoder::*;
 pub use stream::*;
+pub use symbol_analyzer::*;
+pub use tokenizer::*;
 pub use tokens::*;
+pub use tui_renderer::*;
 pub use tui_state::*;
 pub use verification::*;
 
@@ -237,4 +255,3 @@ pub unsafe extern "C" fn mochi_classify_prompt(prompt_ptr: *const c_char) -> c_i
         planner::TaskKind::OneShotAnswer => 6,
     }
 }
-
