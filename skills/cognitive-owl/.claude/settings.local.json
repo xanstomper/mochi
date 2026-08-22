@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//home/bamn/.claude/plugins/marketplaces/local/plugins/**)",
+      "Read(//home/bamn/.claude/plugins/marketplaces/context-mode/skills/**)"
+    ]
+  }
+}
