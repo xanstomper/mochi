@@ -387,11 +387,18 @@ export function composerPlaceholderRow(placeholder: string, width: number): stri
   return `${T.rule}│${T.reset} ${T.act}${T.bold}❯${T.reset} ${T.grayDark}${padEnd(placeholder, inner)}${T.reset} ${T.rule}│${T.reset}`;
 }
 
-export function composerBottomRule(width: number, hint: string): string {
+export function composerBottomRule(width: number): string {
   const inner = Math.max(0, width - 2);
-  const hintVis = visibleLen(hint) + 2;
-  const left = '─'.repeat(Math.max(0, inner - hintVis));
-  return `${T.rule}└${left}${T.reset} ${T.grayDark}${hint}${T.reset} ${T.rule}┘${T.reset}`;
+  return `${T.rule}└${'─'.repeat(inner)}┘${T.reset}`;
+}
+
+/** Right-aligned hint line rendered ABOVE the composer box (moved out of the
+ *  bottom border: the border variant clipped when the input wrapped to the
+ *  last terminal row). Right side placement matches the user's request. */
+export function composerHintRow(hint: string, width: number): string {
+  const vis = visibleLen(hint);
+  const pad = Math.max(1, width - vis);
+  return `${' '.repeat(pad)}${T.grayDark}${hint}${T.reset}`;
 }
 
 // ---- Autocomplete dropdown (Cline autocomplete-dropdown.tsx) ---------------
