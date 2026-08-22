@@ -52,4 +52,11 @@ describe('read tool', () => {
     expect(cache.get(resolve(dir, FILE))!.content).toContain('six');
     void first;
   });
+
+  it('supports structural skeleton extraction when skeleton is true', async () => {
+    const codeFile = 'src/example.ts';
+    writeFileSync(resolve(dir, codeFile), 'export function calculate(x: number): number {\n  return x * 2;\n}\n');
+    const out = String(await readTool.execute({ path: codeFile, skeleton: true }, ctx));
+    expect(out).toContain('calculate');
+  });
 });

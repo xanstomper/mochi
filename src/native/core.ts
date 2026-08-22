@@ -433,3 +433,43 @@ export function nativeTruncateToTokens(text: string, maxTokens: number): string 
   }
   return null;
 }
+
+/**
+ * Fast in-process Rust Myers line diff engine. Returns unified diff string or null.
+ */
+export function nativeUnifiedDiff(
+  oldText: string,
+  newText: string,
+  oldFile = 'a/file',
+  newFile = 'b/file',
+): string | null {
+  initNativeCore();
+  if (!ffiAvailable) return null;
+  if (napiModule && typeof napiModule.unifiedDiff === 'function') {
+    try {
+      const out = napiModule.unifiedDiff(oldText, newText, oldFile, newFile);
+      return typeof out === 'string' ? out : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Fast in-process Rust AST source skeletonizer.
+ * Collapses function/class bodies into `{ ... }` while preserving signatures.
+ */
+export function nativeSkeletonizeSource(source: string, ext = 'ts'): string | null {
+  initNativeCore();
+  if (!ffiAvailable) return null;
+  if (napiModule && typeof napiModule.skeletonizeSource === 'function') {
+    try {
+      const out = napiModule.skeletonizeSource(source, ext);
+      return typeof out === 'string' ? out : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}

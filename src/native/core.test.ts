@@ -8,6 +8,8 @@ import {
   isNativeCoreAvailable,
   nativeCountTokens,
   nativeTruncateToTokens,
+  nativeUnifiedDiff,
+  nativeSkeletonizeSource,
 } from './core.js';
 import { fuzzyFindUnique } from '../tools/fuzzy-match.js';
 
@@ -84,6 +86,41 @@ describe('tokenizer bridge (Rust native, parity-checked)', () => {
     const out = nativeTruncateToTokens('word '.repeat(100), 5);
     if (out !== null) {
       expect(out.length).toBeLessThan('word '.repeat(100).length);
+    }
+  });
+});
+
+describe('native unified diff and skeletonizer', () => {
+  it('nativeUnifiedDiff generates Myers diff in Rust', () => {
+    const oldText = 'line1\nline2\nline3\n';
+    const newText = 'line1\nmodified line2\nline3\nline4\n';
+    const diff = nativeUnifiedDiff(oldText, newText, 'a.txt', 'b.txt');
+    if (diff !== null) {
+      expect(diff).toContain('--- a.txt');
+      expect(diff).toContain('+++ b.txt');
+      expect(diff).toContain('-line2');
+      expect(diff).toContain('+modified line2');
+      expect(diff).toContain('+line4');
+    }
+  });
+
+  it('nativeSkeletonizeSource produces compact AST outlines', () => {
+    const code = `
+export function add(a: number, b: number): number {
+  return a + b;
+}
+
+export class Calculator {
+  multiply(x: number, y: number): number {
+    return x * y;
+  }
+}
+    `;
+    const skeleton = nativeSkeletonizeSource(code, 'ts');
+    if (skeleton !== null) {
+      expect(skeleton).toContain('Structural Skeleton');
+      expect(skeleton).toContain('add');
+      expect(skeleton).toContain('Calculator');
     }
   });
 });

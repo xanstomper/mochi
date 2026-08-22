@@ -1,8 +1,13 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Tool } from './types.js';
+import { nativeUnifiedDiff } from '../native/core.js';
 
 function computeDiff(original: string, modified: string, labelA = 'a', labelB = 'b'): string {
+  if (original === modified) return 'No changes.';
+  const native = nativeUnifiedDiff(original, modified, labelA, labelB);
+  if (native !== null) return native || 'No changes.';
+
   const oldLines = original.split('\n');
   const newLines = modified.split('\n');
   if (oldLines.join('\n') === newLines.join('\n')) return 'No changes.';

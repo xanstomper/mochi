@@ -5,7 +5,7 @@ use std::ffi::CString;
 use std::os::raw::c_char;
 use std::path::Path;
 
-use crate::{budget, diff, fuzzy, git, planner, search, stream, tokens, tokenizer};
+use crate::{budget, diff, fuzzy, git, planner, search, stream, symbol_analyzer, tokens, tokenizer};
 
 pub type NapiEnv = *mut std::ffi::c_void;
 pub type NapiValue = *mut std::ffi::c_void;
@@ -354,6 +354,56 @@ unsafe extern "C" fn js_truncate_to_tokens(env: NapiEnv, info: NapiCallbackInfo)
     str_val
 }
 
+unsafe extern "C" fn js_unified_diff(env: NapiEnv, info: NapiCallbackInfo) -> NapiValue {
+    let mut argc = 4;
+    let mut argv = [std::ptr::null_mut(); 4];
+    napi_get_cb_info(env, info, &mut argc, argv.as_mut_ptr(), std::ptr::null_mut(), std::ptr::null_mut());
+
+    let mut null_val = std::ptr::null_mut();
+    napi_get_null(env, &mut null_val);
+
+    if argc < 2 {
+        return null_val;
+    }
+    let Some(old_text) = get_string_arg(env, argv[0]) else {
+        return null_val;
+    };
+    let Some(new_text) = get_string_arg(env, argv[1]) else {
+        return null_val;
+    };
+    let old_file = if argc >= 3 { get_string_arg(env, argv[2]).unwrap_or_else(|| "a/file".to_string()) } else { "a/file".to_string() };
+    let new_file = if argc >= 4 { get_string_arg(env, argv[3]).unwrap_or_else(|| "b/file".to_string()) } else { "b/file".to_string() };
+
+    let diff_text = diff::generate_unified_diff(&old_text, &new_text, &old_file, &new_file);
+    let c_str = CString::new(diff_text).unwrap();
+    let mut str_val = std::ptr::null_mut();
+    napi_create_string_utf8(env, c_str.as_ptr(), c_str.as_bytes().len(), &mut str_val);
+    str_val
+}
+
+unsafe extern "C" fn js_skeletonize_source(env: NapiEnv, info: NapiCallbackInfo) -> NapiValue {
+    let mut argc = 2;
+    let mut argv = [std::ptr::null_mut(); 2];
+    napi_get_cb_info(env, info, &mut argc, argv.as_mut_ptr(), std::ptr::null_mut(), std::ptr::null_mut());
+
+    let mut null_val = std::ptr::null_mut();
+    napi_get_null(env, &mut null_val);
+
+    if argc < 1 {
+        return null_val;
+    }
+    let Some(source) = get_string_arg(env, argv[0]) else {
+        return null_val;
+    };
+    let ext = if argc >= 2 { get_string_arg(env, argv[1]).unwrap_or_else(|| "ts".to_string()) } else { "ts".to_string() };
+
+    let skeleton = symbol_analyzer::skeletonize_source(&source, &ext);
+    let c_str = CString::new(skeleton).unwrap();
+    let mut str_val = std::ptr::null_mut();
+    napi_create_string_utf8(env, c_str.as_ptr(), c_str.as_bytes().len(), &mut str_val);
+    str_val
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn napi_register_module_v1(env: NapiEnv, exports: NapiValue) -> NapiValue {
     let funcs: &[(&str, NapiCallback)] = &[
@@ -367,6 +417,8 @@ pub unsafe extern "C" fn napi_register_module_v1(env: NapiEnv, exports: NapiValu
         ("classifyPrompt", js_classify_prompt),
         ("countTokens", js_count_tokens),
         ("truncateToTokens", js_truncate_to_tokens),
+        ("unifiedDiff", js_unified_diff),
+        ("skeletonizeSource", js_skeletonize_source),
     ];
 
     for &(name, cb) in funcs {

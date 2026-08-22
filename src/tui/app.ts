@@ -86,6 +86,8 @@ const COMMANDS = [
   { name: '/export', hint: 'Export session transcript to JSON' },
   { name: '/import', hint: 'Import session transcript' },
   { name: '/usage', hint: 'Show token usage, costs, and cache hits' },
+  { name: '/tokens', hint: 'Show token breakdown and prompt cache efficiency' },
+  { name: '/stats', hint: 'Show real-time performance and cost statistics' },
   { name: '/doctor', hint: 'Diagnose workspace configuration' },
   { name: '/init', hint: 'Create project MOCHI.md instructions' },
   { name: '/new', hint: 'Start a fresh conversation session' },
@@ -893,8 +895,19 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       });
       return;
     }
-    if (line === '/usage' || line === '/cost') {
-      await run(async () => `${runtime.usage.summary()}\n\nRecent:\n${runtime.usage.recent()}`);
+    if (line === '/usage' || line === '/cost' || line === '/tokens' || line === '/stats') {
+      await run(async () => {
+        const summary = runtime.usage.summary();
+        const recent = runtime.usage.recent();
+        const cachePct = state.totalTokens > 0 ? Math.round((state.cacheTokens / state.totalTokens) * 100) : 0;
+        return (
+          `Token & Cost Performance:\n` +
+          `  Total Tokens: ${state.totalTokens.toLocaleString()} (${state.cacheTokens.toLocaleString()} cached • ${cachePct}% KV cache hit rate)\n` +
+          `  Total Cost: $${state.totalCost.toFixed(4)} USD\n` +
+          `  Active Model: ${runtime.config.model.model}\n\n` +
+          `Historical Usage:\n${summary}\n\nRecent Turns:\n${recent}`
+        );
+      });
       return;
     }
     if (line === '/known-good') { await run(async () => runtime.recordGood()); return; }

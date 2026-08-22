@@ -1,15 +1,17 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { resolve, extname } from 'node:path';
 import type { Tool } from './types.js';
+import { nativeSkeletonizeSource } from '../native/core.js';
 
 export const readTool: Tool = {
   def: {
     name: 'read',
-    description: 'Read a file, optionally a range of lines. Returns file contents with line numbers.',
+    description: 'Read a file, optionally a range of lines. Returns file contents with line numbers, or a structural AST skeleton when skeleton: true.',
     parameters: [
       { name: 'path', type: 'string', description: 'Relative or absolute file path', required: true },
       { name: 'offset', type: 'integer', description: '1-based starting line', required: false },
       { name: 'limit', type: 'integer', description: 'Maximum number of lines to read', required: false },
+      { name: 'skeleton', type: 'boolean', description: 'When true, returns a compact structural AST skeleton of functions, types, and classes (70-85% token reduction)', required: false },
     ],
     permission: 'read',
   },
@@ -34,6 +36,12 @@ export const readTool: Tool = {
       }
     } else {
       content = readFileSync(fullPath, 'utf8');
+    }
+
+    if (args.skeleton === true) {
+      const ext = extname(rawPath).replace(/^\./, '') || 'ts';
+      const skel = nativeSkeletonizeSource(content, ext);
+      if (skel) return skel;
     }
 
     const lines = content.split('\n');

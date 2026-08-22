@@ -39,6 +39,8 @@ import { findReferencesTool, findDefinitionsTool } from './find-references.js';
 import { dbInspectTool } from './db-inspect.js';
 import { createPrTool } from './create-pr.js';
 import { thinkTool } from './think.js';
+import { renameSymbolTool } from './rename-symbol.js';
+import { replTool } from './repl.js';
 
 export const ALL_TOOLS: Tool[] = [
   readTool, writeTool, editTool, deleteTool, shellTool, searchTool, globTool,
@@ -47,7 +49,7 @@ export const ALL_TOOLS: Tool[] = [
   searchReplaceMultiTool, analyzeCodeTool, verifyTool, perfTool,
   webSearchTool, getDiagnosticsTool, mkdirTool, moveFileTool, copyFileTool,
   gitBlameTool, gitHistoryTool, systemInfoTool, findReferencesTool, findDefinitionsTool,
-  dbInspectTool, createPrTool, thinkTool, webCrawlTool,
+  dbInspectTool, createPrTool, thinkTool, webCrawlTool, renameSymbolTool, replTool,
   ...symbolTools, replaceSymbolTool, chameleonTool,
 ];
 
@@ -67,7 +69,7 @@ const EXTENDED_TOOL_NAMES = new Set([
   'search_replace_multi', 'analyze_code', 'perf',
   'web_search', 'get_diagnostics', 'create_directory', 'move_file', 'copy_file',
   'git_blame', 'git_history', 'system_info', 'find_references', 'find_definitions',
-  'db_inspect', 'create_pr', 'type_hierarchy', 'chameleon',
+  'db_inspect', 'create_pr', 'type_hierarchy', 'chameleon', 'rename_symbol', 'repl',
 ]);
 
 /** Detect whether a model name implies a weak/free-tier model that struggles

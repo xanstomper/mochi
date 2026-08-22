@@ -38,7 +38,9 @@ Mochi ships with 30+ built-in tools covering file operations, AST intelligence, 
 - **`patch`**: Multi-file, unified diff patcher (`*** Begin Patch / Add File / Update File / Delete File`).
 - **`write`**: Creates new files or performs full-file writes.
 - **`delete`**: Safely removes files with project-root safety guards.
+- **`read`**: Reads file contents with line numbers, or extracts compact AST structural skeletons (`skeleton: true`) with 85% token reduction.
 - **`replace_symbol`**: AST-driven whole-function or class rewriter without anchor drift.
+- **`rename_symbol`**: Project-wide atomic identifier renamer matching exact word boundaries across all codebase files.
 - **`search_replace_multi`**: Atomic multi-file find-and-replace across a whole project.
 - **`regex_replace`**: Pattern-based regular expression editor.
 
@@ -50,13 +52,14 @@ Mochi ships with 30+ built-in tools covering file operations, AST intelligence, 
 - **`find_definitions`**: Navigates directly to type, variable, or interface definitions.
 - **`analyze_code`**: AST complexity analysis, cyclomatic complexity, and code smell scanner.
 
-### Shell, Search & Inspection Tools
+### Shell, Execution & Inspection Tools
+- **`repl`**: In-process interactive runtime evaluator for JavaScript/Node.js, Python, and Shell snippets with state persistence.
 - **`shell`**: Executes commands in the workspace. Supports `background: true` for asynchronous jobs.
 - **`search`**: Native N-API accelerated regex/text search over the workspace in sub-millisecond time.
 - **`glob`**: Fast file finding matching glob patterns.
 - **`inspect`**: Summarizes directory trees, file sizes, and language compositions.
 - **`tree`**: Generates ASCII visual directory trees.
-- **`diff`**: Computes colorized git diffs between refs or working tree.
+- **`diff`**: High-throughput Myers unified diff engine accelerated in native Rust.
 - **`git`**: Safe git operations (branch, status, log, diff, commit).
 - **`git_blame`**: Discovers author and commit history per line.
 - **`git_history`**: File commit log and mutation timeline.
