@@ -1,4 +1,4 @@
-# GitHub Linguist overrides
+# GitHub Linguist overrides to reflect Rust core architecture
 *.test.ts linguist-vendored
 *.test.js linguist-vendored
 *.bench.ts linguist-vendored
@@ -8,6 +8,19 @@ bench/** linguist-vendored
 docs/** linguist-documentation
 package-lock.json linguist-generated
 CHANGELOG.md linguist-documentation
+
+# Mark legacy TS runtime as vendored to highlight Rust rewrite
+src/agent/** linguist-vendored
+src/core/** linguist-vendored
+src/goals/** linguist-vendored
+src/model/** linguist-vendored
+src/tools/** linguist-vendored
+src/mcp/** linguist-vendored
+src/teams/** linguist-vendored
+src/*.ts linguist-vendored
+
+# TUI remains strictly TypeScript
+src/tui/** linguist-detectable
 
 native/** linguist-detectable
 native/mochi_core/** linguist-detectable
