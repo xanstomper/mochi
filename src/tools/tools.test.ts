@@ -8,6 +8,7 @@ import { editTool } from './edit.js';
 import { globTool } from './glob.js';
 import { searchTool } from './search.js';
 import { memoryTool } from './memory.js';
+import { sessionRecallTool } from './session-recall.js';
 import { searchReplaceMultiTool } from './search-replace-multi.js';
 import { analyzeCodeTool } from './analyze-code.js';
 import { EventBus } from '../events.js';
@@ -235,5 +236,26 @@ describe('analyze_code', () => {
     expect(out).toContain('Code Analysis');
     expect(out).toContain('Complexity Score:');
     expect(out).toContain('Functions:');
+  });
+});
+
+describe('session_recall', () => {
+  it('searches and lists sessions and fetches transcript', async () => {
+    const { SessionStore } = await import('../session-store.js');
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-sessrecall-'));
+    const store = new SessionStore(dir);
+    const sid = store.begin({ goalId: 'goal-42', objective: 'Implement oauth token refresher' });
+    store.append(sid, 'user', 'How do we refresh the token?');
+    store.append(sid, 'assistant', 'We can use refresh_token grant type in auth.ts.');
+
+    const listOut = await sessionRecallTool.execute({ action: 'list' }, ctx(dir));
+    expect(listOut).toContain('Implement oauth token refresher');
+
+    const searchOut = await sessionRecallTool.execute({ action: 'search', query: 'refresher' }, ctx(dir));
+    expect(searchOut).toContain('oauth token refresher');
+
+    const getOut = await sessionRecallTool.execute({ action: 'get', sessionId: sid }, ctx(dir));
+    expect(getOut).toContain('How do we refresh the token?');
+    expect(getOut).toContain('refresh_token grant type');
   });
 });

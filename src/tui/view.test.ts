@@ -107,6 +107,12 @@ describe('statusBar rows', () => {
     expect(plain).not.toContain('[NORMAL]');
   });
 
+  it('row1 displays active reasoning level next to model', () => {
+    const row = statusBarRow1(baseStatus({ reasoningLevel: 'high' }), 90);
+    const plain = row.replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).toContain('[REASON: HIGH]');
+  });
+
   it('row2 shows workspace, branch, and diff stats', () => {
     const row = statusBarRow2(baseStatus(), 90);
     const plain = row.replace(/\x1b\[[0-9;]*m/g, '');

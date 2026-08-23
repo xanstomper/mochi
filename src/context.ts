@@ -270,6 +270,7 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
     add(['shell'], 'shell: for builds, tests, greps. Not for file mutation when edit/patch will do.');
     add(['blast_radius'], 'blast_radius: analyze the downstream impact and caller call sites of a symbol before modifying or refactoring it.');
     add(['chameleon'], 'chameleon: run test-time compute expansion and cellular MoE decomposition for complex algorithms or architectural refactors.');
+    add(['session_recall'], 'session_recall: search, list, or retrieve transcripts from past conversation sessions to recall earlier architectural discussions or previous solutions.');
     add(['web_search', 'web_crawl', 'fetch'], 'web_search / web_crawl / fetch: for research. Search first; fetch a known URL; crawl a documentation site (same-host by default).');
     lines.push('   - plan mode (when active): research with read-only tools and return a plan. Mutating calls are vetoed.');
     return lines.join('\n');

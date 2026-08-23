@@ -667,6 +667,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       maxInputTokens: runtime.config.safety.contextBudgetTokens,
       mode: state.uiMode,
       agentMode: (runtime.config.mode as any) ?? 'normal',
+      reasoningLevel: runtime.getReasoning(),
       workspaceName: projectName,
       gitBranch: branch || null,
       gitDiff: state.gitDiff,
@@ -948,7 +949,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       const specific = (line.startsWith('/reasoning ') ? line.slice(11) : line.startsWith('/depth ') ? line.slice(7) : '').trim();
       if (specific) {
         const desc = runtime.setReasoning(specific);
-        push('system', `🧠 Reasoning mode set to ${runtime.getReasoning().toUpperCase()} — ${desc}`);
+        push('system', `[REASON] Reasoning mode set to ${runtime.getReasoning().toUpperCase()} — ${desc}`);
         scheduleRender();
       } else {
         await reasoningMenu();
@@ -1295,7 +1296,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     if (idx < 0 || idx >= options.length) return;
     const chosen = options[idx];
     const desc = runtime.setReasoning(chosen.level);
-    push('system', `🧠 Reasoning mode set to ${chosen.level.toUpperCase()} — ${desc}`);
+    push('system', `[REASON] Reasoning mode set to ${chosen.level.toUpperCase()} — ${desc}`);
     scheduleRender();
   }
 
@@ -1668,7 +1669,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         if (rest === '\x1b') {
           if (state.busy) {
             runtime.abort('User skipped/cancelled task via ESC');
-            push('system', '⏹️  Skipped / stopped thinking.');
+            push('system', '[STOP] Task cancelled via ESC.');
             state.busy = false;
             stopSpinner();
             scheduleRender();
@@ -1696,7 +1697,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       if (c === '\u0003') {
         if (state.busy) {
           runtime.abort('User cancelled task via Ctrl+C');
-          push('system', '⏹️  Cancelled thinking.');
+          push('system', '[STOP] Task cancelled via Ctrl+C.');
           state.busy = false;
           stopSpinner();
           scheduleRender();

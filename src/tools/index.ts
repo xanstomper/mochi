@@ -42,10 +42,11 @@ import { thinkTool } from './think.js';
 import { renameSymbolTool } from './rename-symbol.js';
 import { replTool } from './repl.js';
 import { blastRadiusTool } from './blast-radius.js';
+import { sessionRecallTool } from './session-recall.js';
 
 export const ALL_TOOLS: Tool[] = [
   readTool, writeTool, editTool, deleteTool, shellTool, searchTool, globTool,
-  gitTool, inspectTool, memoryTool, todoTool, skillTool, subagentTool, patchTool,
+  gitTool, inspectTool, memoryTool, sessionRecallTool, todoTool, skillTool, subagentTool, patchTool,
   fetchTool, diffTool, treeTool, regexReplaceTool, deepwikiTool, clipboardTool, sqlCodebaseTool,
   searchReplaceMultiTool, analyzeCodeTool, verifyTool, perfTool,
   webSearchTool, getDiagnosticsTool, mkdirTool, moveFileTool, copyFileTool,
@@ -62,7 +63,7 @@ export const ALL_TOOLS: Tool[] = [
  */
 const CORE_TOOL_NAMES = new Set([
   'read', 'write', 'edit', 'delete', 'shell', 'search', 'glob',
-  'git', 'inspect', 'todo', 'skill', 'subagent', 'fetch', 'web_search', 'web_crawl', 'think', 'chameleon', 'blast_radius'
+  'git', 'inspect', 'todo', 'skill', 'subagent', 'fetch', 'web_search', 'web_crawl', 'think', 'chameleon', 'blast_radius', 'session_recall'
 ]);
 
 /** Extended tools included only when the model is not a known weak/free tier. */

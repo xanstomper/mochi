@@ -2,10 +2,12 @@
 
 ## 0.10.7
 
-- **Interactive `/reasoning` Command & Menu.** Added `/reasoning` (and `/depth`)
+- **Interactive `/reasoning` Command & Live TUI Display.** Added `/reasoning` (and `/depth`)
   command to the interactive TUI with an interactive menu selector allowing
   instant adjustment between `low`, `medium`, `high`, and `max` reasoning compute.
-  Also added `mochi reasoning [level]` and `--reasoning <level>` CLI flags.
+  The active reasoning level is now displayed live in the TUI status bar right next
+  to the model name (`[REASON: HIGH]`). Also added `mochi reasoning [level]` and
+  `--reasoning <level>` CLI flags.
 - **Full Reasoning Compute & Thinking Support.** Reasoning levels map to real
   model compute parameters:
   - `low`: Fast, agile execution with minimal overhead.
@@ -15,14 +17,19 @@
     Chameleon MoE synthetic reasoning, and comprehensive verification.
   - Wired provider-level parameters: `reasoning_effort` for OpenAI/OpenCode/DeepSeek,
     adaptive `thinking` token budgets for Anthropic Claude, and Gemini thinkingConfig.
-- **Multi-turn Context Memory & Awareness.** Solved conversation amnesia across
+- **Multi-turn Context Memory & Cross-Session Recall.** Solved conversation amnesia across
   turns by preserving ongoing active sessions and loading previous conversational
   turns (user questions & assistant answers) directly into the agent's context.
-  The model retains full memory of previous questions, explanations, and edits.
+  Added the new `session_recall` core tool allowing Mochi to search, list, and
+  inspect transcripts and architectural decisions from past sessions via SQLite FTS5.
+- **Futuristic Startup Animation & Professional UI Design.** Replaced emojis with
+  crisp, high-end developer status pills and glyphs (`[STOP]`, `[REASON]`, `[SAFE]`, `[YOLO]`).
+  Upgraded startup sequence with a futuristic segmented gradient power bar `⟦ ━━━◈─── ⟧`,
+  animated braille scanner beam, and telemetry diagnostic boot phases.
 - **Conscious & Empowered Agent Intelligence.** Upgraded the agent system prompt
   and output directives: the model understands its full arsenal of autonomous
   capabilities (AST analysis, blast radius, code modification, execution, skills,
-  deep memory, subagents) and communicates with high technical fidelity.
+  session recall, deep memory, subagents) and communicates with high technical fidelity.
 
 ## 0.10.6
 

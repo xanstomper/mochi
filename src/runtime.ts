@@ -229,7 +229,8 @@ export class Runtime {
     const recorder = new TraceRecorder(this.workspace.dir, goal.id).attach(this.events);
     try {
       const extra = await this.enhancedCtx(objective, opts);
-      const result = await this.goals.runGoal(goal, tasks, extra, signal ?? this.abortSignal);
+      const sessionId = this.activeSessionId ?? (this.activeSessionId = this.goals['store'].begin({ goalId: goal.id, objective: objective.slice(0, 80) }));
+      const result = await this.goals.runGoal(goal, tasks, extra, signal ?? this.abortSignal, sessionId);
       this.recordUsage(objective, result);
       recorder.log({ t: Date.now(), kind: 'goal:summary', status: result.goal?.status ?? 'unknown', tokensUsed: result.tokensUsed, costUsd: result.costUsd, durationMs: result.durationMs });
       // Plan mode: the agents' plan text is the deliverable.

@@ -239,6 +239,8 @@ export interface StatusBarModel {
   mode: 'plan' | 'act';
   /** active execution mode (normal/spec/security/codemod/chaos) */
   agentMode?: string;
+  /** active reasoning effort (low/medium/high/max) */
+  reasoningLevel?: string;
   workspaceName: string;
   gitBranch: string | null;
   gitDiff: { files: number; additions: number; deletions: number } | null;
@@ -262,7 +264,7 @@ function modeColor(mode: string): string {
   }
 }
 
-/** Row 1: model + [mode] + context … ○ Plan ● Act (Tab) */
+/** Row 1: model + [REASON: LEVEL] + [mode] + context … ○ Plan ● Act (Tab) */
 export function statusBarRow1(m: StatusBarModel, width: number): string {
   const bar = m.maxInputTokens ? contextBar(m.totalTokens, m.maxInputTokens) : undefined;
   const usage = usageText(m.totalTokens, m.totalCost);
@@ -270,10 +272,13 @@ export function statusBarRow1(m: StatusBarModel, width: number): string {
     ? ` ${T.fg}${bar.filled}${T.grayDark}${bar.empty}${T.reset} ${T.gray}${usage}${T.reset}`
     : ` ${T.gray}${usage}${T.reset}`;
   const toggle = `${m.mode === 'plan' ? `${T.plan}● Plan` : `${T.grayDark}○ Plan`}${T.reset} ${m.mode === 'act' ? `${T.act}● Act` : `${T.grayDark}○ Act`}${T.reset} ${T.grayDark}(Tab)${T.reset}`;
-  const modeBadge = m.agentMode && m.agentMode !== 'normal'
-    ? ` ${modeColor(m.agentMode)}${T.bold}[${m.agentMode.toUpperCase()}]${T.reset} `
+  const reasoningBadge = m.reasoningLevel
+    ? ` ${T.cyan}${T.bold}[REASON: ${m.reasoningLevel.toUpperCase()}]${T.reset}`
     : '';
-  const left = `${T.gray}${ellipsize(m.modelId, 32)}${T.reset}${modeBadge}${barText}`;
+  const modeBadge = m.agentMode && m.agentMode !== 'normal'
+    ? ` ${modeColor(m.agentMode)}${T.bold}[${m.agentMode.toUpperCase()}]${T.reset}`
+    : '';
+  const left = `${T.gray}${ellipsize(m.modelId, 28)}${T.reset}${reasoningBadge}${modeBadge}${barText}`;
   const extra = m.extra?.length ? ` ${T.grayDark}· ${m.extra.join(' · ')}${T.reset}` : '';
   const leftAll = left + extra;
   const leftLen = visibleLen(leftAll);
@@ -643,10 +648,10 @@ const SPLASH_PALETTES: Array<Array<[number, number, number]>> = [
 
 /** Loading progress messages shown under the logo, one per phase. */
 export const SPLASH_PHASES = [
-  'initializing core…',
-  'loading skills + memory…',
-  'indexing workspace…',
-  'connecting provider…',
+  'initializing core + neural fabric…',
+  'loading skills + session memory…',
+  'indexing workspace codegraph…',
+  'connecting AI model provider…',
   'Runtime Ready',
 ] as const;
 
@@ -665,8 +670,8 @@ export function splashFrame(tick: number, width: number, version: string, progre
 
   const activeTheme = getCurrentTheme();
   const stops = burstMode > 0 ? (SPLASH_PALETTES[burstMode % SPLASH_PALETTES.length] ?? activeTheme.splashStops) : activeTheme.splashStops;
-  const pulseSpeed = burstMode > 0 ? 0.35 : 0.25;
-  const waveSpeed = burstMode > 0 ? 0.12 : 0.08;
+  const pulseSpeed = burstMode > 0 ? 0.35 : 0.22;
+  const waveSpeed = burstMode > 0 ? 0.12 : 0.07;
 
   // Dynamic pulsating wave: the gradient shifts horizontally with `tick`,
   // oscillating with a breathing pulse + bright sweep sheen
@@ -691,38 +696,57 @@ export function splashFrame(tick: number, width: number, version: string, progre
       // Sheen sweep + breathing glow
       const dist = Math.abs(x - sheenPos);
       const glow = dist <= 4 ? 1 - dist / 4 : 0;
-      const brightness = Math.min(1, glow * 0.75 + pulse * 0.25);
+      const brightness = Math.min(1, glow * 0.8 + pulse * 0.2);
       const c = lerp(base, [255, 255, 255], brightness);
       cells.push(`${rgb(c[0], c[1], c[2])}${T.bold}${ch}${T.reset}`);
     }
     lines.push(center(cells.join(''), row.length));
   }
 
-  // Subtitle
+  // Subtitle with hairline accents
   lines.push('');
-  const sub = `${T.gray}autonomous coding agent${T.reset}`;
-  lines.push(center(sub, 23));
+  const sub = `${T.grayDark}──${T.reset} ${T.cyan}autonomous coding agent${T.reset} ${T.grayDark}──${T.reset}`;
+  lines.push(center(sub, 29));
   lines.push('');
 
-  // Animated loading bar with gradient fill + shimmer head
-  const barW = Math.min(40, Math.max(16, Math.floor(width * 0.35)));
+  // High-tech segmented loading bar with gradient fill + animated plasma pulse head
+  const barW = Math.min(44, Math.max(20, Math.floor(width * 0.4)));
   const clampedProg = Math.max(0, Math.min(1, progress));
   const filled = Math.round(clampedProg * barW);
-  const head = filled > 0 && filled < barW && progress < 1 ? (tick % 2 === 0 ? '▓' : '▒') : '';
-  const bar =
-    `${T.magenta}${'━'.repeat(Math.max(0, filled - (head ? 1 : 0)))}${T.reset}` +
-    (head ? `${T.bold}${rgb(255, 255, 255)}${head}${T.reset}` : '') +
-    `${T.grayDark}${'─'.repeat(Math.max(0, barW - filled))}${T.reset}`;
-  lines.push(center(bar, barW));
+  const headPos = Math.max(0, filled - 1);
+  const headChar = clampedProg < 1 ? (tick % 3 === 0 ? '◈' : tick % 3 === 1 ? '◆' : '━') : '━';
+
+  const barCells: string[] = [];
+  for (let x = 0; x < barW; x++) {
+    if (x < filled) {
+      const frac = barW > 1 ? x / (barW - 1) : 1;
+      const numStops = stops.length;
+      const scaled = frac * (numStops - 1);
+      const si = Math.min(numStops - 2, Math.floor(scaled));
+      const cellColor = lerp(stops[si], stops[si + 1], scaled - si);
+      if (x === headPos && clampedProg < 1) {
+        barCells.push(`${T.bold}${rgb(255, 255, 255)}${headChar}${T.reset}`);
+      } else {
+        barCells.push(`${rgb(cellColor[0], cellColor[1], cellColor[2])}━${T.reset}`);
+      }
+    } else {
+      barCells.push(`${T.grayDark}─${T.reset}`);
+    }
+  }
+
+  const bracketColor = clampedProg >= 1 ? T.lime : T.cyan;
+  const bar = `${bracketColor}⟦${T.reset} ${barCells.join('')} ${bracketColor}⟧${T.reset}`;
+  lines.push(center(bar, barW + 4));
 
   // Phase text + animated percentage (0% -> 100%)
   const phaseIdx = Math.min(SPLASH_PHASES.length - 1, Math.floor(clampedProg * (SPLASH_PHASES.length - 0.01)));
   const phase = SPLASH_PHASES[phaseIdx];
   const pct = Math.min(100, Math.max(0, Math.round(clampedProg * 100)));
+  const spinnerChar = spinnerFrame(tick);
   const statusText = clampedProg >= 1
-    ? `${T.lime}${T.bold}Runtime Ready${T.reset}`
-    : `${T.gray}${phase}${T.reset}  ${T.pink}${pct}%${T.reset}`;
-  lines.push(center(statusText, clampedProg >= 1 ? 13 : phase.length + 5 + String(pct).length));
+    ? `${T.lime}${T.bold}● Runtime Ready${T.reset}`
+    : `${T.cyan}${spinnerChar}${T.reset} ${T.gray}${phase}${T.reset}  ${T.pink}${T.bold}[ ${pct}% ]${T.reset}`;
+  lines.push(center(statusText, clampedProg >= 1 ? 15 : phase.length + 10 + String(pct).length));
 
   // Version footer
   lines.push('');
@@ -732,4 +756,4 @@ export function splashFrame(tick: number, width: number, version: string, progre
   return lines;
 }
 
-export const SPLASH_TICKS = 10;
+export const SPLASH_TICKS = 14;
