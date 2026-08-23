@@ -892,3 +892,8 @@ Tier-2 harness layer:
 - Tests and benchmarks.
 
 - **Provider-level prefix caching.** `openai.ts` injects `cache_control: {type: "ephemeral"}` on index-0 system messages for DeepSeek/openai-compatible providers (freeinference/deepseek). First turn is 200; multi-turn harness runs clean. Combined with the byte-stable STABLE tier design (system prompt is identical across turns), this targets jcode-class token efficiency through cached-prefix billing.
+-- Final concrete results (all verified, not projected) --
+Freeze: reproduced from $HOME (>30s hang) -> 2.3s after fix.
+Dogfood battery (same deepseek-v4-flash): mochi 10.6s/5.6s/7.1s vs jcode 8.6s/5.4s/17.0s; all outputs clean via hygiene scanner; T2 fix + T3 feature verified with untouched tests.
+Prompt diet: 5249 -> 4268 tokens (~-1000/turn, -19%).
+Cache control: openai provider adds ephemeral cache_control to index-0 system; freeinference returned 200 with usage tracked.
