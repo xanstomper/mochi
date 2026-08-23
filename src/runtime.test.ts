@@ -10,6 +10,7 @@ import type { MochiConfig } from './types.js';
 function makeRepo(): string {
   const dir = mkdtempSync(resolve(tmpdir(), 'mochi-runtime-'));
   execSync('git init -q && git config user.email d@d && git config user.name d && git commit -q --allow-empty -m init', { cwd: dir, shell: '/bin/sh' });
+  process.env.MOCHI_CONFIG_PATH = resolve(dir, 'config.json');
   return dir;
 }
 
@@ -147,5 +148,12 @@ describe('Runtime abort + interrupt', () => {
     expect(rt.activeSessionId).toBeUndefined();
     rmSync(rt.cwd, { recursive: true, force: true });
     delete process.env.MOCHI_REASONING;
+  });
+
+  it('defaults reasoning to max upon model initialization unless user changes it', () => {
+    delete process.env.MOCHI_REASONING;
+    const rt = Runtime.create({ cwd: makeRepo() });
+    expect(rt.getReasoning()).toBe('max');
+    rmSync(rt.cwd, { recursive: true, force: true });
   });
 });

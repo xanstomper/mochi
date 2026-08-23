@@ -1517,14 +1517,6 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       return;
     }
 
-    if (s.length > 0) {
-      state.splashDismissed = true;
-      if (state.splashTick < SPLASH_TICKS) {
-        state.splashTick = SPLASH_TICKS;
-        state.splashProgress = 1;
-      }
-    }
-
     let i = 0;
     while (i < s.length) {
       const rest = s.slice(i);

@@ -21,6 +21,9 @@ export function setProvider(config: MochiConfig, selection: ProviderSelection): 
     model: selection.model,
     apiKey: selection.apiKey || cfg.model.apiKey,
   };
+  if (!cfg.reasoning) {
+    cfg.reasoning = 'max';
+  }
   const p = providerById(selection.provider);
   if (p && (p.kind === 'openai' || p.kind === 'anthropic' || p.kind === 'gemini')) {
     cfg.model.profiles = cfg.model.profiles ?? ({} as Record<ModelProfile, string>);

@@ -31,7 +31,7 @@ const defaultConfig = (): MochiConfig => ({
     gitDestructive: false,
   },
   telemetry: false,
-  reasoning: 'medium',
+  reasoning: 'max',
   projectDir: '.mochi',
   configDir: resolve(homedir(), '.config/mochi'),
   quiet: false,
@@ -69,7 +69,7 @@ function envModelConfig(): Partial<MochiConfig['model']> {
 
 export function loadConfig(overrides: Partial<MochiConfig> = {}, configPath?: string): MochiConfig {
   const cfg = defaultConfig();
-  const user = readJsonFile(configPath ?? resolve(cfg.configDir, 'config.json'));
+  const user = readJsonFile(configPath ?? process.env.MOCHI_CONFIG_PATH ?? resolve(cfg.configDir, 'config.json'));
   if (user) merge(cfg as unknown as Record<string, unknown>, user);
 
   function isPlaceholderKey(key: string | undefined): boolean {

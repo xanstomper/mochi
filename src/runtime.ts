@@ -176,7 +176,7 @@ export class Runtime {
 
   /** Get the active reasoning effort level. */
   getReasoning(): import('./types.js').ReasoningLevel {
-    return this.config.reasoning || 'medium';
+    return this.config.reasoning || (process.env.MOCHI_REASONING as import('./types.js').ReasoningLevel) || 'max';
   }
 
   /** Start a fresh session, clearing conversation context. */
@@ -438,12 +438,18 @@ export class Runtime {
   async useProvider(providerId: string, model?: string) {
     const saved = currentConfig();
     this.config = selectProviderById(saved, providerId, model);
+    if (!this.config.reasoning) {
+      this.config.reasoning = 'max';
+    }
     return describeConfig(this.config);
   }
 
   async loginProvider(provider: string, apiKey: string, model?: string) {
     const saved = currentConfig();
     this.config = doLogin(saved, provider, apiKey, model);
+    if (!this.config.reasoning) {
+      this.config.reasoning = 'max';
+    }
     return describeConfig(this.config);
   }
 
