@@ -171,7 +171,7 @@ Return ONLY the JSON array, no markdown.`;
     return tasks;
   }
 
-  async runGoal(goal: Goal, tasks?: Task[], extraContext: string[] = [], signal?: AbortSignal): Promise<GoalResult> {
+  async runGoal(goal: Goal, tasks?: Task[], extraContext: string[] = [], signal?: AbortSignal, sessionId?: string): Promise<GoalResult> {
     const goalHook = await this.hooks.runBefore('before_goal', { goal: goal.id });
     if (!goalHook.allowed) {
       return {
@@ -256,7 +256,7 @@ Return ONLY the JSON array, no markdown.`;
       // neither had been marked running yet. Incremental starting lets a just-
       // started task's scope gate the ones after it (and lets an unscoped task
       // exclude concurrent writers), preventing parallel write-write races.
-      const launched = this.startReadyBatch(scheduler, goal, abortController.signal, budget, extraContext, maxConcurrency, verifier, readCache);
+      const launched = this.startReadyBatch(scheduler, goal, abortController.signal, budget, extraContext, maxConcurrency, verifier, readCache, sessionId);
       if (launched.length === 0) {
         // Nothing could launch (all ready tasks conflict with the running set);
         // wait for an in-flight agent to finish instead of spinning.
@@ -349,6 +349,7 @@ Return ONLY the JSON array, no markdown.`;
     maxConcurrency: number,
     verifier: VerifierEngine,
     readCache: ReadCache,
+    sessionId?: string,
   ): Promise<void>[] {
     const launched: Promise<void>[] = [];
     while (launched.length < maxConcurrency && !scheduler.isDone()) {
@@ -358,7 +359,7 @@ Return ONLY the JSON array, no markdown.`;
       const taskHook = this.hooks.runBefore('before_task', { task: task.id });
       // Start synchronously so the conflict detector sees this task's scope.
       scheduler.start(task.id);
-      launched.push(this.runOne(scheduler, goal, task, abortSignal, budget, extraContext, taskHook, verifier, readCache));
+      launched.push(this.runOne(scheduler, goal, task, abortSignal, budget, extraContext, taskHook, verifier, readCache, sessionId));
     }
     return launched;
   }
@@ -374,15 +375,25 @@ Return ONLY the JSON array, no markdown.`;
     taskHook: Promise<{ allowed: boolean }>,
     verifier: VerifierEngine,
     readCache: ReadCache,
+    sessionId?: string,
   ): Promise<void> {
     const hook = await taskHook;
     if (!hook.allowed) {
       scheduler.fail(task.id, 'Task blocked by before_task hook', this.agentId(task));
       return;
     }
-    const result = await this.runTask(goal, task, abortSignal, budget, extraContext, readCache);
+    const result = await this.runTask(goal, task, abortSignal, budget, extraContext, readCache, sessionId);
     this.goalStats.tokens += result.tokensUsed;
     this.goalStats.duration += result.durationMs;
+    if (hasSqlite() && (sessionId || goal.id)) {
+      try {
+        const sid = sessionId ?? this.store.begin({ goalId: goal.id });
+        this.store.append(sid, 'user', task.description || task.title);
+        if (result.summary) {
+          this.store.append(sid, 'assistant', result.summary);
+        }
+      } catch { /* best-effort */ }
+    }
     if (!result.success) {
       scheduler.fail(task.id, result.summary, this.agentId(task));
       await this.hooks.runAfter('after_task', { task: task.id, status: 'failed' });
@@ -437,7 +448,7 @@ Return ONLY the JSON array, no markdown.`;
     await this.hooks.runAfter('after_task', { task: task.id });
   }
 
-  private async runTask(goal: Goal, task: Task, abortSignal: AbortSignal, budget: BudgetEngine, extraContext: string[] = [], readCache?: ReadCache) {
+  private async runTask(goal: Goal, task: Task, abortSignal: AbortSignal, budget: BudgetEngine, extraContext: string[] = [], readCache?: ReadCache, sessionId?: string) {
     const profile = this.profiles.get(task.role) ?? this.profiles.get('coder')!;
     const modelProfile = profile.defaultModel ?? 'coding';
     const context = new ContextEngine(this.config, this.cwd);
@@ -449,6 +460,22 @@ Return ONLY the JSON array, no markdown.`;
       nextAction: task.title,
       completedTasks: goalDone,
     });
+    // Resumed-goal / ongoing session context: if this session or goal has prior history,
+    // load the recent conversational turns (user + assistant) into context so multi-turn dialogue works seamlessly.
+    if (hasSqlite()) {
+      try {
+        const sid = sessionId ?? this.store.begin({ goalId: goal.id });
+        const prior = this.store.messages(sid);
+        if (prior.length > 0) {
+          const keep = prior.slice(-10);
+          for (const m of keep) {
+            if (m.role === 'user' || m.role === 'assistant') {
+              context.addMessage({ role: m.role as 'user' | 'assistant', content: m.content });
+            }
+          }
+        }
+      } catch { /* best-effort */ }
+    }
     const modeStamp = this.config.planMode
       ? '[MODE: plan — research and produce a written plan only; do NOT edit files or run mutating commands]\n'
       : '[MODE: act — execute changes and verify them]\n';
@@ -456,21 +483,6 @@ Return ONLY the JSON array, no markdown.`;
       ? `Task: ${task.title}\n${task.description}\nAcceptance criteria: ${task.acceptanceCriteria.join('; ')}`
       : (task.description || task.title));
     context.addMessage({ role: 'user', content: userPromptContent });
-    // Resumed-goal context: if this goal has prior session history, load the
-    // most recent transcript (stored by the same goal id) so the model resumes
-    // with the REAL prior conversation, not just the autopsy's terse summary.
-    // This is the Hermes insight applied to goals: memory survives restarts.
-    if (hasSqlite()) {
-      try {
-        const sid = this.store.begin({ goalId: goal.id });
-        const prior = this.store.messages(sid);
-        if (prior.length > 0) {
-          const keep = prior.slice(-20); // last ~20 messages (bound token use)
-          const transcript = keep.map((m) => (m.role === 'user' ? '>>> prior user:' : '>>> prior agent:') + ' ' + m.content).join('\n');
-          context.addMessage({ role: 'system', content: `PRIOR TRANSCRIPT (resume): the goal was run before. Here is the last part of that conversation — do NOT redo work already done and reported:\n${transcript.slice(0, 6000)}` });
-        }
-      } catch { /* best-effort */ }
-    }
     // Optional synthetic-parameter context (e.g. Lazy Chameleon enhancement) is
     // injected as a leading system message so the agent reasons within it.
     for (const extra of extraContext) {

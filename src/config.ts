@@ -31,6 +31,7 @@ const defaultConfig = (): MochiConfig => ({
     gitDestructive: false,
   },
   telemetry: false,
+  reasoning: 'medium',
   projectDir: '.mochi',
   configDir: resolve(homedir(), '.config/mochi'),
   quiet: false,
@@ -116,6 +117,14 @@ if (envKey) {
   if (process.env.MOCHI_QUIET) cfg.quiet = true;
   if (process.env.MOCHI_VERBOSE) cfg.verbose = true;
   if (process.env.MOCHI_DEBUG) cfg.debug = true;
+  if (process.env.MOCHI_REASONING) {
+    const raw = process.env.MOCHI_REASONING.trim().toLowerCase();
+    const mapped = raw === 'max' || raw === 'extreme' || raw === 'deep' ? 'max'
+      : raw === 'high' || raw === 'hard' ? 'high'
+      : raw === 'low' || raw === 'easy' ? 'low'
+      : 'medium';
+    cfg.reasoning = mapped;
+  }
 
   merge(cfg as unknown as Record<string, unknown>, overrides as Record<string, unknown>);
   return cfg;
@@ -158,6 +167,10 @@ export function validateConfig(config: MochiConfig): string[] {
   }
   if (!config.model.model) {
     problems.push('model.model is empty — set a default model');
+  }
+
+  if (config.reasoning && !['low', 'medium', 'high', 'max'].includes(config.reasoning)) {
+    problems.push(`reasoning "${config.reasoning}" is invalid — must be "low", "medium", "high", or "max"`);
   }
 
   // Safety config ranges

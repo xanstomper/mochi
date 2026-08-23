@@ -88,4 +88,14 @@ describe('validateConfig', () => {
     const problems = validateConfig(cfg);
     expect(problems.some(p => p.includes('contextBudgetTokens'))).toBe(true);
   });
+
+  it('supports reasoning configuration and validates reasoning level', () => {
+    const cfg = loadConfig({ reasoning: 'high' });
+    expect(cfg.reasoning).toBe('high');
+    expect(validateConfig(cfg)).toHaveLength(0);
+
+    const invalidCfg = loadConfig({ reasoning: 'super' as any });
+    const problems = validateConfig(invalidCfg);
+    expect(problems.some(p => p.includes('reasoning'))).toBe(true);
+  });
 });

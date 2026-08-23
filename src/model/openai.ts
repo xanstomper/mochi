@@ -100,6 +100,11 @@ export function createOpenAIProvider(config: ProviderConfig) {
       ...(tools.length ? { tools: openAITools(tools), tool_choice: 'auto' } : {}),
       ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
       ...(options?.maxTokens !== undefined ? { max_tokens: options.maxTokens } : {}),
+      ...(((options as any)?.reasoningEffort || process.env.MOCHI_REASONING) ? {
+        reasoning_effort: (((options as any)?.reasoningEffort || process.env.MOCHI_REASONING).toLowerCase() === 'max' || ((options as any)?.reasoningEffort || process.env.MOCHI_REASONING).toLowerCase() === 'deep' || ((options as any)?.reasoningEffort || process.env.MOCHI_REASONING).toLowerCase() === 'extreme') ? 'high'
+          : (((options as any)?.reasoningEffort || process.env.MOCHI_REASONING).toLowerCase() === 'low' || ((options as any)?.reasoningEffort || process.env.MOCHI_REASONING).toLowerCase() === 'easy') ? 'low'
+          : 'medium'
+      } : {}),
     };
 
     // A local AbortController, linked to the caller's signal, so BOTH the

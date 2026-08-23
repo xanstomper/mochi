@@ -127,4 +127,23 @@ describe('Runtime abort + interrupt', () => {
     expect(signal.aborted).toBe(true);
     rmSync(rt.cwd, { recursive: true, force: true });
   });
+
+  it('adjusts reasoning mode with setReasoning and getReasoning', () => {
+    const rt = Runtime.create({ cwd: makeRepo() });
+    expect(rt.getReasoning()).toBe('medium');
+    const desc = rt.setReasoning('high');
+    expect(rt.getReasoning()).toBe('high');
+    expect(desc).toContain('Deep cognitive analysis');
+    expect(process.env.MOCHI_REASONING).toBe('high');
+
+    rt.setReasoning('max');
+    expect(rt.getReasoning()).toBe('max');
+
+    rt.setReasoning('low');
+    expect(rt.getReasoning()).toBe('low');
+
+    rt.newSession();
+    expect(rt.activeSessionId).toBeUndefined();
+    rmSync(rt.cwd, { recursive: true, force: true });
+  });
 });

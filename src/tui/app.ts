@@ -61,6 +61,7 @@ const COMMANDS = [
   { name: '/help', hint: 'Show commands' },
   { name: '/clear', hint: 'Clear transcript' },
   { name: '/model', hint: 'Select AI model provider & model' },
+  { name: '/reasoning', hint: 'Adjust reasoning effort & compute (low, medium, high, max)' },
   { name: '/theme', hint: 'Select color theme (15 styles)' },
   { name: '/skills', hint: 'Browse & activate specialized engineering skills' },
   { name: '/mode', hint: 'Set execution mode (normal, spec, security, chaos)' },
@@ -943,6 +944,17 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       }
       return;
     }
+    if (line === '/reasoning' || line.startsWith('/reasoning ') || line === '/depth' || line.startsWith('/depth ')) {
+      const specific = (line.startsWith('/reasoning ') ? line.slice(11) : line.startsWith('/depth ') ? line.slice(7) : '').trim();
+      if (specific) {
+        const desc = runtime.setReasoning(specific);
+        push('system', `🧠 Reasoning mode set to ${runtime.getReasoning().toUpperCase()} — ${desc}`);
+        scheduleRender();
+      } else {
+        await reasoningMenu();
+      }
+      return;
+    }
     if (line === '/theme' || line.startsWith('/theme ') || line === '/themes') {
       const specific = line.startsWith('/theme ') ? line.slice(7).trim() : '';
       if (specific) {
@@ -999,6 +1011,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     if (line === '/export') { await exportSession(); return; }
     if (line === '/import') { await importFlow(); return; }
     if (line === '/new' || line === '/clear-all') {
+      runtime.resetSession();
       runtime.workspace.clearCheckpoint();
       state.lines = [];
       state.tasks.clear();
@@ -1261,6 +1274,29 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       modelShort = model.split('/').pop() ?? model;
       return desc;
     });
+  }
+
+  async function reasoningMenu() {
+    const cur = runtime.getReasoning();
+    const options: Array<{ level: import('../types.js').ReasoningLevel; label: string; desc: string }> = [
+      { level: 'low', label: 'Low', desc: 'Fast & agile: minimal reasoning overhead, speedy tool executions.' },
+      { level: 'medium', label: 'Medium', desc: 'Balanced: thoughtful analysis, careful edits, reliable verification.' },
+      { level: 'high', label: 'High', desc: 'Deep cognitive analysis: edge cases, AST blast radius checking, multi-step verification.' },
+      { level: 'max', label: 'Max', desc: 'Maximum reasoning compute: exhaustive decomposition, Chameleon MoE synthesis, full invariant verification.' },
+    ];
+    const items = options.map((opt) => {
+      const active = opt.level === cur;
+      const badge = active ? `${T.lime}[ACTIVE]${T.reset} ` : '        ';
+      return `${T.cyan}${opt.label.padEnd(8)}${T.reset}  ${badge}${T.grayDark}· ${opt.desc}${T.reset}`;
+    });
+    const curIdx = options.findIndex((o) => o.level === cur);
+    state.menuSelected = Math.max(0, curIdx);
+    const idx = await openMenu('Adjust Reasoning Effort & Compute (low / medium / high / max)', items);
+    if (idx < 0 || idx >= options.length) return;
+    const chosen = options[idx];
+    const desc = runtime.setReasoning(chosen.level);
+    push('system', `🧠 Reasoning mode set to ${chosen.level.toUpperCase()} — ${desc}`);
+    scheduleRender();
   }
 
   async function themeMenu() {
@@ -1584,7 +1620,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
           const items = currentDropItems();
           const pick = items[Math.min(state.dropSelected, items.length - 1)];
           const exactMatch = items.length === 1 && state.input.trim() === items[0].name;
-          const takesArg = pick && ['/goal', '/plan', '/team', '/model', '/theme', '/inspect', '/run', '/shell', '/login', '/import', '/rename'].includes(pick.name);
+          const takesArg = pick && ['/goal', '/plan', '/team', '/model', '/reasoning', '/theme', '/inspect', '/run', '/shell', '/login', '/import', '/rename'].includes(pick.name);
           if (pick && state.input.startsWith('/') && (!exactMatch || (takesArg && state.input === pick.name))) {
             state.input = pick.name + ' ';
             state.cursor = state.input.length;

@@ -38,6 +38,8 @@ export interface SafetyConfig {
   maxModelCalls?: number;
 }
 
+export type ReasoningLevel = 'low' | 'medium' | 'high' | 'max';
+
 export interface MochiConfig {
   model: ModelConfig;
   safety: SafetyConfig;
@@ -47,6 +49,8 @@ export interface MochiConfig {
   planMode?: boolean;
   /** Active execution mode: normal | spec | security | codemod | chaos. */
   mode?: string;
+  /** Active reasoning effort / compute level: low | medium | high | max. */
+  reasoning?: ReasoningLevel;
   telemetry: boolean;
   projectDir: string;
   configDir: string;

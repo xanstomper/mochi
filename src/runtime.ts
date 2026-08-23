@@ -34,6 +34,7 @@ export class Runtime {
   private mode = 'normal';
   private abortController: AbortController;
   private abortSignal: AbortSignal;
+  activeSessionId?: string;
 
   constructor(opts: RuntimeOptions = {}) {
     this.config = loadConfig(opts.config);
@@ -144,6 +145,41 @@ export class Runtime {
     this.config = applyMode(this.config, mode);
     this.mode = mode;
     return modeInstruction(mode) || 'normal';
+  }
+
+  /** Set the active reasoning effort / compute level (low, medium, high, max). */
+  setReasoning(level: string): string {
+    const raw = level.trim().toLowerCase();
+    const normalized: import('./types.js').ReasoningLevel =
+      raw === 'max' || raw === 'extreme' || raw === 'deep' ? 'max'
+      : raw === 'high' || raw === 'hard' ? 'high'
+      : raw === 'low' || raw === 'easy' ? 'low'
+      : 'medium';
+    this.config.reasoning = normalized;
+    process.env.MOCHI_REASONING = normalized;
+    const descMap: Record<import('./types.js').ReasoningLevel, string> = {
+      low: 'Fast & agile: minimal reasoning overhead, speedy tool executions.',
+      medium: 'Balanced: thoughtful analysis, careful edits, reliable verification.',
+      high: 'Deep cognitive analysis: edge cases, AST blast radius checking, multi-step verification.',
+      max: 'Maximum reasoning compute: exhaustive decomposition, Chameleon MoE synthesis, full invariant verification.',
+    };
+    return descMap[normalized];
+  }
+
+  /** Get the active reasoning effort level. */
+  getReasoning(): import('./types.js').ReasoningLevel {
+    return this.config.reasoning || (process.env.MOCHI_REASONING as import('./types.js').ReasoningLevel) || 'medium';
+  }
+
+  /** Start a fresh session, clearing conversation context. */
+  newSession(): string {
+    this.activeSessionId = undefined;
+    return 'Started fresh session';
+  }
+
+  /** Reset active conversation session. */
+  resetSession(): void {
+    this.activeSessionId = undefined;
   }
 
   /** List all tools available in this runtime, returning lightweight metadata. */
@@ -294,12 +330,18 @@ export class Runtime {
     return new ChameleonEngine(this.config).enhance({ task, mode, budget });
   }
 
-  async runPrompt(prompt: string): Promise<string> {
+  async runPrompt(prompt: string, opts?: { sessionId?: string }): Promise<string> {
     if (this.abortController.signal.aborted) this.resetAbort();
+    if (!this.activeSessionId) {
+      this.activeSessionId = opts?.sessionId || `session-${Date.now()}`;
+    }
+    const sessionId = opts?.sessionId || this.activeSessionId;
     // Single-agent one-shot task: create task directly without waiting for decompose LLM call.
     const { createTask } = await import('./goals/task.js');
+    const { classifyTaskKind } = await import('./taskkind.js');
     const goal = await this.goals.createGoal(prompt);
-    const isChat = /^(hello|hi|hey|greetings|howdy|yo|sup|who\s+are\s+you|what\s+can\s+you\s+do|explain|tell\s+me)\b/i.test(prompt.trim());
+    const kind = classifyTaskKind({ title: prompt.split('\n')[0].slice(0, 80), description: prompt, role: 'coder' as any });
+    const isChat = kind === 'chat';
     const task = createTask(prompt.split('\n')[0].slice(0, 80), prompt, { role: isChat ? 'assistant' as any : 'coder', acceptanceCriteria: [] });
     goal.tasks.push(task.id);
     this.workspace.saveGoal(goal);
@@ -307,7 +349,7 @@ export class Runtime {
     const { TraceRecorder } = await import('./trace.js');
     const recorder = new TraceRecorder(this.workspace.dir, goal.id).attach(this.events);
     try {
-      const result = await this.goals.runGoal(goal, [task], [], this.abortSignal);
+      const result = await this.goals.runGoal(goal, [task], [], this.abortSignal, sessionId);
       this.recordUsage(prompt, result);
       recorder.log({ t: Date.now(), kind: 'goal:summary', status: goal.status, tokensUsed: result.tokensUsed, costUsd: result.costUsd, durationMs: result.durationMs });
       if (this.config.planMode) {

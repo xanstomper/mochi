@@ -1,5 +1,29 @@
 # Mochi Changelog
 
+## 0.10.7
+
+- **Interactive `/reasoning` Command & Menu.** Added `/reasoning` (and `/depth`)
+  command to the interactive TUI with an interactive menu selector allowing
+  instant adjustment between `low`, `medium`, `high`, and `max` reasoning compute.
+  Also added `mochi reasoning [level]` and `--reasoning <level>` CLI flags.
+- **Full Reasoning Compute & Thinking Support.** Reasoning levels map to real
+  model compute parameters:
+  - `low`: Fast, agile execution with minimal overhead.
+  - `medium`: Balanced reasoning with careful validation.
+  - `high`: Deep cognitive analysis, edge-case checks, AST blast radius checking.
+  - `max`: Maximum reasoning compute, exhaustive multi-angle decomposition,
+    Chameleon MoE synthetic reasoning, and comprehensive verification.
+  - Wired provider-level parameters: `reasoning_effort` for OpenAI/OpenCode/DeepSeek,
+    adaptive `thinking` token budgets for Anthropic Claude, and Gemini thinkingConfig.
+- **Multi-turn Context Memory & Awareness.** Solved conversation amnesia across
+  turns by preserving ongoing active sessions and loading previous conversational
+  turns (user questions & assistant answers) directly into the agent's context.
+  The model retains full memory of previous questions, explanations, and edits.
+- **Conscious & Empowered Agent Intelligence.** Upgraded the agent system prompt
+  and output directives: the model understands its full arsenal of autonomous
+  capabilities (AST analysis, blast radius, code modification, execution, skills,
+  deep memory, subagents) and communicates with high technical fidelity.
+
 ## 0.10.6
 
 - **Rust runtime core.** Pure compute now lives in a zero-dependency Rust crate

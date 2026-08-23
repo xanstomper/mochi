@@ -22,13 +22,19 @@ export function createAnthropicProvider(config: ProviderConfig) {
     return { role: m.role, content: m.content ?? '' };
   };
 
-  async function chat(messages: ChatMessage[], tools: ToolDefinition[]): Promise<ModelResponse> {
+  async function chat(messages: ChatMessage[], tools: ToolDefinition[], options?: { reasoningEffort?: string }): Promise<ModelResponse> {
+    const reasoning = ((options?.reasoningEffort || process.env.MOCHI_REASONING) || '').toLowerCase();
+    const thinkingBudget = (reasoning === 'max' || reasoning === 'extreme' || reasoning === 'deep') ? 32768
+      : (reasoning === 'high' || reasoning === 'hard') ? 16384
+      : (reasoning === 'medium') ? 4096 : 0;
+
     const body: Record<string, unknown> = {
       model,
-      max_tokens: 8192,
+      max_tokens: thinkingBudget > 0 ? Math.max(16384, thinkingBudget + 4096) : 8192,
       system: sysMsg(messages) || undefined,
       messages: messages.map(bodyMsg).filter(Boolean),
       stream: false,
+      ...(thinkingBudget > 0 ? { thinking: { type: 'enabled', budget_tokens: thinkingBudget } } : {}),
       ...(tools.length ? { tools: tools.map((t) => ({ name: t.name, description: t.description, input_schema: { type: 'object', properties: Object.fromEntries(t.parameters.map((p) => [p.name, { type: p.type, description: p.description }])), required: t.parameters.filter((x) => x.required).map((x) => x.name) } })) } : {}),
     };
     const res = await withRetries(async () => {
@@ -57,8 +63,8 @@ export function createAnthropicProvider(config: ProviderConfig) {
     return { content: text, toolCalls: toolCalls.length ? toolCalls : undefined, finishReason: data.stop_reason, usage };
   }
 
-  async function* streamChat(messages: ChatMessage[], _tools: ToolDefinition[]): AsyncGenerator<StreamChunk> {
-    const resp = await chat(messages, _tools);
+  async function* streamChat(messages: ChatMessage[], _tools: ToolDefinition[], options?: { reasoningEffort?: string }): AsyncGenerator<StreamChunk> {
+    const resp = await chat(messages, _tools, options);
     yield { content: resp.content, toolCalls: resp.toolCalls, finishReason: resp.finishReason as any, usage: resp.usage };
   }
 

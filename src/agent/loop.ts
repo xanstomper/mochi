@@ -308,13 +308,16 @@ export class Agent {
       const modeBlurb = modeInstruction(this.config.mode);
       if (modeBlurb) this.context.addMessage({ role: 'system', content: modeBlurb });
     }
-    // Adjustable reasoning mode: read from env/config and inject directive.
-    const reasoning = (process.env.MOCHI_REASONING || '').trim();
-    if (reasoning) {
-      const depth = reasoning.toLowerCase();
-      const blurb = depth === 'deep' || depth === 'extreme' ? 'Engage maximum analysis depth: verify assumptions, explore alternatives, confirm correctness.' : depth === 'hard' ? 'Thorough reasoning: check edge cases, verify invariants, confirm with tests.' : depth === 'easy' ? 'Fast reasoning: act decisively, verify quickly, finish cleanly.' : 'Reason with appropriate depth and verify.';
-      this.context.addMessage({ role: 'system', content: `Active reasoning mode: ${reasoning.toUpperCase()}. ${blurb}` });
-    }
+    // Adjustable reasoning mode: read from config or env and inject directive.
+    const reasoning = (this.config.reasoning || process.env.MOCHI_REASONING || 'medium').trim().toLowerCase();
+    const blurb = reasoning === 'max' || reasoning === 'extreme' || reasoning === 'deep'
+      ? 'Engage MAXIMUM reasoning compute & cognitive depth: perform exhaustive multi-angle decomposition, analyze AST dependency blast radius, synthesize formal invariants (Chameleon reasoning), and thoroughly verify correctness before concluding.'
+      : reasoning === 'high' || reasoning === 'hard'
+        ? 'Engage HIGH reasoning depth: thoroughly analyze edge cases, evaluate invariants, trace AST caller dependencies, and confirm correctness with concrete checks.'
+        : reasoning === 'low' || reasoning === 'easy'
+          ? 'Engage LOW reasoning mode: act fast and decisively with minimal thinking overhead, make direct edits, verify quickly, and respond concisely.'
+          : 'Engage MEDIUM balanced reasoning: carefully inspect relevant context, maintain system invariants, and verify changes.';
+    this.context.addMessage({ role: 'system', content: `Active reasoning mode: ${reasoning.toUpperCase()}. ${blurb}` });
     // Each task gets a fresh autopsy record (idempotent on resume via
     // loadOrCreateAutopsy) so failure trajectories are durable and inspectable.
     this.autopsy = loadOrCreateAutopsy(this.workspace.dir, task.id, this.id, task.title);
@@ -524,7 +527,7 @@ Continue from 'Next:', do not redo completed progress.`,
         let runawayFlagged = false;
 
         sm.enter('stream-guard');
-        for await (const chunk of activeProvider.streamChat(messages, this.toolDefs, { temperature: 0.2, signal: this.abortSignal })) {
+        for await (const chunk of activeProvider.streamChat(messages, this.toolDefs, { temperature: 0.2, signal: this.abortSignal, reasoningEffort: reasoning as any })) {
           chunks.push(chunk);
           if (chunk.content) {
             const newChunk = chunk.content;

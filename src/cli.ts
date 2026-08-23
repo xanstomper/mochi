@@ -9,7 +9,7 @@ import type { MochiConfig } from './types.js';
 // Resolve the version from package.json when running from source; when Mochi is
 // compiled to a standalone binary there is no package.json next to it, so fall
 // back to the constant (kept in sync with package.json at build time).
-let VERSION = '0.10.4';
+let VERSION = '0.10.7';
 try {
   const pkgPath = resolve(dirname(fileURLToPath(import.meta.url)), '../package.json');
   VERSION = JSON.parse(readFileSync(pkgPath, 'utf8')).version;
@@ -77,6 +77,7 @@ function configFromFlags(flags: Record<string, string | boolean>): Partial<Mochi
   if (flags.quiet) overrides.quiet = true;
   if (flags.verbose) overrides.verbose = true;
   if (flags.debug) overrides.debug = true;
+  if (flags.reasoning) overrides.reasoning = String(flags.reasoning).toLowerCase() as any;
   // Plan-then-act: `--plan` (a dashed boolean; the bare `plan` subcommand
   // is positional and unaffected) makes every agent in the run research and
   // return a plan instead of editing files.
@@ -125,6 +126,7 @@ Usage:
   mochi daemon stop
   mochi enhance "<task>" [--mode <mode>]
   mochi termix ["<task>"] [--coms|--sep] [--sessions N]
+  mochi reasoning [low|med|high|max] # view or set reasoning depth
   mochi tui
   mochi perf
   mochi "<prompt>" --plan            # plan-then-act: research + return a plan, no edits
@@ -132,6 +134,7 @@ Usage:
 Options:
   -p, --print             Print response and exit
   --auto                  Autonomous mode
+  --reasoning <level>     Reasoning effort: low|medium|high|max
   --provider <name>       Model provider
   --model <id>            Model ID
   --api-key <key>         API key
@@ -501,6 +504,17 @@ async function main() {
   if (first === 'tui') {
     const { launchTui } = await import('./tui/app.js');
     await launchTui(runtime);
+    return;
+  }
+  if (first === 'reasoning' || first === 'depth') {
+    const level = positional[1];
+    if (level) {
+      const desc = runtime.setReasoning(level);
+      console.log(`Reasoning mode set to ${runtime.getReasoning().toUpperCase()}: ${desc}`);
+    } else {
+      console.log(`Active reasoning mode: ${runtime.getReasoning().toUpperCase()}`);
+      console.log(`Usage: mochi reasoning <low|medium|high|max> (or use /reasoning in 'mochi tui' for interactive menu)`);
+    }
     return;
   }
   if (first === 'mode') {
