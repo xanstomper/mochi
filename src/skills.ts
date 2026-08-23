@@ -190,7 +190,7 @@ export function formatSkillsForPrompt(skills: Skill[], limit?: number): string {
     '<available_skills>',
   ];
   for (const s of visible) {
-    lines.push(`  <skill name="${esc(s.name)}"><description>${esc(s.description)}</description><location>${esc(s.path)}</location></skill>`);
+        lines.push(`  <skill name="${esc(s.name)}"><description>${esc(s.description)}</description></skill>`);
   }
   lines.push('</available_skills>');
   return lines.join('\n');

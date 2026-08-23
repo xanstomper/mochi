@@ -91,7 +91,9 @@ export function createOpenAIProvider(config: ProviderConfig) {
         if (m.role === 'system' && seenUserTurn) {
           return { role: 'user', content: `[system notice] ${m.content ?? ''}` };
         }
-        return { role: m.role, content: m.content ?? '' };
+        const mapped: any = { role: m.role, content: m.content ?? '' };
+        if (i === 0 && m.role === 'system') mapped.cache_control = { type: 'ephemeral' };
+        return mapped;
       }),
       stream: true,
       stream_options: { include_usage: true },
