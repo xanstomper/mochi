@@ -309,7 +309,7 @@ export class Agent {
       if (modeBlurb) this.context.addMessage({ role: 'system', content: modeBlurb });
     }
     // Adjustable reasoning mode: read from config or env and inject directive.
-    const reasoning = (this.config.reasoning || process.env.MOCHI_REASONING || 'medium').trim().toLowerCase();
+    const reasoning = (this.config.reasoning || process.env.MOCHI_REASONING || 'max').trim().toLowerCase();
     const blurb = reasoning === 'max' || reasoning === 'extreme' || reasoning === 'deep'
       ? 'Engage MAXIMUM reasoning compute & cognitive depth: perform exhaustive multi-angle decomposition, analyze AST dependency blast radius, synthesize formal invariants (Chameleon reasoning), and thoroughly verify correctness before concluding.'
       : reasoning === 'high' || reasoning === 'hard'
