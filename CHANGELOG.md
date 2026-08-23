@@ -890,3 +890,5 @@ Tier-2 harness layer:
 - Interactive CLI and slash commands.
 - Multiple workspaces.
 - Tests and benchmarks.
+
+- **Provider-level prefix caching.** `openai.ts` injects `cache_control: {type: "ephemeral"}` on index-0 system messages for DeepSeek/openai-compatible providers (freeinference/deepseek). First turn is 200; multi-turn harness runs clean. Combined with the byte-stable STABLE tier design (system prompt is identical across turns), this targets jcode-class token efficiency through cached-prefix billing.
