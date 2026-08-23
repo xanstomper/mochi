@@ -308,6 +308,13 @@ export class Agent {
       const modeBlurb = modeInstruction(this.config.mode);
       if (modeBlurb) this.context.addMessage({ role: 'system', content: modeBlurb });
     }
+    // Adjustable reasoning mode: read from env/config and inject directive.
+    const reasoning = (process.env.MOCHI_REASONING || '').trim();
+    if (reasoning) {
+      const depth = reasoning.toLowerCase();
+      const blurb = depth === 'deep' || depth === 'extreme' ? 'Engage maximum analysis depth: verify assumptions, explore alternatives, confirm correctness.' : depth === 'hard' ? 'Thorough reasoning: check edge cases, verify invariants, confirm with tests.' : depth === 'easy' ? 'Fast reasoning: act decisively, verify quickly, finish cleanly.' : 'Reason with appropriate depth and verify.';
+      this.context.addMessage({ role: 'system', content: `Active reasoning mode: ${reasoning.toUpperCase()}. ${blurb}` });
+    }
     // Each task gets a fresh autopsy record (idempotent on resume via
     // loadOrCreateAutopsy) so failure trajectories are durable and inspectable.
     this.autopsy = loadOrCreateAutopsy(this.workspace.dir, task.id, this.id, task.title);

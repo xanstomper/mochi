@@ -112,8 +112,14 @@ export function loadSkillFile(filePath: string): { skill: Skill | null; diagnost
 /** Recursively discover skill files under `dir`. A directory containing a
  *  `SKILL.md` is a skill root (no further recursion below it). Plain `*.md`
  *  files with frontmatter in the root are also skills. Returns skills and any
- *  per-file diagnostics (e.g. invalid names). */
-export function discoverSkills(dir: string, depth = 0): { skills: Skill[]; diagnostics: string[] } {
+ *  per-file diagnostics (e.g. invalid names).
+ *
+ *  `maxEntries` bounds the total number of directory entries scanned across the
+ *  whole walk. This is a hard safety valve against pathological trees (e.g. a
+ *  huge home directory) that would otherwise block the event loop with
+ *  synchronous `readdirSync` calls during prompt build. When the budget is
+ *  exhausted the walk stops early and returns whatever it found so far. */
+export function discoverSkills(dir: string, depth = 0, maxEntries = 4096): { skills: Skill[]; diagnostics: string[] } {
   if (!existsSync(dir)) return { skills: [], diagnostics: [] };
   if (depth > 6) return { skills: [], diagnostics: [] };
   const skills: Skill[] = [];
@@ -124,6 +130,8 @@ export function discoverSkills(dir: string, depth = 0): { skills: Skill[]; diagn
   } catch {
     return { skills, diagnostics };
   }
+  if (maxEntries <= 0) return { skills, diagnostics };
+  const budget = maxEntries - entries.length;
   const hasSkillMd = entries.some((e) => e.name === 'SKILL.md' && !e.isDir);
   if (hasSkillMd) {
     const p = join(dir, 'SKILL.md');
@@ -136,7 +144,8 @@ export function discoverSkills(dir: string, depth = 0): { skills: Skill[]; diagn
     if (e.name.startsWith('.') || e.name === 'node_modules') continue;
     const full = join(dir, e.name);
     if (e.isDir) {
-      const sub = discoverSkills(full, depth + 1);
+      if (budget <= 0) break; // entry budget exhausted: stop walking
+      const sub = discoverSkills(full, depth + 1, budget);
       skills.push(...sub.skills);
       diagnostics.push(...sub.diagnostics);
       continue;

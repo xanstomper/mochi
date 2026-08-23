@@ -176,7 +176,13 @@ export class ContextEngine {
   }
 
   /** Advertise project and bundled skills in the system prompt so the model knows to load
-   *  them. Recomputes only when the skills dir fingerprint changes. */
+   *  them. Recomputes only when the skills dir fingerprint changes.
+   *
+   *  Freeze-safe: only the project `.mochi/skills` dir and the bundled catalog are
+   *  walked here — both are small and local. The user/global `~/.mochi/skills` dir is
+   *  deliberately NOT walked synchronously (a large home tree would block the event
+   *  loop during prompt build); user skills are still reachable on demand via the
+   *  `skill` tool. */
   private skills(): string {
     const skillsDir = resolve(this.projectRoot, '.mochi', 'skills');
     const fp = fingerprint(skillsDir);
@@ -184,11 +190,10 @@ export class ContextEngine {
     try {
       this.skillsInitialized = true;
       this.skillsFingerprint = fp;
-      const userSkills = resolve(homedir(), '.mochi', 'skills');
-      const { skills } = loadAllSkills(this.projectRoot, userSkills);
-      // Allow the model to see all skills regardless of tier
-      const limit = undefined;
-      this.skillsCache = formatSkillsForPrompt(skills, limit);
+      // Project + bundled only (bounded walk). User skills are loaded lazily by the
+      // skill tool, never synchronously during prompt build.
+      const { skills } = loadAllSkills(this.projectRoot);
+      this.skillsCache = formatSkillsForPrompt(skills);
     } catch {
       this.skillsCache = '';
     }
@@ -344,11 +349,12 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
     // Add recent messages until budget exhausted; prefer latest. Always retain
     // at least the latest turn so active tool responses are never dropped.
     const recent: ChatMessage[] = [];
+    const MIN_RECENT = 6; // keep at least last 3 turns (user+assistant+tool) for conversation continuity
     for (let i = this.messages.length - 1; i >= 0; i--) {
       const m = this.messages[i];
       const text = JSON.stringify(m);
       const tokens = approxTokens(text);
-      if (recent.length > 0 && remaining - tokens < 0) break;
+      if (recent.length >= MIN_RECENT && remaining - tokens < 0) break;
       remaining -= tokens;
       recent.unshift(m);
     }
