@@ -6,6 +6,7 @@
  * Mochi's connected model router, with instant deterministic zero-turn fallback.
  */
 
+import { resolve } from 'node:path';
 import { createProvider } from '../model/router.js';
 import { BudgetEngine, estimateCostUsd } from '../budget.js';
 import type { ChatMessage, MochiConfig, ModelProfile } from '../types.js';
@@ -138,11 +139,17 @@ export function getCachedScaffold(task: string, cwd = process.cwd()): string | u
 /** Prime the scaffold for a task: warms the lazy codegraph grammars first so
  *  the cached scaffold includes real AST symbol grounding. Safe to call twice.
  */
-export async function primeScaffold(task: string, cwd = process.cwd()): Promise<string> {
+export async function primeScaffold(task: string, cwd = process.cwd(), _unused?: unknown, langs?: readonly string[]): Promise<string> {
   const key = `${cwd}::${task}`;
   let s = _scaffoldCache.get(key);
   if (s === undefined) {
-    try { const cg = await import('../codegraph.js'); await cg.warmCodegraph(cwd); } catch { /* best-effort */ }
+    // FREEZE GUARD: never treat $HOME as a code project root - warming over a
+    // whole home directory pegged the event loop and froze the TUI.
+    let root = cwd;
+    try { const { homedir } = await import('node:os'); if (resolve(cwd) === homedir()) root = ''; } catch {}
+    if (root) {
+      try { const cg = await import('../codegraph.js'); await cg.warmCodegraph(root, langs); } catch { /* best-effort */ }
+    }
     s = synthesizeDeterministicContext(task, cwd);
     _scaffoldCache.set(key, s);
   }

@@ -1,4 +1,5 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
+import * as fsp from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { resolve, relative, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -280,19 +281,43 @@ export async function ensureLanguage(lang: LanguageId | string): Promise<boolean
 }
 
 /**
- * Preload the core plus ONLY the grammars for languages actually present
- * under cwd. Awaited by every read path, so any entry point gets a correctly
- * populated index without paying eager module-load cost.
+ * Preload the parser core plus grammars. With explicit `langs`, loads exactly
+ * those and NEVER walks the filesystem - callers hot paths pass a cheap hint
+ * (repo language) so warming cannot stall the loop. Without langs it performs
+ * a BOUNDED asynchronous walk (SKIP_DIRS respected, entry/depth caps, early
+ * exit once a few languages are found) - never a full synchronous tree scan.
  */
-async function preloadGrammars(cwd: string): Promise<void> {
+async function preloadGrammars(cwd: string, langs?: readonly string[]): Promise<void> {
   if (getParserBackend() !== 'tree-sitter') return;
   if (!(await ensureCore())) return;
-  const langs = new Set<string>();
-  for (const full of walkFiles(cwd, cwd)) {
-    const l = langOf(full);
-    if (l) langs.add(l);
+  let found: Set<string>;
+  if (langs && langs.length > 0) {
+    found = new Set(langs);
+  } else {
+    // Yield to the event loop first: warming must never be the reason a UI
+    // freezes. Then walk asynchronously with hard bounds.
+    await new Promise((r) => setTimeout(r, 0));
+    found = new Set<string>();
+    let entries = 0;
+    const visit = async (dir: string, depth: number): Promise<void> => {
+      if (entries > 4000 || found.size >= 4 || depth > 10) return;
+      let names: string[];
+      try { names = await fsp.readdir(dir); } catch { return; }
+      for (const e of names) {
+        if (entries > 4000 || found.size >= 4) return;
+        if (SKIP_DIRS.has(e)) continue;
+        const full = resolve(dir, e);
+        entries++;
+        let st;
+        try { st = await fsp.stat(full); } catch { continue; }
+        if (st.isDirectory()) { await visit(full, depth + 1); continue; }
+        const l = langOf(full);
+        if (l && st.size < 1_500_000) found.add(l);
+      }
+    };
+    await visit(cwd, 0);
   }
-  await Promise.all([...langs].map((l) => ensureLanguage(l)));
+  await Promise.all([...found].map((l) => ensureLanguage(l)));
 }
 
 export function loadTreeSitter(): { ok: boolean; message: string } {
@@ -617,6 +642,6 @@ export function querySymbolGraphSync(cwd: string, sql: string, maxRows = 50): { 
 /** Warm the lazy parser + the grammars present under cwd so that sync read
  *  helpers (querySymbolGraphSync) return fully populated results. Cheap when
  *  already warm; a no-op in light mode / tsc backend. */
-export async function warmCodegraph(cwd: string): Promise<void> {
-  await preloadGrammars(cwd);
+export async function warmCodegraph(cwd: string, langs?: readonly string[]): Promise<void> {
+  await preloadGrammars(cwd, langs);
 }

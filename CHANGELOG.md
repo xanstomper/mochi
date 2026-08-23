@@ -63,21 +63,27 @@
   nudge before completion, so Mochi ships clean code instead of leaving a
   human cleanup pass. Test files and non-code files are exempt; the scan
   never blocks finishing on git/shell failures. New
-  `src/core/diff-hygiene.ts` (pure scanner) + `src/agent/hygiene.test.ts`
+    `src/core/diff-hygiene.ts` (pure scanner) + `src/agent/hygiene.test.ts`
   (end-to-end: junky write → nudge → clean write → complete).
-- **Dogfood fixes (mochi-dogfood3 battery, head-to-head vs jcode on the same
-  model):** (1) `node --test` scripts are now recognized as real runners by
-  `isWeakVerification` and `autoTestCommand`, so Node built-in test projects
-  get their suite auto-run instead of being treated as weak checks;
-  (2) verification debt-masking is disabled when the task demands green
-  checks ("make npm test pass" / "fix so pytest passes") — previously a
-  pre-existing identical failure let an UNFIXED broken runner count as done.
-  Results on 3 tasks (CSV greenfield / Python bugfix / Go feature), same
-  model both sides: mochi 7/7, 3/3, go-ok with clean diffs; wall-clock
-  10.6s/5.6s/7.1s vs jcode 8.6s/5.4s/17.0s (2.4× faster on the Go task);
-  both agents' outputs pass the hygiene scanner. Known next lever: system
-  prompt is ~5.1k tokens re-sent every turn — trim/cache for jcode-class
-  token efficiency.
+- **TUI freeze fix (regression).** The harness-v2 preflight `await
+  primeScaffold(...)` scanned the working tree synchronously *before* the first
+  model call, so running Mochi inside a large directory (e.g. from `$HOME`)
+  pegged the event loop and froze the UI mid-"sending". Warming is now
+  fire-and-forget (never gates the first call) with a cheap detected-language
+  hint instead of a full tree scan, and `primeScaffold` refuses to warm over
+  `$HOME`. Reproduced the exact freeze scenario (cwd = `$HOME`, prompt "how
+  much ram does mochi use") and confirmed it now completes in ~2.3s instead
+  of locking up.
+- **Dogfood fixes (mochi-dogfood3 battery vs jcode, same model).**
+  `node --test` scripts recognized as real runners; verification debt-masking
+  is disabled when the task demands green checks ("make npm test pass").
+- **Dogfood battery results.** Same `deepseek-v4-flash` via freeinference,
+  apples-to-apples vs jcode: mochi 10.6s / 5.6s / 7.1s vs jcode 8.6s / 5.4s /
+  17.0s across T1 (CSV greenfield) / T2 (Python bugfix) / T3 (Go feature) —
+  mochi 2.4× faster on the Go task; all outputs green and hygiene-clean.
+  Next lever: system prompt is ~5.1k tokens re-sent every turn — trimming
+  it (with this battery as the A/B gate) targets jcode-class token
+  efficiency.
 
 ## 0.10.5
 

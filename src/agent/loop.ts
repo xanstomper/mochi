@@ -312,15 +312,6 @@ export class Agent {
     // loadOrCreateAutopsy) so failure trajectories are durable and inspectable.
     this.autopsy = loadOrCreateAutopsy(this.workspace.dir, task.id, this.id, task.title);
     this.contentOnly = classifyContentOnly({ title: task.title, description: task.description, acceptanceCriteria: task.acceptanceCriteria, verificationCommand: task.verificationCommand });
-    // Harness-v2 perf: warm the lazy codegraph grammars + deterministic Chameleon
-    // scaffold ONCE here (async zone) so the hot sync prompt-build path serves a
-    // fully grounded scaffold with zero per-iteration cost.
-    if (classifyTaskKind(task) !== 'chat') {
-      try {
-        const { primeScaffold } = await import('../cognitive/chameleon.js');
-        await primeScaffold(task.title + (task.description ? ` ${task.description}` : ''), this.cwd);
-      } catch { /* best-effort */ }
-    }
     // Warm start on resume: if a previous session already attempted this task
     // and failed, surface those attempts to the model so it does NOT retry the
     // same dead-end hypotheses. The autopsy is loaded (not created) but was
@@ -361,6 +352,32 @@ Continue from 'Next:', do not redo completed progress.`,
 
     const taskKind = classifyTaskKind(task);
     const repo = detectRepo(this.cwd);
+    // Harness-v2 perf (FREEZE FIX 2026-08-22): warm codegraph grammars and the
+    // Chameleon scaffold strictly in the BACKGROUND - fire-and-forget, never
+    // awaited, never gating the first model call. Language hint comes from the
+    // detected repo (+ fileScope) so warming does NOT scan the tree; and
+    // primeScaffold itself refuses to warm over $HOME.
+    {
+      const hint: string[] = [];
+      const rl = String(repo.language ?? '').toLowerCase();
+      if (rl) hint.push(rl);
+      for (const f of task.fileScope ?? []) {
+        if (/\.tsx?$/.test(f)) hint.push('typescript');
+        else if (/\.(mjs|cjs|jsx)$/.test(f)) hint.push('javascript');
+        else if (/\.py$/.test(f)) hint.push('python');
+        else if (/\.go$/.test(f)) hint.push('go');
+        else if (/\.rs$/.test(f)) hint.push('rust');
+        else if (/\.java$/.test(f)) hint.push('java');
+      }
+      void import('../cognitive/chameleon.js')
+        .then((ch) => ch.primeScaffold(
+          task.title + (task.description ? ` ${task.description}` : ''),
+          this.cwd,
+          undefined,
+          hint.length ? [...new Set(hint)] : undefined,
+        ))
+        .catch(() => {});
+    }
     if (taskKind !== 'chat') {
       const gitStatus = await this.runShell('git status --short');
       const langHint = languageHint(repo);
