@@ -89,12 +89,12 @@ export function formatTrace(entries: TraceEntry[]): string {
   const lines: string[] = [];
   for (const e of entries) {
     switch (e.kind) {
-      case 'task:started': lines.push(`▶ started: ${String((e.task as any)?.title ?? '')}`); break;
-      case 'task:completed': lines.push(`✓ done (${e.stopReason ?? 'completed'})`); break;
-      case 'task:failed': lines.push(`✗ failed: ${String(e.reason ?? '').slice(0, 120)}`); break;
+      case 'task:started': lines.push(`▸ started: ${String((e.task as any)?.title ?? '')}`); break;
+      case 'task:completed': lines.push(`[OK] done (${e.stopReason ?? 'completed'})`); break;
+      case 'task:failed': lines.push(`[ERR] failed: ${String(e.reason ?? '').slice(0, 120)}`); break;
       case 'tool:called': lines.push(`  tool ${e.tool} ${JSON.stringify(e.args ?? {}).slice(0, 120)}`); break;
       case 'tool:completed': lines.push(`  tool ${e.tool} → ${String((e.result as any)?.output ?? '').slice(0, 100)}`); break;
-      case 'tool:failed': lines.push(`  tool ${e.tool} ✗ ${String(e.error).slice(0, 100)}`); break;
+      case 'tool:failed': lines.push(`  tool ${e.tool} [ERR] ${String(e.error).slice(0, 100)}`); break;
       case 'agent:log': lines.push(`  [log] ${String(e.message).slice(0, 120)}`); break;
       default: break;
     }

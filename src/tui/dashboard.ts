@@ -95,7 +95,7 @@ async function run() {
   process.stdout.write(draw());
 
   const pipeline = new PerformancePipeline('demo');
-  const tasks = ['✓ Inspect repository', '✓ Trace stream', '◐ Render dashboard', '○ Verify'] as string[];
+  const tasks = ['[OK] Inspect repository', '[OK] Trace stream', '[RUN] Render dashboard', '[...] Verify'] as string[];
 
   process.stdin.on('data', (key) => {
     const s = key.toString();

@@ -84,21 +84,33 @@ export class SessionStore {
 
   /** Create a session; returns its id (or the existing id for a goal-id that
    *  already has one — makes `resume` idempotent). */
-  begin(obj: { goalId?: string; role?: string; objective?: string; parentId?: string | null }): string {
+  begin(obj: { id?: string; goalId?: string; role?: string; objective?: string; parentId?: string | null }): string {
+    if (obj.id) {
+      const existingById = this.db.prepare('SELECT id FROM sessions WHERE id=?').get(obj.id) as { id: string } | undefined;
+      if (existingById) {
+        if (obj.objective) this.db.prepare('UPDATE sessions SET objective=COALESCE(?,objective), role=COALESCE(?,role), updated_at=? WHERE id=?').run(obj.objective, obj.role ?? null, Date.now(), existingById.id);
+        return existingById.id;
+      }
+      const now = Date.now();
+      this.db.prepare(
+        'INSERT OR IGNORE INTO sessions(id,parent_id,goal_id,role,objective,created_at,updated_at,status,summary) VALUES(?,?,?,?,?,?,?,?,?)',
+      ).run(obj.id, obj.parentId ?? null, obj.goalId ?? null, obj.role ?? 'coder', obj.objective ?? '', now, now, 'open', null);
+      return obj.id;
+    }
     const existing = obj.goalId
       ? (this.db.prepare('SELECT id FROM sessions WHERE goal_id=? ORDER BY updated_at DESC LIMIT 1').get(obj.goalId) as { id: string } | undefined)
       : undefined;
     if (existing) {
       // Freshen objective/role so a later begin({goalId}) that omits them
       // doesn't leave a stale/empty objective row.
-      if (obj.objective) this.db.prepare('UPDATE sessions SET objective=?, role=COALESCE(?,role) WHERE id=?').run(obj.objective, obj.role ?? null, existing.id);
+      if (obj.objective) this.db.prepare('UPDATE sessions SET objective=?, role=COALESCE(?,role), updated_at=? WHERE id=?').run(obj.objective, obj.role ?? null, Date.now(), existing.id);
       return existing.id;
     }
     const id = randomUUID();
     const now = Date.now();
     this.db.prepare(
       'INSERT OR IGNORE INTO sessions(id,parent_id,goal_id,role,objective,created_at,updated_at,status,summary) VALUES(?,?,?,?,?,?,?,?,?)',
-    ).run(id, obj.parentId ?? null, obj.goalId ?? null, obj.role ?? 'coder', obj.objective ?? '', now, now, 'completed', null);
+    ).run(id, obj.parentId ?? null, obj.goalId ?? null, obj.role ?? 'coder', obj.objective ?? '', now, now, 'open', null);
     return id;
   }
 
@@ -163,6 +175,30 @@ export class SessionStore {
   rename(id: string, objective: string): void {
     if (!this.available) return;
     this.db.prepare('UPDATE sessions SET objective=?, updated_at=? WHERE id=?').run(objective, Date.now(), id);
+  }
+
+  /** Recent session summaries for ambient agent context injection. */
+  recentSummaries(limit = 5): Array<{ id: string; objective: string; role: string; summary?: string; messageCount: number; updatedAt: number }> {
+    if (!this.available) return [];
+    try {
+      return this.db.prepare(
+        `SELECT id, role, objective, summary, message_count AS messageCount, updated_at AS updatedAt
+         FROM sessions WHERE objective IS NOT NULL AND objective != ''
+         ORDER BY updated_at DESC LIMIT ?`,
+      ).all(limit) as Array<{ id: string; objective: string; role: string; summary?: string; messageCount: number; updatedAt: number }>;
+    } catch {
+      return [];
+    }
+  }
+
+  /** Full formatted transcript of a session. */
+  fullTranscript(sessionId: string): string {
+    const msgs = this.messages(sessionId);
+    if (!msgs.length) return '';
+    return msgs.map((m) => {
+      const time = new Date(m.t).toISOString().replace('T', ' ').slice(0, 19);
+      return `[${time}] ${m.role.toUpperCase()}:\n${m.content}`;
+    }).join('\n\n---\n\n');
   }
 
   delete(id: string): void {

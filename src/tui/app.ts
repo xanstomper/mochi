@@ -690,10 +690,12 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       
       rows[s1 + 1] = barsRow;
       rows[s1 + 2] = statusBarRow2(statusModel, w);
-      cTop = s1 + 3;
+      rows[s1 + 3] = composerHintRow(' ⏎ send · Tab plan/act · ESC stop · / for commands', w);
+      cTop = s1 + 4;
     } else {
       rows[s1 + 1] = statusBarRow2(statusModel, w);
-      cTop = s1 + 2;
+      rows[s1 + 2] = composerHintRow(' ⏎ send · Tab plan/act · ESC stop · / for commands', w);
+      cTop = s1 + 3;
     }
 
     rows[cTop] = composerTopRule(w);

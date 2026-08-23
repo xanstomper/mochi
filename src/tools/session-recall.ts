@@ -36,14 +36,14 @@ export const sessionRecallTool: Tool = {
       return `Found ${results.length} session transcript match(es) for "${query}":\n\n${lines.join('\n\n')}`;
     }
 
-    if (action === 'list') {
+    if (action === 'list' || action === 'recent') {
       const rows = store.list(limit);
       if (!rows.length) return 'No past sessions recorded yet.';
       const lines = rows.map((s, i) => {
         const time = new Date(s.updatedAt || s.createdAt).toISOString().replace('T', ' ').slice(0, 19);
-        return `${i + 1}. [${s.id.slice(0, 8)}] ${s.objective || '(no title)'} (${s.role}) · ${time}`;
+        return `${i + 1}. [session ${s.id.slice(0, 8)}] ${s.objective || '(no title)'} (${s.role}) · ${time}`;
       });
-      return `Recent sessions (${rows.length}):\n${lines.join('\n')}\n\nUse session_recall get with sessionId to view full transcript.`;
+      return `Recent workspace sessions (${rows.length}):\n${lines.join('\n')}\n\nUse session_recall action="get" sessionId="${rows[0]?.id.slice(0, 8)}" to view full transcript.`;
     }
 
     if (action === 'get') {
@@ -65,6 +65,6 @@ export const sessionRecallTool: Tool = {
       return `Transcript for session ${targetId} (${msgs.length} messages):\n\n${transcript}`;
     }
 
-    throw new Error(`Unknown session_recall action: ${action}. Use "search", "list", or "get".`);
+    throw new Error(`Unknown session_recall action: ${action}. Use "search", "list", "recent", or "get".`);
   },
 };

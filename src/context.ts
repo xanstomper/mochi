@@ -13,6 +13,7 @@ import type { ChatMessage, MochiConfig, RepoInfo, Task, ToolDefinition } from '.
 import { isWeakModel } from './tools/index.js';
 import { getCachedScaffold } from './cognitive/chameleon.js';
 import { isMode, modeInstruction } from './modes.js';
+import { SessionStore, hasSqlite } from './session-store.js';
 
 const CANDIDATE_RULES = ['MOCHI.md', 'mochi.md', 'AGENTS.md', 'CLAUDE.md'];
 
@@ -276,6 +277,22 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
     return lines.join('\n');
   }
 
+  private loadRecentSessionSummaries(): string {
+    if (!hasSqlite()) return '';
+    try {
+      const store = new SessionStore(this.projectRoot);
+      const recents = store.recentSummaries(4);
+      if (!recents.length) return '';
+      const lines = recents.map((s) => {
+        const time = new Date(s.updatedAt).toISOString().replace('T', ' ').slice(0, 16);
+        return `- [session ${s.id.slice(0, 8)}] (${time}) [${s.role}] ${s.objective}${s.summary ? ` → ${s.summary.slice(0, 120)}` : ''}`;
+      });
+      return `Recent workspace sessions:\n${lines.join('\n')}\n(Use session_recall to inspect complete transcripts or search prior sessions)`;
+    } catch {
+      return '';
+    }
+  }
+
   /** VOLATILE tier (task-dependent): memory query + task-kind hint. Kept OUT
    *  of the stable system prompt so the identity prefix stays byte-identical
    *  across tasks and providers can prefix-cache it (Hermes insight). */
@@ -288,6 +305,8 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
       if (modeBlurb) parts.push(modeBlurb.trim());
     }
     if (memory) parts.push(`Project memory:\n${memory}`);
+    const recentSessions = this.loadRecentSessionSummaries();
+    if (recentSessions) parts.push(recentSessions);
     if (task) {
       parts.push(kindHint(classifyTaskKind(task)));
       const kind = classifyTaskKind(task);
@@ -350,9 +369,9 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
     let remaining = this.budget - approxTokens(baseSystemPrompt);
 
     // Add recent messages until budget exhausted; prefer latest. Always retain
-    // at least the latest turn so active tool responses are never dropped.
+    // at least the latest turns so active tool responses and conversation context are never dropped.
     const recent: ChatMessage[] = [];
-    const MIN_RECENT = 6; // keep at least last 3 turns (user+assistant+tool) for conversation continuity
+    const MIN_RECENT = 12; // keep at least last 6 turns (user+assistant+tool) for conversation continuity
     for (let i = this.messages.length - 1; i >= 0; i--) {
       const m = this.messages[i];
       const text = JSON.stringify(m);

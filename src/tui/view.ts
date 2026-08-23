@@ -278,7 +278,7 @@ export function statusBarRow1(m: StatusBarModel, width: number): string {
   const modeBadge = m.agentMode && m.agentMode !== 'normal'
     ? ` ${modeColor(m.agentMode)}${T.bold}[${m.agentMode.toUpperCase()}]${T.reset}`
     : '';
-  const left = `${T.gray}${ellipsize(m.modelId, 28)}${T.reset}${reasoningBadge}${modeBadge}${barText}`;
+  const left = `${T.fg}${T.bold}${ellipsize(m.modelId, 28)}${T.reset}${reasoningBadge}${modeBadge}${barText}`;
   const extra = m.extra?.length ? ` ${T.grayDark}· ${m.extra.join(' · ')}${T.reset}` : '';
   const leftAll = left + extra;
   const leftLen = visibleLen(leftAll);
@@ -287,7 +287,9 @@ export function statusBarRow1(m: StatusBarModel, width: number): string {
     return padEnd(`${leftAll}${' '.repeat(Math.max(1, width - leftLen - toggleLen))}${toggle}`, width);
   }
   // Too narrow: keep the toggle, shrink the model label instead.
-  const modelOnly = `${T.gray}${ellipsize(m.modelId, Math.max(8, width - toggleLen - 2))}${T.reset}`;
+  const reasonLen = visibleLen(reasoningBadge);
+  const modelMax = Math.max(6, width - toggleLen - reasonLen - 3);
+  const modelOnly = `${T.fg}${T.bold}${ellipsize(m.modelId, modelMax)}${T.reset}${reasoningBadge}`;
   return padEnd(`${modelOnly}${' '.repeat(Math.max(1, width - visibleLen(modelOnly) - toggleLen))}${toggle}`, width);
 }
 
@@ -405,6 +407,14 @@ export function accentToolPrefix(text: string): string {
   if (text.startsWith('✗') || text.startsWith('[ERR]')) {
     const rest = text.replace(/^(✗|\[ERR\])\s*/, '');
     return `${T.error}${T.bold}[ERR]${T.reset} ${T.error}${rest}${T.reset}`;
+  }
+  if (text.startsWith('[SKIP]')) {
+    const rest = text.replace(/^\[SKIP\]\s*/, '');
+    return `${T.grayDark}${T.bold}[SKIP]${T.reset} ${T.gray}${rest}${T.reset}`;
+  }
+  if (text.startsWith('[WARN]')) {
+    const rest = text.replace(/^\[WARN\]\s*/, '');
+    return `${T.warning}${T.bold}[WARN]${T.reset} ${T.warning}${rest}${T.reset}`;
   }
   const colonIdx = text.indexOf(':');
   if (colonIdx !== -1) {
@@ -648,7 +658,7 @@ const SPLASH_PALETTES: Array<Array<[number, number, number]>> = [
 
 /** Loading progress messages shown under the logo, one per phase. */
 export const SPLASH_PHASES = [
-  'initializing core + neural fabric…',
+  'warming neural fabric + core…',
   'loading skills + session memory…',
   'indexing workspace codegraph…',
   'connecting AI model provider…',
@@ -709,25 +719,27 @@ export function splashFrame(tick: number, width: number, version: string, progre
   lines.push(center(sub, 29));
   lines.push('');
 
-  // High-tech segmented loading bar with gradient fill + animated plasma pulse head
-  const barW = Math.min(44, Math.max(20, Math.floor(width * 0.4)));
+  // High-tech futuristic segmented cyber energy rail with moving gradient plasma flux
+  const barW = Math.min(44, Math.max(20, Math.floor(width * 0.42)));
   const clampedProg = Math.max(0, Math.min(1, progress));
   const filled = Math.round(clampedProg * barW);
   const headPos = Math.max(0, filled - 1);
-  const headChar = clampedProg < 1 ? (tick % 3 === 0 ? '◈' : tick % 3 === 1 ? '◆' : '━') : '━';
+  const headChar = clampedProg < 1 ? (tick % 4 === 0 ? '◈' : tick % 4 === 1 ? '◆' : tick % 4 === 2 ? '✦' : '━') : '━';
 
   const barCells: string[] = [];
   for (let x = 0; x < barW; x++) {
     if (x < filled) {
       const frac = barW > 1 ? x / (barW - 1) : 1;
       const numStops = stops.length;
-      const scaled = frac * (numStops - 1);
+      const scaled = ((frac + waveShift) % 1) * (numStops - 1);
       const si = Math.min(numStops - 2, Math.floor(scaled));
       const cellColor = lerp(stops[si], stops[si + 1], scaled - si);
       if (x === headPos && clampedProg < 1) {
         barCells.push(`${T.bold}${rgb(255, 255, 255)}${headChar}${T.reset}`);
       } else {
-        barCells.push(`${rgb(cellColor[0], cellColor[1], cellColor[2])}━${T.reset}`);
+        const isPulse = (x + tick) % 6 === 0;
+        const pulseColor = isPulse ? lerp(cellColor, [255, 255, 255], 0.6) : cellColor;
+        barCells.push(`${rgb(pulseColor[0], pulseColor[1], pulseColor[2])}━${T.reset}`);
       }
     } else {
       barCells.push(`${T.grayDark}─${T.reset}`);

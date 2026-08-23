@@ -305,24 +305,15 @@ Return ONLY the JSON array, no markdown.`;
     return this.sessionStoreInstance;
   }
 
-  private recordSave(goal: Goal, task: Task, result: { summary: string }, context: ContextEngine): void {
+  private recordSave(goal: Goal, task: Task, result: { summary: string }, context: ContextEngine, sessionId?: string): void {
     try {
-      const sid = this.store.begin({ goalId: goal.id, role: task.role, objective: task.title });
-      const goalText = goal.objective;
-      const taskDesc = task.description;
-      // This is a synthesized internal directive (the engine's task brief), not
-      // a real user request. Store it as `system` so replayed sessions show it
-      // as muted context instead of a prominent "user" prompt above the agent
-      // turns — and so searches don't confuse it for a genuine user ask.
-      this.store.append(sid, 'system', 'Goal: ' + goalText + '\nTask: ' + task.title + '\n' + taskDesc);
-      if (result.summary) this.store.append(sid, 'assistant', result.summary);
-      // surface non-tool (user/assistant/system) message content
-      const msgs = (context as unknown as { messages: Array<{ role: string; content?: string }> }).messages ?? [];
-      for (const m of msgs) {
-        if (m.role === 'tool') continue;
-        if (m.content) this.store.append(sid, m.role, m.content);
+      const sid = sessionId ?? this.store.begin({ goalId: goal.id, role: task.role, objective: task.title });
+      if (!sessionId) {
+        const goalText = goal.objective;
+        const taskDesc = task.description;
+        this.store.append(sid, 'system', 'Goal: ' + goalText + '\nTask: ' + task.title + '\n' + taskDesc);
+        if (result.summary) this.store.append(sid, 'assistant', result.summary);
       }
-      this.store.markCompleted(sid, 'completed');
     } catch { /* session persistence is best-effort */ }
   }
 
@@ -467,10 +458,10 @@ Return ONLY the JSON array, no markdown.`;
         const sid = sessionId ?? this.store.begin({ goalId: goal.id });
         const prior = this.store.messages(sid);
         if (prior.length > 0) {
-          const keep = prior.slice(-10);
+          const keep = prior.slice(-20);
           for (const m of keep) {
-            if (m.role === 'user' || m.role === 'assistant') {
-              context.addMessage({ role: m.role as 'user' | 'assistant', content: m.content });
+            if (m.role === 'user' || m.role === 'assistant' || m.role === 'system') {
+              context.addMessage({ role: m.role as 'user' | 'assistant' | 'system', content: m.content });
             }
           }
         }
@@ -521,7 +512,7 @@ Return ONLY the JSON array, no markdown.`;
     // Persist the conversation to the searchable session store so
     // `mochi session search` finds past work and a resume can reconstruct
     // the exact prior conversation (Hermes insight).
-    if (hasSqlite()) { this.recordSave(goal, task, result, context); }
+    if (hasSqlite()) { this.recordSave(goal, task, result, context, sessionId); }
     await this.hooks.runAfter('after_agent', { agent: this.agentId(task), task: task.id, success: String(result.success) });
 
     // Record the task as completed on shared state. This must be atomic: under

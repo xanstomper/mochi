@@ -24,7 +24,7 @@ export const getDiagnosticsTool: Tool = {
     try {
       const diag = await diagnoseFile(fullPath, ctx.cwd);
       if (diag.ok && diag.errors.length === 0 && diag.warnings.length === 0) {
-        return `✓ No diagnostics or syntax errors found in ${rawPath} (${diag.ms}ms).`;
+        return `[OK] No diagnostics or syntax errors found in ${rawPath} (${diag.ms}ms).`;
       }
       return renderDiagnostics([diag]);
     } catch (err) {

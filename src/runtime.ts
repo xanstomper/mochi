@@ -333,10 +333,12 @@ export class Runtime {
 
   async runPrompt(prompt: string, opts?: { sessionId?: string }): Promise<string> {
     if (this.abortController.signal.aborted) this.resetAbort();
-    if (!this.activeSessionId) {
-      this.activeSessionId = opts?.sessionId || `session-${Date.now()}`;
+    if (opts?.sessionId) {
+      this.activeSessionId = opts.sessionId;
+    } else if (!this.activeSessionId) {
+      this.activeSessionId = this.goals['store'].begin({ objective: prompt.slice(0, 80) });
     }
-    const sessionId = opts?.sessionId || this.activeSessionId;
+    const sessionId = this.activeSessionId;
     // Single-agent one-shot task: create task directly without waiting for decompose LLM call.
     const { createTask } = await import('./goals/task.js');
     const { classifyTaskKind } = await import('./taskkind.js');

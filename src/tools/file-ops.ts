@@ -21,7 +21,7 @@ export const mkdirTool: Tool = {
         return `Directory already exists at "${rawPath}".`;
       }
       mkdirSync(fullPath, { recursive: true });
-      return `✓ Created directory "${rawPath}".`;
+      return `[OK] Created directory "${rawPath}".`;
     } catch (err) {
       return `Error creating directory: ${err instanceof Error ? err.message : String(err)}`;
     }
@@ -53,7 +53,7 @@ export const moveFileTool: Tool = {
     try {
       mkdirSync(dirname(fullDest), { recursive: true });
       renameSync(fullSrc, fullDest);
-      return `✓ Moved "${src}" → "${dest}".`;
+      return `[OK] Moved "${src}" → "${dest}".`;
     } catch (err) {
       return `Error moving file: ${err instanceof Error ? err.message : String(err)}`;
     }
@@ -90,7 +90,7 @@ export const copyFileTool: Tool = {
       } else {
         copyFileSync(fullSrc, fullDest);
       }
-      return `✓ Copied "${src}" → "${dest}".`;
+      return `[OK] Copied "${src}" → "${dest}".`;
     } catch (err) {
       return `Error copying: ${err instanceof Error ? err.message : String(err)}`;
     }
