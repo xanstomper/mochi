@@ -38,7 +38,7 @@ export interface SafetyConfig {
   maxModelCalls?: number;
 }
 
-export type ReasoningLevel = 'low' | 'medium' | 'high' | 'max';
+export type ReasoningLevel = 'low' | 'medium' | 'high' | 'max' | 'off' | 'auto';
 
 export interface MochiConfig {
   model: ModelConfig;
@@ -179,6 +179,7 @@ export interface StreamToolCall {
 
 export interface StreamChunk {
   content?: string;
+  reasoningContent?: string;
   toolCalls?: StreamToolCall[];
   finishReason?: 'stop' | 'tool_calls' | 'length' | 'error';
   usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
@@ -186,6 +187,7 @@ export interface StreamChunk {
 
 export interface ModelResponse {
   content?: string;
+  reasoningContent?: string;
   toolCalls?: ToolCall[];
   finishReason?: string;
   usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
@@ -224,6 +226,7 @@ export type MochiEvent =
   | { type: 'agent:spawned'; id: string; role: AgentRole; taskId: string }
   | { type: 'agent:completed'; id: string; taskId: string }
   | { type: 'agent:log'; agentId: string; message: string }
+  | { type: 'agent:reasoning'; content: string; agentId: string }
   | { type: 'agent:iteration'; agentId: string; trace: IterationTrace }
   | { type: 'tool:called'; tool: string; args: unknown; agentId: string }
   | { type: 'tool:completed'; tool: string; result: ToolResult; agentId: string }

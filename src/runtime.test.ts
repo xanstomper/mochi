@@ -129,7 +129,8 @@ describe('Runtime abort + interrupt', () => {
   });
 
   it('adjusts reasoning mode with setReasoning and getReasoning', () => {
-    const rt = Runtime.create({ cwd: makeRepo() });
+    delete process.env.MOCHI_REASONING;
+    const rt = Runtime.create({ cwd: makeRepo(), config: { reasoning: 'medium' } });
     expect(rt.getReasoning()).toBe('medium');
     const desc = rt.setReasoning('high');
     expect(rt.getReasoning()).toBe('high');
@@ -145,5 +146,6 @@ describe('Runtime abort + interrupt', () => {
     rt.newSession();
     expect(rt.activeSessionId).toBeUndefined();
     rmSync(rt.cwd, { recursive: true, force: true });
+    delete process.env.MOCHI_REASONING;
   });
 });

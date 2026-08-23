@@ -25,9 +25,20 @@ export function createGeminiProvider(config: ProviderConfig) {
 
   const system = (msgs: ChatMessage[]) => msgs.filter((m) => m.role === 'system').map((m) => m.content ?? '').join('\n');
 
-  async function chat(messages: ChatMessage[], _tools: ToolDefinition[]): Promise<ModelResponse> {
+  async function chat(messages: ChatMessage[], _tools: ToolDefinition[], options?: { reasoningEffort?: string }): Promise<ModelResponse> {
     const url = `${base}/v1beta/models/${model}:generateContent?key=${config.apiKey ?? ''}`;
-    const body: Record<string, unknown> = { contents: toContents(messages), systemInstruction: system(messages) ? { parts: [{ text: system(messages) }] } : undefined };
+    const reasoning = String(options?.reasoningEffort || process.env.MOCHI_REASONING || '').toLowerCase().trim();
+    const thinkingBudget = (reasoning === 'max' || reasoning === 'extreme' || reasoning === 'deep') ? 24576
+      : (reasoning === 'high' || reasoning === 'hard') ? 16384
+      : (reasoning === 'medium') ? 8192
+      : (reasoning === 'low' || reasoning === 'easy') ? 1024
+      : 0;
+
+    const body: Record<string, unknown> = {
+      contents: toContents(messages),
+      systemInstruction: system(messages) ? { parts: [{ text: system(messages) }] } : undefined,
+      ...(thinkingBudget > 0 ? { generationConfig: { thinking_config: { thinking_budget: thinkingBudget } } } : {}),
+    };
     const res = await withRetries(async () => {
       try {
         const r = await fetch(url, {
@@ -52,8 +63,8 @@ export function createGeminiProvider(config: ProviderConfig) {
     return { content, finishReason: candidates[0]?.finishReason, usage: { promptTokens: u.promptTokenCount ?? 0, completionTokens: u.candidatesTokenCount ?? 0, totalTokens: u.totalTokenCount ?? 0 } };
   }
 
-  async function* streamChat(messages: ChatMessage[], tools: ToolDefinition[]): AsyncGenerator<StreamChunk> {
-    const resp = await chat(messages, tools);
+  async function* streamChat(messages: ChatMessage[], tools: ToolDefinition[], options?: { reasoningEffort?: string }): AsyncGenerator<StreamChunk> {
+    const resp = await chat(messages, tools, options);
     yield { content: resp.content, finishReason: resp.finishReason as any, usage: resp.usage };
   }
 

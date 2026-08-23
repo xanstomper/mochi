@@ -662,7 +662,7 @@ export const SPLASH_PHASES = [
   'loading skills + session memory…',
   'indexing workspace codegraph…',
   'connecting AI model provider…',
-  'Runtime Ready',
+  'The Dongo is ready',
 ] as const;
 
 /** One frame of the animated splash.
@@ -756,9 +756,9 @@ export function splashFrame(tick: number, width: number, version: string, progre
   const pct = Math.min(100, Math.max(0, Math.round(clampedProg * 100)));
   const spinnerChar = spinnerFrame(tick);
   const statusText = clampedProg >= 1
-    ? `${T.lime}${T.bold}● Runtime Ready${T.reset}`
+    ? `${T.lime}${T.bold}● The Dongo is ready${T.reset}`
     : `${T.cyan}${spinnerChar}${T.reset} ${T.gray}${phase}${T.reset}  ${T.pink}${T.bold}[ ${pct}% ]${T.reset}`;
-  lines.push(center(statusText, clampedProg >= 1 ? 15 : phase.length + 10 + String(pct).length));
+  lines.push(center(statusText, clampedProg >= 1 ? 21 : phase.length + 10 + String(pct).length));
 
   // Version footer
   lines.push('');

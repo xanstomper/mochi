@@ -100,11 +100,19 @@ export function createOpenAIProvider(config: ProviderConfig) {
       ...(tools.length ? { tools: openAITools(tools), tool_choice: 'auto' } : {}),
       ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
       ...(options?.maxTokens !== undefined ? { max_tokens: options.maxTokens } : {}),
-      ...(((options as any)?.reasoningEffort || process.env.MOCHI_REASONING) ? {
-        reasoning_effort: (((options as any)?.reasoningEffort || process.env.MOCHI_REASONING).toLowerCase() === 'max' || ((options as any)?.reasoningEffort || process.env.MOCHI_REASONING).toLowerCase() === 'deep' || ((options as any)?.reasoningEffort || process.env.MOCHI_REASONING).toLowerCase() === 'extreme') ? 'high'
-          : (((options as any)?.reasoningEffort || process.env.MOCHI_REASONING).toLowerCase() === 'low' || ((options as any)?.reasoningEffort || process.env.MOCHI_REASONING).toLowerCase() === 'easy') ? 'low'
-          : 'medium'
-      } : {}),
+      ...(() => {
+        const rawEffort = String((options as any)?.reasoningEffort || process.env.MOCHI_REASONING || '').toLowerCase().trim();
+        if (rawEffort === 'max' || rawEffort === 'extreme' || rawEffort === 'deep' || rawEffort === 'high' || rawEffort === 'hard') {
+          return { reasoning_effort: 'high' };
+        }
+        if (rawEffort === 'medium') {
+          return { reasoning_effort: 'medium' };
+        }
+        if (rawEffort === 'low' || rawEffort === 'easy') {
+          return { reasoning_effort: 'low' };
+        }
+        return {};
+      })(),
     };
 
     // A local AbortController, linked to the caller's signal, so BOTH the
@@ -190,6 +198,7 @@ export function createOpenAIProvider(config: ProviderConfig) {
           const choice = chunk.choices?.[0];
           const delta = choice?.delta ?? {};
           const toolCalls = delta.tool_calls;
+          const reasoningContent = delta.reasoning_content ?? delta.reasoning ?? delta.thought ?? undefined;
           const parsedCalls: StreamChunk['toolCalls'] = [];
           if (toolCalls && Array.isArray(toolCalls)) {
             for (const tc of toolCalls) {
@@ -223,6 +232,7 @@ export function createOpenAIProvider(config: ProviderConfig) {
           }
           yield {
             content: delta.content ?? undefined,
+            reasoningContent: typeof reasoningContent === 'string' && reasoningContent.length > 0 ? reasoningContent : undefined,
             toolCalls: parsedCalls.length ? parsedCalls : undefined,
             finishReason: choice?.finish_reason,
             usage: { promptTokens: totalInput, completionTokens: totalOutput, totalTokens: totalInput + totalOutput },
@@ -243,7 +253,8 @@ export function createOpenAIProvider(config: ProviderConfig) {
     for await (const chunk of streamChat(messages, tools, options)) {
       chunks.push(chunk);
     }
-    const content = chunks.map((c) => c.content).join('');
+    const content = chunks.map((c) => c.content || '').join('');
+    const reasoningContent = chunks.map((c) => c.reasoningContent || '').join('') || undefined;
     const callsByIndex = new Map<number, ToolCallAccum>();
     for (const chunk of chunks) {
       if (chunk.toolCalls) {
@@ -260,6 +271,7 @@ export function createOpenAIProvider(config: ProviderConfig) {
     const usage = chunks[chunks.length - 1]?.usage;
     return {
       content,
+      reasoningContent,
       toolCalls: tool_calls.length ? tool_calls : undefined,
       finishReason: chunks[chunks.length - 1]?.finishReason,
       usage,

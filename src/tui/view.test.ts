@@ -324,8 +324,8 @@ describe('splash screen', () => {
     expect(a.join('|')).not.toBe(b.join('|'));
   });
 
-  it('phase list ends at Runtime Ready', () => {
-    expect(SPLASH_PHASES[SPLASH_PHASES.length - 1]).toBe('Runtime Ready');
+  it('phase list ends at The Dongo is ready', () => {
+    expect(SPLASH_PHASES[SPLASH_PHASES.length - 1]).toBe('The Dongo is ready');
   });
 });
 

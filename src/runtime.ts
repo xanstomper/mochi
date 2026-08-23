@@ -17,6 +17,7 @@ import { setProvider, currentConfig, login as doLogin, selectProviderById, descr
 import { UsageStore } from './usage.js';
 import { buildTools } from './tools/index.js';
 import { applyMode, modeInstruction, MODE_IDS, isMode } from './modes.js';
+import { loadConfigFile, saveConfigFile } from './providers.js';
 
 export interface RuntimeOptions {
   cwd?: string;
@@ -157,18 +158,25 @@ export class Runtime {
       : 'medium';
     this.config.reasoning = normalized;
     process.env.MOCHI_REASONING = normalized;
+    try {
+      const cfg = loadConfigFile();
+      cfg.reasoning = normalized;
+      saveConfigFile(cfg);
+    } catch { /* best-effort */ }
     const descMap: Record<import('./types.js').ReasoningLevel, string> = {
       low: 'Fast & agile: minimal reasoning overhead, speedy tool executions.',
       medium: 'Balanced: thoughtful analysis, careful edits, reliable verification.',
       high: 'Deep cognitive analysis: edge cases, AST blast radius checking, multi-step verification.',
       max: 'Maximum reasoning compute: exhaustive decomposition, Chameleon MoE synthesis, full invariant verification.',
+      off: 'Disabled reasoning overhead.',
+      auto: 'Model-default reasoning effort.',
     };
-    return descMap[normalized];
+    return descMap[normalized] || descMap.medium;
   }
 
   /** Get the active reasoning effort level. */
   getReasoning(): import('./types.js').ReasoningLevel {
-    return this.config.reasoning || (process.env.MOCHI_REASONING as import('./types.js').ReasoningLevel) || 'medium';
+    return this.config.reasoning || 'medium';
   }
 
   /** Start a fresh session, clearing conversation context. */

@@ -40,10 +40,17 @@ export interface Autopsy {
 }
 
 function autopsyDir(workspaceDir: string): string {
+  if (existsSync(resolve(workspaceDir, '.mochi'))) {
+    return resolve(workspaceDir, '.mochi', 'autopsies');
+  }
   return resolve(workspaceDir, 'autopsies');
 }
 
 function autopsyPath(workspaceDir: string, taskId: string): string {
+  const p1 = resolve(workspaceDir, '.mochi', 'autopsies', `${taskId}.json`);
+  if (existsSync(p1)) return p1;
+  const p2 = resolve(workspaceDir, 'autopsies', `${taskId}.json`);
+  if (existsSync(p2)) return p2;
   return resolve(autopsyDir(workspaceDir), `${taskId}.json`);
 }
 

@@ -526,9 +526,13 @@ Continue from 'Next:', do not redo completed progress.`,
         let tailCheckedAt = 0;
         let runawayFlagged = false;
 
+        const activeReasoning = (this.config.reasoning || process.env.MOCHI_REASONING || 'medium').trim().toLowerCase();
         sm.enter('stream-guard');
-        for await (const chunk of activeProvider.streamChat(messages, this.toolDefs, { temperature: 0.2, signal: this.abortSignal, reasoningEffort: reasoning as any })) {
+        for await (const chunk of activeProvider.streamChat(messages, this.toolDefs, { temperature: 0.2, signal: this.abortSignal, reasoningEffort: activeReasoning as any })) {
           chunks.push(chunk);
+          if (chunk.reasoningContent) {
+            this.events.emit({ type: 'agent:reasoning', content: chunk.reasoningContent, agentId: this.id });
+          }
           if (chunk.content) {
             const newChunk = chunk.content;
             streamBuf += newChunk;
@@ -638,7 +642,8 @@ Continue from 'Next:', do not redo completed progress.`,
           }
         }
 
-        const rawContent = chunks.map((c) => c.content).join('');
+        const rawContent = chunks.map((c) => c.content || '').join('');
+        const rawReasoning = chunks.map((c) => c.reasoningContent || '').join('');
         let content = stripThinkTags(rawContent);
         const callsByIndex = new Map<number, any>();
         for (const chunk of chunks) {
@@ -655,8 +660,8 @@ Continue from 'Next:', do not redo completed progress.`,
         const tool_calls = [...callsByIndex.values()].map((a) => ({ id: a.id, type: 'function' as const, function: { name: a.name, arguments: a.args } }));
         // If content is empty after stripping think tags, but the model did emit reasoning (and no tools),
         // extract the thinking body so we don't treat it as a dead empty response that triggers an endless loop.
-        if (!content && !tool_calls.length && rawContent.trim()) {
-          const thinkText = rawContent.replace(/<\/?(?:think|thought)>/gi, '').trim();
+        if (!content && !tool_calls.length) {
+          const thinkText = (rawReasoning || rawContent.replace(/<\/?(?:think|thought)>/gi, '')).trim();
           if (thinkText) {
             content = thinkText;
           }
@@ -885,16 +890,15 @@ Continue from 'Next:', do not redo completed progress.`,
             continue;
           }
 
-          // If the task specifically expected file changes (fileScope or acceptanceCriteria)
+          // If the task specifically expected file changes (explicit fileScope)
           // and no files were modified yet, nudge the model to execute the tool rather than
           // completing prematurely on conversational preamble.
-          const expectsFiles = (task.fileScope && task.fileScope.length > 0) ||
-                               (task.acceptanceCriteria && task.acceptanceCriteria.length > 0);
-          if (expectsFiles && !this.planMode && taskKind !== 'chat' && this.planNudges < 2) {
+          const expectsFiles = Boolean(task.fileScope && task.fileScope.length > 0);
+          if (expectsFiles && !this.planMode && taskKind !== 'chat' && this.planNudges < 1) {
             this.planNudges++;
             this.context.addMessage({
               role: 'system',
-              content: 'You responded with text, but no files have been created or modified yet for this task. Please use the write or edit tool to make the required file changes now.',
+              content: 'You responded with text, but the scoped files have not been created or modified yet for this task. Please use write, edit, or patch to make the required file changes.',
             });
             this.events.emit({ type: 'agent:log', agentId: this.id, message: '[file-guard] expected file changes; nudging to call write/edit tool' });
             continue;
@@ -1317,10 +1321,21 @@ Continue from 'Next:', do not redo completed progress.`,
         diagNote = renderDiagnostics(diags);
       }
     }
+    let recoveryHint = '';
+    if (error) {
+      const errLower = error.toLowerCase();
+      if (errLower.includes('enoent') || errLower.includes('not found') || errLower.includes('no such file')) {
+        recoveryHint = '\n[Harness Hint: Target file was not found. Use glob or search to verify paths before editing/reading.]';
+      } else if (errLower.includes('did not match') || errLower.includes('patch')) {
+        recoveryHint = '\n[Harness Hint: Target text was not found verbatim in the file. Call read tool to inspect current lines before editing.]';
+      } else if (tc.function.name === 'shell' && (errLower.includes('exit') || errLower.includes('failed') || errLower.includes('command not found'))) {
+        recoveryHint = '\n[Harness Hint: Shell command failed. Review the terminal error above to fix syntax or missing packages.]';
+      }
+    }
     const result: ToolResult = {
       toolCallId: tc.id,
       name: tc.function.name,
-      output: (error ? `Error: ${error}\n${output}` : output) + (diagNote ? `\n${diagNote}` : ''),
+      output: (error ? `Error: ${error}\n${output}` : output) + (diagNote ? `\n${diagNote}` : '') + recoveryHint,
       error,
       durationMs,
     };

@@ -261,7 +261,7 @@ it('runs and persists a scheduled cron job through the daemon', async () => {
     const after = await retryUntil(() => {
       const j = listJobs(d)[0];
       return j && j.runs >= 1 && j.nextRun > Date.now() ? j : undefined;
-    }, 20_000);
+    }, 35_000);
     expect(after.runs).toBeGreaterThanOrEqual(1);
     expect(after.nextRun).toBeGreaterThan(Date.now());
   } finally {

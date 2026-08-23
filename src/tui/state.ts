@@ -158,6 +158,12 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
       }
       return true;
     }
+    case 'agent:reasoning': {
+      const content = event.content as string | undefined;
+      if (!content) return false;
+      state.chatVer++;
+      return true;
+    }
     case 'task:failed': {
       const t = event.task as Partial<TuiTask> & { id?: string; title?: string };
       if (state.currentTask === t.title) state.currentTask = '';
@@ -168,7 +174,7 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
           stopReason: event.stopReason as string | undefined,
         });
       }
-      if (event.reason) pushLine(state, 'error', `✗ ${t.title}: ${String(event.reason ?? '').slice(0, 400)}`);
+      if (event.reason) pushLine(state, 'error', `[ERR] ${t.title}: ${String(event.reason ?? '').slice(0, 400)}`);
       return true;
     }
     case 'file:changed':
