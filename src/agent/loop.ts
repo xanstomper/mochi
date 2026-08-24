@@ -526,7 +526,7 @@ Continue from 'Next:', do not redo completed progress.`,
         let tailCheckedAt = 0;
         let runawayFlagged = false;
 
-        const activeReasoning = (this.config.reasoning || process.env.MOCHI_REASONING || 'medium').trim().toLowerCase();
+        const activeReasoning = (this.config.reasoning || process.env.MOCHI_REASONING || 'max').trim().toLowerCase();
         sm.enter('stream-guard');
         for await (const chunk of activeProvider.streamChat(messages, this.toolDefs, { temperature: 0.2, signal: this.abortSignal, reasoningEffort: activeReasoning as any })) {
           chunks.push(chunk);
@@ -970,7 +970,10 @@ Continue from 'Next:', do not redo completed progress.`,
             continue;
           }
         }
-        return this.finish(task, true, verification.summary, 'completed');
+        const finalSummary = (response.content && response.content.trim())
+          ? `${response.content.trim()}\n\n${verification.summary}`
+          : verification.summary;
+        return this.finish(task, true, finalSummary, 'completed');
       }
       if (this.verifyCount > 3) {
         // Repeated verification failure: roll the repo back to the state before
@@ -1758,9 +1761,9 @@ Continue from 'Next:', do not redo completed progress.`,
       const mentionsFile = /\b[\w./-]+\.[a-zA-Z0-9]+:\d+/.test(text) || /\b(?:file|line|in)\b/.test(text);
       const neutralNoIssue =
         /^NO_ISSUE$/i.test(text) ||
-        /no issue|cannot identify|looks (correct|good|fine)|all good/i.test(text) ||
-        // terse affirmative/no-op verdicts with no cited location/problem
+        /\b(?:no issue|no issues|no problems?|cannot identify|looks (?:correct|good|fine|clean|great|solid)|all good|lgtm|properly implemented|change looks good|diff is correct)\b/i.test(text) ||
         (!mentionsFile && (/^(done|ok|okay|clean|nothing|no problems|no problem|fine|lgtm)\b/i.test(text) || text.length < 40));
+
       if (neutralNoIssue) {
         return { tail };
       }
