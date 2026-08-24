@@ -40,9 +40,14 @@ export function parsePatch(patch: string): FilePatch[] {
   const raw = patch.replace(/\r\n/g, '\n').split('\n');
   let i = 0;
   // Skip leading lines before Begin Patch (prose like "Here is the patch:").
-  while (i < raw.length && raw[i].trim() !== '*** Begin Patch') i++;
-  if (i === raw.length) throw new Error('Patch is missing "*** Begin Patch"');
-  i++;
+  const hasBegin = raw.some((l) => l.trim() === '*** Begin Patch');
+  if (hasBegin) {
+    while (i < raw.length && raw[i].trim() !== '*** Begin Patch') i++;
+    i++;
+  } else {
+    while (i < raw.length && !raw[i].startsWith('*** ')) i++;
+    if (i === raw.length) throw new Error('Patch is missing "*** Begin Patch" or valid patch directives');
+  }
 
   const patches: FilePatch[] = [];
   let cur: FilePatch | null = null;

@@ -62,7 +62,7 @@ export const ALL_TOOLS: Tool[] = [
  * models with sufficient context to handle them without degenerating.
  */
 const CORE_TOOL_NAMES = new Set([
-  'read', 'write', 'edit', 'delete', 'shell', 'search', 'glob',
+  'read', 'write', 'edit', 'patch', 'replace_symbol', 'delete', 'shell', 'search', 'glob',
   'git', 'inspect', 'todo', 'skill', 'subagent', 'fetch', 'web_search', 'web_crawl', 'think', 'chameleon', 'blast_radius', 'session_recall'
 ]);
 
