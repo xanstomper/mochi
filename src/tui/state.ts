@@ -3,7 +3,7 @@
 // MochiEvent through reduceEvent and re-renders. Keeping this free of I/O is
 // what lets tests drive a full agent run and assert the rendered state.
 
-export type LineKind = 'user' | 'assistant' | 'system' | 'error' | 'tool' | 'task' | 'goal' | 'plain';
+export type LineKind = 'user' | 'assistant' | 'system' | 'error' | 'tool' | 'task' | 'goal' | 'plain' | 'thought';
 
 export interface TuiLine {
   kind: LineKind;
@@ -161,6 +161,12 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
     case 'agent:reasoning': {
       const content = event.content as string | undefined;
       if (!content) return false;
+      const last = state.lines[state.lines.length - 1];
+      if (last && last.kind === 'thought') {
+        last.text += content;
+      } else {
+        pushLine(state, 'thought', content);
+      }
       state.chatVer++;
       return true;
     }

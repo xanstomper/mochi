@@ -43,7 +43,7 @@ const BRACKET_PASTE_ON = '\x1b[?2004h';
 const BRACKET_PASTE_OFF = '\x1b[?2004l';
 const RESET = '\x1b[0m';
 
-type LineKind = 'user' | 'assistant' | 'system' | 'error' | 'tool' | 'task' | 'goal' | 'plain';
+type LineKind = 'user' | 'assistant' | 'system' | 'error' | 'tool' | 'task' | 'goal' | 'plain' | 'thought';
 
 interface Line {
   kind: LineKind;

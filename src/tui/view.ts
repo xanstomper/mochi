@@ -553,16 +553,20 @@ export function renderEntry(entry: RenderEntry, expandTools = false): string[] {
       return [`${T.magenta}❯${T.reset} ${T.bgUser}${T.fg}${T.bold}${text}${T.reset}`];
     case 'assistant':
       return renderMarkdown(text);
+    case 'thought':
+      return text.split('\n').map((l) => `${T.grayDark}│ ${T.reset}${T.italic}${T.gray}${l}${T.reset}`);
     case 'tool':
       return [accentToolPrefix(text)];
-    case 'error':
-      return [`${T.error}${T.bold}✗${T.reset} ${T.error}${text}${T.reset}`];
+    case 'error': {
+      const rest = text.startsWith('[ERR] ') ? text.slice(6) : text.replace(/^✗\s*/, '');
+      return [`${T.error}${T.bold}[ERR]${T.reset} ${T.error}${rest}${T.reset}`];
+    }
     case 'system':
       return [`${T.gray}${text}${T.reset}`];
     case 'task':
-      return [`${T.teal}▸ ${text}${T.reset}`];
+      return [`${T.cyan}${T.bold}[TASK]${T.reset} ${T.fg}${text}${T.reset}`];
     case 'goal':
-      return [`${T.pink}${T.bold}● ${text}${T.reset}`];
+      return [`${T.pink}${T.bold}[GOAL]${T.reset} ${T.fg}${T.bold}${text}${T.reset}`];
     default:
       return [text];
   }

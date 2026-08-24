@@ -147,10 +147,15 @@ describe('renderEntry', () => {
     expect(row).toContain('hello');
   });
 
-  it('errors get ✗', () => {
+  it('errors get [ERR]', () => {
     const [row] = renderEntry({ kind: 'error', text: 'boom' });
     const plain = row.replace(/\x1b\[[0-9;]*m/g, '');
-    expect(plain).toContain('✗ boom');
+    expect(plain).toContain('[ERR] boom');
+  });
+
+  it('thought entries render with italic gutter bar', () => {
+    const [row] = renderEntry({ kind: 'thought', text: 'analyzing AST' });
+    expect(row).toContain('analyzing AST');
   });
 
   it('empty text renders nothing', () => {
@@ -341,9 +346,9 @@ describe('color coordination', () => {
     expect(read[0]).toContain(T.cyan);
   });
 
-  it('errors are bold red with ✗', () => {
+  it('errors are bold red with [ERR]', () => {
     const err = renderEntry({ kind: 'error', text: 'boom' });
-    expect(err[0]).toContain('✗');
+    expect(err[0]).toContain('[ERR]');
     expect(err[0]).toContain(T.error);
   });
 });
