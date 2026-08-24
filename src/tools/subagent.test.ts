@@ -59,4 +59,41 @@ describe('subagent tool', () => {
       ),
     ).rejects.toThrow('child blew up');
   });
+
+  it('handles batch concurrent subagents with spawnSubagents', async () => {
+    const tasks = [
+      { prompt: 'Research indexing strategies', role: 'researcher' },
+      { prompt: 'Write unit test', role: 'tester' },
+    ];
+    const result = await subagentTool.execute(
+      { tasks },
+      ctx({
+        spawnSubagents: async (items) => {
+          return items.map((t, idx) => `[Subagent #${idx + 1} (${t.role})]: completed subtask for ${t.prompt}`);
+        },
+      }),
+    );
+    expect(result).toContain('Concurrent subagents (2 agents)');
+    expect(result).toContain('researcher');
+    expect(result).toContain('tester');
+    expect(result).toContain('Research indexing strategies');
+  });
+
+  it('handles batch concurrent subagents with JSON string tasks fallback', async () => {
+    const tasksJson = JSON.stringify([
+      { prompt: 'Security audit auth.ts', role: 'security' },
+      { prompt: 'Check DB migration', role: 'db_admin' },
+    ]);
+    const result = await subagentTool.execute(
+      { tasks: tasksJson },
+      ctx({
+        spawnSubagent: async (prompt, opts) => {
+          return `done: ${prompt} (${opts?.role})`;
+        },
+      }),
+    );
+    expect(result).toContain('Concurrent subagents (2 agents)');
+    expect(result).toContain('security');
+    expect(result).toContain('db_admin');
+  });
 });

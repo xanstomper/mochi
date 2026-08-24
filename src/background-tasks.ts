@@ -21,12 +21,16 @@ export interface BackgroundTask {
 }
 
 const tasks = new Map<string, BackgroundTask>();
+const processes = new Map<string, import('node:child_process').ChildProcess>();
 const MAX_COMPLETED = 20;
 
 function prune() {
   const done = [...tasks.values()].filter((t) => t.status !== 'running');
   if (done.length > MAX_COMPLETED) {
-    for (const t of done.slice(0, done.length - MAX_COMPLETED)) tasks.delete(t.id);
+    for (const t of done.slice(0, done.length - MAX_COMPLETED)) {
+      tasks.delete(t.id);
+      processes.delete(t.id);
+    }
   }
 }
 
@@ -49,6 +53,7 @@ export function startBackgroundTask(
     env: opts.env ?? process.env,
     detached: false,
   });
+  processes.set(id, child);
   let buffer = '';
   const cap = 200_000;
   child.stdout?.on('data', (d: Buffer) => {
@@ -60,12 +65,14 @@ export function startBackgroundTask(
   const timeout = opts.timeoutMs ?? 10 * 60_000;
   const timer = setTimeout(() => {
     try { child.kill('SIGKILL'); } catch { /* already gone */ }
+    processes.delete(id);
     task.status = 'timeout';
     task.endedAt = Date.now();
     task.output = buffer;
   }, timeout);
   child.on('exit', (code) => {
     clearTimeout(timer);
+    processes.delete(id);
     if (task.status === 'running') {
       task.status = code === 0 ? 'completed' : 'failed';
       task.exitCode = code;
@@ -76,12 +83,35 @@ export function startBackgroundTask(
   });
   child.on('error', () => {
     clearTimeout(timer);
+    processes.delete(id);
     task.status = 'failed';
     task.endedAt = Date.now();
     task.output = buffer + '\n(spawn error)';
   });
   tasks.set(id, task);
   return task;
+}
+
+export function killTask(id: string): boolean {
+  const t = tasks.get(id);
+  if (!t || t.status !== 'running') return false;
+  const child = processes.get(id);
+  if (child) {
+    try {
+      child.kill('SIGTERM');
+      setTimeout(() => {
+        try { child.kill('SIGKILL'); } catch {}
+      }, 500);
+    } catch {
+      /* process already exited */
+    }
+  }
+  processes.delete(id);
+  t.status = 'failed';
+  t.endedAt = Date.now();
+  t.output = t.output ? `${t.output}\n(task killed by agent)` : '(task killed by agent)';
+  prune();
+  return true;
 }
 
 export function getTask(id: string): BackgroundTask | undefined {

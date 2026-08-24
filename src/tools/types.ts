@@ -21,6 +21,8 @@ export interface ToolContext {
   /** Injected by the agent loop: spawn a child agent on a subtask and resolve
    *  to its summary. Returns a short result string (summary, success, tokens). */
   spawnSubagent?: (prompt: string, opts?: { role?: string }) => Promise<string>;
+  /** Spawn multiple subagents concurrently and return their aggregated results. */
+  spawnSubagents?: (tasks: Array<{ prompt: string; role?: string }>) => Promise<string[]>;
 }
 
 export interface Tool {

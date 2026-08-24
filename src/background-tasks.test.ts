@@ -44,4 +44,30 @@ describe('background tasks', () => {
     const d = describeTask(t, 500);
     expect(d.length).toBeLessThan(1000);
   }, 30_000);
+
+  it('kills a long-running background task with killTask', async () => {
+    const { killTask } = await import('./background-tasks.js');
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-bg-'));
+    const t = startBackgroundTask('sleep 60', dir, { description: 'long sleeper' });
+    expect(t.status).toBe('running');
+    const killed = killTask(t.id);
+    expect(killed).toBe(true);
+    expect(t.status).toBe('failed');
+    expect(t.output).toContain('task killed');
+  });
+
+  it('manages tasks via bgTaskTool', async () => {
+    const { bgTaskTool } = await import('./tools/bg-task.js');
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-bg-'));
+    const t = startBackgroundTask('sleep 30', dir, { description: 'test tool sleep' });
+
+    const listRes = await bgTaskTool.execute({ action: 'list' }, {} as never);
+    expect(listRes).toContain(t.id);
+
+    const statusRes = await bgTaskTool.execute({ action: 'status', task_id: t.id }, {} as never);
+    expect(statusRes).toContain(t.id);
+
+    const killRes = await bgTaskTool.execute({ action: 'kill', task_id: t.id }, {} as never);
+    expect(killRes).toContain('terminated successfully');
+  });
 });

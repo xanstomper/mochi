@@ -1216,8 +1216,9 @@ Continue from 'Next:', do not redo completed progress.`,
   private async spawnSubagent(prompt: string, role?: string): Promise<string> {
     const childRole = (role ?? 'coder') as import('../types.js').AgentRole;
     const childProfile = new AgentProfileService(this.workspace.dir).get(childRole) ?? this.profile;
+    const childId = `${this.id}-sub-${Math.random().toString(36).slice(2, 8)}`;
     const child = new Agent({
-      id: `${this.id}-sub-${Math.random().toString(36).slice(2, 8)}`,
+      id: childId,
       role: childRole,
       modelProfile: childProfile.defaultModel ?? 'coding',
       profile: childProfile,
@@ -1243,8 +1244,39 @@ Continue from 'Next:', do not redo completed progress.`,
       attempts: [],
       createdAt: Date.now(),
     };
+    this.events.emit({
+      type: 'subagent:started',
+      agentId: childId,
+      parentId: this.id,
+      role: childRole,
+      prompt: prompt.slice(0, 300),
+    });
     const result = await child.run(task);
+    this.events.emit({
+      type: 'subagent:completed',
+      agentId: childId,
+      parentId: this.id,
+      role: childRole,
+      success: result.success,
+      summary: result.summary,
+      tokensUsed: result.tokensUsed,
+    });
     return `[completed=${result.success}] ${result.summary} (${result.tokensUsed} tokens, ${result.durationMs}ms)`;
+  }
+
+  /** Spawn multiple subagents concurrently and return their aggregated results. */
+  private async spawnSubagents(tasks: Array<{ prompt: string; role?: string }>): Promise<string[]> {
+    const results = await Promise.allSettled(
+      tasks.map((t) => this.spawnSubagent(t.prompt, t.role))
+    );
+    return results.map((r, i) => {
+      const role = tasks[i]?.role ?? 'coder';
+      if (r.status === 'fulfilled') {
+        return `[Subagent #${i + 1} (${role})]: ${r.value}`;
+      }
+      const err = r.reason instanceof Error ? r.reason.message : String(r.reason);
+      return `[Subagent #${i + 1} (${role}) FAILED]: ${err}`;
+    });
   }
 
   private async runMoolCall(tc: ToolCall): Promise<void> {
@@ -1314,7 +1346,10 @@ Continue from 'Next:', do not redo completed progress.`,
       // Only the top-level agent (depth 0) can delegate; children cannot spawn
       // grandchildren, bounding the delegation tree to one level.
       ...(this.subagentDepth === 0
-        ? { spawnSubagent: (prompt: string, opts?: { role?: string }) => this.spawnSubagent(prompt, opts?.role) }
+        ? {
+            spawnSubagent: (prompt: string, opts?: { role?: string }) => this.spawnSubagent(prompt, opts?.role),
+            spawnSubagents: (tasks: Array<{ prompt: string; role?: string }>) => this.spawnSubagents(tasks),
+          }
         : {}),
     };
     this.events.emit({ type: 'tool:called', tool: tc.function.name, args, agentId: this.id });
@@ -1626,7 +1661,10 @@ Continue from 'Next:', do not redo completed progress.`,
         abortSignal: this.abortSignal,
         readCache: this.readCache,
         ...(this.subagentDepth === 0
-          ? { spawnSubagent: (p: string, o?: { role?: string }) => this.spawnSubagent(p, o?.role) }
+          ? {
+              spawnSubagent: (p: string, o?: { role?: string }) => this.spawnSubagent(p, o?.role),
+              spawnSubagents: (tasks: Array<{ prompt: string; role?: string }>) => this.spawnSubagents(tasks),
+            }
           : {}),
       };
       const { output, error } = await executeTool('shell', { command, timeout: 20 }, ctx, this.tools);

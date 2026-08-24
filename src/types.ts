@@ -225,6 +225,8 @@ export type MochiEvent =
   | { type: 'task:failed'; task: Task; agentId: string; reason: string; stopReason?: string }
   | { type: 'agent:spawned'; id: string; role: AgentRole; taskId: string }
   | { type: 'agent:completed'; id: string; taskId: string }
+  | { type: 'subagent:started'; agentId: string; parentId: string; role: AgentRole; prompt: string }
+  | { type: 'subagent:completed'; agentId: string; parentId: string; role: AgentRole; success: boolean; summary: string; tokensUsed: number }
   | { type: 'agent:log'; agentId: string; message: string }
   | { type: 'agent:reasoning'; content: string; agentId: string }
   | { type: 'agent:iteration'; agentId: string; trace: IterationTrace }

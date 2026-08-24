@@ -15,9 +15,34 @@ export function createAnthropicProvider(config: ProviderConfig) {
   const sysMsg = (msgs: ChatMessage[]) => msgs.filter((m) => m.role === 'system').map((m) => m.content ?? '').join('\n');
   const bodyMsg = (m: ChatMessage) => {
     if (m.role === 'system') return null;
-    if (m.role === 'tool') return { role: 'user', content: JSON.stringify({ type: 'tool_result', tool_use_id: m.tool_call_id, content: m.content ?? '' }) };
+    if (m.role === 'tool') {
+      return {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: m.tool_call_id,
+            content: m.content ?? '',
+          },
+        ],
+      };
+    }
     if (m.role === 'assistant' && m.tool_calls) {
-      return { role: 'assistant', content: m.content ?? '', tool_use: m.tool_calls.map((tc) => ({ id: tc.id, name: tc.function.name, input: JSON.parse(tc.function.arguments || '{}') })) };
+      const contentBlocks: any[] = [];
+      if (m.content) contentBlocks.push({ type: 'text', text: m.content });
+      for (const tc of m.tool_calls) {
+        let input = {};
+        try {
+          input = JSON.parse(tc.function.arguments || '{}');
+        } catch {}
+        contentBlocks.push({
+          type: 'tool_use',
+          id: tc.id,
+          name: tc.function.name,
+          input,
+        });
+      }
+      return { role: 'assistant', content: contentBlocks };
     }
     return { role: m.role, content: m.content ?? '' };
   };
@@ -65,8 +90,8 @@ export function createAnthropicProvider(config: ProviderConfig) {
     return { content: text, reasoningContent: reasoningText || undefined, toolCalls: toolCalls.length ? toolCalls : undefined, finishReason: data.stop_reason, usage };
   }
 
-  async function* streamChat(messages: ChatMessage[], _tools: ToolDefinition[], options?: { reasoningEffort?: string }): AsyncGenerator<StreamChunk> {
-    const resp = await chat(messages, _tools, options);
+  async function* streamChat(messages: ChatMessage[], tools: ToolDefinition[], options?: { reasoningEffort?: string }): AsyncGenerator<StreamChunk> {
+    const resp = await chat(messages, tools, options);
     yield { content: resp.content, reasoningContent: (resp as any).reasoningContent, toolCalls: resp.toolCalls, finishReason: resp.finishReason as any, usage: resp.usage };
   }
 
