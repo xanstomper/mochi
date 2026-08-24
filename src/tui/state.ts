@@ -1,7 +1,4 @@
-// Pure TUI state + event reducer, extracted from app.ts so the transcript and
-// task-tree logic is unit-testable without a terminal. The TUI feeds every
-// MochiEvent through reduceEvent and re-renders. Keeping this free of I/O is
-// what lets tests drive a full agent run and assert the rendered state.
+import { TOOL_ALIASES, normalizeToolArgs } from '../tools/index.js';
 
 export type LineKind = 'user' | 'assistant' | 'system' | 'error' | 'tool' | 'task' | 'goal' | 'plain' | 'thought';
 
@@ -39,9 +36,10 @@ export function truncateArgs(args: unknown): string {
   return s;
 }
 
-export function formatToolInvocation(tool: string, args: unknown): string {
-  if (typeof args === 'object' && args !== null) {
-    const a = args as Record<string, unknown>;
+export function formatToolInvocation(rawTool: string, rawArgs: unknown): string {
+  const tool = TOOL_ALIASES[rawTool] || rawTool;
+  if (typeof rawArgs === 'object' && rawArgs !== null) {
+    const a = normalizeToolArgs(tool, rawArgs as Record<string, unknown>);
     if (a.path) {
       if (a.oldText && a.newText) return `edit: ${a.path}`;
       if (a.content !== undefined) return `write: ${a.path}`;
@@ -50,8 +48,15 @@ export function formatToolInvocation(tool: string, args: unknown): string {
     if (a.command) return `shell: ${truncateArgs(a.command)}`;
     if (a.query) return `search: "${truncateArgs(a.query)}"`;
     if (a.pattern) return `glob: "${truncateArgs(a.pattern)}"`;
+    if (tool === 'subagent') {
+      if (a.tasks) return `subagents: ${Array.isArray(a.tasks) ? a.tasks.length : 1} parallel tasks`;
+      if (a.prompt) return `subagent (${a.role ?? 'coder'}): "${truncateArgs(a.prompt)}"`;
+    }
+    if (tool === 'bg_task') {
+      return `bg_task: ${a.action ?? 'list'} ${a.task_id ?? ''}`.trim();
+    }
   }
-  return `${tool}: (${truncateArgs(args)})`;
+  return `${rawTool}: (${truncateArgs(rawArgs)})`;
 }
 
 export function formatToolCompleted(tool: string, result?: { output?: string; error?: string; durationMs?: number }): string {
@@ -181,6 +186,19 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
         });
       }
       if (event.reason) pushLine(state, 'error', `[ERR] ${t.title}: ${String(event.reason ?? '').slice(0, 400)}`);
+      return true;
+    }
+    case 'subagent:started': {
+      const role = String(event.role ?? 'subagent');
+      const prompt = String(event.prompt ?? '').slice(0, 80);
+      pushLine(state, 'system', `[Subagent] ${role} started: "${prompt}"`);
+      return true;
+    }
+    case 'subagent:completed': {
+      const role = String(event.role ?? 'subagent');
+      const status = event.success ? 'succeeded' : 'failed';
+      const summary = String(event.summary ?? '').slice(0, 100);
+      pushLine(state, event.success ? 'system' : 'error', `[Subagent] ${role} ${status}: ${summary}`);
       return true;
     }
     case 'file:changed':

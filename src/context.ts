@@ -10,7 +10,7 @@ import { nativePlanCompaction } from './native/agent-protocol.js';
 import type { PlanRequestMessage } from './native/agent-protocol.js';
 import { classifyTaskKind, kindHint } from './taskkind.js';
 import type { ChatMessage, MochiConfig, RepoInfo, Task, ToolDefinition } from './types.js';
-import { isWeakModel } from './tools/index.js';
+import { isWeakModel, TOOL_ALIASES, normalizeToolArgs } from './tools/index.js';
 import { getCachedScaffold } from './cognitive/chameleon.js';
 import { isMode, modeInstruction } from './modes.js';
 
@@ -400,12 +400,14 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
     const FILE_TOOLS = new Set(['read', 'write', 'edit', 'delete', 'patch', 'replace_symbol', 'regex-replace', 'search-replace-multi']);
     const READ_TOOLS = new Set(['read']);
     for (const tc of message.tool_calls) {
-      if (!FILE_TOOLS.has(tc.function.name)) continue;
+      const canonical = TOOL_ALIASES[tc.function.name] || tc.function.name;
+      if (!FILE_TOOLS.has(canonical)) continue;
       let args: Record<string, unknown> = {};
       try { args = JSON.parse(tc.function.arguments || '{}'); } catch { continue; }
-      const p = typeof args.path === 'string' ? args.path : typeof args.file === 'string' ? args.file : typeof args.file_path === 'string' ? args.file_path : '';
+      const norm = normalizeToolArgs(canonical, args);
+      const p = typeof norm.path === 'string' ? norm.path : '';
       if (!p) continue;
-      if (READ_TOOLS.has(tc.function.name)) this.filesRead.add(p);
+      if (READ_TOOLS.has(canonical)) this.filesRead.add(p);
       else this.filesEdited.add(p);
     }
   }

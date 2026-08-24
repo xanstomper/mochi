@@ -42,6 +42,18 @@ describe('reduceEvent', () => {
     expect(truncateArgs('short')).toBe('short');
   });
 
+  it('tracks subagent lifecycle events', () => {
+    const s = createTuiState();
+    reduceEvent(s, ev({ type: 'subagent:started', role: 'architect', prompt: 'Design database schema' }));
+    expect(s.lines.some((l) => l.kind === 'system' && l.text.includes('[Subagent] architect started'))).toBe(true);
+
+    reduceEvent(s, ev({ type: 'subagent:completed', role: 'architect', success: true, summary: 'Schema design complete' }));
+    expect(s.lines.some((l) => l.kind === 'system' && l.text.includes('[Subagent] architect succeeded'))).toBe(true);
+
+    reduceEvent(s, ev({ type: 'subagent:completed', role: 'tester', success: false, summary: 'Tests failed' }));
+    expect(s.lines.some((l) => l.kind === 'error' && l.text.includes('[Subagent] tester failed'))).toBe(true);
+  });
+
   it('caps the transcript at the configured limit, dropping oldest', () => {
     const s = createTuiState(3);
     for (let i = 0; i < 10; i++) pushLine(s, 'system', `line${i}`);
