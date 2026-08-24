@@ -57,15 +57,17 @@ export function createAnthropicProvider(config: ProviderConfig) {
     const data: any = await res.json();
     const blocks = data.content ?? [];
     const text = blocks.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('');
+    const thinkingBlocks = blocks.filter((b: any) => b.type === 'thinking');
+    const reasoningText = thinkingBlocks.map((b: any) => b.thinking).filter(Boolean).join('\n');
     const toolUses = blocks.filter((b: any) => b.type === 'tool_use');
     const toolCalls = toolUses.map((b: any) => ({ id: b.id, type: 'function' as const, function: { name: b.name, arguments: JSON.stringify(b.input ?? {}) } }));
     const usage = data.usage ? { promptTokens: data.usage.input_tokens ?? 0, completionTokens: data.usage.output_tokens ?? 0, totalTokens: (data.usage.input_tokens ?? 0) + (data.usage.output_tokens ?? 0) } : undefined;
-    return { content: text, toolCalls: toolCalls.length ? toolCalls : undefined, finishReason: data.stop_reason, usage };
+    return { content: text, reasoningContent: reasoningText || undefined, toolCalls: toolCalls.length ? toolCalls : undefined, finishReason: data.stop_reason, usage };
   }
 
   async function* streamChat(messages: ChatMessage[], _tools: ToolDefinition[], options?: { reasoningEffort?: string }): AsyncGenerator<StreamChunk> {
     const resp = await chat(messages, _tools, options);
-    yield { content: resp.content, toolCalls: resp.toolCalls, finishReason: resp.finishReason as any, usage: resp.usage };
+    yield { content: resp.content, reasoningContent: (resp as any).reasoningContent, toolCalls: resp.toolCalls, finishReason: resp.finishReason as any, usage: resp.usage };
   }
 
   return { chat, streamChat };

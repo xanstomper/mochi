@@ -58,14 +58,23 @@ export function createGeminiProvider(config: ProviderConfig) {
     }, { maxAttempts: 4, onBackoff: (attempt, delayMs, err) => logBackoff(attempt, delayMs, err) });
     const data: any = await res.json();
     const candidates = data.candidates ?? [];
-    const content = candidates[0]?.content?.parts?.map((p: any) => p.text ?? '').join('') ?? '';
+    const parts = candidates[0]?.content?.parts ?? [];
+    const textParts = parts.filter((p: any) => !p.thought && p.text).map((p: any) => p.text);
+    const thoughtParts = parts.filter((p: any) => p.thought && p.text).map((p: any) => p.text);
+    const content = textParts.length ? textParts.join('') : (parts.map((p: any) => p.text ?? '').join('') ?? '');
+    const reasoningText = thoughtParts.join('\n');
     const u = data.usageMetadata ?? {};
-    return { content, finishReason: candidates[0]?.finishReason, usage: { promptTokens: u.promptTokenCount ?? 0, completionTokens: u.candidatesTokenCount ?? 0, totalTokens: u.totalTokenCount ?? 0 } };
+    return {
+      content,
+      reasoningContent: reasoningText || undefined,
+      finishReason: candidates[0]?.finishReason,
+      usage: { promptTokens: u.promptTokenCount ?? 0, completionTokens: u.candidatesTokenCount ?? 0, totalTokens: u.totalTokenCount ?? 0 },
+    };
   }
 
   async function* streamChat(messages: ChatMessage[], tools: ToolDefinition[], options?: { reasoningEffort?: string }): AsyncGenerator<StreamChunk> {
     const resp = await chat(messages, tools, options);
-    yield { content: resp.content, finishReason: resp.finishReason as any, usage: resp.usage };
+    yield { content: resp.content, reasoningContent: (resp as any).reasoningContent, finishReason: resp.finishReason as any, usage: resp.usage };
   }
 
   return { chat, streamChat };
