@@ -63,13 +63,14 @@ describe('CapabilityRegistry', () => {
     expect(withDb.some((s) => s.name === 'db_query')).toBe(true);
   });
 
-  it('builds default capability registry with all native tools', () => {
+  it('builds default capability registry with all native tools and resolves aliases', async () => {
     const reg = createDefaultCapabilityRegistry({});
     expect(reg.has('read')).toBe(true);
-    expect(reg.has('write')).toBe(true);
-    expect(reg.has('patch')).toBe(true);
-    expect(reg.has('shell')).toBe(true);
-    expect(reg.get('read')?.isReadOnly).toBe(true);
-    expect(reg.get('write')?.isReadOnly).toBe(false);
+    expect(reg.has('view_file')).toBe(true);
+    expect(reg.has('run_command')).toBe(true);
+    expect(reg.get('run_command')?.name).toBe('shell');
+    expect(reg.get('view_file')?.name).toBe('read');
+    expect(reg.get('view_file')?.isReadOnly).toBe(true);
+    expect(reg.get('write_to_file')?.isReadOnly).toBe(false);
   });
 });

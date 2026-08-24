@@ -849,7 +849,14 @@ Continue from 'Next:', do not redo completed progress.`,
           }
         }
         // Loop guard: repeated identical tool calls -> force the model to answer.
-        const nowSig = response.toolCalls.map((c) => `${c.function.name}:${c.function.arguments}`).join('|');
+        const nowSig = response.toolCalls.map((c) => {
+          const canonical = TOOL_ALIASES[c.function.name] || c.function.name;
+          const args = normalizeToolArgs(canonical, this.parseArgs(c.function.arguments || '{}'));
+          const sortedKeys = Object.keys(args).sort();
+          const sortedArgs: Record<string, unknown> = {};
+          for (const k of sortedKeys) sortedArgs[k] = args[k];
+          return `${canonical}:${JSON.stringify(sortedArgs)}`;
+        }).join('|');
         if (nowSig === this.lastSig) this.sigStreak++;
         else {
           this.sigStreak = 1;

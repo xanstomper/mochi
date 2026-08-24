@@ -3,6 +3,7 @@
 
 import type { Capability, CapabilityContext, CapabilityExecutionRequest, CapabilityExecutionResponse } from './capability.js';
 import type { ToolDefinition } from '../types.js';
+import { TOOL_ALIASES, normalizeToolArgs } from '../tools/index.js';
 
 export class CapabilityRegistry {
   private capabilities = new Map<string, Capability>();
@@ -18,20 +19,23 @@ export class CapabilityRegistry {
   }
 
   unregister(name: string): boolean {
-    const cap = this.capabilities.get(name);
+    const canonical = TOOL_ALIASES[name] || name;
+    const cap = this.capabilities.get(canonical);
     if (!cap) return false;
-    this.capabilities.delete(name);
+    this.capabilities.delete(canonical);
     const domain = cap.domain ?? 'core';
-    this.domainMap.get(domain)?.delete(name);
+    this.domainMap.get(domain)?.delete(canonical);
     return true;
   }
 
   get(name: string): Capability | undefined {
-    return this.capabilities.get(name);
+    const canonical = TOOL_ALIASES[name] || name;
+    return this.capabilities.get(canonical);
   }
 
   has(name: string): boolean {
-    return this.capabilities.has(name);
+    const canonical = TOOL_ALIASES[name] || name;
+    return this.capabilities.has(canonical);
   }
 
   list(): Capability[] {
@@ -60,11 +64,12 @@ export class CapabilityRegistry {
 
   async execute(
     name: string,
-    args: Record<string, unknown>,
+    rawArgs: Record<string, unknown>,
     context: CapabilityContext,
     callId = `call_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
   ): Promise<CapabilityExecutionResponse> {
-    const cap = this.capabilities.get(name);
+    const canonical = TOOL_ALIASES[name] || name;
+    const cap = this.capabilities.get(canonical);
     if (!cap) {
       return {
         callId,
@@ -77,9 +82,10 @@ export class CapabilityRegistry {
       };
     }
 
+    const args = normalizeToolArgs(canonical, rawArgs);
     const req: CapabilityExecutionRequest = {
       callId,
-      name,
+      name: canonical,
       args,
       context,
     };
