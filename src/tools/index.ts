@@ -80,7 +80,7 @@ const EXTENDED_TOOL_NAMES = new Set([
  *  with large tool schemas (>20 tools). These models degenerate into repetition
  *  loops when overwhelmed with too many tool definitions. */
 export function isWeakModel(config: MochiConfig): boolean {
-  const m = (config.model.model ?? '').toLowerCase();
+  const m = (config?.model?.model ?? '').toLowerCase();
   // DeepSeek v4 Flash is powerful enough for all tools, do not penalize it
   return m.includes('nano') || m.includes('tiny') || m.includes('lite');
 }
@@ -108,6 +108,143 @@ export function buildTools(config: MochiConfig, allowed?: string[]): Map<string,
   return map;
 }
 
+export const TOOL_ALIASES: Record<string, string> = {
+  // Shell / command execution
+  run_command: 'shell',
+  execute_command: 'shell',
+  bash: 'shell',
+  terminal: 'shell',
+  sh: 'shell',
+  exec: 'shell',
+  cmd: 'shell',
+  run_shell: 'shell',
+
+  // File reading
+  read_file: 'read',
+  view_file: 'read',
+  readFile: 'read',
+  viewFile: 'read',
+  cat: 'read',
+
+  // File writing / creation
+  write_to_file: 'write',
+  writeFile: 'write',
+  writeToFile: 'write',
+  create_file: 'write',
+  new_file: 'write',
+
+  // File editing
+  edit_file: 'edit',
+  editFile: 'edit',
+  replace_file_content: 'edit',
+  str_replace: 'edit',
+  modify_file: 'edit',
+
+  // Patching
+  apply_patch: 'patch',
+  patch_file: 'patch',
+  patchFile: 'patch',
+
+  // File searching & listing
+  find_files: 'glob',
+  file_search: 'glob',
+  list_dir: 'glob',
+  find_by_name: 'glob',
+  list_files: 'glob',
+  listFiles: 'glob',
+  dir: 'glob',
+
+  // Content searching
+  grep: 'search',
+  search_files: 'search',
+  grep_search: 'search',
+  ripgrep: 'search',
+  grepSearch: 'search',
+
+  // Deletion
+  delete_file: 'delete',
+  remove_file: 'delete',
+  unlink: 'delete',
+  deleteFile: 'delete',
+
+  // Subagents & delegation
+  invoke_subagent: 'subagent',
+  agent_delegate: 'subagent',
+  spawn_agent: 'subagent',
+  invokeSubagent: 'subagent',
+
+  // Background tasks
+  manage_task: 'bg_task',
+  background_task: 'bg_task',
+  task_manager: 'bg_task',
+  manageTask: 'bg_task',
+
+  // Memory & session recall
+  session_search: 'session_recall',
+  search_history: 'session_recall',
+  history_search: 'session_recall',
+
+  // Web & network
+  fetch_url: 'fetch',
+  web_fetch: 'fetch',
+  read_url_content: 'fetch',
+  search_web: 'web_search',
+  google_search: 'web_search',
+};
+
+export function normalizeToolArgs(toolName: string, args: Record<string, unknown>): Record<string, unknown> {
+  const norm: Record<string, unknown> = { ...args };
+
+  // 1. Path normalization
+  if (norm.path === undefined) {
+    norm.path = norm.file_path ?? norm.filePath ?? norm.filename ?? norm.file ?? norm.TargetFile ?? norm.target_file ?? norm.AbsolutePath ?? norm.absolute_path ?? norm.target;
+  }
+
+  // 2. Command normalization
+  if (norm.command === undefined) {
+    norm.command = norm.cmd ?? norm.CommandLine ?? norm.command_line ?? norm.script ?? norm.exec;
+  }
+
+  // 3. Content normalization
+  if (norm.content === undefined) {
+    norm.content = norm.file_text ?? norm.CodeContent ?? norm.code_content ?? norm.text ?? norm.body ?? norm.Code;
+  }
+
+  // 4. Edit oldText / newText normalization
+  if (norm.oldText === undefined) {
+    norm.oldText = norm.old_text ?? norm.old_string ?? norm.oldString ?? norm.TargetContent ?? norm.target_content ?? norm.search ?? norm.find;
+  }
+  if (norm.newText === undefined) {
+    norm.newText = norm.new_text ?? norm.new_string ?? norm.newString ?? norm.ReplacementContent ?? norm.replacement_content ?? norm.replace;
+  }
+
+  // 5. Query / Pattern normalization
+  if (norm.pattern === undefined) {
+    norm.pattern = norm.Pattern ?? norm.glob ?? norm.glob_pattern ?? norm.query ?? norm.Query ?? norm.search_pattern;
+  }
+  if (norm.query === undefined && (toolName === 'search' || toolName === 'web_search')) {
+    norm.query = norm.Query ?? norm.pattern ?? norm.Pattern ?? norm.term ?? norm.search_term;
+  }
+
+  // 6. Subagent / Prompt normalization
+  if (norm.prompt === undefined) {
+    norm.prompt = norm.Prompt ?? norm.instructions ?? norm.instruction ?? norm.task ?? norm.description ?? norm.Description;
+  }
+  if (norm.role === undefined && norm.Role !== undefined) {
+    norm.role = norm.Role;
+  }
+
+  // 7. Background task action / taskId normalization
+  if (norm.task_id === undefined) {
+    norm.task_id = norm.taskId ?? norm.TaskId ?? norm.id ?? norm.taskID;
+  }
+  if (norm.action === undefined) {
+    norm.action = norm.Action ?? norm.operation ?? norm.op;
+  }
+
+  return norm;
+}
+
 export function toolDescriptions(tools: Map<string, Tool>): string {
   const lines: string[] = [];
   for (const [name, tool] of tools) {
@@ -129,14 +266,16 @@ export function validateArgs(tool: Tool, args: Record<string, unknown>): string 
 }
 
 export async function executeTool(
-  name: string,
-  args: Record<string, unknown>,
+  rawName: string,
+  rawArgs: Record<string, unknown>,
   ctx: ToolContext,
   tools: Map<string, Tool>,
 ): Promise<{ output: string; error?: string; durationMs: number }> {
+  const name = TOOL_ALIASES[rawName] || rawName;
   const tool = tools.get(name);
-  if (!tool) return { output: '', error: `Unknown tool: ${name}`, durationMs: 0 };
+  if (!tool) return { output: '', error: `Unknown tool: ${rawName}`, durationMs: 0 };
 
+  const args = normalizeToolArgs(name, rawArgs);
   const validation = validateArgs(tool, args);
   if (validation) return { output: '', error: validation, durationMs: 0 };
 

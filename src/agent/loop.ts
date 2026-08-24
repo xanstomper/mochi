@@ -8,7 +8,7 @@ import { ContextEngine } from '../context.js';
 import { createProvider } from '../model/router.js';
 import { isMode, modeInstruction } from '../modes.js';
 import { kvCache } from '../kv-cache.js';
-import { executeTool, buildTools } from '../tools/index.js';
+import { executeTool, buildTools, TOOL_ALIASES, normalizeToolArgs } from '../tools/index.js';
 import type { ToolContext, ReadCache } from '../tools/types.js';
 import { detectRepo, languageHint } from '../repo.js';
 import { classifyTaskKind } from '../taskkind.js';
@@ -1133,15 +1133,16 @@ Continue from 'Next:', do not redo completed progress.`,
   }
 
   private isReadOnly(name: string): boolean {
+    const canonical = TOOL_ALIASES[name] || name;
     // Allowlist of non-mutating tools. Note: MCP resource tools registered as
     // <server>__resources_list/read are read-only by construction.
     return [
       'read', 'search', 'glob', 'inspect', 'get_function', 'find_callers', 'type_hierarchy',
-      'todo', 'skill', 'memory', 'chameleon', 'analyze_code', 'perf', 'perf_audit',
+      'todo', 'skill', 'memory', 'session_recall', 'blast_radius', 'chameleon', 'analyze_code', 'perf', 'perf_audit',
       'web_search', 'get_diagnostics', 'git_blame', 'git_history', 'system_info',
       'find_references', 'find_definitions', 'db_inspect', 'diff', 'tree', 'deepwiki',
-      'fetch', 'verify', 'sql_codebase', 'think',
-    ].includes(name) || /__resources_(list|read)$/.test(name);
+      'fetch', 'verify', 'sql_codebase', 'sql_codebase_query', 'think',
+    ].includes(canonical) || /__resources_(list|read)$/.test(canonical);
   }
 
   /** Veto a tool call in plan mode, still answering its tool_call_id so the
@@ -1152,12 +1153,13 @@ Continue from 'Next:', do not redo completed progress.`,
 
   /** Mark a tool result as "file changed" and track the affected paths. */
   private trackFileChange(name: string, args: Record<string, unknown>, toolResult?: { output?: string }) {
-    if (['write', 'edit', 'delete', 'patch'].includes(name)) {
+    const canonical = TOOL_ALIASES[name] || name;
+    if (['write', 'edit', 'delete', 'patch'].includes(canonical)) {
       this.fileChanged = true;
       const path = String(args.path ?? '');
       if (path) this.context.addModifiedFile(resolve(this.cwd, path));
     }
-    if (name === 'patch' && toolResult?.output) {
+    if (canonical === 'patch' && toolResult?.output) {
       for (const line of toolResult.output.split('\n')) {
         const m = line.match(/^- (?:added|updated|deleted) (.+?)(?: \(\d+ lines\))?$/);
         if (m) this.context.addModifiedFile(resolve(this.cwd, m[1]));
@@ -1165,12 +1167,18 @@ Continue from 'Next:', do not redo completed progress.`,
     }
   }
 
-  private async executeToolCalls(toolCalls: ToolCall[]) {
-    const batch = [...toolCalls];
+  /**
+   * Run the model's chosen tool calls in parallel-where-safe order:
+   *   1. All read-only calls (read/search/glob/etc.) run concurrently via Promise.all.
+   *   2. Mutating calls to DISTINCT target paths run concurrently.
+   *   3. Shell/other stateful calls run sequentially to preserve causal order.
+   */
+  private async executeToolCalls(batch: ToolCall[]): Promise<void> {
     while (batch.length > 0) {
       if (this.abortSignal?.aborted) return;
       const head = batch[0];
-      if (this.isReadOnly(head.function.name)) {
+      const headName = TOOL_ALIASES[head.function.name] || head.function.name;
+      if (this.isReadOnly(headName)) {
         let n = 0;
         while (n < batch.length && n < 8 && this.isReadOnly(batch[n].function.name)) n++;
         const group = batch.splice(0, Math.max(n, 1));
@@ -1181,15 +1189,18 @@ Continue from 'Next:', do not redo completed progress.`,
       // Writes-edits to DISTINCT target files are independent and safe to run in
       // parallel, which lets the model create/edit several files in one turn
       // instead of paying a round-trip per file — a real cut to iterations/tokens.
-      if (['write', 'edit', 'delete'].includes(head.function.name)) {
+      if (['write', 'edit', 'delete'].includes(headName)) {
         const seen = new Set<string>();
         const group: ToolCall[] = [];
         const remaining: ToolCall[] = [];
         for (const tc of batch) {
-          if (['write', 'edit', 'delete'].includes(tc.function.name)) {
+          const tcName = TOOL_ALIASES[tc.function.name] || tc.function.name;
+          if (['write', 'edit', 'delete'].includes(tcName)) {
             let path = '';
             try {
-              path = String(JSON.parse(tc.function.arguments || '{}').path ?? '');
+              const parsed = this.parseArgs(tc.function.arguments || '{}');
+              const normalized = normalizeToolArgs(tcName, parsed);
+              path = String(normalized.path ?? '');
             } catch { /* treat as independent */ }
             if (seen.has(path)) { remaining.push(tc); continue; }
             seen.add(path);
@@ -1281,6 +1292,7 @@ Continue from 'Next:', do not redo completed progress.`,
 
   private async runMoolCall(tc: ToolCall): Promise<void> {
     if (this.abortSignal?.aborted) return;
+    const toolName = TOOL_ALIASES[tc.function.name] || tc.function.name;
     if (this.budget) {
       this.budget.recordToolCall();
       if (!this.budget.canExecuteTool()) {
@@ -1289,28 +1301,28 @@ Continue from 'Next:', do not redo completed progress.`,
         return;
       }
     }
-    const before = await this.hooks.runBefore('before_tool', { tool: tc.function.name });
+    const before = await this.hooks.runBefore('before_tool', { tool: toolName });
     if (!before.allowed) {
-      this.context.addKnownError(`before_tool hook vetoed ${tc.function.name}`);
-      this.vetoToolCall(tc, `before_tool hook vetoed ${tc.function.name}.`);
+      this.context.addKnownError(`before_tool hook vetoed ${toolName}`);
+      this.vetoToolCall(tc, `before_tool hook vetoed ${toolName}.`);
       return;
     }
-    if (['edit', 'write', 'delete', 'patch'].includes(tc.function.name)) {
-      const editHook = await this.hooks.runBefore('before_edit', { tool: tc.function.name });
+    if (['edit', 'write', 'delete', 'patch'].includes(toolName)) {
+      const editHook = await this.hooks.runBefore('before_edit', { tool: toolName });
       if (!editHook.allowed) {
         this.vetoToolCall(tc, 'before_edit hook vetoed this edit.');
         return;
       }
     }
-    if (tc.function.name === 'shell') {
-      const shellHook = await this.hooks.runBefore('before_shell', { tool: tc.function.name });
+    if (toolName === 'shell') {
+      const shellHook = await this.hooks.runBefore('before_shell', { tool: toolName });
       if (!shellHook.allowed) return;
     }
-    const args = this.parseArgs(tc.function.arguments);
+    const args = normalizeToolArgs(toolName, this.parseArgs(tc.function.arguments));
     // Pre-execution snapshot: take it BEFORE the first mutating tool runs so
     // the restore point predates the agent's own edits. Only on a CLEAN tree
     // (a dirty tree has user work we must never stash or reset away).
-    if (['write', 'edit', 'delete', 'patch'].includes(tc.function.name) && !this.preEditCheckpoint && !this.checkpointFailed) {
+    if (['write', 'edit', 'delete', 'patch'].includes(toolName) && !this.preEditCheckpoint && !this.checkpointFailed) {
       try {
         this.preEditCheckpoint = (await gitPreEditSnapshot(this.cwd, `mochi pre-edit [${this.id}]`)) ?? undefined;
       } catch {
@@ -1321,17 +1333,17 @@ Continue from 'Next:', do not redo completed progress.`,
     // config, data) gains nothing from repo-wide suites or builds — they
     // exercise code, not content, and pre-existing failures then burn tokens
     // and fail correct work. Veto the suite; suggest a direct check instead.
-    if (tc.function.name === 'shell' && this.contentOnly) {
+    if (toolName === 'shell' && this.contentOnly) {
       const cmd = String(args.command ?? '');
       const isRepoWide = /^(npm|pnpm|yarn)\s+(test|run\s+test)|^(npx|pnpm)\s+(vitest|jest|mocha)\s*(run)?\s*$|\bgo\s+test\s+\.\/\.\.\b|^cargo\s+(test|build)|^mvn\s+test|^\.\/gradlew\s+test|^dotnet\s+test|^python3?\s+-m\s+pytest\s*$|^bundle\s+exec\s+rspec$|^zig\s+build\s+test$/.test(cmd.trim());
       if (isRepoWide) {
         this.context.addMessage({
           role: 'tool',
           tool_call_id: tc.id,
-          name: 'shell',
+          name: tc.function.name,
           content: 'Vetoed: this is a content-only task; repo-wide test suites and builds do not exercise file content. Verify the deliverable directly instead (e.g. test -f <path>, grep -q <expected> <path>, cat <path>) and finish.',
         });
-        this.events.emit({ type: 'tool:completed', tool: 'shell', result: { toolCallId: tc.id, name: 'shell', output: 'Vetoed content-only repo-wide suite.', durationMs: 0 }, agentId: this.id });
+        this.events.emit({ type: 'tool:completed', tool: tc.function.name, result: { toolCallId: tc.id, name: tc.function.name, output: 'Vetoed content-only repo-wide suite.', durationMs: 0 }, agentId: this.id });
         return;
       }
     }
@@ -1359,9 +1371,9 @@ Continue from 'Next:', do not redo completed progress.`,
     // fixes them now instead of burning whole iterations discovering them at
     // verification time.
     let diagNote = '';
-    if (['write', 'edit', 'patch'].includes(tc.function.name) && !error) {
+    if (['write', 'edit', 'patch'].includes(toolName) && !error) {
       const targets = [String(args.path ?? '')].filter(Boolean);
-      if (tc.function.name === 'patch' && typeof output === 'string') {
+      if (toolName === 'patch' && typeof output === 'string') {
         for (const line of output.split('\n')) {
           const m = line.match(/^- (?:added|updated|deleted) (.+?)(?: \(\d+ lines\))?$/);
           if (m && /\.(ts|tsx|js|jsx|mts|cts|py)$/.test(m[1])) targets.push(m[1]);
@@ -1381,7 +1393,7 @@ Continue from 'Next:', do not redo completed progress.`,
         recoveryHint = '\n[Harness Hint: Target file was not found. Use glob or search to verify paths before editing/reading.]';
       } else if (errLower.includes('did not match') || errLower.includes('patch')) {
         recoveryHint = '\n[Harness Hint: Target text was not found verbatim in the file. Call read tool to inspect current lines before editing.]';
-      } else if (tc.function.name === 'shell' && (errLower.includes('exit') || errLower.includes('failed') || errLower.includes('command not found'))) {
+      } else if (toolName === 'shell' && (errLower.includes('exit') || errLower.includes('failed') || errLower.includes('command not found'))) {
         recoveryHint = '\n[Harness Hint: Shell command failed. Review the terminal error above to fix syntax or missing packages.]';
       }
     }
@@ -1400,12 +1412,12 @@ Continue from 'Next:', do not redo completed progress.`,
     const foldedOutput = pol.content;
     this.context.addMessage({ role: 'tool', tool_call_id: tc.id, content: foldedOutput, name: tc.function.name });
     this.events.emit({ type: 'tool:completed', tool: tc.function.name, result, agentId: this.id });
-    await this.hooks.runAfter('after_tool', { tool: tc.function.name });
-    if (['edit', 'write', 'delete', 'patch'].includes(tc.function.name)) {
-      await this.hooks.runAfter('after_edit', { tool: tc.function.name });
+    await this.hooks.runAfter('after_tool', { tool: toolName });
+    if (['edit', 'write', 'delete', 'patch'].includes(toolName)) {
+      await this.hooks.runAfter('after_edit', { tool: toolName });
     }
-    if (tc.function.name === 'shell') {
-      await this.hooks.runAfter('after_shell', { tool: tc.function.name });
+    if (toolName === 'shell') {
+      await this.hooks.runAfter('after_shell', { tool: toolName });
     }
     if (error) {
       this.errors.push(error);
@@ -1416,7 +1428,7 @@ Continue from 'Next:', do not redo completed progress.`,
         this.learning.record(classified.pattern, this.lastStrategy ?? 'unclassified', false);
       }
     }
-    this.trackFileChange(tc.function.name, args, { output: result.output });
+    this.trackFileChange(toolName, args, { output: result.output });
   }
   private parseArgs(raw: string): Record<string, unknown> {
     if (!raw || !raw.trim()) return {};
@@ -1459,7 +1471,23 @@ Continue from 'Next:', do not redo completed progress.`,
       } catch {}
     }
 
-    // 5. Fallback
+    // 5. Incomplete JSON stream repair (auto-close open strings and braces)
+    if (firstBrace !== -1) {
+      let openSlice = trimmed.slice(firstBrace);
+      const quoteCount = (openSlice.match(/(?<!\\)"/g) || []).length;
+      if (quoteCount % 2 !== 0) openSlice += '"';
+      const openBraces = (openSlice.match(/\{/g) || []).length;
+      const closedBraces = (openSlice.match(/\}/g) || []).length;
+      if (openBraces > closedBraces) {
+        openSlice += '}'.repeat(openBraces - closedBraces);
+        try {
+          const res = JSON.parse(openSlice);
+          if (typeof res === 'object' && res !== null && !Array.isArray(res)) return res as Record<string, unknown>;
+        } catch {}
+      }
+    }
+
+    // 6. Fallback
     return { content: raw, query: raw, command: raw, path: raw };
   }
 

@@ -259,3 +259,42 @@ describe('session_recall', () => {
     expect(getOut).toContain('refresh_token grant type');
   });
 });
+
+describe('tool aliases and argument normalization', () => {
+  it('executes tool aliases and normalizes alternate argument keys', async () => {
+    const { executeTool, buildTools, TOOL_ALIASES, normalizeToolArgs } = await import('./index.js');
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-aliases-'));
+    const tools = buildTools({ permissions: { read: true, write: true, shell: true } } as any);
+    const c = ctx(dir);
+    c.config = { permissions: { read: true, write: true, shell: true }, safety: { mode: 'auto' } } as any;
+
+    // 1. write_to_file alias with TargetFile and CodeContent
+    const writeRes = await executeTool('write_to_file', { TargetFile: 'demo.ts', CodeContent: 'export const x = 42;\n' }, c, tools);
+    expect(writeRes.error).toBeUndefined();
+    expect(existsSync(resolve(dir, 'demo.ts'))).toBe(true);
+
+    // 2. view_file alias with AbsolutePath
+    const readRes = await executeTool('view_file', { AbsolutePath: resolve(dir, 'demo.ts') }, c, tools);
+    expect(readRes.error).toBeUndefined();
+    expect(readRes.output).toContain('export const x = 42;');
+
+    // 3. replace_file_content alias with TargetContent and ReplacementContent
+    const editRes = await executeTool('replace_file_content', {
+      file_path: 'demo.ts',
+      TargetContent: 'x = 42',
+      ReplacementContent: 'x = 100',
+    }, c, tools);
+    expect(editRes.error).toBeUndefined();
+    expect(readFileSync(resolve(dir, 'demo.ts'), 'utf8')).toContain('x = 100');
+
+    // 4. run_command alias with CommandLine
+    const shellRes = await executeTool('run_command', { CommandLine: 'echo "hello from alias"' }, c, tools);
+    expect(shellRes.error).toBeUndefined();
+    expect(shellRes.output).toContain('hello from alias');
+
+    // 5. find_files alias with search pattern
+    const globRes = await executeTool('find_files', { Pattern: '*.ts' }, c, tools);
+    expect(globRes.error).toBeUndefined();
+    expect(globRes.output).toContain('demo.ts');
+  });
+});
