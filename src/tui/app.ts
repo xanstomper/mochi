@@ -1095,7 +1095,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       await run(async () => {
         const { restore } = await import('../git.js');
         await restore(projectRoot, cpJson);
-        return `⏪ Rewound to ${cpJson.type} ${cpJson.ref} — "${cpJson.message}"`;
+        return `[REWIND] Rewound to ${cpJson.type} ${cpJson.ref} — "${cpJson.message}"`;
       });
       return;
     }
@@ -1394,6 +1394,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     if (idx < 0) return;
 
     if (idx === 0) {
+      runtime.resetSession();
       state.lines = [];
       state.tasks.clear();
       state.scroll = 0;
@@ -1413,6 +1414,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     ];
     const actIdx = await openMenu(`Manage: ${(chosen.objective || 'Session').slice(0, 30)}`, subActions);
     if (actIdx === 0) {
+      runtime.activeSessionId = chosen.id;
       const msgs = store.messages(chosen.id);
       state.lines = [];
       state.tasks.clear();
