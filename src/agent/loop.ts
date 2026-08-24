@@ -631,8 +631,23 @@ Continue from 'Next:', do not redo completed progress.`,
                   : (thinkCloseIdx !== -1 ? thinkCloseIdx : thoughtCloseIdx);
 
                 if (closeIdx === -1) {
-                  streamBuf = '';
+                  const partialClose = streamBuf.match(/<\/(?:th?(?:i(?:n(?:k)?)?)?|th?(?:o(?:u(?:g(?:h(?:t)?)?)?)?)?)?$/i);
+                  if (partialClose) {
+                    const safeChunk = streamBuf.slice(0, streamBuf.length - partialClose[0].length);
+                    if (safeChunk) {
+                      this.events.emit({ type: 'agent:reasoning', content: safeChunk, agentId: this.id });
+                    }
+                    streamBuf = partialClose[0];
+                    break;
+                  } else {
+                    this.events.emit({ type: 'agent:reasoning', content: streamBuf, agentId: this.id });
+                    streamBuf = '';
+                  }
                 } else {
+                  const thinkChunk = streamBuf.slice(0, closeIdx);
+                  if (thinkChunk) {
+                    this.events.emit({ type: 'agent:reasoning', content: thinkChunk, agentId: this.id });
+                  }
                   const isThoughtClose = closeIdx === thoughtCloseIdx;
                   streamBuf = streamBuf.slice(closeIdx + (isThoughtClose ? 10 : 8));
                   inThinkTag = false;
