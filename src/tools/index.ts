@@ -46,6 +46,7 @@ import { sessionRecallTool } from './session-recall.js';
 import { bgTaskTool } from './bg-task.js';
 import { outlineTool } from './outline.js';
 import { mergeConflictTool } from './merge-conflict.js';
+import { codeSimilarityTool } from './code-similarity.js';
 
 export const ALL_TOOLS: Tool[] = [
   readTool, writeTool, editTool, deleteTool, shellTool, searchTool, globTool, outlineTool,
@@ -55,7 +56,7 @@ export const ALL_TOOLS: Tool[] = [
   webSearchTool, getDiagnosticsTool, mkdirTool, moveFileTool, copyFileTool,
   gitBlameTool, gitHistoryTool, systemInfoTool, findReferencesTool, findDefinitionsTool,
   dbInspectTool, createPrTool, thinkTool, webCrawlTool, renameSymbolTool, replTool,
-  blastRadiusTool, mergeConflictTool,
+  blastRadiusTool, mergeConflictTool, codeSimilarityTool,
   ...symbolTools, replaceSymbolTool, chameleonTool,
 ];
 
@@ -171,6 +172,10 @@ export const TOOL_ALIASES: Record<string, string> = {
   get_outline: 'outline',
   code_outline: 'outline',
   file_outline: 'outline',
+  find_similar_code: 'code_similarity',
+  detect_duplicates: 'code_similarity',
+  clone_search: 'code_similarity',
+  similar_code: 'code_similarity',
 
   // Deletion
   delete_file: 'delete',
