@@ -54,6 +54,7 @@ import { applyToolOutputPolicy } from '../core/tool-output.js';
 import { nativeStripThinkTags } from '../native/core.js';
 import { LoopStateMachine } from './loop-state.js';
 import { scanDiffForHygiene, renderHygieneFindings, type HygieneFinding } from '../core/diff-hygiene.js';
+import { parseCompilerDiagnostics, renderCompilerAdvisory } from './error-diagnostics.js';
 
 export function stripThinkTags(text: string): string {
   if (!text) return '';
@@ -1478,6 +1479,16 @@ Continue from 'Next:', do not redo completed progress.`,
     } else {
       this.consecutiveToolErrors.delete(toolName);
     }
+
+    // Polyglot Compiler Diagnostics: If shell or test command produced compiler/runtime errors,
+    // pinpoint exact error lines with real source snippets directly to the agent.
+    if (typeof output === 'string' && output.length > 0) {
+      const diags = parseCompilerDiagnostics(output, this.cwd);
+      if (diags.length > 0) {
+        recoveryHint += renderCompilerAdvisory(diags);
+      }
+    }
+
     const result: ToolResult = {
       toolCallId: tc.id,
       name: tc.function.name,
