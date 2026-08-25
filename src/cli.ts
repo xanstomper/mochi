@@ -111,6 +111,10 @@ Usage:
   mochi session search "<text>"       # full-text search past transcripts
   mochi speculate "<question>"
   mochi mode <normal|spec|security|codemod|chaos>  # set execution mode
+  mochi rules [list|add]             # manage modular project rules
+  mochi bg [list|logs|kill]          # manage async background tasks
+  mochi discord [run|status]         # run Discord bot gateway
+  mochi dashboard | mochi web        # open web dashboard in browser
   mochi plugin add <dir>|remove <name>|list        # spec 12-E plugin registry
   mochi review [--strict] [--json] [--diff-only]   # git diff | mochi review
   mochi fix [--auto-commit]                        # cat crash.log | mochi fix
@@ -618,6 +622,87 @@ async function main() {
       return;
     }
     console.log('Usage: mochi plugin <add <dir>|remove <name>|list>');
+    return;
+  }
+  if (first === 'rules' || first === 'rule') {
+    const { loadRules, synthesizeRule } = await import('./rules.js');
+    const sub = positional[1];
+    if (sub === 'list' || !sub) {
+      const all = loadRules(cwd);
+      if (!all.length) { console.log('No modular rules found in .mochi/rules/. Use: mochi rules add <name> "<title>" "<content>"'); return; }
+      console.log(`🍡 Modular Project Rules (${all.length}):\n`);
+      for (const r of all) {
+        const triggers = [
+          r.globs?.length ? `globs:[${r.globs.join(',')}]` : null,
+          r.keywords?.length ? `keywords:[${r.keywords.join(',')}]` : null,
+        ].filter(Boolean).join(' ');
+        console.log(`- ${r.id.padEnd(20)} "${r.title}" ${triggers ? `(${triggers})` : '(universal)'}`);
+      }
+      return;
+    }
+    if (sub === 'add') {
+      const name = positional[2];
+      const title = positional[3] || name;
+      const content = positional.slice(4).join(' ') || positional[3] || '';
+      if (!name || !content) { console.log('Usage: mochi rules add <name> "<title>" "<content>"'); return; }
+      synthesizeRule(cwd, name, title, content);
+      console.log(`Added rule "${name}" in .mochi/rules/${name}.md`);
+      return;
+    }
+    console.log('Usage: mochi rules [list | add <name> "<title>" "<content>"]');
+    return;
+  }
+  if (first === 'bg') {
+    const { listTasks, getTask, describeTask, killTask } = await import('./background-tasks.js');
+    const sub = positional[1];
+    if (sub === 'list' || !sub) {
+      const all = listTasks();
+      if (!all.length) { console.log('No background tasks.'); return; }
+      for (const t of all) {
+        console.log(describeTask(t, 200));
+      }
+      return;
+    }
+    if (sub === 'status' || sub === 'logs' || sub === 'show') {
+      const id = positional[2];
+      if (!id) { console.log('Usage: mochi bg logs <task-id>'); return; }
+      const t = getTask(id);
+      if (!t) { console.log(`No background task "${id}".`); return; }
+      console.log(`[bg:${t.id} status=${t.status} exit=${t.exitCode ?? 'running'}]\n${t.output || '(no output)'}`);
+      return;
+    }
+    if (sub === 'kill' || sub === 'stop') {
+      const id = positional[2];
+      if (!id) { console.log('Usage: mochi bg kill <task-id>'); return; }
+      const ok = killTask(id);
+      console.log(ok ? `Killed background task ${id}.` : `Could not kill task ${id}.`);
+      return;
+    }
+    console.log('Usage: mochi bg [list | logs <id> | kill <id>]');
+    return;
+  }
+  if (first === 'discord') {
+    const { loadDiscordConfig } = await import('./discord.js');
+    const cfg = loadDiscordConfig(cwd);
+    if (!cfg) {
+      console.error('No Discord bot configuration found. Set DISCORD_BOT_TOKEN in .env, ~/.mochi/.env, or ~/.hermes/.env.');
+      process.exit(1);
+    }
+    console.log(`🍡 Mochi Discord Gateway configured with prefix "${cfg.prefix || '!mochi'}".`);
+    console.log(`Bot Token: ${cfg.token.slice(0, 10)}... (whitelisting: ${cfg.allowAllUsers ? 'all users' : (cfg.allowedUserIds?.length ?? 0) + ' users'})`);
+    return;
+  }
+  if (first === 'dashboard' || first === 'web') {
+    const wsDir = resolve(cwd, '.mochi');
+    const { readDaemonInfo, startDaemon, daemonRunning } = await import('./daemon.js');
+    let info = readDaemonInfo(wsDir);
+    if (!info || !daemonRunning(wsDir)) {
+      const r = await startDaemon({ cwd, config: configOverrides });
+      if (!r.ok) { console.error(`Failed to start daemon: ${r.error}`); process.exit(1); }
+      info = readDaemonInfo(wsDir);
+    }
+    const url = `http://127.0.0.1:${info?.port}/dashboard?token=${info?.token}`;
+    console.log(`🍡 Mochi Web Dashboard running at:\n${url}\n`);
     return;
   }
   if (first === 'review') {
