@@ -96,4 +96,21 @@ describe('subagent tool', () => {
     expect(result).toContain('security');
     expect(result).toContain('db_admin');
   });
+
+  it('passes scratchpad and timeoutMs to spawnSubagent', async () => {
+    let capturedOpts: { role?: string; timeoutMs?: number; scratchpad?: string } | undefined;
+    const result = await subagentTool.execute(
+      { prompt: 'Optimize query', role: 'db_admin', scratchpad: 'DB is postgres 15', timeoutMs: 5000 },
+      ctx({
+        spawnSubagent: async (prompt, opts) => {
+          capturedOpts = opts;
+          return `optimized: ${prompt}`;
+        },
+      }),
+    );
+    expect(result).toContain('Subagent result:');
+    expect(capturedOpts?.role).toBe('db_admin');
+    expect(capturedOpts?.scratchpad).toBe('DB is postgres 15');
+    expect(capturedOpts?.timeoutMs).toBe(5000);
+  });
 });

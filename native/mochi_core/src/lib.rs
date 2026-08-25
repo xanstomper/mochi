@@ -256,3 +256,41 @@ pub unsafe extern "C" fn mochi_classify_prompt(prompt_ptr: *const c_char) -> c_i
         planner::TaskKind::OneShotAnswer => 6,
     }
 }
+
+#[no_mangle]
+pub unsafe extern "C" fn mochi_strip_ansi(
+    text_ptr: *const c_char,
+    out_buf: *mut c_char,
+    out_cap: usize,
+) -> c_int {
+    if text_ptr.is_null() || out_buf.is_null() || out_cap == 0 {
+        return -1;
+    }
+    let Ok(text) = (unsafe { CStr::from_ptr(text_ptr) }).to_str() else {
+        return -1;
+    };
+
+    let stripped = tokens::strip_ansi(text);
+    if let Ok(c_res) = CString::new(stripped) {
+        let bytes = c_res.as_bytes_with_nul();
+        let copy_len = bytes.len().min(out_cap);
+        let dst = unsafe { slice::from_raw_parts_mut(out_buf as *mut u8, copy_len) };
+        dst.copy_from_slice(&bytes[..copy_len]);
+        if copy_len > 0 {
+            dst[copy_len - 1] = 0; // Null terminate
+        }
+        return (copy_len - 1) as c_int;
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mochi_estimate_tokens(text_ptr: *const c_char) -> usize {
+    if text_ptr.is_null() {
+        return 0;
+    }
+    let Ok(text) = (unsafe { CStr::from_ptr(text_ptr) }).to_str() else {
+        return 0;
+    };
+    tokens::estimate_tokens_approx(text)
+}

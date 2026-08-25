@@ -44,9 +44,22 @@ export const shellTool: Tool = {
     let command = String(args.command ?? '');
     if (!command) throw new Error('No command provided');
 
-    // Background task management surface: `bg status <id>` / `bg list`.
-    if (command === 'bg list' || command.startsWith('bg status')) {
-      const { listTasks, getTask, describeTask } = await import('../background-tasks.js');
+    // Background task management surface: `bg status <id>` / `bg list` / `bg kill <id>` / `bg logs <id>`.
+    if (command === 'bg list' || command.startsWith('bg status') || command.startsWith('bg kill') || command.startsWith('bg logs')) {
+      const { listTasks, getTask, describeTask, killTask } = await import('../background-tasks.js');
+      if (command.startsWith('bg kill')) {
+        const id = command.split(/\s+/)[2];
+        if (!id) return 'Usage: bg kill <task-id>';
+        const ok = killTask(id);
+        return ok ? `Killed background task ${id}.` : `Could not kill background task ${id} (not running or not found).`;
+      }
+      if (command.startsWith('bg logs')) {
+        const id = command.split(/\s+/)[2];
+        if (!id) return 'Usage: bg logs <task-id>';
+        const t = getTask(id);
+        if (!t) return `No background task ${id}. Use 'bg list'.`;
+        return `[bg:${t.id} logs (${t.status})]:\n${t.output || '(no output yet)'}`;
+      }
       const id = command.startsWith('bg status') ? command.split(/\s+/)[2] : undefined;
       if (id) {
         const t = getTask(id);

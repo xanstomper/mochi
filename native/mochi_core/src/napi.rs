@@ -404,6 +404,49 @@ unsafe extern "C" fn js_skeletonize_source(env: NapiEnv, info: NapiCallbackInfo)
     str_val
 }
 
+unsafe extern "C" fn js_strip_ansi(env: NapiEnv, info: NapiCallbackInfo) -> NapiValue {
+    let mut argc = 1;
+    let mut argv = [std::ptr::null_mut(); 1];
+    napi_get_cb_info(env, info, &mut argc, argv.as_mut_ptr(), std::ptr::null_mut(), std::ptr::null_mut());
+
+    let mut null_val = std::ptr::null_mut();
+    napi_get_null(env, &mut null_val);
+
+    if argc < 1 {
+        return null_val;
+    }
+    let Some(text) = get_string_arg(env, argv[0]) else {
+        return null_val;
+    };
+
+    let stripped = tokens::strip_ansi(&text);
+    let c_str = CString::new(stripped).unwrap();
+    let mut str_val = std::ptr::null_mut();
+    napi_create_string_utf8(env, c_str.as_ptr(), c_str.as_bytes().len(), &mut str_val);
+    str_val
+}
+
+unsafe extern "C" fn js_estimate_tokens(env: NapiEnv, info: NapiCallbackInfo) -> NapiValue {
+    let mut argc = 1;
+    let mut argv = [std::ptr::null_mut(); 1];
+    napi_get_cb_info(env, info, &mut argc, argv.as_mut_ptr(), std::ptr::null_mut(), std::ptr::null_mut());
+
+    let mut null_val = std::ptr::null_mut();
+    napi_get_null(env, &mut null_val);
+
+    if argc < 1 {
+        return null_val;
+    }
+    let Some(text) = get_string_arg(env, argv[0]) else {
+        return null_val;
+    };
+
+    let count = tokens::estimate_tokens_approx(&text);
+    let mut int_val = std::ptr::null_mut();
+    napi_create_int64(env, count as i64, &mut int_val);
+    int_val
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn napi_register_module_v1(env: NapiEnv, exports: NapiValue) -> NapiValue {
     let funcs: &[(&str, NapiCallback)] = &[
@@ -411,6 +454,8 @@ pub unsafe extern "C" fn napi_register_module_v1(env: NapiEnv, exports: NapiValu
         ("gitBranch", js_git_branch),
         ("searchDir", js_search),
         ("stripThinkTags", js_strip_think_tags),
+        ("stripAnsi", js_strip_ansi),
+        ("estimateTokens", js_estimate_tokens),
         ("hashPrompt", js_hash_prompt),
         ("estimateCost", js_estimate_cost),
         ("diffNumstat", js_diff_numstat),

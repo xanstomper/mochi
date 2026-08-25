@@ -42,16 +42,19 @@ describe('reduceEvent', () => {
     expect(truncateArgs('short')).toBe('short');
   });
 
-  it('tracks subagent lifecycle events', () => {
+  it('tracks subagent lifecycle events and active map', () => {
     const s = createTuiState();
-    reduceEvent(s, ev({ type: 'subagent:started', role: 'architect', prompt: 'Design database schema' }));
-    expect(s.lines.some((l) => l.kind === 'system' && l.text.includes('[Subagent] architect started'))).toBe(true);
+    reduceEvent(s, ev({ type: 'subagent:started', agentId: 'sub-1', role: 'architect', prompt: 'Design database schema' }));
+    expect(s.lines.some((l) => l.kind === 'system' && l.text.includes('┌── [Subagent: architect] started'))).toBe(true);
+    expect(s.activeSubagents.has('sub-1')).toBe(true);
+    expect(s.activeSubagents.get('sub-1')?.role).toBe('architect');
 
-    reduceEvent(s, ev({ type: 'subagent:completed', role: 'architect', success: true, summary: 'Schema design complete' }));
-    expect(s.lines.some((l) => l.kind === 'system' && l.text.includes('[Subagent] architect succeeded'))).toBe(true);
+    reduceEvent(s, ev({ type: 'subagent:completed', agentId: 'sub-1', role: 'architect', success: true, summary: 'Schema design complete' }));
+    expect(s.lines.some((l) => l.kind === 'system' && l.text.includes('└── [Subagent: architect] succeeded'))).toBe(true);
+    expect(s.activeSubagents.has('sub-1')).toBe(false);
 
-    reduceEvent(s, ev({ type: 'subagent:completed', role: 'tester', success: false, summary: 'Tests failed' }));
-    expect(s.lines.some((l) => l.kind === 'error' && l.text.includes('[Subagent] tester failed'))).toBe(true);
+    reduceEvent(s, ev({ type: 'subagent:completed', agentId: 'sub-2', role: 'tester', success: false, summary: 'Tests failed' }));
+    expect(s.lines.some((l) => l.kind === 'error' && l.text.includes('└── [Subagent: tester] failed'))).toBe(true);
   });
 
   it('caps the transcript at the configured limit, dropping oldest', () => {

@@ -16,13 +16,15 @@ export const subagentTool: Tool = {
     parameters: [
       { name: 'prompt', type: 'string', description: 'Self-contained instructions for a single subtask', required: false },
       { name: 'role', type: 'string', description: 'Specialized role for the child: lead, coder, reviewer, tester, researcher, debugger, security, architect, devops, db_admin, frontend, backend, performance, tech_writer, qa_engineer, data_scientist (defaults to coder)', required: false },
-      { name: 'tasks', type: 'string', description: 'Optional JSON array of subtasks [{prompt: string, role?: string}] for concurrent multi-agent fanout', required: false },
+      { name: 'scratchpad', type: 'string', description: 'Optional shared context, architectural notes, or constraints for the child agent', required: false },
+      { name: 'timeoutMs', type: 'number', description: 'Optional execution timeout in milliseconds for the subtask', required: false },
+      { name: 'tasks', type: 'string', description: 'Optional JSON array of subtasks [{prompt: string, role?: string, scratchpad?: string, timeoutMs?: number}] for concurrent multi-agent fanout', required: false },
     ],
     permission: 'network',
   },
   async execute(args, ctx) {
     // Handle batch subagents if tasks parameter is supplied
-    let rawTasks: Array<{ prompt: string; role?: string }> | undefined;
+    let rawTasks: Array<{ prompt: string; role?: string; scratchpad?: string; timeoutMs?: number }> | undefined;
     if (Array.isArray(args.tasks)) {
       rawTasks = args.tasks;
     } else if (typeof args.tasks === 'string' && args.tasks.trim().startsWith('[')) {
@@ -44,7 +46,12 @@ export const subagentTool: Tool = {
 
     if (rawTasks && Array.isArray(rawTasks) && rawTasks.length > 0) {
       const validTasks = rawTasks
-        .map((t) => ({ prompt: String(t?.prompt ?? '').trim(), role: t?.role ? String(t.role) : undefined }))
+        .map((t) => ({
+          prompt: String(t?.prompt ?? '').trim(),
+          role: t?.role ? String(t.role) : undefined,
+          scratchpad: t?.scratchpad ? String(t.scratchpad) : undefined,
+          timeoutMs: typeof t?.timeoutMs === 'number' ? t.timeoutMs : undefined,
+        }))
         .filter((t) => t.prompt.length > 0);
 
       if (validTasks.length === 0) {
@@ -58,7 +65,7 @@ export const subagentTool: Tool = {
 
       // Fallback to Promise.allSettled if only spawnSubagent is available
       const results = await Promise.allSettled(
-        validTasks.map((t) => ctx.spawnSubagent!(t.prompt, { role: t.role }))
+        validTasks.map((t) => ctx.spawnSubagent!(t.prompt, { role: t.role, scratchpad: t.scratchpad, timeoutMs: t.timeoutMs }))
       );
       const formatted = results.map((r, i) => {
         const role = validTasks[i]?.role ?? 'coder';
@@ -70,7 +77,13 @@ export const subagentTool: Tool = {
     }
 
     try {
-      const result = await ctx.spawnSubagent!(prompt, { role: args.role ? String(args.role) : undefined });
+      const timeoutMs = typeof args.timeoutMs === 'number' ? args.timeoutMs : undefined;
+      const scratchpad = typeof args.scratchpad === 'string' ? args.scratchpad : undefined;
+      const result = await ctx.spawnSubagent!(prompt, {
+        role: args.role ? String(args.role) : undefined,
+        timeoutMs,
+        scratchpad,
+      });
       return `Subagent result:\n${result}`;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

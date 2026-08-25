@@ -10,6 +10,7 @@ export const dbInspectTool: Tool = {
     parameters: [
       { name: 'db_path', type: 'string', description: 'Relative path to SQLite database file (.db, .sqlite, .sqlite3)', required: true },
       { name: 'table', type: 'string', description: 'Optional specific table name to inspect in detail', required: false },
+      { name: 'query', type: 'string', description: 'Optional read-only SQL query to execute (SELECT/PRAGMA only, max 50 rows)', required: false },
     ],
     permission: 'read',
   },
@@ -27,6 +28,19 @@ export const dbInspectTool: Tool = {
 
     try {
       const db = openDb(fullPath);
+
+      if (args.query) {
+        const sql = String(args.query).trim();
+        if (!/^SELECT\b/i.test(sql) && !/^PRAGMA\b/i.test(sql) && !/^EXPLAIN\b/i.test(sql)) {
+          db.close();
+          return 'Error: Only read-only queries (SELECT, PRAGMA, EXPLAIN) are permitted with db_inspect.';
+        }
+        const stmt = db.prepare(sql);
+        const rows = stmt.all() as any[];
+        db.close();
+        const capped = rows.slice(0, 50);
+        return `# Query Results (${capped.length} rows):\n\`\`\`json\n${JSON.stringify(capped, null, 2)}\n\`\`\``;
+      }
 
       if (args.table) {
         const tableName = String(args.table).trim();

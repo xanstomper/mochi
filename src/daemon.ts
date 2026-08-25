@@ -173,6 +173,155 @@ export async function startDaemonInProcess(opts: {
   };
 }
 
+function getDashboardHtml(token: string): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mochi Agent Dashboard</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --card: #1a1d26;
+      --border: #2e3346;
+      --accent: #ff79c6;
+      --text: #f8f8f2;
+      --green: #50fa7b;
+      --code-bg: #12141c;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+    header {
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .brand { font-weight: 700; font-size: 1.2rem; color: var(--accent); display: flex; align-items: center; gap: 8px; }
+    .status-badge { background: rgba(80, 250, 123, 0.15); color: var(--green); padding: 4px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: 600; }
+    .main { display: flex; flex: 1; overflow: hidden; }
+    .sidebar { width: 280px; background: var(--card); border-right: 1px solid var(--border); padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; }
+    .chat-container { flex: 1; display: flex; flex-direction: column; background: var(--bg); }
+    .messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+    .msg { padding: 12px 16px; border-radius: 8px; max-width: 85%; font-size: 0.95rem; line-height: 1.5; white-space: pre-wrap; }
+    .msg.user { background: #282a36; align-self: flex-end; border: 1px solid var(--border); }
+    .msg.agent { background: #1e2230; align-self: flex-start; border-left: 3px solid var(--accent); }
+    .msg.log { background: var(--code-bg); font-family: monospace; font-size: 0.82rem; color: #a4b1cd; }
+    .input-area { padding: 16px; background: var(--card); border-top: 1px solid var(--border); display: flex; gap: 12px; }
+    input[type="text"] { flex: 1; padding: 12px 16px; background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 1rem; outline: none; }
+    input[type="text"]:focus { border-color: var(--accent); }
+    button { padding: 12px 24px; background: var(--accent); border: none; border-radius: 6px; color: #000; font-weight: 700; cursor: pointer; transition: opacity 0.2s; }
+    button:hover { opacity: 0.9; }
+    .card-title { font-size: 0.85rem; text-transform: uppercase; color: #6272a4; letter-spacing: 0.05em; margin-bottom: 8px; }
+    @media (max-width: 768px) {
+      .sidebar { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">🍡 Mochi Dashboard</div>
+    <div class="status-badge">● Daemon Live</div>
+  </header>
+  <div class="main">
+    <div class="sidebar">
+      <div>
+        <div class="card-title">Quick Actions</div>
+        <button style="width:100%; margin-bottom:8px; background:#44475a; color:#fff;" onclick="sendQuick('/doctor')">🩺 Run Doctor</button>
+        <button style="width:100%; background:#44475a; color:#fff;" onclick="sendQuick('/usage')">📊 Token Usage</button>
+      </div>
+    </div>
+    <div class="chat-container">
+      <div class="messages" id="messages">
+        <div class="msg agent">Hello! I am Mochi. Enter a goal or coding task below to start.</div>
+      </div>
+      <div class="input-area">
+        <input type="text" id="prompt-input" placeholder="Type a goal (e.g. 'Build a REST API endpoint')..." onkeydown="if(event.key==='Enter') sendGoal()" />
+        <button id="send-btn" onclick="sendGoal()">Send</button>
+      </div>
+    </div>
+  </div>
+  <script>
+    const token = '${token}' || new URLSearchParams(window.location.search).get('token') || localStorage.getItem('mochi_token') || '';
+    if (token) localStorage.setItem('mochi_token', token);
+
+    async function sendGoal() {
+      const input = document.getElementById('prompt-input');
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = '';
+      addMsg(text, 'user');
+      const msgDiv = addMsg('Thinking and working on task...', 'agent');
+
+      try {
+        const res = await fetch('/api/goal', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + (localStorage.getItem('mochi_token') || ''),
+            'Accept': 'text/event-stream'
+          },
+          body: JSON.stringify({ objective: text })
+        });
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const lines = buf.split('\\n\\n');
+          buf = lines.pop() || '';
+
+          for (const chunk of lines) {
+            if (chunk.startsWith('event: task:started')) {
+              const data = JSON.parse(chunk.replace(/^event: .*\\ndata: /, ''));
+              addMsg('▶ Started: ' + (data.task || ''), 'log');
+            } else if (chunk.startsWith('event: task:completed')) {
+              const data = JSON.parse(chunk.replace(/^event: .*\\ndata: /, ''));
+              addMsg('✓ Completed: ' + (data.task || ''), 'log');
+            } else if (chunk.startsWith('event: done')) {
+              const data = JSON.parse(chunk.replace(/^event: .*\\ndata: /, ''));
+              msgDiv.textContent = data.out;
+            }
+          }
+        }
+      } catch (err) {
+        msgDiv.textContent = 'Error: ' + err.message;
+      }
+    }
+
+    function sendQuick(cmd) {
+      document.getElementById('prompt-input').value = cmd;
+      sendGoal();
+    }
+
+    function addMsg(text, type) {
+      const msgs = document.getElementById('messages');
+      const d = document.createElement('div');
+      d.className = 'msg ' + type;
+      d.textContent = text;
+      msgs.appendChild(d);
+      msgs.scrollTop = msgs.scrollHeight;
+      return d;
+    }
+  </script>
+</body>
+</html>`;
+}
+
 async function handleRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -184,7 +333,25 @@ async function handleRequest(
     res.end(JSON.stringify(body));
   };
 
-  if (!timingSafeEqualStr(req.headers.authorization ?? '', `Bearer ${token}`)) {
+  const parsedUrl = new URL(req.url ?? '/', 'http://127.0.0.1');
+  const path = parsedUrl.pathname;
+  const queryToken = parsedUrl.searchParams.get('token') ?? '';
+  const authHeader = (req.headers.authorization ?? '').replace(/^Bearer\s+/i, '');
+  const reqToken = authHeader || queryToken;
+
+  // Serve Web UI Dashboard on GET / or /dashboard
+  if (req.method === 'GET' && (path === '/' || path === '/dashboard')) {
+    if (reqToken && !timingSafeEqualStr(reqToken, token)) {
+      res.writeHead(401, { 'content-type': 'text/html' });
+      res.end('<h1>401 Unauthorized</h1><p>Invalid daemon token.</p>');
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(getDashboardHtml(reqToken || token));
+    return;
+  }
+
+  if (!reqToken || !timingSafeEqualStr(reqToken, token)) {
     send(401, { error: 'unauthorized' });
     return;
   }
@@ -202,8 +369,6 @@ async function handleRequest(
     send(400, { error: 'invalid json' });
     return;
   }
-
-  const path = req.url ?? '';
   try {
     if (path === '/api/status') {
       const usage = runtime.usage?.total?.() as

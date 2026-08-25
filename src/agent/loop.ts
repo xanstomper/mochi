@@ -239,6 +239,7 @@ export class Agent {
   private checkpointFailed = false;
   private lastSig = '';
   private sigStreak = 0;
+  private consecutiveToolErrors = new Map<string, { error: string; count: number }>();
   private readCache: ReadCache;
   private planMode: boolean;
   private planVetoes = 0;
@@ -865,9 +866,12 @@ Continue from 'Next:', do not redo completed progress.`,
         }
         this.lastSig = nowSig;
         if (this.sigStreak >= 3) {
+          this.nudgeInjections++;
+          if (this.nudgeInjections >= 3) {
+            return this.finish(task, false, 'Loop guard: stopped after repeated identical tool calls and failed recovery nudges.', 'tool_loop');
+          }
           this.context.addMessage({ role: 'system', content: 'You are repeating the same tool call. Stop issuing tools and give a final answer now without any tool calls.' });
           this.sigStreak = 0;
-          this.nudgeInjections++;
           // Phase 5: the state prompt now also carries the pattern so the
           // model sees it even after the nudge message is far back.
           this.context.stuckSignal = `You have issued ${this.nudgeInjections} repeated-tool-call nudges. Change strategy or answer now.`;
@@ -984,12 +988,16 @@ Continue from 'Next:', do not redo completed progress.`,
           const review = await this.selfReview(task, repo);
           if (review.issue) {
             this.selfReviewCount++;
-            this.context.addMessage({
-              role: 'system',
-              content: 'SELF-REVIEW found a problem with the change. Fix it before finishing:\n' + review.issue,
-            });
-            this.events.emit({ type: 'agent:log', agentId: this.id, message: `[self-review] ${review.tail}` });
-            continue;
+            if (this.selfReviewCount > 2) {
+              this.events.emit({ type: 'agent:log', agentId: this.id, message: `[self-review] reached 2 review passes; proceeding to complete` });
+            } else {
+              this.context.addMessage({
+                role: 'system',
+                content: 'SELF-REVIEW found a problem with the change. Fix it before finishing:\n' + review.issue,
+              });
+              this.events.emit({ type: 'agent:log', agentId: this.id, message: `[self-review] ${review.tail}` });
+              continue;
+            }
           }
         }
         const finalSummary = (response.content && response.content.trim())
@@ -1231,10 +1239,30 @@ Continue from 'Next:', do not redo completed progress.`,
   /** Spawn a fresh child agent on a subtask and return a short summary. The
    *  child shares this run's config, workspace, events, cwd, abort signal,
    *  budget, and file read cache so delegation is cheap and consistent. */
-  private async spawnSubagent(prompt: string, role?: string): Promise<string> {
-    const childRole = (role ?? 'coder') as import('../types.js').AgentRole;
+  private async spawnSubagent(
+    prompt: string,
+    opts?: { role?: string; timeoutMs?: number; scratchpad?: string } | string
+  ): Promise<string> {
+    const roleStr = typeof opts === 'string' ? opts : opts?.role;
+    const timeoutMs = typeof opts === 'object' ? opts?.timeoutMs : undefined;
+    const scratchpad = typeof opts === 'object' ? opts?.scratchpad : undefined;
+
+    const childRole = (roleStr ?? 'coder') as import('../types.js').AgentRole;
     const childProfile = new AgentProfileService(this.workspace.dir).get(childRole) ?? this.profile;
     const childId = `${this.id}-sub-${Math.random().toString(36).slice(2, 8)}`;
+    const childContext = new ContextEngine(this.config, this.cwd);
+    if (scratchpad) {
+      childContext.addMessage({
+        role: 'system',
+        content: `[Shared Context / Scratchpad from Parent Agent]:\n${scratchpad}`,
+      });
+    }
+
+    const childAbort = new AbortController();
+    const combinedAbort = this.abortSignal
+      ? AbortSignal.any([this.abortSignal, childAbort.signal])
+      : childAbort.signal;
+
     const child = new Agent({
       id: childId,
       role: childRole,
@@ -1244,9 +1272,9 @@ Continue from 'Next:', do not redo completed progress.`,
       workspace: this.workspace,
       events: this.events,
       cwd: this.cwd,
-      context: new ContextEngine(this.config, this.cwd),
+      context: childContext,
       budget: this.budget,
-      abortSignal: this.abortSignal,
+      abortSignal: combinedAbort,
       readCache: this.readCache,
       subagentDepth: this.subagentDepth + 1,
     });
@@ -1269,23 +1297,56 @@ Continue from 'Next:', do not redo completed progress.`,
       role: childRole,
       prompt: prompt.slice(0, 300),
     });
-    const result = await child.run(task);
-    this.events.emit({
-      type: 'subagent:completed',
-      agentId: childId,
-      parentId: this.id,
-      role: childRole,
-      success: result.success,
-      summary: result.summary,
-      tokensUsed: result.tokensUsed,
-    });
-    return `[completed=${result.success}] ${result.summary} (${result.tokensUsed} tokens, ${result.durationMs}ms)`;
+
+    let timeoutTimer: NodeJS.Timeout | undefined;
+    const runPromise = child.run(task);
+    const timeoutPromise = timeoutMs && timeoutMs > 0
+      ? new Promise<never>((_, reject) => {
+          timeoutTimer = setTimeout(() => {
+            childAbort.abort('Subagent execution timed out');
+            reject(new Error(`Subagent timed out after ${timeoutMs}ms`));
+          }, timeoutMs);
+        })
+      : null;
+
+    try {
+      const result = timeoutPromise
+        ? await Promise.race([runPromise, timeoutPromise])
+        : await runPromise;
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+
+      this.events.emit({
+        type: 'subagent:completed',
+        agentId: childId,
+        parentId: this.id,
+        role: childRole,
+        success: result.success,
+        summary: result.summary,
+        tokensUsed: result.tokensUsed,
+      });
+      return `[completed=${result.success}] ${result.summary} (${result.tokensUsed} tokens, ${result.durationMs}ms)`;
+    } catch (err) {
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      const msg = err instanceof Error ? err.message : String(err);
+      this.events.emit({
+        type: 'subagent:completed',
+        agentId: childId,
+        parentId: this.id,
+        role: childRole,
+        success: false,
+        summary: msg,
+        tokensUsed: 0,
+      });
+      throw err;
+    }
   }
 
   /** Spawn multiple subagents concurrently and return their aggregated results. */
-  private async spawnSubagents(tasks: Array<{ prompt: string; role?: string }>): Promise<string[]> {
+  private async spawnSubagents(
+    tasks: Array<{ prompt: string; role?: string; timeoutMs?: number; scratchpad?: string }>
+  ): Promise<string[]> {
     const results = await Promise.allSettled(
-      tasks.map((t) => this.spawnSubagent(t.prompt, t.role))
+      tasks.map((t) => this.spawnSubagent(t.prompt, { role: t.role, timeoutMs: t.timeoutMs, scratchpad: t.scratchpad }))
     );
     return results.map((r, i) => {
       const role = tasks[i]?.role ?? 'coder';
@@ -1362,12 +1423,12 @@ Continue from 'Next:', do not redo completed progress.`,
       agentId: this.id,
       abortSignal: this.abortSignal,
       readCache: this.readCache,
-      // Only the top-level agent (depth 0) can delegate; children cannot spawn
-      // grandchildren, bounding the delegation tree to one level.
-      ...(this.subagentDepth === 0
+      // Top-level and first-level agents (depth < 2) can delegate; bounding
+      // the delegation tree to 2 levels so complex multi-agent flows work reliably.
+      ...(this.subagentDepth < 2
         ? {
-            spawnSubagent: (prompt: string, opts?: { role?: string }) => this.spawnSubagent(prompt, opts?.role),
-            spawnSubagents: (tasks: Array<{ prompt: string; role?: string }>) => this.spawnSubagents(tasks),
+            spawnSubagent: (prompt: string, opts?: { role?: string; timeoutMs?: number; scratchpad?: string }) => this.spawnSubagent(prompt, opts),
+            spawnSubagents: (tasks: Array<{ prompt: string; role?: string; timeoutMs?: number; scratchpad?: string }>) => this.spawnSubagents(tasks),
           }
         : {}),
     };
@@ -1395,14 +1456,27 @@ Continue from 'Next:', do not redo completed progress.`,
     }
     let recoveryHint = '';
     if (error) {
+      const errSig = error.slice(0, 100);
+      const prevError = this.consecutiveToolErrors.get(toolName);
+      if (prevError && prevError.error === errSig) {
+        prevError.count++;
+        if (prevError.count >= 3) {
+          recoveryHint += `\n[CRITICAL HARNESS ADVISORY: Tool '${toolName}' has failed ${prevError.count} times consecutively with the same error. Do NOT retry this exact call. Use a different tool (e.g. read/glob/search) or report the blocker directly.]`;
+        }
+      } else {
+        this.consecutiveToolErrors.set(toolName, { error: errSig, count: 1 });
+      }
+
       const errLower = error.toLowerCase();
       if (errLower.includes('enoent') || errLower.includes('not found') || errLower.includes('no such file')) {
-        recoveryHint = '\n[Harness Hint: Target file was not found. Use glob or search to verify paths before editing/reading.]';
+        recoveryHint += '\n[Harness Hint: Target file was not found. Use glob or search to verify paths before editing/reading.]';
       } else if (errLower.includes('did not match') || errLower.includes('patch')) {
-        recoveryHint = '\n[Harness Hint: Target text was not found verbatim in the file. Call read tool to inspect current lines before editing.]';
+        recoveryHint += '\n[Harness Hint: Target text was not found verbatim in the file. Call read tool to inspect current lines before editing.]';
       } else if (toolName === 'shell' && (errLower.includes('exit') || errLower.includes('failed') || errLower.includes('command not found'))) {
-        recoveryHint = '\n[Harness Hint: Shell command failed. Review the terminal error above to fix syntax or missing packages.]';
+        recoveryHint += '\n[Harness Hint: Shell command failed. Review the terminal error above to fix syntax or missing packages.]';
       }
+    } else {
+      this.consecutiveToolErrors.delete(toolName);
     }
     const result: ToolResult = {
       toolCallId: tc.id,
@@ -1695,10 +1769,10 @@ Continue from 'Next:', do not redo completed progress.`,
         agentId: this.id,
         abortSignal: this.abortSignal,
         readCache: this.readCache,
-        ...(this.subagentDepth === 0
+        ...(this.subagentDepth < 2
           ? {
-              spawnSubagent: (p: string, o?: { role?: string }) => this.spawnSubagent(p, o?.role),
-              spawnSubagents: (tasks: Array<{ prompt: string; role?: string }>) => this.spawnSubagents(tasks),
+              spawnSubagent: (p: string, o?: { role?: string; timeoutMs?: number; scratchpad?: string }) => this.spawnSubagent(p, o),
+              spawnSubagents: (tasks: Array<{ prompt: string; role?: string; timeoutMs?: number; scratchpad?: string }>) => this.spawnSubagents(tasks),
             }
           : {}),
       };

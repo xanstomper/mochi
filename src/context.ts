@@ -13,6 +13,7 @@ import type { ChatMessage, MochiConfig, RepoInfo, Task, ToolDefinition } from '.
 import { isWeakModel, TOOL_ALIASES, normalizeToolArgs } from './tools/index.js';
 import { getCachedScaffold } from './cognitive/chameleon.js';
 import { isMode, modeInstruction } from './modes.js';
+import { loadRules, selectActiveRules } from './rules.js';
 
 const CANDIDATE_RULES = ['MOCHI.md', 'mochi.md', 'AGENTS.md', 'CLAUDE.md'];
 
@@ -160,7 +161,8 @@ export class ContextEngine {
     return this.memoryCache;
   }
 
-  private loadProjectRules(): string {
+  private loadProjectRules(task?: Task): string {
+    const parts: string[] = [];
     for (const f of CANDIDATE_RULES) {
       const path = resolve(this.projectRoot, f);
       const fp = fingerprint(path);
@@ -170,9 +172,25 @@ export class ContextEngine {
         this.rulesFingerprint = fp;
         this.rulesCache = rulesSource(path, f);
       }
-      return this.rulesCache;
+      if (this.rulesCache) parts.push(this.rulesCache);
+      break;
     }
-    return this.rulesCache;
+
+    try {
+      const allModularRules = loadRules(this.projectRoot);
+      const active = selectActiveRules(
+        allModularRules,
+        this.state.filesModified.concat(this.state.filesRead ?? []),
+        task ? `${task.title} ${task.description}` : this.state.goal ?? ''
+      );
+      for (const r of active) {
+        parts.push(`Project rule [${r.title}]:\n${r.content}`);
+      }
+    } catch {
+      /* ignore rules loading errors */
+    }
+
+    return parts.join('\n\n');
   }
 
   /** Advertise project and bundled skills in the system prompt so the model knows to load
@@ -201,7 +219,7 @@ export class ContextEngine {
   }
 
     private buildSystemPrompt(tools: ToolDefinition[], repo?: RepoInfo, task?: Task): string {
-    const rules = this.loadProjectRules();
+    const rules = this.loadProjectRules(task);
     const repoInfo = repo ? `
 Repository Context:
 - Language: ${repo.language ?? 'unknown'} | Framework: ${repo.framework ?? 'unknown'}

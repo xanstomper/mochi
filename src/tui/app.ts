@@ -133,6 +133,10 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     menuMark: new Set<number>(),
     currentTool: '' as string,
     currentTask: '' as string,
+    activeSubagents: new Map<string, { id: string; role: string; prompt: string; startedAt: number }>(),
+    tokenVelocity: 0 as number,
+    lastUsageAt: 0 as number,
+    lastTokens: 0 as number,
     lastStatus: '' as string,
     chatVer: 0 as number,
     limit: 500 as number,
@@ -660,6 +664,14 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     if (kvCache.badge()) extra.push(kvCache.badge());
     const queued = [...state.tasks.values()].filter((t) => t.status === 'pending').length;
     if (queued) extra.push(`${queued} queued`);
+    const activeSubs = state.activeSubagents ? [...state.activeSubagents.values()] : [];
+    if (activeSubs.length > 0) {
+      const roles = activeSubs.map((s) => `#${s.role}`).join(', ');
+      extra.push(`⚡ ${activeSubs.length} subagents (${roles})`);
+    }
+    if (state.tokenVelocity && state.tokenVelocity > 0) {
+      extra.push(`⚡ ${state.tokenVelocity} tok/s`);
+    }
     const statusModel = {
       modelId: modelShort,
       totalTokens: state.inTokens + state.outTokens + state.cacheTokens,

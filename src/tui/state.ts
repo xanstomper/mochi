@@ -15,18 +15,29 @@ export interface TuiTask {
   stopReason?: string;
 }
 
+export interface ActiveSubagentInfo {
+  id: string;
+  role: string;
+  prompt: string;
+  startedAt: number;
+}
+
 export interface TuiState {
   lines: TuiLine[];
   tasks: Map<string, TuiTask>;
+  activeSubagents: Map<string, ActiveSubagentInfo>;
   currentTask: string;
   currentTool: string;
   chatVer: number;
   /** Max transcript lines; oldest are dropped. */
   limit: number;
+  tokenVelocity?: number;
+  lastUsageAt?: number;
+  lastTokens?: number;
 }
 
 export function createTuiState(limit = 500): TuiState {
-  return { lines: [], tasks: new Map(), currentTask: '', currentTool: '', chatVer: 0, limit };
+  return { lines: [], tasks: new Map(), activeSubagents: new Map(), currentTask: '', currentTool: '', chatVer: 0, limit };
 }
 
 /** Truncate long args for display without losing the tool identity. */
@@ -189,17 +200,35 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
       return true;
     }
     case 'subagent:started': {
+      const subId = String(event.agentId ?? event.id ?? Math.random().toString());
       const role = String(event.role ?? 'subagent');
       const prompt = String(event.prompt ?? '').slice(0, 80);
-      pushLine(state, 'system', `[Subagent] ${role} started: "${prompt}"`);
+      state.activeSubagents.set(subId, { id: subId, role, prompt, startedAt: Date.now() });
+      pushLine(state, 'system', `┌── [Subagent: ${role}] started: "${prompt}"`);
       return true;
     }
     case 'subagent:completed': {
+      const subId = String(event.agentId ?? event.id ?? '');
+      if (subId) state.activeSubagents.delete(subId);
       const role = String(event.role ?? 'subagent');
       const status = event.success ? 'succeeded' : 'failed';
       const summary = String(event.summary ?? '').slice(0, 100);
-      pushLine(state, event.success ? 'system' : 'error', `[Subagent] ${role} ${status}: ${summary}`);
+      pushLine(state, event.success ? 'system' : 'error', `└── [Subagent: ${role}] ${status}: ${summary}`);
       return true;
+    }
+    case 'usage:updated': {
+      const now = Date.now();
+      const currentTotal = Number(event.totalTokens ?? 0);
+      if (state.lastUsageAt && state.lastTokens && now > state.lastUsageAt) {
+        const elapsedSec = (now - state.lastUsageAt) / 1000;
+        const diff = currentTotal - state.lastTokens;
+        if (diff > 0 && elapsedSec > 0.1) {
+          state.tokenVelocity = Math.round(diff / elapsedSec);
+        }
+      }
+      state.lastUsageAt = now;
+      state.lastTokens = currentTotal;
+      return false;
     }
     case 'file:changed':
       pushLine(state, 'system', `${event.operation} ${event.path}`);
