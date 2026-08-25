@@ -72,7 +72,7 @@ const AUDIT_PATTERNS: AuditPattern[] = [
   {
     id: 'INJECTION_SQL_INTERPOLATION',
     severity: 'HIGH',
-    regex: /(?:SELECT|INSERT|UPDATE|DELETE|FROM|WHERE)\s+[^`"'\n]*`[^`]*\${[^}]+}[^`]*`/i,
+    regex: /(?:\.query|\.execute|\.prepare|\.runQuery|querySymbolGraphSync)\s*\(\s*`[^`]*\b(?:SELECT|INSERT|UPDATE|DELETE|PRAGMA)\b[^`]*\${[^}]+}[^`]*`/i,
     description: 'Raw SQL query constructed with string interpolation.',
     remediation: 'Use parameterized queries ($1, ? or prepared statements) to prevent SQL injection.',
   },
@@ -92,7 +92,12 @@ const SCAN_EXTS = new Set([
 ]);
 
 /** Scan project files for security vulnerabilities */
-export function runSecurityAudit(cwd: string, maxFiles = 250): SecurityFinding[] {
+export function runSecurityAudit(
+  cwd: string,
+  opts: { includeTests?: boolean; maxFiles?: number } = {}
+): SecurityFinding[] {
+  const includeTests = opts.includeTests ?? false;
+  const maxFiles = opts.maxFiles ?? 250;
   const findings: SecurityFinding[] = [];
   const stack = [cwd];
   let filesScanned = 0;
@@ -114,6 +119,10 @@ export function runSecurityAudit(cwd: string, maxFiles = 250): SecurityFinding[]
         entry.name === 'target' ||
         entry.name === 'coverage'
       ) {
+        continue;
+      }
+
+      if (!includeTests && (entry.name.includes('.test.') || entry.name.includes('.spec.') || entry.name.includes('fixtures'))) {
         continue;
       }
 
