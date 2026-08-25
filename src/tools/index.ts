@@ -44,9 +44,10 @@ import { replTool } from './repl.js';
 import { blastRadiusTool } from './blast-radius.js';
 import { sessionRecallTool } from './session-recall.js';
 import { bgTaskTool } from './bg-task.js';
+import { outlineTool } from './outline.js';
 
 export const ALL_TOOLS: Tool[] = [
-  readTool, writeTool, editTool, deleteTool, shellTool, searchTool, globTool,
+  readTool, writeTool, editTool, deleteTool, shellTool, searchTool, globTool, outlineTool,
   gitTool, inspectTool, memoryTool, sessionRecallTool, todoTool, skillTool, subagentTool, patchTool,
   bgTaskTool, fetchTool, diffTool, treeTool, regexReplaceTool, deepwikiTool, clipboardTool, sqlCodebaseTool,
   searchReplaceMultiTool, analyzeCodeTool, verifyTool, perfTool,
@@ -63,7 +64,7 @@ export const ALL_TOOLS: Tool[] = [
  * models with sufficient context to handle them without degenerating.
  */
 const CORE_TOOL_NAMES = new Set([
-  'read', 'write', 'edit', 'patch', 'replace_symbol', 'delete', 'shell', 'search', 'glob',
+  'read', 'write', 'edit', 'patch', 'replace_symbol', 'delete', 'shell', 'search', 'glob', 'outline',
   'git', 'inspect', 'todo', 'skill', 'subagent', 'bg_task', 'fetch', 'web_search', 'web_crawl', 'think', 'chameleon', 'blast_radius', 'session_recall'
 ]);
 
@@ -154,12 +155,17 @@ export const TOOL_ALIASES: Record<string, string> = {
   listFiles: 'glob',
   dir: 'glob',
 
-  // Content searching
+  // Content searching & outlines
   grep: 'search',
   search_files: 'search',
   grep_search: 'search',
   ripgrep: 'search',
   grepSearch: 'search',
+  skeleton: 'outline',
+  symbols_outline: 'outline',
+  get_outline: 'outline',
+  code_outline: 'outline',
+  file_outline: 'outline',
 
   // Deletion
   delete_file: 'delete',
