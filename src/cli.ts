@@ -20,7 +20,7 @@ try {
 const BOOLEAN_FLAGS = new Set([
   'p', 'print', 'auto', 'quiet', 'q', 'verbose', 'v', 'debug', 'h', 'help', 'version', 'offline', 'enhance', 'install', 'plan',
   'y', 'yolo', 'dangerously-skip-permissions', 'force', 'user',
-  'strict', 'json', 'diff-only', 'auto-commit',
+  'strict', 'json', 'diff-only', 'auto-commit', 'repair',
 ]);
 
 function parseArgs(argv: string[]): { flags: Record<string, string | boolean>; positional: string[] } {
@@ -854,8 +854,20 @@ async function main() {
     return;
   }
   if (first === 'doctor') {
-    const { doctorReport, formatDoctor } = await import('./doctor.js');
+    const { doctorReport, formatDoctor, repairDoctor } = await import('./doctor.js');
     const { daemonRunning, readDaemonInfo } = await import('./daemon.js');
+    const wsDir = findProjectRoot(runtime.cwd);
+    
+    if (flags.repair || flags.fix || positional[1] === 'repair' || positional[1] === 'fix') {
+      const repair = await repairDoctor({ cwd: runtime.cwd, workspaceDir: resolve(wsDir, '.mochi') });
+      console.log(repair.summary + '\n');
+      for (const item of repair.items) {
+        const icon = item.status === 'fixed' ? '🔧 [FIXED]' : item.status === 'already_ok' ? '✓ [OK]' : '⚠️ [ACTION]';
+        console.log(`  ${icon.padEnd(14)} ${item.name}: ${item.details}`);
+      }
+      console.log('');
+    }
+
     const info = readDaemonInfo(runtime.workspace.dir);
     const isRunning = daemonRunning(runtime.workspace.dir);
     const report = await doctorReport({
@@ -863,7 +875,7 @@ async function main() {
       baseUrl: runtime.config.model.baseUrl ?? '',
       model: runtime.config.model.model,
       apiKey: runtime.config.model.apiKey ?? null,
-      workspaceDir: findProjectRoot(runtime.cwd),
+      workspaceDir: wsDir,
       daemon: { running: isRunning, port: info?.port },
     });
     console.log(formatDoctor(report));
