@@ -857,6 +857,39 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       push('system', records.map((p) => `${p.name} v${p.version} [${p.scope}] ${p.description}${p.hooks.length ? ` hooks:${p.hooks.join(',')}` : ''}`).join('\n'));
       return;
     }
+    if (line === '/rules') {
+      const { loadRules } = await import('../rules.js');
+      const all = loadRules(projectRoot);
+      if (!all.length) { push('system', 'No modular rules found in .mochi/rules/.'); return; }
+      push('system', `🍡 Modular Project Rules (${all.length}):\n` + all.map(r => `• ${r.id.padEnd(16)} "${r.title}"`).join('\n'));
+      return;
+    }
+    if (line.startsWith('/symbols ') || line === '/symbols' || line.startsWith('/find ') || line === '/find') {
+      const query = (line.startsWith('/symbols ') ? line.slice(9) : line.startsWith('/find ') ? line.slice(6) : '').trim();
+      await run(async () => {
+        const { generateProjectDocs } = await import('../docgen.js');
+        const docs = generateProjectDocs(projectRoot);
+        const matches: string[] = [];
+        for (const mod of docs.modules) {
+          for (const s of mod.symbols) {
+            if (!query || s.signature.toLowerCase().includes(query.toLowerCase())) {
+              matches.push(`  ${mod.file}:${s.line} [${s.kind}] ${s.signature}`);
+            }
+          }
+        }
+        if (!matches.length) return `No symbols found matching "${query}".`;
+        return `Symbol Search (${matches.length} matches):\n` + matches.slice(0, 30).join('\n') + (matches.length > 30 ? `\n  ... and ${matches.length - 30} more.` : '');
+      });
+      return;
+    }
+    if (line === '/docgen' || line === '/docs') {
+      await run(async () => {
+        const { generateProjectDocs } = await import('../docgen.js');
+        const docs = generateProjectDocs(projectRoot);
+        return docs.markdown;
+      });
+      return;
+    }
     if (line === '/profiles') { await run(async () => runtime.profiles().map(p => `${p.name} (${p.role}) model=${p.defaultModel ?? 'coding'} verification=${p.verification ?? 'optional'}`).join('\n')); return; }
     if (line === '/memory') { await run(async () => runtime.memory() || 'No project memory yet.'); return; }
     if (line === '/tasks') { await run(async () => listTasks()); return; }

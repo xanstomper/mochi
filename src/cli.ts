@@ -100,7 +100,8 @@ Usage:
   mochi team "..."
   mochi plan "..."
   mochi resume
-  mochi checkpoint
+  mochi checkpoint [save <name>|list|restore <name>]  # named snapshots & rollback
+  mochi docgen [--write]             # generate architecture diagram & API reference
   mochi rollback
   mochi workspace create|list|switch <name>
   mochi profiles
@@ -464,9 +465,50 @@ async function main() {
     return;
   }
   if (first === 'checkpoint') {
+    const sub = positional[1];
+    if (sub === 'save') {
+      const name = positional[2];
+      const desc = positional.slice(3).join(' ');
+      if (!name) { console.log('Usage: mochi checkpoint save <name> ["description"]'); return; }
+      const { saveNamedCheckpoint } = await import('./checkpoint-manager.js');
+      const cp = await saveNamedCheckpoint(cwd, name, desc);
+      console.log(`Saved named checkpoint "${cp.name}" (SHA: ${cp.gitCommitSha.slice(0, 7)})`);
+      return;
+    }
+    if (sub === 'list' || sub === 'ls') {
+      const { listNamedCheckpoints } = await import('./checkpoint-manager.js');
+      const list = listNamedCheckpoints(cwd);
+      if (!list.length) { console.log('No named checkpoints found. Use: mochi checkpoint save <name>'); return; }
+      console.log(`🍡 Saved Checkpoints (${list.length}):\n`);
+      for (const cp of list) {
+        console.log(`- ${cp.name.padEnd(20)} [${new Date(cp.createdAt).toLocaleString()}] ${cp.description || ''}`);
+      }
+      return;
+    }
+    if (sub === 'restore' || sub === 'load') {
+      const name = positional[2];
+      if (!name) { console.log('Usage: mochi checkpoint restore <name>'); return; }
+      const { restoreNamedCheckpoint } = await import('./checkpoint-manager.js');
+      const res = await restoreNamedCheckpoint(cwd, name);
+      console.log(res.message);
+      return;
+    }
     if (!(await isRepo(cwd))) { console.log('Not a git repository.'); return; }
     const cp = await runtime.checkpoint(positional.slice(1).join(' ') || 'mochi checkpoint');
     console.log(`Checkpoint created: ${cp.type} ${cp.ref}`);
+    return;
+  }
+  if (first === 'docgen' || first === 'docs') {
+    const { generateProjectDocs } = await import('./docgen.js');
+    const docs = generateProjectDocs(cwd);
+    if (flags.write || flags.save) {
+      const { writeFileSync } = await import('node:fs');
+      const outPath = resolve(cwd, 'ARCHITECTURE.md');
+      writeFileSync(outPath, docs.markdown, 'utf8');
+      console.log(`Wrote architecture documentation to ${outPath} (${docs.moduleCount} modules, ${docs.symbolCount} symbols).`);
+    } else {
+      console.log(docs.markdown);
+    }
     return;
   }
   if (first === 'rollback') {
