@@ -1153,7 +1153,7 @@ Continue from 'Next:', do not redo completed progress.`,
     // Allowlist of non-mutating tools. Note: MCP resource tools registered as
     // <server>__resources_list/read are read-only by construction.
     return [
-      'read', 'search', 'glob', 'outline', 'code_similarity', 'inspect', 'get_function', 'find_callers', 'type_hierarchy',
+      'read', 'search', 'glob', 'outline', 'code_similarity', 'security_audit', 'inspect', 'get_function', 'find_callers', 'type_hierarchy',
       'todo', 'skill', 'memory', 'session_recall', 'blast_radius', 'chameleon', 'analyze_code', 'perf', 'perf_audit',
       'web_search', 'get_diagnostics', 'git_blame', 'git_history', 'system_info',
       'find_references', 'find_definitions', 'db_inspect', 'diff', 'tree', 'deepwiki',

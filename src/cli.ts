@@ -117,6 +117,7 @@ Usage:
   mochi discord [run|status]         # run Discord bot gateway
   mochi dashboard | mochi web        # open web dashboard in browser
   mochi plugin add <dir>|remove <name>|list        # spec 12-E plugin registry
+  mochi security | mochi audit       # static security and credential audit
   mochi review [--strict] [--json] [--diff-only]   # git diff | mochi review
   mochi fix [--auto-commit]                        # cat crash.log | mochi fix
   mochi acp                          # editor-native stdio server (Agent Client Protocol)
@@ -732,6 +733,15 @@ async function main() {
     }
     console.log(`🍡 Mochi Discord Gateway configured with prefix "${cfg.prefix || '!mochi'}".`);
     console.log(`Bot Token: ${cfg.token.slice(0, 10)}... (whitelisting: ${cfg.allowAllUsers ? 'all users' : (cfg.allowedUserIds?.length ?? 0) + ' users'})`);
+    return;
+  }
+  if (first === 'security' || first === 'audit') {
+    const { runSecurityAudit, formatSecurityReport } = await import('./tools/security-audit.js');
+    const findings = runSecurityAudit(cwd);
+    console.log(formatSecurityReport(findings));
+    if (flags.strict && findings.some(f => f.severity === 'CRITICAL' || f.severity === 'HIGH')) {
+      process.exit(1);
+    }
     return;
   }
   if (first === 'dashboard' || first === 'web') {

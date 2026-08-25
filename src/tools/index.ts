@@ -47,6 +47,7 @@ import { bgTaskTool } from './bg-task.js';
 import { outlineTool } from './outline.js';
 import { mergeConflictTool } from './merge-conflict.js';
 import { codeSimilarityTool } from './code-similarity.js';
+import { securityAuditTool } from './security-audit.js';
 
 export const ALL_TOOLS: Tool[] = [
   readTool, writeTool, editTool, deleteTool, shellTool, searchTool, globTool, outlineTool,
@@ -56,7 +57,7 @@ export const ALL_TOOLS: Tool[] = [
   webSearchTool, getDiagnosticsTool, mkdirTool, moveFileTool, copyFileTool,
   gitBlameTool, gitHistoryTool, systemInfoTool, findReferencesTool, findDefinitionsTool,
   dbInspectTool, createPrTool, thinkTool, webCrawlTool, renameSymbolTool, replTool,
-  blastRadiusTool, mergeConflictTool, codeSimilarityTool,
+  blastRadiusTool, mergeConflictTool, codeSimilarityTool, securityAuditTool,
   ...symbolTools, replaceSymbolTool, chameleonTool,
 ];
 
@@ -176,6 +177,10 @@ export const TOOL_ALIASES: Record<string, string> = {
   detect_duplicates: 'code_similarity',
   clone_search: 'code_similarity',
   similar_code: 'code_similarity',
+  security: 'security_audit',
+  audit: 'security_audit',
+  vuln_scan: 'security_audit',
+  scan_security: 'security_audit',
 
   // Deletion
   delete_file: 'delete',
