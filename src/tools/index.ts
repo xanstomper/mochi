@@ -45,6 +45,7 @@ import { blastRadiusTool } from './blast-radius.js';
 import { sessionRecallTool } from './session-recall.js';
 import { bgTaskTool } from './bg-task.js';
 import { outlineTool } from './outline.js';
+import { mergeConflictTool } from './merge-conflict.js';
 
 export const ALL_TOOLS: Tool[] = [
   readTool, writeTool, editTool, deleteTool, shellTool, searchTool, globTool, outlineTool,
@@ -54,7 +55,7 @@ export const ALL_TOOLS: Tool[] = [
   webSearchTool, getDiagnosticsTool, mkdirTool, moveFileTool, copyFileTool,
   gitBlameTool, gitHistoryTool, systemInfoTool, findReferencesTool, findDefinitionsTool,
   dbInspectTool, createPrTool, thinkTool, webCrawlTool, renameSymbolTool, replTool,
-  blastRadiusTool,
+  blastRadiusTool, mergeConflictTool,
   ...symbolTools, replaceSymbolTool, chameleonTool,
 ];
 
@@ -141,10 +142,14 @@ export const TOOL_ALIASES: Record<string, string> = {
   str_replace: 'edit',
   modify_file: 'edit',
 
-  // Patching
+  // Patching & conflicts
   apply_patch: 'patch',
   patch_file: 'patch',
   patchFile: 'patch',
+  merge_conflicts: 'resolve_conflicts',
+  resolve_conflict: 'resolve_conflicts',
+  fix_conflicts: 'resolve_conflicts',
+  resolve_merge_conflicts: 'resolve_conflicts',
 
   // File searching & listing
   find_files: 'glob',
