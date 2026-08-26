@@ -13,6 +13,21 @@ describe('reduceEvent', () => {
     expect(s.chatVer).toBe(2);
   });
 
+  it('rolls a huge streamed assistant line into a fresh line to bound wrap cost', () => {
+    const s = createTuiState();
+    // Seed a base assistant line, then push chunks past the 16k streaming cap.
+    reduceEvent(s, ev({ type: 'message', role: 'assistant', content: 'start' }));
+    // ~11 chars per chunk; need to cross the 16k cap, so push plenty.
+    for (let i = 0; i < 2000; i++) {
+      const chunk = `chunk${i.toString().padStart(5, '0')} `;
+      reduceEvent(s, ev({ type: 'message:chunk', content: chunk }));
+    }
+    const assistantLines = s.lines.filter((l) => l.kind === 'assistant');
+    expect(assistantLines.length).toBeGreaterThanOrEqual(2);
+    const longest = Math.max(...assistantLines.map((l) => l.text.length));
+    expect(longest).toBeLessThanOrEqual(16_000 + 500);
+  });
+
   it('tracks tasks through created -> started -> completed with stopReason', () => {
     const s = createTuiState();
     reduceEvent(s, ev({ type: 'task:created', task: { id: 't1', title: 'Fix', role: 'coder', status: 'pending' } }));

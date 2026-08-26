@@ -6,6 +6,7 @@ import type { Runtime } from '../runtime.js';
 import type { MochiEvent } from '../types.js';
 import { PROVIDERS, providerById } from '../providers.js';
 import { reduceEvent } from './state.js';
+import { wrap, visibleLen } from './wrap.js';
 import pkg from '../../package.json' with { type: 'json' };
 import { kvCache } from '../kv-cache.js';
 import { formatModes } from '../modes.js';
@@ -31,7 +32,6 @@ import {
   transcriptIndent,
   thinkingLine,
   spinnerFrame,
-  visibleLen,
   ellipsize,
 } from './view.js';
 
@@ -251,35 +251,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     spinnerTimer = undefined;
     if (schedulerTimer) { clearInterval(schedulerTimer); schedulerTimer = undefined; }
   };
-
-  function visibleLen(s: string): number {
-    return s.replace(/\x1b\[[0-9;]*m/g, '').length;
-  }
-
-  function wrap(text: string, max: number): string[] {
-    if (!text) return [''];
-    const out: string[] = [];
-    for (const paragraph of text.split('\n')) {
-      let line = '';
-      let lineVis = 0; // visible (ANSI-stripped) length of `line`, kept O(1)
-      for (const word of paragraph.split(/(\s+)/)) {
-        const wVis = visibleLen(word);
-        if (lineVis + wVis > max) {
-          if (line.trim()) out.push(line.trimEnd());
-          line = word.startsWith(' ') ? word.slice(1) : word;
-          lineVis = visibleLen(line);
-        } else {
-          // O(1) cumulative visible length instead of re-stripping ANSI over
-          // the whole growing line per word, which was O(line^2) and froze
-          // the UI while a long response streamed in.
-          line += word;
-          lineVis += wVis;
-        }
-      }
-      out.push(line);
-    }
-    return out.length ? out : [''];
-  }
+  // `wrap` and `visibleLen` are imported from ./wrap.js (shared, testable).
 
   function prettifyToolCall(text: string): string | undefined {
     const m = text.trim().match(/^(shell|read|write|edit|search|git|inspect|glob|memory|delete)\(([\s\S]*)\)$/);

@@ -118,8 +118,17 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
       const content = event.content as string | undefined;
       if (!content) return false;
       const last = state.lines[state.lines.length - 1];
-      if (last && last.kind === 'assistant') last.text += content;
-      else pushLine(state, 'assistant', content);
+      if (last && last.kind === 'assistant') {
+        // Streaming line-overflow guard: a huge single assistant response is
+        // one logical text but would become one gigantic string that every
+        // frame fully re-wraps (the freeze/"bottles up" during long outputs).
+        // Roll it into a fresh line once it passes a soft cap so wrap cost
+        // stays bounded while still rendering continuously.
+        if (last.text.length > 16_000) pushLine(state, 'assistant', content);
+        else last.text += content;
+      } else {
+        pushLine(state, 'assistant', content);
+      }
       state.chatVer++;
       return true;
     }
