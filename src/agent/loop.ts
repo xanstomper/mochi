@@ -240,6 +240,11 @@ export class Agent {
   private checkpointFailed = false;
   private lastSig = '';
   private sigStreak = 0;
+  /** Cumulative repeated-tool-name count (fires regardless of arg variation) so a
+   *  rambling/yammering model loops is cut short even when the args change each
+   *  turn (bounded exploration loop burned 139k tokens on a trivial prompt). */
+  private toolNameCounts = new Map<string, number>();
+  private chatToolRounds = 0; // tool-call rounds issued for a chat task
   private consecutiveToolErrors = new Map<string, { error: string; count: number }>();
   private readCache: ReadCache;
   private planMode: boolean;
@@ -878,6 +883,26 @@ Continue from 'Next:', do not redo completed progress.`,
           this.context.stuckSignal = `You have issued ${this.nudgeInjections} repeated-tool-call nudges. Change strategy or answer now.`;
         }
         this.toolCallsTotal++;
+        // Cumulative repeated-tool-name breaker: a rambling model changes args
+        // slightly each turn so the signature guard never trips, but keeps
+        // re-issuing the same tool name. Track counts across turns and abort
+        // hard once any single tool name shows up too many times unfixed.
+        for (const c of response.toolCalls) {
+          const canonical = TOOL_ALIASES[c.function.name] || c.function.name;
+          const prev = this.toolNameCounts.get(canonical) ?? 0;
+          this.toolNameCounts.set(canonical, prev + 1);
+          if (prev + 1 >= 4) {
+            return this.finish(task, false, 'Loop guard: repeated the same tool name too many times without progress.', 'tool_loop');
+          }
+        }
+        // Chat-task hard tool cap: a chat prompt (hello, Q&A, summarise) has no
+        // repo and should not run 12+ exploration tool rounds. Cut it off fast.
+        if (taskKind === 'chat') {
+          this.chatToolRounds++;
+          if (this.chatToolRounds >= 2) {
+            return this.finish(task, false, 'Stopped: chat task should not require repeated tool use.', 'tool_loop');
+          }
+        }
         if (this.toolCallsTotal > 40) {
           return this.finish(task, false, 'Too many tool calls; stopping to avoid an infinite loop.', 'tool_loop');
         }
