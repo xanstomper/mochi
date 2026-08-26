@@ -31,7 +31,11 @@ const defaultConfig = (): MochiConfig => ({
     gitDestructive: false,
   },
   telemetry: false,
-  reasoning: 'max',
+  // Balanced default: "max" over-specifies heavy compute for the free/low-tier
+  // flash models (making them slow/stall/thin on trivial work). medium keeps
+  // correctness while responding fast; users can raise via MOCHI_REASONING or
+  // the /reasoning menu.
+  reasoning: 'medium',
   projectDir: '.mochi',
   configDir: resolve(homedir(), '.config/mochi'),
   quiet: false,
