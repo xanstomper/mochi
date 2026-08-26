@@ -697,8 +697,21 @@ Continue from 'Next:', do not redo completed progress.`,
         };
       };
 
+      // Hard per-response stall guard: the stream guards above only fire when
+      // chunks ARRIVE (runaway repetition/capacity). A fully silent provider
+      // hold (no chunks, no error) would otherwise freeze the agent mid-task
+      // forever. Race the gather against a wall-clock timer so a silent stall
+      // is surfaced as a normal retryable error instead of an infinite hang.
+      const MODEL_RESPONSE_TIMEOUT_MS = 180_000; // 3 min per model reply
       try {
-        response = await gatherStream(packet.messages);
+        const stall = new Promise<{ __timedOut: true }>((r) => setTimeout(() => r({ __timedOut: true }), MODEL_RESPONSE_TIMEOUT_MS));
+        const raced = await Promise.race([gatherStream(packet.messages), stall]);
+        if ('__timedOut' in raced) {
+          this.events.emit({ type: 'agent:log', agentId: this.id, message: `[model] no data for ${MODEL_RESPONSE_TIMEOUT_MS / 1000}s; aborting this response to avoid a mid-task stall.` });
+          return this.finish(task, false, 'Model stream stalled (no response) — will not hang the task.', 'model_error');
+        } else {
+          response = raced;
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         
