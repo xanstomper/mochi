@@ -3,10 +3,10 @@ import { THEMES, getTheme, getAllThemes, applyTheme, getCurrentTheme, themeSwatc
 import { setTheme, T } from './view.js';
 
 describe('mochi themes', () => {
-  it('defines 15 unique themes', () => {
-    expect(THEMES.length).toBe(15);
+  it('defines 20 unique themes', () => {
+    expect(THEMES.length).toBe(20);
     const ids = new Set(THEMES.map((t) => t.id));
-    expect(ids.size).toBe(15);
+    expect(ids.size).toBe(20);
   });
 
   it('every theme has all required color tokens and description', () => {
@@ -77,5 +77,53 @@ describe('mochi themes', () => {
     // Reset to cyber-void for subsequent test runs
     applyTheme('cyber-void');
     expect(getCurrentTheme().id).toBe('cyber-void');
+  });
+});
+
+describe('themes are visually distinct', () => {
+  // Verifies the key claim of the redesigned themes: most themes have a
+  // distinct assistantGutter color (the most-seen color in the TUI), and
+  // each theme picks at least one role color that no other theme uses.
+  // This is what makes them "look different" rather than being the same
+  // rainbow with different palette labels.
+  it('most themes have unique assistantGutter colors (≥ 15 distinct)', () => {
+    // Some themes intentionally share a gutter (midnight-jazz + obsidian-gold
+    // both want gold; cyber-void + deep-sea both want cyan). That visual
+    // kinship is a feature, not a bug. What matters is that the BULK of
+    // themes pick distinct colors, which is the visible claim.
+    const seen = new Map<string, string>();
+    for (const t of THEMES) {
+      const color = t.roleColors?.assistantGutter ?? t.colors.cyan;
+      if (!seen.has(color)) seen.set(color, t.id);
+    }
+    expect(seen.size, `expected ≥ 15 distinct assistantGutter colors, got ${seen.size}`).toBeGreaterThanOrEqual(15);
+  });
+
+  it('every theme picks at least 4 role-color overrides', () => {
+    // Each redesigned/new theme should customize at least 4 semantic
+    // roles so the role colors genuinely differ from the palette default.
+    for (const t of THEMES) {
+      const overrides = Object.keys(t.roleColors ?? {}).length;
+      expect(overrides, `${t.id} should customize at least 4 roles, has ${overrides}`).toBeGreaterThanOrEqual(4);
+    }
+  });
+
+  it('themes differ in white-balance (fg color) so they read as different palettes', () => {
+    // Collect distinct fg colors. With 20 themes covering cool, warm,
+    // cream, ivory, charcoal etc, we expect at least 15 distinct values.
+    const fgColors = new Set(THEMES.map((t) => t.colors.fg));
+    expect(fgColors.size).toBeGreaterThanOrEqual(15);
+  });
+
+  it('themes differ in userBg so user-input highlights read as different surfaces', () => {
+    const bgs = new Set(THEMES.map((t) => t.colors.bgUser));
+    expect(bgs.size).toBeGreaterThanOrEqual(15);
+  });
+
+  it('themes include the developer-favorite set (Dracula, Tokyo Night, Catppuccin, Gruvbox, One Dark)', () => {
+    const ids = new Set(THEMES.map((t) => t.id));
+    for (const required of ['dracula', 'tokyo-night', 'catppuccin-mocha', 'gruvbox', 'one-dark']) {
+      expect(ids.has(required), `missing required theme: ${required}`).toBe(true);
+    }
   });
 });

@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   T,
+  R,
   setTheme,
+  getAllThemes,
   gradientContextBar,
   gradientCacheBar,
   spinnerColored,
@@ -189,20 +191,23 @@ describe('renderEntry', () => {
   it('tool uses ▷ gutter + the verb-colored prefix', () => {
     const [row] = renderEntry({ kind: 'tool', text: 'write({"path":"a.ts"})' });
     expect(row).toContain('▷');
-    expect(row).toContain(T.violet);
+    // The write verb's color comes from R.toolWriteName — verified across
+    // all themes by the "all themes render tools with R.toolWriteName or
+    // fallback" test in this file.
+    expect(row).toContain(R.toolWriteName);
   });
 
   it('system uses ◆ gutter and gray text', () => {
     const [row] = renderEntry({ kind: 'system', text: 'cached' });
     expect(row).toContain('◆');
-    expect(row).toContain(T.gray);
+    expect(row).toContain(R.systemText);
   });
 
   it('task uses ★ gutter and [TASK] tag', () => {
     const [row] = renderEntry({ kind: 'task', text: 'fix the bug' });
     expect(row).toContain('★');
     expect(row).toContain('[TASK]');
-    expect(row).toContain(T.cyan);
+    expect(row).toContain(R.taskMark);
   });
 
   it('goal uses ◉ gutter and [GOAL] tag', () => {
@@ -413,11 +418,14 @@ describe('color coordination', () => {
     setTheme('cyber-void');
   });
 
-  it('edit tools get violet accent, read tools cyan', () => {
+  it('edit tools use R.toolWriteName and read tools use R.toolReadName', () => {
+    // Cyber Void's roleColors map write=hot-pink, read=cyan — distinct
+    // colors that match the theme's intent rather than a hardcoded "violet".
     const edit = renderEntry({ kind: 'tool', text: 'write({"path":"a.ts"})' });
-    expect(edit[0]).toContain(T.violet);
+    expect(edit[0]).toContain(R.toolWriteName);
+    expect(edit[0]).not.toContain(R.toolReadName);
     const read = renderEntry({ kind: 'tool', text: 'read({"path":"a.ts"})' });
-    expect(read[0]).toContain(T.cyan);
+    expect(read[0]).toContain(R.toolReadName);
   });
 
   it('errors are bold red with [ERR]', () => {

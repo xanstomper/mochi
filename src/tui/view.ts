@@ -6,15 +6,31 @@
 // bar + tokens/cost | Plan/Act | git stats | auto-approve), the slash-command
 // autocomplete dropdown, and the braille thinking spinner.
 //
-// Design language mirrors Cline's OpenTUI components (status-bar.tsx,
-// input-bar.tsx, chat-message-list.tsx, tool-output.tsx) and themes.ts:
-// act #79b8ff, plan #ffea7f, success #99e89b, muted grays, and a transcript
-// capped to a comfortable reading width on wide terminals.
+// Two color surfaces are exported:
+//   T  — palette tokens (raw hex slots from the theme's colors{}). Used by
+//        generic surfaces: status bar, gradient bars, splash, autocomplete
+//        borders, and any place where the "color harmony" of the palette
+//        matters more than a specific role.
+//   R  — semantic role colors (assistantGutter, toolWriteName, etc.).
+//        Themes override these to genuinely change which color is used for
+//        which role, so two themes can have very different tool-name
+//        philosophies without sharing the same cyan/violet tokens.
+//
+// Both T and R are reassigned in place by setTheme() so callers can read
+// them without re-importing.
 import type { LineKind } from './state.js';
 
-import { THEMES, getTheme, getAllThemes, getCurrentTheme, applyTheme, themeSwatch, type MochiTheme } from './themes.js';
+import {
+  THEMES, getTheme, getAllThemes, getCurrentTheme, applyTheme, themeSwatch,
+  defaultRoleColors, resolveRoleColors,
+  type MochiTheme, type RoleColors,
+} from './themes.js';
 
-export { THEMES, getTheme, getAllThemes, getCurrentTheme, applyTheme, themeSwatch, type MochiTheme };
+export {
+  THEMES, getTheme, getAllThemes, getCurrentTheme, applyTheme, themeSwatch,
+  defaultRoleColors, resolveRoleColors,
+  type MochiTheme, type RoleColors,
+};
 
 // ---- Palette (customizable with 15 handcrafted themes) -------------------
 export const T = {
@@ -26,10 +42,20 @@ export const T = {
   ...getCurrentTheme().colors,
 };
 
-/** Switch active theme dynamically. Updates all color codes in T in place. */
+/** Semantic role colors. Initialized from the current theme and refreshed
+ *  in place by setTheme(). Use R.assistantGutter, R.toolWriteName, etc.
+ *  instead of hardcoded token names so themes can legitimately re-color
+ *  roles. T.<token> stays available for generic surfaces that just want
+ *  the palette. */
+export const R: RoleColors = resolveRoleColors(getCurrentTheme());
+
+/** Switch active theme dynamically. Updates T (palette) AND R (role colors)
+ *  in place so any code that has a reference to either sees the new theme
+ *  immediately without re-importing. */
 export function setTheme(themeId: string): MochiTheme {
   const t = applyTheme(themeId);
   Object.assign(T, t.colors);
+  Object.assign(R, resolveRoleColors(t));
   return t;
 }
 
@@ -124,7 +150,7 @@ export function spinnerSweep(i: number, width = 18): string {
 
 export function thinkingLine(frame: number, note = ''): string {
   const note_ = note ? ` ${T.orange}${note}${T.reset}` : '';
-  return `${spinnerColored(frame)} ${T.cyan}Thinking…${T.reset} ${spinnerSweep(frame, 8)}${note_} ${T.grayDark}(esc to cancel)${T.reset}`;
+  return `${spinnerColored(frame)} ${R.thinkingLabel}Thinking…${T.reset} ${spinnerSweep(frame, 8)}${note_} ${T.grayDark}(esc to cancel)${T.reset}`;
 }
 
 // ---- jcode-style animated context + cache bars ----------------------------
@@ -273,7 +299,7 @@ export function statusBarRow1(m: StatusBarModel, width: number): string {
     : ` ${T.gray}${usage}${T.reset}`;
   const toggle = `${m.mode === 'plan' ? `${T.plan}● Plan` : `${T.grayDark}○ Plan`}${T.reset} ${m.mode === 'act' ? `${T.act}● Act` : `${T.grayDark}○ Act`}${T.reset} ${T.grayDark}(Tab)${T.reset}`;
   const reasoningBadge = m.reasoningLevel
-    ? ` ${T.cyan}${T.bold}[REASON: ${m.reasoningLevel.toUpperCase()}]${T.reset}`
+    ? ` ${(R.reasonBadge as any)[m.reasoningLevel] ?? R.reasoningBadge}${T.bold}[REASON: ${m.reasoningLevel.toUpperCase()}]${T.reset}`
     : '';
   const modeBadge = m.agentMode && m.agentMode !== 'normal'
     ? ` ${modeColor(m.agentMode)}${T.bold}[${m.agentMode.toUpperCase()}]${T.reset}`
@@ -329,14 +355,17 @@ export function renderToolOutput(text: string, indent = 2): string[] {
   return out;
 }
 
-/** Color-coordinate tool names: known edit tools get the violet accent,
- *  read tools cyan, verification lime — so a transcript scan shows what the
- *  agent is DOING at a glance. */
-const TOOL_ACCENTS: Array<[RegExp, string]> = [
-  [/^(write|edit|delete|patch|replace_symbol|search_replace_multi)\b/, 'violet'],
-  [/^(read|search|glob|inspect|tree|fetch|deepwiki|clipboard)\b/, 'cyan'],
-  [/^(shell|git|verify|perf)\b/, 'orange'],
-  [/^(memory|skill|subagent|chameleon|analyze_code|sql_codebase_query)\b/, 'magenta'],
+/** Color-coordinate tool names by verb group, so a transcript scan shows
+ *  what the agent is DOING at a glance. The mapped string is now a key into
+ *  R (semantic role colors) instead of T (palette tokens), so themes can
+ *  legitimately recolor write tools (Tokyo Night makes them yellow, Dracula
+ *  makes them red, etc.) without breaking the meaning of "write=mutating". */
+const TOOL_ACCENTS: Array<[RegExp, keyof RoleColors]> = [
+  [/^(write|edit|delete|patch|replace_symbol|search_replace_multi)\b/, 'toolWriteName'],
+  [/^(read|search|glob|inspect|tree|fetch|deepwiki|clipboard)\b/, 'toolReadName'],
+  [/^(shell|git)\b/, 'toolShellName'],
+  [/^(verify|perf|test)\b/, 'toolTestName'],
+  [/^(memory|skill|subagent|chameleon|analyze_code|sql_codebase_query)\b/, 'toolGenericName'],
 ];
 
 export function highlightShellCommand(cmd: string): string {
@@ -387,7 +416,7 @@ export function renderMetricGauge(label: string, value: number, max: number, uni
   const ratio = max > 0 ? Math.max(0, Math.min(1, value / max)) : 0;
   const filled = Math.round(ratio * width);
   const empty = Math.max(0, width - filled);
-  const color = ratio < 0.6 ? T.lime : ratio < 0.85 ? T.orange : T.error;
+  const color = ratio < 0.6 ? R.contextLow : ratio < 0.85 ? R.contextMid : R.contextHigh;
   const bar = `${color}${'█'.repeat(filled)}${T.grayDark}${'░'.repeat(empty)}${T.reset}`;
   const pct = Math.round(ratio * 100);
   const formattedVal = value >= 1000 ? `${(value / 1000).toFixed(1)}k` : `${value}`;
@@ -406,7 +435,7 @@ export function accentToolPrefix(text: string): string {
   }
   if (text.startsWith('✗') || text.startsWith('[ERR]')) {
     const rest = text.replace(/^(✗|\[ERR\])\s*/, '');
-    return `${T.error}${T.bold}[ERR]${T.reset} ${T.error}${rest}${T.reset}`;
+    return `${R.errorMark}${T.bold}[ERR]${T.reset} ${R.errorText}${rest}${T.reset}`;
   }
   if (text.startsWith('[SKIP]')) {
     const rest = text.replace(/^\[SKIP\]\s*/, '');
@@ -420,46 +449,50 @@ export function accentToolPrefix(text: string): string {
   if (colonIdx !== -1) {
     const name = text.slice(0, colonIdx).trim();
     const rest = text.slice(colonIdx + 1);
-    let color = 'violet';
+    let color: keyof RoleColors = 'toolGenericName';
     for (const [re, c] of TOOL_ACCENTS) {
       if (re.test(name)) { color = c; break; }
     }
-    const coloredName = `${(T as any)[color] ?? T.violet}${T.bold}${name}${T.reset}:`;
+    const coloredName = `${R[color]}${T.bold}${name}${T.reset}:`;
     if (name === 'shell' || name === 'git') {
       return `${coloredName} ${highlightShellCommand(rest.trimStart())}`;
     }
-    return `${coloredName}${T.fg}${rest}${T.reset}`;
+    return `${coloredName}${R.assistantText}${rest}${T.reset}`;
   }
   const name = text.split(/[(:\s]/)[0] ?? '';
   for (const [re, color] of TOOL_ACCENTS) {
-    if (re.test(name)) return `${(T as any)[color]}${name}${T.reset}${T.grayDark}${text.slice(name.length)}${T.reset}`;
+    if (re.test(name)) return `${R[color]}${name}${T.reset}${T.grayDark}${text.slice(name.length)}${T.reset}`;
   }
-  return `${T.violet}${name}${T.reset}${T.grayDark}${text.slice(name.length)}${T.reset}`;
+  return `${R.toolGenericName}${name}${T.reset}${T.grayDark}${text.slice(name.length)}${T.reset}`;
 }
 
 export function formatInlineMarkdown(text: string): string {
   // Bold: **text**
-  let s = text.replace(/\*\*(.+?)\*\*/g, `${T.bold}${T.fg}$1${T.reset}${T.fg}`);
+  let s = text.replace(/\*\*(.+?)\*\*/g, `${T.bold}${R.mdBold}$1${T.reset}${R.assistantText}`);
   // Inline code: `code`
-  s = s.replace(/`([^`]+)`/g, `${T.violet}${T.bold}$1${T.reset}${T.fg}`);
+  s = s.replace(/`([^`]+)`/g, `${R.codeType}${T.bold}$1${T.reset}${R.assistantText}`);
   // Italic: *text* (when not preceded or followed by *)
-  s = s.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, `${T.italic}$1${T.reset}${T.fg}`);
-  return `${T.fg}${s}${T.reset}`;
+  s = s.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, `${T.italic}$1${T.reset}${R.assistantText}`);
+  return `${R.assistantText}${s}${T.reset}`;
 }
 
 function highlightCodeLine(line: string): string {
   let s = line;
   // Keywords
-  s = s.replace(/\b(const|let|var|function|return|import|export|from|class|extends|interface|type|async|await|if|else|switch|case|break|for|while|try|catch|throw|finally|new|typeof|instanceof)\b/g, `${T.magenta}$1${T.reset}${T.fg}`);
+  s = s.replace(/\b(const|let|var|function|return|import|export|from|class|extends|interface|type|async|await|if|else|switch|case|break|for|while|try|catch|throw|finally|new|typeof|instanceof)\b/g, `${R.codeKeyword}$1${T.reset}${R.assistantText}`);
   // Types & builtins
-  s = s.replace(/\b(string|number|boolean|void|any|unknown|never|null|undefined|Promise|Array|Record|Set|Map|Object|Function)\b/g, `${T.cyan}$1${T.reset}${T.fg}`);
+  s = s.replace(/\b(string|number|boolean|void|any|unknown|never|null|undefined|Promise|Array|Record|Set|Map|Object|Function)\b/g, `${R.codeType}$1${T.reset}${R.assistantText}`);
+  // Function calls
+  s = s.replace(/\b([a-zA-Z_$][\w$]*)\s*\(/g, `${R.codeFn}$1${T.reset}${R.assistantText}(${T.reset}`);
   // Strings
-  s = s.replace(/(['"`])(.*?)\1/g, `${T.lime}$1$2$1${T.reset}${T.fg}`);
+  s = s.replace(/(['"`])(.*?)\1/g, `${R.codeString}$1$2$1${T.reset}${R.assistantText}`);
   // Numbers
-  s = s.replace(/\b(\d+)\b/g, `${T.orange}$1${T.reset}${T.fg}`);
+  s = s.replace(/\b(\d+)\b/g, `${R.codeNumber}$1${T.reset}${R.assistantText}`);
+  // Punctuation
+  s = s.replace(/([{}();,<>[\]])/g, `${R.codePunct}$1${T.reset}${R.assistantText}`);
   // Comments
-  s = s.replace(/(\/\/.*$)/g, `${T.grayDark}$1${T.reset}`);
-  return `${T.fg}${s}${T.reset}`;
+  s = s.replace(/(\/\/.*$)/g, `${R.codeComment}$1${T.reset}`);
+  return `${R.assistantText}${s}${T.reset}`;
 }
 
 /**
@@ -482,7 +515,7 @@ export function renderMarkdown(text: string): string[] {
       if (!inCodeBlock) {
         inCodeBlock = true;
         codeBlockLang = trimmed.slice(3).trim();
-        const tag = codeBlockLang ? ` ${T.cyan}${codeBlockLang}${T.reset} ` : ' ';
+        const tag = codeBlockLang ? ` ${R.codeType}${codeBlockLang}${T.reset} ` : ' ';
         out.push(`${T.rule}┌──${tag}${'─'.repeat(Math.max(0, 36 - (codeBlockLang?.length || 0)))}┐${T.reset}`);
       } else {
         inCodeBlock = false;
@@ -499,15 +532,15 @@ export function renderMarkdown(text: string): string[] {
 
     // Markdown Headers
     if (trimmed.startsWith('### ')) {
-      out.push(`${T.pink}${T.bold}### ${formatInlineMarkdown(trimmed.slice(4))}${T.reset}`);
+      out.push(`${R.mdHeading}${T.bold}### ${formatInlineMarkdown(trimmed.slice(4))}${T.reset}`);
       continue;
     }
     if (trimmed.startsWith('## ')) {
-      out.push(`${T.cyan}${T.bold}## ${formatInlineMarkdown(trimmed.slice(3))}${T.reset}`);
+      out.push(`${R.mdHeading}${T.bold}## ${formatInlineMarkdown(trimmed.slice(3))}${T.reset}`);
       continue;
     }
     if (trimmed.startsWith('# ')) {
-      out.push(`${T.magenta}${T.bold}# ${formatInlineMarkdown(trimmed.slice(2))}${T.reset}`);
+      out.push(`${R.mdHeading}${T.bold}# ${formatInlineMarkdown(trimmed.slice(2))}${T.reset}`);
       continue;
     }
 
@@ -526,14 +559,14 @@ export function renderMarkdown(text: string): string[] {
     // Unordered bullet lists
     if (/^[\*\-\+]\s+/.test(trimmed)) {
       const content = trimmed.replace(/^[\*\-\+]\s+/, '');
-      out.push(`  ${T.cyan}•${T.reset} ${formatInlineMarkdown(content)}`);
+      out.push(`  ${R.mdLink}•${T.reset} ${formatInlineMarkdown(content)}`);
       continue;
     }
 
     // Numbered lists
     const numMatch = trimmed.match(/^(\d+)\.\s+(.*)$/);
     if (numMatch) {
-      out.push(`  ${T.magenta}${numMatch[1]}.${T.reset} ${formatInlineMarkdown(numMatch[2])}`);
+      out.push(`  ${R.codeNumber}${numMatch[1]}.${T.reset} ${formatInlineMarkdown(numMatch[2])}`);
       continue;
     }
 
@@ -556,25 +589,25 @@ export function renderEntry(entry: RenderEntry, expandTools = false): string[] {
   switch (entry.kind) {
     case 'user':
       // Background-highlighted user input (left gutter through end of text).
-      return [`  ${T.magenta}${T.bold}❯${T.reset} ${T.bgUser}${T.fg}${T.bold}${text}${T.reset}`];
+      return [`  ${R.userGutter}${T.bold}❯${T.reset} ${R.userBg}${R.userFg}${T.bold}${text}${T.reset}`];
     case 'assistant':
       return [
-        ...renderMarkdown(text).map((l) => `  ${T.cyan}▌${T.reset}${l.replace(/^\s*/, '')}`),
+        ...renderMarkdown(text).map((l) => `  ${R.assistantGutter}▌${T.reset}${l.replace(/^\s*/, '')}`),
       ];
     case 'thought':
-      return text.split('\n').map((l) => `  ${T.grayDark}◇ ${T.italic}${T.gray}${l}${T.reset}`);
+      return text.split('\n').map((l) => `  ${R.thoughtGutter}◇ ${T.italic}${R.thoughtText}${l}${T.reset}`);
     case 'tool':
-      return [`  ${T.lime}${T.bold}▷${T.reset} ${accentToolPrefix(text)}`];
+      return [`  ${R.toolMarker}${T.bold}▷${T.reset} ${accentToolPrefix(text)}`];
     case 'error': {
       const rest = text.startsWith('[ERR] ') ? text.slice(6) : text.replace(/^✗\s*/, '');
-      return [`  ${T.error}${T.bold}! [ERR]${T.reset} ${T.error}${rest}${T.reset}`];
+      return [`  ${R.errorMark}${T.bold}! [ERR]${T.reset} ${R.errorText}${rest}${T.reset}`];
     }
     case 'system':
-      return text.split('\n').map((l) => `  ${T.grayDark}◆ ${T.reset}${T.gray}${l}${T.reset}`);
+      return text.split('\n').map((l) => `  ${R.systemMark}◆ ${T.reset}${R.systemText}${l}${T.reset}`);
     case 'task':
-      return [`  ${T.cyan}${T.bold}★ [TASK]${T.reset} ${T.fg}${text}${T.reset}`];
+      return [`  ${R.taskMark}${T.bold}★ [TASK]${T.reset} ${R.taskText}${text}${T.reset}`];
     case 'goal':
-      return [`  ${T.pink}${T.bold}◉ [GOAL]${T.reset} ${T.fg}${T.bold}${text}${T.reset}`];
+      return [`  ${R.goalMark}${T.bold}◉ [GOAL]${T.reset} ${R.goalText}${T.bold}${text}${T.reset}`];
     default:
       return [`  ${text}`];
   }

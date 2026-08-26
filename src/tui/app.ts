@@ -12,6 +12,7 @@ import { kvCache } from '../kv-cache.js';
 import { formatModes } from '../modes.js';
 import {
   T,
+  R,
   setTheme,
   getAllThemes,
   getCurrentTheme,
@@ -341,74 +342,74 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
 
     switch (line.kind) {
       case 'user': {
-        // 2-space gutter + ❯ magenta accent + background-fill + bold white text
+        // 2-space gutter + ❯ accent + background-fill + bold fg text
         const wrapped = wrap(cleanText, Math.max(10, maxWidth - 4));
         for (let i = 0; i < wrapped.length; i++) {
           const w = wrapped[i];
-          if (i === 0) rows.push(`  ${T.magenta}${T.bold}❯${T.reset} ${T.bgUser}${T.fg}${T.bold}${w}${T.reset}`);
-          else rows.push(`  ${T.bgUser}${T.fg}${T.bold}${w}${T.reset}`);
+          if (i === 0) rows.push(`  ${R.userGutter}${T.bold}❯${T.reset} ${R.userBg}${R.userFg}${T.bold}${w}${T.reset}`);
+          else rows.push(`  ${R.userBg}${R.userFg}${T.bold}${w}${T.reset}`);
         }
         break;
       }
       case 'assistant': {
-        // 2-space gutter + ▌ cyan rule accent for each wrapped line (a
+        // 2-space gutter + ▌ rule accent for each wrapped line (a
         // vertical bar visually anchors the assistant's block on the grid)
         const wrapped = wrap(cleanText, Math.max(10, maxWidth - 4));
         for (const w of wrapped) {
-          rows.push(`  ${T.cyan}▌${T.reset}${T.fg}${w}${T.reset}`);
+          rows.push(`  ${R.assistantGutter}▌${T.reset}${R.assistantText}${w}${T.reset}`);
         }
         break;
       }
       case 'tool': {
-        // ▷ lime gutter + accentToolPrefix for verb-coordinated color
+        // ▷ gutter + accentToolPrefix for verb-coordinated color
         const wrapped = wrap(cleanText, Math.max(10, maxWidth - 6));
         for (let i = 0; i < wrapped.length; i++) {
           const w = wrapped[i];
-          if (i === 0) rows.push(`  ${T.lime}${T.bold}▷${T.reset} ${accentToolPrefix(w)}`);
+          if (i === 0) rows.push(`  ${R.toolMarker}${T.bold}▷${T.reset} ${accentToolPrefix(w)}`);
           else rows.push(`  ${T.grayDark}${w}${T.reset}`);
         }
         break;
       }
       case 'error': {
-        // ! red gutter + [ERR] tag, bold
+        // ! gutter + [ERR] tag, bold
         const wrapped = wrap(cleanText, Math.max(10, maxWidth - 4));
         for (let i = 0; i < wrapped.length; i++) {
           const w = wrapped[i];
-          if (i === 0) rows.push(`  ${T.error}${T.bold}! [ERR]${T.reset} ${T.error}${w}${T.reset}`);
-          else rows.push(`  ${T.error}${w}${T.reset}`);
+          if (i === 0) rows.push(`  ${R.errorMark}${T.bold}! [ERR]${T.reset} ${R.errorText}${w}${T.reset}`);
+          else rows.push(`  ${R.errorText}${w}${T.reset}`);
         }
         break;
       }
       case 'system': {
-        // ◆ gray gutter, italic gray text — every line carries the marker
+        // ◆ gutter, italic text — every line carries the marker
         const wrapped = wrap(cleanText, Math.max(10, maxWidth - 4));
         for (const w of wrapped) {
-          rows.push(`  ${T.grayDark}◆ ${T.italic}${T.gray}${w}${T.reset}`);
+          rows.push(`  ${R.systemMark}◆ ${T.italic}${R.systemText}${w}${T.reset}`);
         }
         break;
       }
       case 'task': {
-        // ★ cyan bold gutter + [TASK] tag
+        // ★ gutter + [TASK] tag
         const wrapped = wrap(cleanText, Math.max(10, maxWidth - 4));
         for (let i = 0; i < wrapped.length; i++) {
           const w = wrapped[i];
-          if (i === 0) rows.push(`  ${T.cyan}${T.bold}★ [TASK]${T.reset} ${T.fg}${w}${T.reset}`);
+          if (i === 0) rows.push(`  ${R.taskMark}${T.bold}★ [TASK]${T.reset} ${R.taskText}${w}${T.reset}`);
           else rows.push(`  ${T.grayDark}${w}${T.reset}`);
         }
         break;
       }
       case 'thought': {
-        // ◇ gray gutter, italic dim text — hidden reasoning
+        // ◇ gutter, italic dim text — hidden reasoning
         const wrapped = wrap(cleanText, Math.max(10, maxWidth - 4));
         for (const w of wrapped) {
-          rows.push(`  ${T.grayDark}◇ ${T.italic}${T.gray}${w}${T.reset}`);
+          rows.push(`  ${R.thoughtGutter}◇ ${T.italic}${R.thoughtText}${w}${T.reset}`);
         }
         break;
       }
       default: {
         const wrapped = wrap(cleanText, Math.max(10, maxWidth));
         for (const w of wrapped) {
-          rows.push(`  ${T.fg}${w}${T.reset}`);
+          rows.push(`  ${R.assistantText}${w}${T.reset}`);
         }
         break;
       }
