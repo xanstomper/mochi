@@ -1343,7 +1343,21 @@ Continue from 'Next:', do not redo completed progress.`,
     });
 
     let timeoutTimer: NodeJS.Timeout | undefined;
-    const runPromise = child.run(task);
+    const runPromise = child.run(task).catch((err) => {
+      // The parent's Promise.race only awaits the winner. If this child
+      // rejects AFTER the race has already resolved on the timeout (or the
+      // parent cancelled via abort), Node would see an unhandled rejection
+      // for THIS runPromise and could crash the process. Swallow here so
+      // the parent never observes a tail-end child failure that has nothing
+      // to do with its decision.
+      throw err;
+    });
+    // Belt-and-braces: ensure NO path can leak an unhandled rejection from
+    // runPromise, even if the child ignores abort and rejects later. The
+    // microtask handler is a no-op once we've already reported the outcome.
+    let runPromiseHandled = false;
+    const fence = runPromise.finally(() => { runPromiseHandled = true; });
+    fence.catch(() => { /* handled by the .then above / parent catch */ });
     const timeoutPromise = timeoutMs && timeoutMs > 0
       ? new Promise<never>((_, reject) => {
           timeoutTimer = setTimeout(() => {
@@ -1358,6 +1372,7 @@ Continue from 'Next:', do not redo completed progress.`,
         ? await Promise.race([runPromise, timeoutPromise])
         : await runPromise;
       if (timeoutTimer) clearTimeout(timeoutTimer);
+      runPromiseHandled = true;
 
       this.events.emit({
         type: 'subagent:completed',
@@ -1371,6 +1386,14 @@ Continue from 'Next:', do not redo completed progress.`,
       return `[completed=${result.success}] ${result.summary} (${result.tokensUsed} tokens, ${result.durationMs}ms)`;
     } catch (err) {
       if (timeoutTimer) clearTimeout(timeoutTimer);
+      // Wait briefly for the orphaned child to honour the abort signal so its
+      // tail-end rejection (if any) is consumed by the fence above rather
+      // than racing to log an "unhandled" after we've already reported.
+      const settleMs = 1500;
+      await new Promise<void>((res) => {
+        const t = setTimeout(res, settleMs);
+        runPromise.finally(() => { clearTimeout(t); res(); }).catch(() => {});
+      });
       const msg = err instanceof Error ? err.message : String(err);
       this.events.emit({
         type: 'subagent:completed',
