@@ -150,10 +150,10 @@ describe('Runtime abort + interrupt', () => {
     delete process.env.MOCHI_REASONING;
   });
 
-  it('defaults reasoning to max upon model initialization unless user changes it', () => {
+  it('defaults reasoning to medium upon model initialization unless user changes it', () => {
     delete process.env.MOCHI_REASONING;
     const rt = Runtime.create({ cwd: makeRepo() });
-    expect(rt.getReasoning()).toBe('max');
+    expect(rt.getReasoning()).toBe('medium');
     rmSync(rt.cwd, { recursive: true, force: true });
   });
 });
