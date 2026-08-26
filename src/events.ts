@@ -30,14 +30,24 @@ export class EventBus {
     const handlers = this.listeners.get(event.type) ?? [];
     for (const h of handlers) {
       try {
-        h(event);
+        // Handlers are typed as `void | Promise<void>` but emit() is fire-and-forget;
+        // if a handler ever returns a rejected promise (e.g. a future async handler
+        // is registered without the caller knowing), it must NOT become an unhandled
+        // rejection that can crash the process. Swallow the tail end here.
+        const ret = h(event);
+        if (ret && typeof (ret as Promise<unknown>).then === 'function') {
+          (ret as Promise<void>).catch(() => { /* listener errors must not bubble */ });
+        }
       } catch {
         // ignore listener errors
       }
     }
     for (const h of this.wildcard) {
       try {
-        h(event);
+        const ret = h(event);
+        if (ret && typeof (ret as Promise<unknown>).then === 'function') {
+          (ret as Promise<void>).catch(() => { /* listener errors must not bubble */ });
+        }
       } catch {
         // ignore listener errors
       }
