@@ -1657,7 +1657,12 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
             state.input = '';
             state.cursor = 0;
           } else {
-            void handleCommand(text);
+            Promise.resolve(handleCommand(text)).catch((e) => {
+              push('error', e instanceof Error ? `${e.message}` : String(e));
+              state.busy = false;
+              stopSpinner();
+              scheduleRender();
+            });
           }
         }
         scheduleRender();
