@@ -887,12 +887,17 @@ Continue from 'Next:', do not redo completed progress.`,
         // slightly each turn so the signature guard never trips, but keeps
         // re-issuing the same tool name. Track counts across turns and abort
         // hard once any single tool name shows up too many times unfixed.
-        for (const c of response.toolCalls) {
-          const canonical = TOOL_ALIASES[c.function.name] || c.function.name;
-          const prev = this.toolNameCounts.get(canonical) ?? 0;
-          this.toolNameCounts.set(canonical, prev + 1);
-          if (prev + 1 >= 4) {
-            return this.finish(task, false, 'Loop guard: repeated the same tool name too many times without progress.', 'tool_loop');
+        // Only count repeats when there has been NO progress yet: a rambling
+        // model that keeps re-issuing tools without editing anything. Once real
+        // edits land (fileChanged), legit multi-file coding is never cut short.
+        if (!this.fileChanged) {
+          for (const c of response.toolCalls) {
+            const canonical = TOOL_ALIASES[c.function.name] || c.function.name;
+            const prev = this.toolNameCounts.get(canonical) ?? 0;
+            this.toolNameCounts.set(canonical, prev + 1);
+            if (prev + 1 >= 4) {
+              return this.finish(task, false, 'Loop guard: probing the same tool repeatedly with no progress. Answer or edit files now.', 'tool_loop');
+            }
           }
         }
         // Chat-task hard tool cap: a chat prompt (hello, Q&A, summarise) has no
