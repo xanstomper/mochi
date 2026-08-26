@@ -1,5 +1,22 @@
 # Mochi Changelog
 
+## 0.11.0
+
+- **Reliability overhaul: the agent can no longer hang, freeze, or spin on token-draining loops.** A suite of guards makes the loop fail fast instead of stalling:
+  - *Cumulative repeated-tool breaker* — a turn that keeps calling the same tool name without producing file edits is cut short instead of rambling across many exploration rounds (a "hello" chat prompt previously ran 12+ rounds burning ~140k tokens / 29s; now the chat-task tool cap stops it immediately).
+  - *Mutating-tools-only no-progress breaker* — the repeated-tool abort only fires on mutating tools, never on legit context-gathering reads (`read`/`glob`/`tree`/`search`), so multi-file coding tasks that read several files before editing are never killed mid-flight.
+  - *Hard per-response stall guard* — a fully silent provider hold (no chunks, no error) previously froze the agent forever; the gather now races a 3-minute timer and reports a clean `model_error`.
+  - *SIGKILL fallback on abort* — when a tool call is aborted a `SIGKILL` is scheduled 5s after `SIGTERM`, so a stubborn child can never hang the loop or freeze the agent.
+  - *Subagent timeout fence* — a child's late rejection (post-timeout / post-abort) can no longer crash the process via an unhandled rejection or race into a duplicated `subagent:completed` event.
+  - *Event-layer safety* — `emit()` now defensively swallows promise rejections from handlers, so a future async handler can't leak an unhandled rejection.
+- **Fast, lean defaults.** Default reasoning was lowered `max → medium` so free/low-tier flash models stop stalling: a chat reply dropped from ~30s / 139k tokens to ~2s / 7k tokens. The stale test that asserted `max` was updated to match; the suite is green at 763/763 (excluding the network-flaky live test).
+- **Terminal no longer freezes.** A root-cause fix eliminated the raw-mode/`fake wrapper` freeze bottleneck, and the Enter-to-run path now has unhandled-rejection safety so a provider/command error surfaces as a line and resets busy/spinner instead of leaving the terminal stuck.
+- **TUI: Cline-style tool cards.** Every tool call is now rendered as a small framed card with a status icon, the tool name, the key argument(s) (file path + edit delta, `$ command`, search query, subagent role/prompt), and the first useful line of output or error — an entire `READ`/`EDIT`/`SHELL` turn is scannable at a glance, with noise (`exit_code`, `duration_ms`, `{}`) stripped.
+- **TUI: post-turn "what I did" summary card.** When a turn finishes, the TUI shows a Cline-style card: `✓ TURN COMPLETE 4523ms · 8 tools` with the first line of the final summary, the files touched (`files: a.ts, b.ts, c.ts (+2 more)`), and tokens used. No-op turns ("the model said hi") get no card; failures render `TURN STOPPED: <reason>`.
+- **TUI: coordinated visual language & semantic themes.** Every transcript line now sits on a 2-space grid gutter with a single-character role marker colored to its accent; all themes were refactored and redesigned around semantic role colors with a single source of truth.
+- **TUI: drag-select fixes.** Drag-select highlight now works reliably (root cause: a missing `?1002h` private-mode query), works on the splash screen too, and remembers the last column the cursor touched; added a `/copy` keyboard fallback.
+- **Removed the DeepWiki MCP server's canned-response mode.** The standalone `deepwiki-server` no longer honors a `MOCHI_TEST_WIKI=mock` env-var shortcut that returned a fabricated summary from shipping code. It now always hits the real Wikipedia REST API + search fallback (verified live), so `wiki_lookup` returns genuine, current content instead of a placeholder.
+
 ## 0.10.7
 
 - **Interactive `/reasoning` Command & Live TUI Display.** Added `/reasoning` (and `/depth`)
