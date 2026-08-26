@@ -16,6 +16,7 @@
 - **TUI: coordinated visual language & semantic themes.** Every transcript line now sits on a 2-space grid gutter with a single-character role marker colored to its accent; all themes were refactored and redesigned around semantic role colors with a single source of truth.
 - **TUI: drag-select fixes.** Drag-select highlight now works reliably (root cause: a missing `?1002h` private-mode query), works on the splash screen too, and remembers the last column the cursor touched; added a `/copy` keyboard fallback.
 - **Removed the DeepWiki MCP server's canned-response mode.** The standalone `deepwiki-server` no longer honors a `MOCHI_TEST_WIKI=mock` env-var shortcut that returned a fabricated summary from shipping code. It now always hits the real Wikipedia REST API + search fallback (verified live), so `wiki_lookup` returns genuine, current content instead of a placeholder.
+- **Real shared SSE encoder.** The OpenAI-compatible SSE *encoder* previously lived only in the test harness (hand-rolled framing inside `fake-openai.ts`). New `src/sse-encode.ts` is the real outbound half of `StreamParser` (`encodeSSEChunk`, `encodeSSEDone`, `buildChatCompletion`), and the test server now delegates all wire encoding to it — deleting ~60 hand-rolled protocol lines. Both production and tests emit identical bytes. Verified with 8 round-trip tests that encode through the real `StreamParser`.
 
 ## 0.10.7
 
