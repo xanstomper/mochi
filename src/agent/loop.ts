@@ -896,20 +896,20 @@ Continue from 'Next:', do not redo completed progress.`,
           this.context.stuckSignal = `You have issued ${this.nudgeInjections} repeated-tool-call nudges. Change strategy or answer now.`;
         }
         this.toolCallsTotal++;
-        // Cumulative repeated-tool-name breaker: a rambling model changes args
-        // slightly each turn so the signature guard never trips, but keeps
-        // re-issuing the same tool name. Track counts across turns and abort
-        // hard once any single tool name shows up too many times unfixed.
-        // Only count repeats when there has been NO progress yet: a rambling
-        // model that keeps re-issuing tools without editing anything. Once real
-        // edits land (fileChanged), legit multi-file coding is never cut short.
+        // Cumulative repeated-tool-name breaker (MUTATING TOOLS ONLY): a rambling
+        // model changes args slightly each turn so the signature guard never
+        // trips, but keeps re-issuing the same mutating tool over and over. Read-only
+        // exploration (read/glob/tree/search/glob) is legitimate context-gathering
+        // and MUST never trip this — only repeated MUTATING calls (edit/write/
+        // delete/patch/shell) with no file change indicate a genuinely stuck loop.
         if (!this.fileChanged) {
           for (const c of response.toolCalls) {
             const canonical = TOOL_ALIASES[c.function.name] || c.function.name;
+            if (this.isReadOnly(canonical)) continue; // never abort on read-only gathering
             const prev = this.toolNameCounts.get(canonical) ?? 0;
             this.toolNameCounts.set(canonical, prev + 1);
             if (prev + 1 >= 4) {
-              return this.finish(task, false, 'Loop guard: probing the same tool repeatedly with no progress. Answer or edit files now.', 'tool_loop');
+              return this.finish(task, false, 'Loop guard: probing with repeated mutating tools and no progress. Change strategy or finish.', 'tool_loop');
             }
           }
         }
