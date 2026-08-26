@@ -48,13 +48,39 @@ describe('reduceEvent', () => {
     expect(s.lines.some((l) => l.kind === 'error' && l.text.includes('Break'))).toBe(true);
   });
 
-  it('renders tool calls compactly and truncates huge args', () => {
+  it('renders tool calls as boxed cards and truncates huge args inside them', () => {
     const s = createTuiState();
     reduceEvent(s, ev({ type: 'tool:called', tool: 'shell', args: { command: 'x'.repeat(500) } }));
     const last = s.lines[s.lines.length - 1];
     expect(last.kind).toBe('tool');
-    expect(last.text.length).toBeLessThanOrEqual(220);
+    // Card is multi-line: header, body, footer. Even with a 500-char
+    // command the body line must be visibly truncated so it never wraps
+    // and breaks the grid alignment.
+    const lines = last.text.split('\n');
+    expect(lines.length).toBeGreaterThanOrEqual(3);
+    const bodyLine = lines[1] ?? '';
+    // The visible cells of the body line (ignoring ANSI) must fit inside
+    // the card's interior width — ~50 chars.
+    const visible = bodyLine.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
+    expect(visible.length).toBeLessThanOrEqual(64);
+    expect(visible).toContain('…'); // ellipsis marks truncation
     expect(truncateArgs('short')).toBe('short');
+  });
+
+  it('renders tool completions as cards with outcome line', () => {
+    const s = createTuiState();
+    reduceEvent(s, ev({ type: 'tool:called', tool: 'edit', tool_call_id: 'c1', args: { path: 'src/foo.ts', oldText: 'a', newText: 'b' } }));
+    reduceEvent(s, ev({
+      type: 'tool:completed',
+      tool: 'edit',
+      result: { toolCallId: 'c1', name: 'edit', output: 'updated src/foo.ts', durationMs: 42 },
+    }));
+    const last = s.lines[s.lines.length - 1];
+    expect(last.kind).toBe('tool');
+    expect(last.text).toContain('EDIT');
+    expect(last.text).toContain('src/foo.ts');
+    expect(last.text).toContain('42ms');
+    expect(last.text).toContain('updated src/foo.ts');
   });
 
   it('tracks subagent lifecycle events and active map', () => {

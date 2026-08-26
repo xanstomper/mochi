@@ -1,4 +1,5 @@
 import { TOOL_ALIASES, normalizeToolArgs } from '../tools/index.js';
+import { formatToolInvocationCard, formatToolCompletedCard } from './cards.js';
 
 export type LineKind = 'user' | 'assistant' | 'system' | 'error' | 'tool' | 'task' | 'goal' | 'plain' | 'thought';
 
@@ -26,6 +27,14 @@ export interface TuiState {
   lines: TuiLine[];
   tasks: Map<string, TuiTask>;
   activeSubagents: Map<string, ActiveSubagentInfo>;
+  /** Args of in-flight tool calls, keyed by tool_call_id (or tool name as
+   *  fallback). Stored at tool:called time so the matching tool:completed
+   *  can render a complete card showing both the call and the result. */
+  activeToolArgs: Map<string, unknown>;
+  /** Line index of each in-flight tool card, keyed by tool_call_id. Used to
+   *  replace the matching pending card on tool:completed instead of always
+   *  stomping the last line (which broke parallel tool execution). */
+  activeToolLine: Map<string, number>;
   currentTask: string;
   currentTool: string;
   chatVer: number;
@@ -37,7 +46,17 @@ export interface TuiState {
 }
 
 export function createTuiState(limit = 500): TuiState {
-  return { lines: [], tasks: new Map(), activeSubagents: new Map(), currentTask: '', currentTool: '', chatVer: 0, limit };
+  return {
+    lines: [],
+    tasks: new Map(),
+    activeSubagents: new Map(),
+    activeToolArgs: new Map(),
+    activeToolLine: new Map(),
+    currentTask: '',
+    currentTool: '',
+    chatVer: 0,
+    limit,
+  };
 }
 
 /** Truncate long args for display without losing the tool identity. */
@@ -134,17 +153,63 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
     }
     case 'tool:called': {
       state.currentTool = String(event.tool ?? '');
-      pushLine(state, 'tool', formatToolInvocation(state.currentTool, event.args));
+      // Remember the args so the matching tool:completed can render the
+      // full card with both the tool name and the outcome in one frame.
+      // Keyed by the tool_call_id when the runtime provides one, otherwise
+      // by the tool name (last call wins in pathological cases — the
+      // wrapping state machine guarantees one outstanding call per tool).
+      const key = String(event.tool_call_id ?? event.callId ?? event.tool ?? '');
+      state.activeToolArgs.set(key, event.args);
+      const cardText = formatToolInvocationCard(state.currentTool, event.args);
+      // Track the line index so the matching tool:completed can replace
+      // THIS card (not "the last tool line") when several tool calls are
+      // in flight concurrently. Without this, parallel tools stomp on
+      // each other: t1 calls push, t2 calls push, t1 completes and
+      // overwrites t2's pending card with t1's outcome.
+      const idx = state.lines.length;
+      state.activeToolLine.set(key, idx);
+      state.lines.push({ kind: 'tool', text: cardText });
+      if (state.lines.length > state.limit) state.lines.splice(0, state.lines.length - state.limit);
+      state.chatVer++;
       return true;
     }
     case 'tool:completed': {
       state.currentTool = '';
-      const formatted = formatToolCompleted(String(event.tool ?? ''), event.result as any);
-      const last = state.lines[state.lines.length - 1];
-      if (last && last.kind === 'tool') {
-        last.text = formatted;
+      // Pull the args back out so the card can show path / command / etc.
+      // alongside the outcome line.
+      const callId = String((event.result as any)?.toolCallId ?? '');
+      const fallbackKey = String(event.tool ?? '');
+      const lookupKey = (callId && state.activeToolLine.has(callId)) ? callId : fallbackKey;
+      // Even if we don't have the args, the completed card uses the tool
+      // name to fall back to a minimal args row (path/command empty).
+      const args =
+        (callId && state.activeToolArgs.get(callId)) ??
+        state.activeToolArgs.get(fallbackKey);
+      const formatted = formatToolCompletedCard(
+        String(event.tool ?? ''),
+        args,
+        event.result as any,
+      );
+      if (callId) {
+        state.activeToolArgs.delete(callId);
+        state.activeToolLine.delete(callId);
+      }
+      if (state.activeToolLine.has(fallbackKey)) state.activeToolLine.delete(fallbackKey);
+      // Replace the matching pending card by callId; otherwise append.
+      const targetIdx = state.activeToolLine.size > 0 ? state.activeToolLine.get(lookupKey) : undefined;
+      if (targetIdx !== undefined && targetIdx >= 0 && targetIdx < state.lines.length) {
+        const t = state.lines[targetIdx];
+        if (t && t.kind === 'tool') t.text = formatted;
       } else {
-        pushLine(state, 'tool', formatted);
+        // Promote: the matching tool:called may have been trimmed from the
+        // head of the buffer (limit reached) or never recorded because the
+        // event arrived before its call. Either way just append.
+        const last = state.lines[state.lines.length - 1];
+        if (last && last.kind === 'tool') {
+          last.text = formatted;
+        } else {
+          pushLine(state, 'tool', formatted);
+        }
       }
       return true;
     }

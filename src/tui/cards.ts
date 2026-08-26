@@ -1,0 +1,232 @@
+import { TOOL_ALIASES, normalizeToolArgs } from '../tools/index.js';
+import { T } from './view.js';
+
+/**
+ * Cline-style boxed tool cards.
+ *
+ * The default agent transcript just shows one line per tool call
+ * (`▷ edit: src/foo.ts`) which is fine for status but impossible to
+ * scan once a turn runs several tools in parallel — the user can no
+ * longer tell at a glance which file was edited, which command ran,
+ * and what came back. This module renders each tool call as a small
+ * framed card with a status icon, the tool name, the key argument(s),
+ * and the first useful line of output (success) or error (failure).
+ *
+ * The whole card is a single string with embedded newlines and ANSI
+ * codes, so the existing `wrapLine` / transcript machinery renders
+ * it without any changes — each wrapped row becomes a card row.
+ *
+ * Width is bounded so a tool call never wraps awkwardly: long paths
+ * and commands are truncated to the card width minus the gutter that
+ * the renderer prepends on every row.
+ */
+
+const TOOL_ICONS: Record<string, string> = {
+  write: '✎', edit: '✎', patch: '✎', delete: '✕',
+  read: '○', search: '○', glob: '○', inspect: '○', tree: '○',
+  fetch: '↓', shell: '▷', git: '▷',
+  verify: '✓', perf: '✓', test: '✓',
+  memory: '◌', skill: '◌', subagent: '◆', think: '◌', todo: '☐',
+};
+
+const TOOL_NAMES: Record<string, string> = {
+  write: 'WRITE', edit: 'EDIT', patch: 'PATCH', delete: 'DELETE',
+  read: 'READ', search: 'SEARCH', glob: 'GLOB', inspect: 'INSPECT', tree: 'TREE',
+  fetch: 'FETCH', shell: 'SHELL', git: 'GIT',
+  verify: 'VERIFY', perf: 'PERF', test: 'TEST',
+  memory: 'MEMORY', skill: 'SKILL', subagent: 'SUBAGENT', think: 'THINK', todo: 'TODO',
+};
+
+/** Map a tool to a semantic color token (theme-aware). */
+function toolColor(tool: string): string {
+  if (['write', 'edit', 'patch', 'delete'].includes(tool)) return T.cyan ?? T.fg;
+  if (['read', 'search', 'glob', 'inspect', 'tree'].includes(tool)) return T.fg;
+  if (tool === 'shell' || tool === 'git') return T.orange ?? T.warning ?? T.fg;
+  if (['verify', 'perf', 'test'].includes(tool)) return T.success ?? T.lime ?? T.fg;
+  if (['memory', 'skill', 'subagent'].includes(tool)) return T.magenta ?? T.violet ?? T.pink ?? T.fg;
+  return T.fg;
+}
+/** Pick a one-line description of a tool call's arguments. Returns the
+ *  raw single string the card will display; never wraps inside. */
+export function describeToolArgs(rawTool: string, rawArgs: unknown): string {
+  const tool = TOOL_ALIASES[rawTool] || rawTool;
+  if (typeof rawArgs === 'object' && rawArgs !== null) {
+    const a = normalizeToolArgs(tool, rawArgs as Record<string, unknown>);
+    if (a.path) {
+      const p = String(a.path);
+      if (a.oldText !== undefined && a.newText !== undefined) {
+        const oldLen = String(a.oldText).length;
+        const newLen = String(a.newText).length;
+        const delta = newLen - oldLen;
+        const sign = delta > 0 ? '+' : delta < 0 ? '' : '±';
+        return `${p}  ${sign}${delta}`;
+      }
+      if (a.content !== undefined) {
+        const lines = String(a.content).split('\n').length;
+        return `${p}  (${lines} line${lines === 1 ? '' : 's'})`;
+      }
+      return p;
+    }
+    if (a.command) {
+      const cmd = String(a.command).trim();
+      return `$ ${cmd}`;
+    }
+    if (a.query) return `"${String(a.query)}"`;
+    if (a.pattern) return `pattern: ${String(a.pattern)}`;
+    if (tool === 'subagent') {
+      if (Array.isArray(a.tasks)) return `${a.tasks.length} parallel subtask${a.tasks.length === 1 ? '' : 's'}`;
+      const role = (a.role as string) ?? 'coder';
+      const prompt = String(a.prompt ?? '').replace(/\s+/g, ' ').slice(0, 60);
+      return `[${role}] ${prompt}${prompt.length === 60 ? '…' : ''}`;
+    }
+    if (tool === 'bg_task') {
+      const action = (a.action as string) ?? 'list';
+      const id = (a.task_id as string) ?? '';
+      return `${action}${id ? ' ' + id : ''}`;
+    }
+  }
+  const s = typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs ?? {});
+  return s.length > 80 ? s.slice(0, 77) + '…' : s;
+}
+
+/** Pick a one-line description of the tool's outcome for the card body. */
+export function describeToolOutcome(
+  rawTool: string,
+  result?: { output?: string; error?: string; durationMs?: number },
+): { kind: 'success' | 'error'; summary: string; durationMs?: number } {
+  const dur = result?.durationMs ? Math.round(result.durationMs) : undefined;
+  if (result?.error) {
+    const err = String(result.error).replace(/\s+/g, ' ').slice(0, 120);
+    return { kind: 'error', summary: err, durationMs: dur };
+  }
+  const out = (result?.output ?? '').trim();
+  // Strip the noisy "exit_code: 0" / JSON wrapper lines that the harness
+  // often prepends — show the actual content instead.
+  const lines = out.split('\n').filter((l) => {
+    const t = l.trim();
+    if (!t) return false;
+    if (/^exit_code:\s*-?\d+$/.test(t)) return false;
+    if (/^duration_ms:\s*-?\d+$/.test(t)) return false;
+    if (t === '{}' || t === '{ }') return false;
+    return true;
+  });
+  const firstLine = lines[0] ?? '';
+  const tool = TOOL_ALIASES[rawTool] || rawTool;
+  if (firstLine) {
+    const trimmed = firstLine.length > 100 ? firstLine.slice(0, 97) + '…' : firstLine;
+    return { kind: 'success', summary: trimmed, durationMs: dur };
+  }
+  return {
+    kind: 'success',
+    summary: `${tool} completed${out.length === 0 ? ' (no output)' : ''}`,
+    durationMs: dur,
+  };
+}
+
+/** Pad a string to `width` visible cells (ignoring ANSI). */
+function pad(s: string, width: number): string {
+  const visible = s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
+  const padLen = Math.max(0, width - visible.length);
+  return s + ' '.repeat(padLen);
+}
+
+/** Truncate to `max` visible cells with an ellipsis. */
+function truncate(s: string, max: number): string {
+  const visible = s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
+  if (visible.length <= max) return s;
+  let out = '';
+  let cells = 0;
+  let i = 0;
+  while (i < s.length && cells < max - 1) {
+    if (s[i] === '\x1b' && s.slice(i).match(/^\x1b\[[0-9;]*[A-Za-z]/)) {
+      const m = s.slice(i).match(/^\x1b\[[0-9;]*[A-Za-z]/)![0];
+      out += m;
+      i += m.length;
+      continue;
+    }
+    out += s[i];
+    cells++;
+    i++;
+  }
+  return out + '…';
+}
+
+export interface ToolCardOptions {
+  status?: 'pending' | 'success' | 'error';
+  width?: number;
+}
+
+/** Build a multi-line boxed card for a single tool invocation. The output
+ *  is a single string with embedded `\n` so the existing wrapLine
+ *  infrastructure renders each row separately. */
+export function renderToolCard(
+  rawTool: string,
+  rawArgs: unknown,
+  outcome?: { kind: 'success' | 'error'; summary: string; durationMs?: number },
+  opts: ToolCardOptions = {},
+): string {
+  const tool = TOOL_ALIASES[rawTool] || rawTool;
+  const name = TOOL_NAMES[tool] ?? tool.toUpperCase();
+  const color = toolColor(tool);
+
+  let statusIcon = '○';
+  let statusColor = T.gray;
+  // Resolve effective status: explicit opts.status wins, otherwise infer from
+  // the outcome (success → ✓, error → ✗), otherwise stay pending (○).
+  const effective = opts.status ?? (outcome ? (outcome.kind === 'success' ? 'success' : 'error') : 'pending');
+  if (effective === 'success') {
+    statusIcon = '✓';
+    statusColor = T.success ?? T.lime ?? T.fg;
+  } else if (effective === 'error') {
+    statusIcon = '✗';
+    statusColor = T.error ?? '#ff5555';
+  } else {
+    statusIcon = '○';
+    statusColor = T.gray;
+  }
+
+  const dur = outcome?.durationMs !== undefined ? `${outcome.durationMs}ms` : '';
+  const headerRight = dur ? ` ${dur}` : '';
+
+  const width = opts.width ?? 56;
+  const inner = width - 4;
+
+  const headerInner = ` ${statusColor}${statusIcon}${T.reset} ${color}${T.bold}${name}${T.reset}${T.grayDark}${headerRight}${T.reset}`;
+  const visibleHeader = headerInner.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
+  const headerPad = ' '.repeat(Math.max(0, inner - visibleHeader.length));
+  const headerLine = `${T.grayDark}┌─${T.reset}${headerInner}${headerPad}${T.grayDark}─┐${T.reset}`;
+
+  const argText = describeToolArgs(rawTool, rawArgs);
+  const lines: string[] = [headerLine];
+
+  const argPadded = pad(truncate(argText, inner), inner);
+  lines.push(`${T.grayDark}│${T.reset} ${argPadded} ${T.grayDark}│${T.reset}`);
+
+  if (outcome) {
+    const marker = outcome.kind === 'error' ? `${T.error}✗${T.reset}` : `${T.success ?? T.lime}→${T.reset}`;
+    const summaryText = truncate(outcome.summary, inner - 2);
+    const body = ` ${marker} ${summaryText}`;
+    const bodyPadded = pad(body, inner);
+    lines.push(`${T.grayDark}│${T.reset}${bodyPadded}${T.grayDark}│${T.reset}`);
+  }
+
+  const bottom = `${T.grayDark}└${'─'.repeat(width - 2)}┘${T.reset}`;
+  lines.push(bottom);
+
+  return lines.join('\n');
+}
+
+/** Convenience: format a tool invocation as a "pending" card. */
+export function formatToolInvocationCard(rawTool: string, rawArgs: unknown): string {
+  return renderToolCard(rawTool, rawArgs);
+}
+
+/** Convenience: format a tool completion as a card with outcome. */
+export function formatToolCompletedCard(
+  rawTool: string,
+  rawArgs: unknown,
+  result?: { output?: string; error?: string; durationMs?: number },
+): string {
+  const outcome = describeToolOutcome(rawTool, result);
+  return renderToolCard(rawTool, rawArgs, outcome, { status: outcome.kind });
+}

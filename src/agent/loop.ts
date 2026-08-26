@@ -868,7 +868,12 @@ Continue from 'Next:', do not redo completed progress.`,
             continue;
           }
         }
-        // Loop guard: repeated identical tool calls -> force the model to answer.
+        // Loop guard: identical tool calls with NO progress between them means the
+        // model is stuck. The bar is high — we only count a "repeat" when the
+        // signature matches AND the previous run produced the same error or no
+        // change. Read-only exploration (read/glob/tree/search) and batch edits
+        // to many distinct files legitimately produce repeated tool names and
+        // MUST NOT trip this guard.
         const nowSig = response.toolCalls.map((c) => {
           const canonical = TOOL_ALIASES[c.function.name] || c.function.name;
           const args = normalizeToolArgs(canonical, this.parseArgs(c.function.arguments || '{}'));
@@ -884,9 +889,13 @@ Continue from 'Next:', do not redo completed progress.`,
           if (this.context.stuckSignal) this.context.stuckSignal = null;
         }
         this.lastSig = nowSig;
-        if (this.sigStreak >= 3) {
+        // Was raised from 3 -> 8 so that legitimate batch work (e.g. editing
+        // many files in sequence, repeated reads on a long file tree) does
+        // not get cancelled. A truly stuck model will hit 8 identical calls
+        // in a row, which never happens for real work.
+        if (this.sigStreak >= 8) {
           this.nudgeInjections++;
-          if (this.nudgeInjections >= 3) {
+          if (this.nudgeInjections >= 2) {
             return this.finish(task, false, 'Loop guard: stopped after repeated identical tool calls and failed recovery nudges.', 'tool_loop');
           }
           this.context.addMessage({ role: 'system', content: 'You are repeating the same tool call. Stop issuing tools and give a final answer now without any tool calls.' });
@@ -896,20 +905,35 @@ Continue from 'Next:', do not redo completed progress.`,
           this.context.stuckSignal = `You have issued ${this.nudgeInjections} repeated-tool-call nudges. Change strategy or answer now.`;
         }
         this.toolCallsTotal++;
-        // Cumulative repeated-tool-name breaker (MUTATING TOOLS ONLY): a rambling
-        // model changes args slightly each turn so the signature guard never
-        // trips, but keeps re-issuing the same mutating tool over and over. Read-only
-        // exploration (read/glob/tree/search/glob) is legitimate context-gathering
-        // and MUST never trip this — only repeated MUTATING calls (edit/write/
-        // delete/patch/shell) with no file change indicate a genuinely stuck loop.
+        // Cumulative repeated-tool-name breaker. Previously: ANY 4 calls to the
+        // same mutating tool without a file change would finish the task as a
+        // tool_loop — which made multi-file refactors (10 edits to 10 files)
+        // and shell pipelines that re-invoke the same binary impossible.
+        // New rule: only fire when (a) no file changed yet AND (b) more than
+        // 12 calls to the same mutating tool happened AND (c) the SAME error
+        // has repeated 3+ times. Read-only tools are excluded entirely.
         if (!this.fileChanged) {
+          let mutatingRepeats = 0;
+          let mutatingTool = '';
+          let sameErrorRepeats = 0;
           for (const c of response.toolCalls) {
             const canonical = TOOL_ALIASES[c.function.name] || c.function.name;
             if (this.isReadOnly(canonical)) continue; // never abort on read-only gathering
-            const prev = this.toolNameCounts.get(canonical) ?? 0;
-            this.toolNameCounts.set(canonical, prev + 1);
-            if (prev + 1 >= 4) {
-              return this.finish(task, false, 'Loop guard: probing with repeated mutating tools and no progress. Change strategy or finish.', 'tool_loop');
+            mutatingRepeats++;
+            mutatingTool = canonical;
+            const errInfo = this.consecutiveToolErrors.get(canonical);
+            if (errInfo && errInfo.count >= 3) sameErrorRepeats++;
+          }
+          if (mutatingRepeats > 0) {
+            const totalRepeats = this.toolNameCounts.get(mutatingTool) ?? 0;
+            this.toolNameCounts.set(mutatingTool, totalRepeats + mutatingRepeats);
+            // 12 calls of the same mutating tool + same-error 3+ times = real stuck loop.
+            // Anything less is legitimate batch work (refactor N files, run a build
+            // pipeline, etc.).
+            if ((totalRepeats + mutatingRepeats) >= 12 && sameErrorRepeats > 0) {
+              return this.finish(task, false,
+                `Loop guard: '${mutatingTool}' was called ${totalRepeats + mutatingRepeats} times with the same error and no progress. Change strategy or finish.`,
+                'tool_loop');
             }
           }
         }
@@ -917,11 +941,14 @@ Continue from 'Next:', do not redo completed progress.`,
         // repo and should not run 12+ exploration tool rounds. Cut it off fast.
         if (taskKind === 'chat') {
           this.chatToolRounds++;
-          if (this.chatToolRounds >= 2) {
+          if (this.chatToolRounds >= 4) {
             return this.finish(task, false, 'Stopped: chat task should not require repeated tool use.', 'tool_loop');
           }
         }
-        if (this.toolCallsTotal > 40) {
+        // Global tool-call ceiling: was 40, raised to 200 because large multi-file
+        // refactors and codebase-wide migrations legitimately need many calls.
+        // A truly runaway model is already caught by the signature/breaker above.
+        if (this.toolCallsTotal > 200) {
           return this.finish(task, false, 'Too many tool calls; stopping to avoid an infinite loop.', 'tool_loop');
         }
         await this.executeToolCalls(response.toolCalls);
@@ -1230,22 +1257,27 @@ Continue from 'Next:', do not redo completed progress.`,
    * Run the model's chosen tool calls in parallel-where-safe order:
    *   1. All read-only calls (read/search/glob/etc.) run concurrently via Promise.all.
    *   2. Mutating calls to DISTINCT target paths run concurrently.
-   *   3. Shell/other stateful calls run sequentially to preserve causal order.
+   *   3. Pure shell calls (no shell metacharacters that change state, like
+   *      a leading "cd " or output redirect) run in parallel with each other
+   *      but still serially with read-only/mutating groups so their $PWD /
+   *      env stays consistent.
    */
   private async executeToolCalls(batch: ToolCall[]): Promise<void> {
     while (batch.length > 0) {
       if (this.abortSignal?.aborted) return;
       const head = batch[0];
       const headName = TOOL_ALIASES[head.function.name] || head.function.name;
+      // 1. Read-only group: run up to 16 in parallel. Bumped from 8 because
+      // a real codebase-wide read often needs 10+ files in one turn.
       if (this.isReadOnly(headName)) {
         let n = 0;
-        while (n < batch.length && n < 8 && this.isReadOnly(batch[n].function.name)) n++;
+        while (n < batch.length && n < 16 && this.isReadOnly(batch[n].function.name)) n++;
         const group = batch.splice(0, Math.max(n, 1));
         await Promise.all(group.map((tc) => this.runMoolCall(tc)));
         continue;
       }
 
-      // Writes-edits to DISTINCT target files are independent and safe to run in
+      // 2. Writes-edits to DISTINCT target files are independent and safe to run in
       // parallel, which lets the model create/edit several files in one turn
       // instead of paying a round-trip per file — a real cut to iterations/tokens.
       if (['write', 'edit', 'delete'].includes(headName)) {
@@ -1274,7 +1306,47 @@ Continue from 'Next:', do not redo completed progress.`,
         continue;
       }
 
-      // shell may depend on prior results, so run alone unless clearly read-only.
+      // 3. Shell: previously serial even when safe. Now: a batch of PURE
+      // read-only shell commands (ls, cat, grep, head, tail, find, wc, jq,
+      // tree, file, stat, ps, env, which, type, du, df, ripgrep) can run in
+      // parallel — they don't change state and don't interfere with each other.
+      // Stateful commands (anything with `&&`, `||`, `|`, `>`, `>>`, `<`,
+      // backticks, `$()`, `;`, `cd`, or shell metacharacters) still go one at
+      // a time to preserve causal order.
+      if (headName === 'shell') {
+        const isPureReadOnly = (cmd: string): boolean => {
+          const c = cmd.trim();
+          if (/[;&|<>`$()]|>>?|<|cd\s/.test(c)) return false;
+          // First token (binary name) must be a known read-only command.
+          const bin = c.split(/\s+/)[0];
+          return /^(ls|cat|head|tail|grep|egrep|fgrep|wc|file|stat|which|type|jq|env|printenv|ps|pgrep|pwd|whoami|hostname|date|uname|df|du|find|tree|ripgrep|rg)$/.test(bin);
+        };
+        const group: ToolCall[] = [];
+        const remaining: ToolCall[] = [];
+        for (const tc of batch) {
+          const tcName = TOOL_ALIASES[tc.function.name] || tc.function.name;
+          if (tcName === 'shell') {
+            let cmd = '';
+            try {
+              const parsed = this.parseArgs(tc.function.arguments || '{}');
+              cmd = String(parsed.command ?? '');
+            } catch { /* leave cmd empty -> not pure */ }
+            if (isPureReadOnly(cmd)) group.push(tc);
+            else remaining.push(tc);
+          } else {
+            remaining.push(tc);
+          }
+        }
+        if (group.length > 0) {
+          batch.length = 0;
+          batch.push(...remaining);
+          await Promise.all(group.map((tc) => this.runMoolCall(tc)));
+          continue;
+        }
+      }
+
+      // 4. Everything else (stateful shell, patch, subagent, etc.) runs
+      // serially so each call observes the previous call's effects.
       batch.shift();
       await this.runMoolCall(head);
     }

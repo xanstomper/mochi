@@ -138,6 +138,12 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     currentTool: '' as string,
     currentTask: '' as string,
     activeSubagents: new Map<string, { id: string; role: string; prompt: string; startedAt: number }>(),
+    /** Args of in-flight tool calls, keyed by tool_call_id (or tool name).
+     *  Stored at tool:called time so the matching tool:completed can render
+     *  the full card showing the call AND the result in one frame. */
+    activeToolArgs: new Map<string, unknown>(),
+    /** Line index of each in-flight tool card, keyed by tool_call_id. */
+    activeToolLine: new Map<string, number>(),
     tokenVelocity: 0 as number,
     lastUsageAt: 0 as number,
     lastTokens: 0 as number,
