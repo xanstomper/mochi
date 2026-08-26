@@ -2104,6 +2104,17 @@ Continue from 'Next:', do not redo completed progress.`,
     }
     const durationMs = Math.round(performance.now() - this.startTime);
     this.events.emit({ type: 'agent:completed', id: this.id, taskId: task.id });
+    this.events.emit({
+      type: 'summary:rendered',
+      agentId: this.id,
+      success,
+      stopReason,
+      durationMs,
+      toolCallsTotal: this.toolCallsTotal,
+      tokensUsed: this.tokensUsed,
+      filesModified: [...new Set(this.context['state'].filesModified)],
+      summary,
+    } as any);
     return {
       success,
       summary,

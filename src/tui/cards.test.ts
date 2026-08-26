@@ -5,6 +5,7 @@ import {
   formatToolCompletedCard,
   describeToolArgs,
   describeToolOutcome,
+  renderTurnSummaryCard,
 } from './cards.js';
 
 describe('tool cards', () => {
@@ -121,5 +122,76 @@ describe('tool cards', () => {
       expect(card).toContain('updated src/foo.ts');
       expect(card).toContain('42ms');
     });
+  });
+});
+describe('renderTurnSummaryCard', () => {
+  it('renders a success summary with files modified and tool count', () => {
+    const card = renderTurnSummaryCard({
+      success: true,
+      stopReason: 'completed',
+      durationMs: 4523,
+      toolCallsTotal: 8,
+      tokensUsed: 4231,
+      filesModified: ['src/a.ts', 'src/b.ts'],
+      summary: 'Refactored tool rendering.',
+    });
+    const lines = card.split('\n');
+    expect(lines[0]).toMatch(/┌─/);
+    expect(card).toContain('TURN COMPLETE');
+    expect(card).toContain('4523ms');
+    expect(card).toContain('8 tools');
+    expect(card).toContain('src/a.ts');
+    expect(card).toContain('Refactored tool rendering.');
+    expect(card).toContain('4,231 tokens');
+  });
+
+  it('renders a failure summary showing the stop reason', () => {
+    const card = renderTurnSummaryCard({
+      success: false,
+      stopReason: 'tool_loop',
+      durationMs: 12000,
+      toolCallsTotal: 14,
+      tokensUsed: 8000,
+      filesModified: [],
+      summary: 'Model got stuck in a loop.',
+    });
+    expect(card).toContain('TURN STOPPED');
+    expect(card).toContain('tool_loop');
+    // No "files:" row when none modified.
+    expect(card).not.toContain('files:');
+  });
+
+  it('omits the files row when nothing was modified', () => {
+    const card = renderTurnSummaryCard({
+      success: true,
+      durationMs: 100,
+      toolCallsTotal: 1,
+      filesModified: [],
+      summary: 'Read-only task',
+    });
+    expect(card).not.toContain('files:');
+    expect(card).toContain('Read-only task');
+  });
+
+  it('caps the file list and shows a count of the rest', () => {
+    const files = Array.from({ length: 8 }, (_, i) => `src/file${i}.ts`);
+    const card = renderTurnSummaryCard({
+      success: true,
+      durationMs: 100,
+      toolCallsTotal: 8,
+      filesModified: files,
+      summary: 'Refactor',
+    });
+    // Some of the first 4 paths are shown, the rest are summarised with "+N more".
+    expect(card).toMatch(/\(\+\d+ more\)/);
+    expect(card).toContain('file0.ts');
+    expect(card).toContain('file1.ts');
+    // The total "more" count is the difference between files.length and what
+    // fits in the card, so it must be < files.length and >= 1.
+    const m = card.match(/\(\+(\d+) more\)/);
+    expect(m).not.toBeNull();
+    const more = Number(m![1]);
+    expect(more).toBeGreaterThanOrEqual(1);
+    expect(more).toBeLessThan(files.length);
   });
 });

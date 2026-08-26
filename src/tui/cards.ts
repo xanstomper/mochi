@@ -230,3 +230,85 @@ export function formatToolCompletedCard(
   const outcome = describeToolOutcome(rawTool, result);
   return renderToolCard(rawTool, rawArgs, outcome, { status: outcome.kind });
 }
+
+/** "What I did" summary card shown after the agent finishes a turn.
+ *  Gives the user a one-glance view of: total time, tool calls made,
+ *  files touched, and the first line of the final summary. */
+export interface TurnSummary {
+  success: boolean;
+  stopReason?: string;
+  durationMs: number;
+  toolCallsTotal: number;
+  tokensUsed?: number;
+  filesModified: string[];
+  summary: string;
+}
+
+export function renderTurnSummaryCard(s: TurnSummary): string {
+  const width = 64;
+  const inner = width - 4;
+  const ok = s.success;
+  const icon = ok ? '✓' : '✗';
+  const iconColor = ok ? (T.success ?? T.lime ?? T.fg) : (T.error ?? '#ff5555');
+  const label = ok ? 'TURN COMPLETE' : `TURN STOPPED: ${s.stopReason ?? 'aborted'}`;
+  const dur = `${Math.round(s.durationMs)}ms`;
+  const headerRight = ` ${dur} · ${s.toolCallsTotal} tool${s.toolCallsTotal === 1 ? '' : 's'}`;
+
+  const headerInner = ` ${iconColor}${icon}${T.reset} ${T.bold}${label}${T.reset}${T.grayDark}${headerRight}${T.reset}`;
+  const visH = headerInner.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
+  const padH = ' '.repeat(Math.max(0, inner - visH.length));
+  const headerLine = `${T.grayDark}┌─${T.reset}${headerInner}${padH}${T.grayDark}─┐${T.reset}`;
+
+  const lines: string[] = [headerLine];
+
+  // Summary line — first non-empty line of the agent's final answer.
+  if (s.summary) {
+    const firstLine = s.summary.trim().split('\n').map((l) => l.trim()).find((l) => l) ?? '';
+    if (firstLine) {
+      const marker = `${iconColor}▸${T.reset}`;
+      const text = truncate(firstLine, inner - 2);
+      const body = ` ${marker} ${text}`;
+      lines.push(`${T.grayDark}│${T.reset}${pad(body, inner)}${T.grayDark}│${T.reset}`);
+    }
+  }
+
+  // Files modified (only show if there are some)
+  if (s.filesModified.length > 0) {
+    const marker = `${T.cyan}▸${T.reset}`;
+    // " files: " prefix is 8 visible cells, plus 1 for the marker space.
+    const overhead = 9;
+    const budget = inner - overhead;
+    // Build the candidate text. Try the natural first-N view first and
+    // back off (showing fewer names) if the "+N more" suffix would be
+    // chopped by truncation. Always preserve the suffix when present.
+    const labels = s.filesModified.map((f) => f.length > 30 ? '…' + f.slice(-29) : f);
+    const total = labels.length;
+    let shown = labels.slice(0, 4);
+    let remaining = total - shown.length;
+    let text = shown.join(', ');
+    if (remaining > 0) text += ` (+${remaining} more)`;
+    // If too long, drop one file at a time until it fits.
+    while (text.length > budget && shown.length > 1) {
+      shown = shown.slice(0, -1);
+      remaining = total - shown.length;
+      text = shown.join(', ');
+      if (remaining > 0) text += ` (+${remaining} more)`;
+    }
+    text = truncate(text, budget);
+    const body = ` ${marker} files: ${text}`;
+    lines.push(`${T.grayDark}│${T.reset}${pad(body, inner)}${T.grayDark}│${T.reset}`);
+  }
+
+  // Tokens used (only if reported)
+  if (s.tokensUsed !== undefined && s.tokensUsed > 0) {
+    const marker = `${T.magenta ?? T.fg}▸${T.reset}`;
+    const text = `${s.tokensUsed.toLocaleString()} tokens`;
+    const body = ` ${marker} ${text}`;
+    lines.push(`${T.grayDark}│${T.reset}${pad(body, inner)}${T.grayDark}│${T.reset}`);
+  }
+
+  const bottom = `${T.grayDark}└${'─'.repeat(width - 2)}┘${T.reset}`;
+  lines.push(bottom);
+
+  return lines.join('\n');
+}
