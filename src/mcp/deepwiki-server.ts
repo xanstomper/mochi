@@ -5,6 +5,7 @@
 // Or add to mochi config as an MCP server with command: "node" and args pointing to the compiled file.
 
 import { createInterface } from 'node:readline';
+import { wikiSummary as lookupWikipedia } from '../wiki.js';
 
 const TOOL_SCHEMA = {
   name: 'wiki_lookup',
@@ -20,24 +21,17 @@ const TOOL_SCHEMA = {
 };
 
 async function wikiSummary(query: string, lang: string): Promise<string> {
-  const encoded = encodeURIComponent(query.replace(/ /g, '_'));
-  const url = `https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encoded}`;
-  const res = await fetch(url, {
-    headers: { 'User-Agent': 'mochi-deepwiki-mcp/1.0' },
+  // Share the exact same Wikipedia lookup logic as the in-process `deepwiki`
+  // tool (src/tools/deepwiki.ts). The only differences here: this standalone
+  // server identifies itself with its own User-Agent, tags search fallbacks
+  // with "(search)", and never throws — it reports a graceful "not found".
+  const { markdown } = await lookupWikipedia(query, lang, {
+    userAgent: 'mochi-deepwiki-mcp/1.0',
+    searchTag: ' (search)',
+    emptyMessage: (q) => `No result found for: ${q}`,
+    strict: false,
   });
-  if (res.ok) {
-    const data = (await res.json()) as { title?: string; extract?: string };
-    return `**${data.title ?? query}**\n\n${(data.extract ?? '').slice(0, 2000)}`;
-  }
-  // Search fallback
-  const searchUrl = `https://${lang}.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&utf8=1`;
-  const sr = await fetch(searchUrl, { headers: { 'User-Agent': 'mochi-deepwiki-mcp/1.0' } });
-  if (!sr.ok) return `No result found for: ${query}`;
-  const sd = (await sr.json()) as { query?: { search?: Array<{ title?: string; snippet?: string }> } };
-  const top = sd?.query?.search?.[0];
-  if (!top) return `No result found for: ${query}`;
-  const snippet = (top.snippet ?? '').replace(/<[^>]*>/g, '');
-  return `**${top.title ?? query}** (search)\n\n${snippet}`;
+  return markdown;
 }
 
 function respond(id: number | string | null, result: unknown): void {
