@@ -24,12 +24,14 @@ import {
   statusBarRow2,
   renderEntry,
   renderDropdown,
+  accentToolPrefix,
   composerRow,
   composerPlaceholderRow,
   composerTopRule,
   composerBottomRule,
   composerHintRow,
   transcriptIndent,
+  turnRule,
   thinkingLine,
   spinnerFrame,
   ellipsize,
@@ -324,7 +326,11 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     return outLines;
   }
 
-  /** Wrap a single transcript line into rendered, wrapped output rows. */
+  /** Wrap a single transcript line into rendered, wrapped output rows.
+   *  Uses the coordinated visual language from view.ts: 2-space left gutter,
+   *  single-character kind marker (color = role accent), and the same color
+   *  tokens as the legend in renderEntry so the TUI's own rendering matches
+   *  the print-mode rendering. */
   function wrapLine(line: Line, maxWidth: number): string[] {
     if (line.kind === 'goal') return [];
     if (line.kind === 'system' && line.text.startsWith('Tokens used:')) return [];
@@ -335,59 +341,74 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
 
     switch (line.kind) {
       case 'user': {
+        // 2-space gutter + ❯ magenta accent + background-fill + bold white text
         const wrapped = wrap(cleanText, Math.max(10, maxWidth - 4));
         for (let i = 0; i < wrapped.length; i++) {
           const w = wrapped[i];
-          if (i === 0) rows.push(`${T.magenta}❯${T.reset} ${T.bold}${T.fg}${w}${T.reset}`);
-          else rows.push(`  ${T.bold}${T.fg}${w}${T.reset}`);
+          if (i === 0) rows.push(`  ${T.magenta}${T.bold}❯${T.reset} ${T.bgUser}${T.fg}${T.bold}${w}${T.reset}`);
+          else rows.push(`  ${T.bgUser}${T.fg}${T.bold}${w}${T.reset}`);
         }
         break;
       }
       case 'assistant': {
-        const wrapped = wrap(cleanText, Math.max(10, maxWidth));
+        // 2-space gutter + ▌ cyan rule accent for each wrapped line (a
+        // vertical bar visually anchors the assistant's block on the grid)
+        const wrapped = wrap(cleanText, Math.max(10, maxWidth - 4));
         for (const w of wrapped) {
-          rows.push(`${T.fg}${w}${T.reset}`);
+          rows.push(`  ${T.cyan}▌${T.reset}${T.fg}${w}${T.reset}`);
         }
         break;
       }
       case 'tool': {
-        const wrapped = wrap(cleanText, Math.max(10, maxWidth - 4));
+        // ▷ lime gutter + accentToolPrefix for verb-coordinated color
+        const wrapped = wrap(cleanText, Math.max(10, maxWidth - 6));
         for (let i = 0; i < wrapped.length; i++) {
           const w = wrapped[i];
-          if (i === 0) rows.push(`${T.violet}◆${T.reset} ${T.grayDark}${w}${T.reset}`);
+          if (i === 0) rows.push(`  ${T.lime}${T.bold}▷${T.reset} ${accentToolPrefix(w)}`);
           else rows.push(`  ${T.grayDark}${w}${T.reset}`);
         }
         break;
       }
       case 'error': {
+        // ! red gutter + [ERR] tag, bold
         const wrapped = wrap(cleanText, Math.max(10, maxWidth - 4));
         for (let i = 0; i < wrapped.length; i++) {
           const w = wrapped[i];
-          if (i === 0) rows.push(`${T.error}${T.bold}✗${T.reset} ${T.error}${w}${T.reset}`);
+          if (i === 0) rows.push(`  ${T.error}${T.bold}! [ERR]${T.reset} ${T.error}${w}${T.reset}`);
           else rows.push(`  ${T.error}${w}${T.reset}`);
         }
         break;
       }
       case 'system': {
-        const wrapped = wrap(cleanText, Math.max(10, maxWidth));
+        // ◆ gray gutter, italic gray text — every line carries the marker
+        const wrapped = wrap(cleanText, Math.max(10, maxWidth - 4));
         for (const w of wrapped) {
-          rows.push(`${T.gray}${w}${T.reset}`);
+          rows.push(`  ${T.grayDark}◆ ${T.italic}${T.gray}${w}${T.reset}`);
         }
         break;
       }
       case 'task': {
+        // ★ cyan bold gutter + [TASK] tag
         const wrapped = wrap(cleanText, Math.max(10, maxWidth - 4));
         for (let i = 0; i < wrapped.length; i++) {
           const w = wrapped[i];
-          if (i === 0) rows.push(`${T.teal}▸${T.reset} ${T.teal}${w}${T.reset}`);
-          else rows.push(`  ${T.teal}${w}${T.reset}`);
+          if (i === 0) rows.push(`  ${T.cyan}${T.bold}★ [TASK]${T.reset} ${T.fg}${w}${T.reset}`);
+          else rows.push(`  ${T.grayDark}${w}${T.reset}`);
+        }
+        break;
+      }
+      case 'thought': {
+        // ◇ gray gutter, italic dim text — hidden reasoning
+        const wrapped = wrap(cleanText, Math.max(10, maxWidth - 4));
+        for (const w of wrapped) {
+          rows.push(`  ${T.grayDark}◇ ${T.italic}${T.gray}${w}${T.reset}`);
         }
         break;
       }
       default: {
         const wrapped = wrap(cleanText, Math.max(10, maxWidth));
         for (const w of wrapped) {
-          rows.push(`${T.fg}${w}${T.reset}`);
+          rows.push(`  ${T.fg}${w}${T.reset}`);
         }
         break;
       }

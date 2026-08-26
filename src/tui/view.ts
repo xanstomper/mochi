@@ -548,28 +548,46 @@ export function renderMarkdown(text: string): string[] {
 export function renderEntry(entry: RenderEntry, expandTools = false): string[] {
   const text = entry.text;
   if (!text.trim()) return [];
+  // Coordinated visual language: every transcript line carries a 2-space
+  // left gutter + a single-character kind marker, so the eye can scan by
+  // column and the terminal stays on a readable grid regardless of width.
+  // The kind marker is colored with the theme's role accent so colors stay
+  // semantically coordinated across all 15 themes.
   switch (entry.kind) {
     case 'user':
-      return [`${T.magenta}❯${T.reset} ${T.bgUser}${T.fg}${T.bold}${text}${T.reset}`];
+      // Background-highlighted user input (left gutter through end of text).
+      return [`  ${T.magenta}${T.bold}❯${T.reset} ${T.bgUser}${T.fg}${T.bold}${text}${T.reset}`];
     case 'assistant':
-      return renderMarkdown(text);
+      return [
+        ...renderMarkdown(text).map((l) => `  ${T.cyan}▌${T.reset}${l.replace(/^\s*/, '')}`),
+      ];
     case 'thought':
-      return text.split('\n').map((l) => `${T.grayDark}│ ${T.reset}${T.italic}${T.gray}${l}${T.reset}`);
+      return text.split('\n').map((l) => `  ${T.grayDark}◇ ${T.italic}${T.gray}${l}${T.reset}`);
     case 'tool':
-      return [accentToolPrefix(text)];
+      return [`  ${T.lime}${T.bold}▷${T.reset} ${accentToolPrefix(text)}`];
     case 'error': {
       const rest = text.startsWith('[ERR] ') ? text.slice(6) : text.replace(/^✗\s*/, '');
-      return [`${T.error}${T.bold}[ERR]${T.reset} ${T.error}${rest}${T.reset}`];
+      return [`  ${T.error}${T.bold}! [ERR]${T.reset} ${T.error}${rest}${T.reset}`];
     }
     case 'system':
-      return [`${T.gray}${text}${T.reset}`];
+      return text.split('\n').map((l) => `  ${T.grayDark}◆ ${T.reset}${T.gray}${l}${T.reset}`);
     case 'task':
-      return [`${T.cyan}${T.bold}[TASK]${T.reset} ${T.fg}${text}${T.reset}`];
+      return [`  ${T.cyan}${T.bold}★ [TASK]${T.reset} ${T.fg}${text}${T.reset}`];
     case 'goal':
-      return [`${T.pink}${T.bold}[GOAL]${T.reset} ${T.fg}${T.bold}${text}${T.reset}`];
+      return [`  ${T.pink}${T.bold}◉ [GOAL]${T.reset} ${T.fg}${T.bold}${text}${T.reset}`];
     default:
-      return [text];
+      return [`  ${text}`];
   }
+}
+
+/**
+ * Render a thin hairline separator between user→assistant turns. Use this
+ * between turns to visually segment the transcript on the grid. Optional —
+ * calls renderEntry do NOT emit this automatically (kept composable).
+ */
+export function turnRule(width: number, accent: string = T.rule): string {
+  const w = Math.max(0, Math.floor(width / 2));
+  return `  ${accent}${'─'.repeat(w)}${T.reset}`;
 }
 
 // ---- Input bar (Cline input-bar.tsx: ❯ + hairline rules) -------------------

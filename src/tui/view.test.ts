@@ -161,6 +161,80 @@ describe('renderEntry', () => {
   it('empty text renders nothing', () => {
     expect(renderEntry({ kind: 'assistant', text: '   ' })).toEqual([]);
   });
+
+  // ---- Coordinated visual language (grid + gutter markers) ----------------
+  it('every transcript entry starts with a 2-space left gutter for grid alignment', () => {
+    const kinds = ['user', 'assistant', 'thought', 'tool', 'error', 'system', 'task', 'goal'] as const;
+    for (const kind of kinds) {
+      const rows = renderEntry({ kind, text: 'x' });
+      expect(rows.length).toBeGreaterThan(0);
+      const plain = rows[0].replace(/\x1b\[[0-9;]*m/g, '');
+      expect(plain.startsWith('  ')).toBe(true);
+    }
+  });
+
+  it('user keeps ❯ accent and background fill', () => {
+    const [row] = renderEntry({ kind: 'user', text: 'hi' });
+    expect(row).toContain('❯');
+    expect(row).toContain(T.bgUser);
+    expect(row).toContain(T.fg);
+  });
+
+  it('thought uses ◇ gutter marker', () => {
+    const [row] = renderEntry({ kind: 'thought', text: 'analyzing AST' });
+    expect(row).toContain('◇');
+    expect(row).toContain('analyzing AST');
+  });
+
+  it('tool uses ▷ gutter + the verb-colored prefix', () => {
+    const [row] = renderEntry({ kind: 'tool', text: 'write({"path":"a.ts"})' });
+    expect(row).toContain('▷');
+    expect(row).toContain(T.violet);
+  });
+
+  it('system uses ◆ gutter and gray text', () => {
+    const [row] = renderEntry({ kind: 'system', text: 'cached' });
+    expect(row).toContain('◆');
+    expect(row).toContain(T.gray);
+  });
+
+  it('task uses ★ gutter and [TASK] tag', () => {
+    const [row] = renderEntry({ kind: 'task', text: 'fix the bug' });
+    expect(row).toContain('★');
+    expect(row).toContain('[TASK]');
+    expect(row).toContain(T.cyan);
+  });
+
+  it('goal uses ◉ gutter and [GOAL] tag', () => {
+    const [row] = renderEntry({ kind: 'goal', text: 'ship mochi 1.0' });
+    expect(row).toContain('◉');
+    expect(row).toContain('[GOAL]');
+    expect(row).toContain(T.pink);
+  });
+
+  it('error uses ! gutter + [ERR] tag + T.error color', () => {
+    const [row] = renderEntry({ kind: 'error', text: '[ERR] boom' });
+    expect(row).toContain('!');
+    expect(row).toContain('[ERR]');
+    expect(row).toContain(T.error);
+    const plain = row.replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).toContain('[ERR] boom');
+  });
+
+  it('assistant markdown lines are prefixed with ▌ rule accent', () => {
+    const rows = renderEntry({ kind: 'assistant', text: 'hello\nworld' });
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    const plain = rows.map((r) => r.replace(/\x1b\[[0-9;]*m/g, '')).join('\n');
+    expect(plain).toContain('▌');
+    expect(plain).toContain('hello');
+    expect(plain).toContain('world');
+  });
+
+  it('multi-line system entry repeats ◆ on every line', () => {
+    const rows = renderEntry({ kind: 'system', text: 'first\nsecond\nthird' });
+    expect(rows.length).toBe(3);
+    for (const r of rows) expect(r).toContain('◆');
+  });
 });
 
 describe('composer', () => {
