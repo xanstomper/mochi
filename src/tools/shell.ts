@@ -125,6 +125,9 @@ export const shellTool: Tool = {
       ctx.abortSignal?.addEventListener('abort', () => {
         killed.value = true;
         child.kill('SIGTERM');
+        // SIGTERM can be ignored by stubborn children; guarantee the shell is
+        // reaped so the tool call can never hang the agent (the "freeze").
+        setTimeout(() => child.kill('SIGKILL'), 5000);
       });
 
       child.stdout?.on('data', (chunk) => {
