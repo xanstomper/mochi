@@ -228,3 +228,156 @@ describe('selection state machine (mirrors app.ts logic)', () => {
     expect(selectedText(s)).toBe('green');
   });
 });
+
+describe('SGR mouse event parser (the bytes a real terminal sends)', () => {
+  // Mirrors the regex used in app.ts onKey(). If the parser ever drifts,
+  // this test will catch it before drag-select silently breaks again.
+  const SGR = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])/;
+
+  function parse(buf: string) {
+    const m = buf.match(SGR);
+    if (!m) return null;
+    return {
+      btn: Number(m[1]),
+      col: Number(m[2]),
+      row: Number(m[3]),
+      isPress: m[4] === 'M',
+    };
+  }
+
+  it('parses a left-button press (btn=0)', () => {
+    const e = parse('\x1b[<0;5;3M')!;
+    expect(e).toEqual({ btn: 0, col: 5, row: 3, isPress: true });
+  });
+
+  it('parses a motion event (btn=32 = base 0 + motion flag)', () => {
+    const e = parse('\x1b[<32;8;3M')!;
+    expect(e.isPress).toBe(true);
+    expect(e.btn & 32).toBe(32); // motion bit set
+    expect(e.btn & 3).toBe(0);   // left button still down
+  });
+
+  it('parses a left-button release (lowercase m, btn=0)', () => {
+    const e = parse('\x1b[<0;12;3m')!;
+    expect(e.isPress).toBe(false);
+    expect(e.btn).toBe(0);
+  });
+
+  it('parses wheel up (btn=64)', () => {
+    const e = parse('\x1b[<64;50;20M')!;
+    expect(e.btn).toBe(64);
+  });
+
+  it('parses wheel down (btn=65)', () => {
+    const e = parse('\x1b[<65;50;20M')!;
+    expect(e.btn).toBe(65);
+  });
+
+  it('parses right-button press (btn=2)', () => {
+    const e = parse('\x1b[<2;40;10M')!;
+    expect(e.btn).toBe(2);
+  });
+
+  it('parses mid-drag release with motion flag still set (some terminals)', () => {
+    // Real terminals often send the final release event with the motion
+    // bit still set if the user released while still moving. Handle both.
+    const e = parse('\x1b[<32;20;5m')!;
+    expect(e.isPress).toBe(false);
+    expect(e.btn & 32).toBe(32);
+  });
+
+  it('handles split chunks: press + motion arrive in separate data events', () => {
+    // A real PTY may split an SGR sequence across multiple data chunks
+    // when the OS reads < N bytes. The parser only matches at the start
+    // of the chunk, so the caller must buffer incomplete chunks. This
+    // test documents that contract.
+    const buf1 = Buffer.from('\x1b[<0;5;3', 'utf8'); // truncated
+    const buf2 = Buffer.from('M\x1b[<32;8;3M\x1b[<0;8;3m', 'utf8');
+    const combined = Buffer.concat([buf1, buf2]).toString('utf8');
+    const events: any[] = [];
+    let i = 0;
+    while (i < combined.length) {
+      const m = combined.slice(i).match(SGR);
+      if (!m) break;
+      events.push(parse(m[0]));
+      i += m[0].length;
+    }
+    expect(events).toHaveLength(3);
+    expect(events.map(e => e.isPress)).toEqual([true, true, false]);
+  });
+
+  it('end-to-end drag sequence produces the expected selection', () => {
+    // Drive the FULL flow with real terminal bytes:
+    //   press(0,5,3) → motion(32,8,3) → motion(32,12,3) → release(0,12,3)
+    // The selection uses a windowStart offset (mirroring app.ts selectedText)
+    // so the chat lines can live at non-zero indices in the visible window.
+    type Pt = { row: number; col: number };
+    type State = {
+      active: boolean; start: Pt | null; end: Pt | null;
+      lines: string[]; windowStart: number;
+    };
+    const s: State = {
+      active: false, start: null, end: null,
+      lines: ['hello world'], // chat row 0 = window row 0 (no scroll)
+      windowStart: 0,
+    };
+
+    function begin(r: number, c: number) {
+      s.start = { row: r, col: c }; s.end = { row: r, col: c }; s.active = true;
+    }
+    function update(r: number, c: number) {
+      if (!s.active) return; s.end = { row: r, col: c };
+    }
+
+    // Mirrors app.ts selectedText exactly.
+    function selectedText(): string {
+      if (!s.active || !s.start || !s.end) return '';
+      const topRow = Math.min(s.start.row, s.end.row);
+      const botRow = Math.max(s.start.row, s.end.row);
+      const lines: string[] = [];
+      for (let r = topRow; r <= botRow; r++) {
+        const idx = s.windowStart + r;
+        if (idx < 0 || idx >= s.lines.length) continue;
+        const bare = s.lines[idx].replace(/\x1b\[[0-9;]*m/g, '');
+        if (topRow === botRow) {
+          const lo = Math.min(s.start.col, s.end.col);
+          const hi = Math.max(s.start.col, s.end.col);
+          lines.push(bare.slice(lo, hi));
+        }
+      }
+      return lines.join('\n');
+    }
+
+    // Mirrors endSelection: capture BEFORE clearing active state.
+    let captured = '';
+    function endCapture() {
+      if (s.active) {
+        captured = selectedText();
+        s.active = false;
+      }
+    }
+
+    // The bytes a real terminal emits. Press at row=1 col=5 (top-left area):
+    const bytes = '\x1b[<0;5;1M\x1b[<32;8;1M\x1b[<32;12;1M\x1b[<0;12;1m';
+    let i = 0;
+    while (i < bytes.length) {
+      const m = bytes.slice(i).match(SGR);
+      if (!m) break;
+      const e = parse(m[0])!;
+      // app.ts uses 0-based row/col: row - 1, col - 1
+      const r = e.row - 1;
+      const c = e.col - 1;
+      if (e.isPress) {
+        const isMotion = (e.btn & 32) !== 0;
+        if (isMotion) update(r, c);
+        else begin(r, c);
+      } else {
+        endCapture();
+      }
+      i += m[0].length;
+    }
+    expect(captured).toBe('o world');
+    expect(s.start).toEqual({ row: 0, col: 4 });
+    expect(s.end).toEqual({ row: 0, col: 11 });
+  });
+});

@@ -63,6 +63,7 @@ interface TaskView {
 const COMMANDS = [
   { name: '/help', hint: 'Show commands' },
   { name: '/clear', hint: 'Clear transcript' },
+  { name: '/copy', hint: 'Copy last assistant message to clipboard (works without mouse)' },
   { name: '/model', hint: 'Select AI model provider & model' },
   { name: '/reasoning', hint: 'Adjust reasoning effort & compute (low, medium, high, max)' },
   { name: '/theme', hint: 'Select color theme (15 styles)' },
@@ -601,7 +602,27 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         }
         scheduleRender();
       } else {
+        // The drag produced a visible highlight but the underlying cell
+        // content is empty (e.g. user dragged across the splash screen,
+        // or across a blank line below the chat). Tell them what to do
+        // instead instead of silently doing nothing.
+        const onSplash = !state.splashDismissed && state.lines.length === 0;
+        if (onSplash) {
+          push(
+            'system',
+            'No text to copy yet — the drag landed on the splash screen. ' +
+              'Send mochi a message first, then drag-select the chat. ' +
+              'Tip: /copy works without the mouse.',
+          );
+        } else {
+          push(
+            'system',
+            'No text in the selected region (drag landed on a blank area). ' +
+              'Tip: /copy pastes the last assistant message.',
+          );
+        }
         clearSelection();
+        scheduleRender();
       }
     }
   }
@@ -671,7 +692,9 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       const splash = splashFrame(state.splashTick, w, pkg.version, state.splashProgress, state.splashBurst);
       const top = Math.max(0, Math.floor((contentH - splash.length) / 2));
       for (let i = 0; i < splash.length && i < contentH; i++) {
-        rows[top + i] = splash[i];
+        // Apply selection to splash rows too so drag-select works from the
+        // very first frame (before any chat lines exist).
+        rows[top + i] = lead + applySelection(splash[i], top + i, indent);
       }
     } else {
       for (let i = 0; i < availableH && i < contentH; i++) {
@@ -866,6 +889,65 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     }
     if (line === '/help') { pushHelp(); return; }
     if (line === '/clear') { state.lines = []; state.tasks.clear(); state.scroll = 0; scheduleRender(); return; }
+    if (line === '/copy' || line.startsWith('/copy ')) {
+      // Keyboard fallback for terminal selection. By default copies the
+      // last assistant message; "/copy last" copies the same, "/copy N"
+      // copies the Nth-most-recent message.
+      const arg = line.startsWith('/copy ') ? line.slice(6).trim() : '';
+      const lastAssistantIdx = (() => {
+        for (let i = state.lines.length - 1; i >= 0; i--) {
+          if (state.lines[i].kind === 'assistant') return i;
+        }
+        return -1;
+      })();
+      const lastErrorIdx = (() => {
+        for (let i = state.lines.length - 1; i >= 0; i--) {
+          if (state.lines[i].kind === 'error') return i;
+        }
+        return -1;
+      })();
+      if (arg === 'last' || arg === '') {
+        if (lastAssistantIdx >= 0) {
+          const t = state.lines[lastAssistantIdx].text;
+          const via = copyToClipboard(t);
+          push('system', via === 'failed'
+            ? `Could not copy last assistant message (no clipboard tool found). Install xclip / wl-copy / pbcopy.`
+            : `Copied last assistant message (${t.length} chars) to clipboard via ${via === 'osc52' ? 'terminal' : via}.`);
+        } else {
+          push('system', 'No assistant message to copy yet.');
+        }
+        scheduleRender();
+        return;
+      }
+      if (arg === 'err' || arg === 'error') {
+        if (lastErrorIdx >= 0) {
+          const t = state.lines[lastErrorIdx].text;
+          const via = copyToClipboard(t);
+          push('system', via === 'failed'
+            ? `Could not copy last error (no clipboard tool found).`
+            : `Copied last error (${t.length} chars) to clipboard via ${via === 'osc52' ? 'terminal' : via}.`);
+        } else {
+          push('system', 'No error to copy yet.');
+        }
+        scheduleRender();
+        return;
+      }
+      // Numeric: copy Nth-most-recent line
+      const n = parseInt(arg, 10);
+      if (!isNaN(n) && n > 0 && n <= state.lines.length) {
+        const idx = state.lines.length - n;
+        const t = state.lines[idx].text;
+        const via = copyToClipboard(t);
+        push('system', via === 'failed'
+          ? `Could not copy line (no clipboard tool found).`
+          : `Copied line ${n} (${t.length} chars) to clipboard via ${via === 'osc52' ? 'terminal' : via}.`);
+        scheduleRender();
+        return;
+      }
+      push('system', `Usage: /copy [last | err | N] — copies to clipboard`);
+      scheduleRender();
+      return;
+    }
     if (line === '/status' || line === '/changes') { await run(async () => (await import('../git.js')).status(projectRoot)); return; }
     if (line === '/diff') { await run(async () => (await import('../git.js')).diff(projectRoot)); return; }
     if (line === '/mode' || line.startsWith('/mode ')) {
@@ -1556,9 +1638,12 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   function pushHelp() {
     const text = COMMANDS.map(c => `${c.name.padEnd(12)} ${c.hint}`).join('\n');
     const tips =
-      `\nTerminal shortcuts:\n` +
+      `\nCopying text from the transcript:\n` +
       `  Drag with the left mouse button to select text — release copies to clipboard.\n` +
-      `  Shift+drag bypasses inline highlight and uses the host terminal's native selection.\n` +
+      `  Shift+drag uses the host terminal's native selection (works in tmux / older terminals).\n` +
+      `  /copy [last | err | N] — keyboard fallback: copy last assistant, last error,\n` +
+      `    or the Nth-most-recent line. Works on every terminal, no mouse needed.\n` +
+      `\nTerminal shortcuts:\n` +
       `  Wheel or PgUp/PgDn scroll the transcript — Home/End jump to top/bottom.\n` +
       `  Shift+Tab toggles auto-approve, Double Esc exits.`;
     push('system', text + tips);
