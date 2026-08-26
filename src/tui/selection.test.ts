@@ -381,3 +381,64 @@ describe('SGR mouse event parser (the bytes a real terminal sends)', () => {
     expect(s.end).toEqual({ row: 0, col: 11 });
   });
 });
+
+describe('inclusive end column (the off-by-one that drops the last char)', () => {
+  // SGR mouse reports the column the cursor was over (1-based). The
+  // mouse handler converts to 0-based, then applySelection/selectedText
+  // subtract the indent to get the visible-cell index. After that, the
+  // cell at the cursor MUST still be in the selection — otherwise
+  // dragging to col 17 over "hello world" copies only "hello worl".
+  //
+  // The math: selEnd.col = 16 (0-based). After subtracting indent (2)
+  // we land on visible[14] = 'd'. But bare.slice(4, 14) only includes
+  // indices 4..13, so 'd' is silently dropped. The fix is to add 1 to
+  // the end so the slice is inclusive.
+  function selectedTextWithEnd(startCol: number, endCol: number, indent: number, lines: string[]): string {
+    const minCol = Math.min(startCol, endCol);
+    const maxCol = Math.max(startCol, endCol);
+    const from = Math.max(0, minCol - indent);
+    const to = Math.min(lines[0].length, Math.max(0, maxCol - indent + 1));
+    return lines[0].slice(from, to);
+  }
+
+  it('dragging from "h" to "d" in "hello world" includes the "d"', () => {
+    // User clicks at screen col 7 (h) and releases at col 17 (d).
+    // After converting to 0-based: 6..16. After -indent (2): 4..14.
+    // With the fix (+1 to end): 4..15. slice(4, 15) = "hello world".
+    const row = '  ❯ hello world';
+    const got = selectedTextWithEnd(6, 16, 2, [row]);
+    expect(got).toBe('hello world');
+  });
+
+  it('single-cell click captures exactly that cell', () => {
+    // Click at col 7 (h): selStart.col = selEnd.col = 6. After -indent:
+    // from=to=4. Without +1, slice(4, 4) = "". With +1, slice(4, 5) = "h".
+    const row = '  ❯ hello';
+    const got = selectedTextWithEnd(6, 6, 2, [row]);
+    expect(got).toBe('h');
+  });
+
+  it('clicking past the row end clamps to the row', () => {
+    // User drags off the right edge. Should not throw, should clamp.
+    const row = '  ❯ hi';
+    const got = selectedTextWithEnd(6, 100, 2, [row]);
+    expect(got).toBe('hi');
+  });
+
+  it('reverse drag (end before start) still includes both endpoints', () => {
+    // User drags backwards: starts at "o" (col 11), releases at "h" (col 7).
+    // Selected range should still be inclusive: [h, o] = "hello".
+    const row = '  ❯ hello world';
+    const got = selectedTextWithEnd(10, 6, 2, [row]);
+    expect(got).toBe('hello');
+  });
+
+  it('dragging over assistant row (▌ marker) includes content at first cell', () => {
+    // Assistant row: " ▌ Some text". Content starts at visible[2].
+    // Click at terminal col 4 (0-based 3) → visible[1] = "▌".
+    // Drag to col 14 → visible[12] = "t" (last 't' in "text").
+    const row = ' ▌ Some text';
+    const got = selectedTextWithEnd(3, 14, 2, [row]);
+    expect(got).toBe('▌ Some text');
+  });
+});

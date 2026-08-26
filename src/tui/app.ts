@@ -447,12 +447,16 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     if (row < top || row > bottom) return content;
 
     const len = visibleLen(content);
+    // The +1 makes the end column INCLUSIVE: SGR mouse reports the column
+    // the cursor was over (1-based), and after we convert to 0-based and
+    // subtract the indent, that cell should still be in the selection.
+    // Without +1, dragging from col 7 to col 17 over "hello world" copies
+    // only "hello worl" — the 'd' at col 17 gets dropped. (VisibleLen
+    // counts the gutter markers so an off-by-one here is hard to spot.)
+    const inc = (c: number) => Math.max(0, c - indent + 1);
     if (top === bottom) {
-      // Same row: if press == release position the user just clicked (no
-      // drag yet), still highlight the single cell under the cursor so they
-      // see the selection register. Otherwise highlight the dragged range.
       let from = Math.max(0, Math.min(state.selStart.col, state.selEnd.col) - indent);
-      let to = Math.max(0, Math.max(state.selStart.col, state.selEnd.col) - indent);
+      let to = inc(Math.max(state.selStart.col, state.selEnd.col));
       if (to === from) to = from + 1; // single-cell click
       to = Math.min(len, to);
       if (to <= from) return content;
@@ -468,7 +472,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       return highlightRange(content, from, len);
     }
     if (row === bottom) {
-      const to = Math.min(len, Math.max(0, endCol - indent));
+      const to = Math.min(len, inc(endCol));
       if (to <= 0) return content;
       return highlightRange(content, 0, to);
     }
@@ -489,6 +493,13 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     const startCol = isStartTop ? state.selStart.col : state.selEnd.col;
     const endCol = isStartTop ? state.selEnd.col : state.selStart.col;
 
+    // SGR mouse reports the column the cursor was over (1-based, then
+    // converted to 0-based in the mouse handler). After subtracting the
+    // indent, that cell is at index col - indent, but the slice end is
+    // exclusive so we add 1 to make it inclusive. Without this, dragging
+    // to col 17 over "hello world" copies only "hello worl" — the last
+    // cell the cursor touched is silently dropped.
+    const sliceEnd = (c: number) => Math.max(0, c - indent + 1);
     const lines: string[] = [];
     for (let r = topRow; r <= bottomRow; r++) {
       const idx = windowStart + r;
@@ -498,13 +509,13 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         const minCol = Math.min(state.selStart.col, state.selEnd.col);
         const maxCol = Math.max(state.selStart.col, state.selEnd.col);
         const from = Math.max(0, minCol - indent);
-        const to = Math.min(bare.length, Math.max(0, maxCol - indent));
+        const to = Math.min(bare.length, sliceEnd(maxCol));
         lines.push(from < to ? bare.slice(from, to) : '');
       } else if (r === topRow) {
         const from = Math.max(0, startCol - indent);
         lines.push(bare.slice(from));
       } else if (r === bottomRow) {
-        const to = Math.min(bare.length, Math.max(0, endCol - indent));
+        const to = Math.min(bare.length, sliceEnd(endCol));
         lines.push(bare.slice(0, to));
       } else {
         lines.push(bare);
