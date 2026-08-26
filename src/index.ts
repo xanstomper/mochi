@@ -14,6 +14,19 @@ export { VerifierEngine } from './verification.js';
 export { SpeculativeEngine } from './speculative.js';
 export { FastEventBus } from './fast-events.js';
 export { StreamParser } from './stream-parser.js';
+export {
+  encodeSSEChunk,
+  encodeSSEDone,
+  buildChatCompletion,
+  buildContentChunk,
+  buildToolCallChunk,
+  buildFinishChunk,
+  randomChunkId,
+  type SSEUsage,
+  type SSEWireUsage,
+  type SSEToolCall,
+  type SSEChunk,
+} from './sse-encode.js';
 export { StateStore } from './state-store.js';
 export { BatchScheduler } from './scheduler.js';
 export { PerformancePipeline } from './performance-pipeline.js';

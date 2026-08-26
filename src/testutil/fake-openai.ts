@@ -1,6 +1,11 @@
 import { createServer, type Server } from 'node:http';
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
+import {
+  buildChatCompletion,
+  encodeSSEDone,
+  type SSEToolCall,
+} from '../sse-encode.js';
 
 // Test harness fake for the OpenAI-compatible wire protocol.
 //
@@ -10,6 +15,10 @@ import type { AddressInfo } from 'node:net';
 // is exercised end-to-end in tests. The scripted responses drive the model
 // behavior tests need (e.g. a tool call then "done", or a JSON verdict), but the
 // provider code under test is the exact production code.
+//
+// The wire encoding is NOT hand-rolled here — it is delegated to the shared
+// `sse-encode` module (the real outbound half of `StreamParser`), so the test
+// server and any production emitter stay byte-for-byte in sync.
 
 export interface FakeScriptToolCall {
   id: string;
@@ -25,8 +34,9 @@ export interface FakeScriptResponse {
   completionTokens?: number;
 }
 
-function tcIndexed(tc: FakeScriptToolCall, i: number): FakeScriptToolCall & { index: number } {
-  return { ...tc, index: i };
+/** Convert the scripted tool call into the shared encoder's shape. */
+function toSSEToolCall(tc: FakeScriptToolCall): SSEToolCall {
+  return { id: tc.id, name: tc.function?.name ?? '', arguments: tc.function?.arguments ?? '' };
 }
 
 export interface FakeOpenAI {
@@ -38,10 +48,6 @@ export interface FakeOpenAI {
   close(): Promise<void>;
   /** Bodies of every /chat/completions request received, in order. */
   requests: { body: any }[];
-}
-
-function toSSEChunk(payload: Record<string, unknown>): string {
-  return `data: ${JSON.stringify(payload)}\n\n`;
 }
 
 /**
@@ -68,64 +74,28 @@ export async function startFakeOpenAI(script?: FakeScriptResponse[]): Promise<Fa
       requests.push({ body: JSON.parse(body || '{}') });
       const resp = queue.length ? queue.shift()! : { ...defaultResp };
       const content = resp.content ?? '';
-      const chunkId = `chatcmpl_${Math.random().toString(36).slice(2, 10)}`;
-      const out: string[] = [];
 
-      const completionTokens = resp.completionTokens ?? (content ? Math.max(1, Math.ceil(content.length / 4)) : 0);
-      const promptTokens = resp.promptTokens ?? 1;
-
-      if (resp.toolCalls && resp.toolCalls.length) {
-        // Emit each tool call as ONE chunk carrying the full arguments. Real
-        // providers slice calls across chunks; our declaration-level emission
-        // is a valid single-chunk encoding as long as each call gets a
-        // DISTINCT `index` — the stream parser keys its accumulator on that
-        // field, so two calls with separate indices stay distinct calls.
-        resp.toolCalls.forEach((tc, i) => {
-          out.push(
-            toSSEChunk({
-              id: chunkId,
-              object: 'chat.completion.chunk',
-              choices: [{
-                index: 0,
-                delta: { role: 'assistant', tool_calls: [tcIndexed(tc, i)] },
-                finish_reason: null,
-              }],
-            }),
-          );
-        });
-      } else if (content) {
-        // Emit the content (optionally split across a couple chunks to exercise
-        // the stream reassembly).
-        const halves = [content.slice(0, Math.ceil(content.length / 2)), content.slice(Math.ceil(content.length / 2))];
-        for (const part of halves) {
-          if (!part) continue;
-          out.push(
-            toSSEChunk({
-              id: chunkId,
-              object: 'chat.completion.chunk',
-              choices: [{ index: 0, delta: { role: 'assistant', content: part }, finish_reason: null }],
-            }),
-          );
-        }
-      }
-
-      out.push(
-        toSSEChunk({
-          id: chunkId,
-          object: 'chat.completion.chunk',
-          choices: [{
-            index: 0,
-            delta: {},
-            finish_reason: resp.finishReason ?? (resp.toolCalls && resp.toolCalls.length ? 'tool_calls' : 'stop'),
-          }],
-          usage: { prompt_tokens: promptTokens, completion_tokens: completionTokens, total_tokens: promptTokens + completionTokens },
-        }),
-      );
-      out.push('data: [DONE]\n\n');
+      // Delegate ALL wire encoding to the shared SSE encoder (the real outbound
+      // half of StreamParser). Tool calls each get their own chunk with a
+      // distinct index; content is split across chunks; the finish chunk carries
+      // the finish_reason and usage counters; [DONE] ends the stream.
+      const sseBody = buildChatCompletion({
+        id: `chatcmpl_${Math.random().toString(36).slice(2, 10)}`,
+        content,
+        toolCalls: resp.toolCalls?.map(toSSEToolCall),
+        finishReason: resp.finishReason,
+        usage: {
+          promptTokens: resp.promptTokens ?? 1,
+          completionTokens: resp.completionTokens ?? (content ? Math.max(1, Math.ceil(content.length / 4)) : 0),
+          totalTokens: resp.completionTokens !== undefined
+            ? (resp.promptTokens ?? 1) + resp.completionTokens
+            : (resp.promptTokens ?? 1) + (content ? Math.max(1, Math.ceil(content.length / 4)) : 0),
+        },
+      });
 
       res.statusCode = 200;
       res.setHeader('content-type', 'text/event-stream');
-      res.end(out.join(''));
+      res.end(sseBody + encodeSSEDone());
     });
   });
 
