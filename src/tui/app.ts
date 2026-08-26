@@ -447,10 +447,13 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
 
     const len = visibleLen(content);
     if (top === bottom) {
-      const minCol = Math.min(state.selStart.col, state.selEnd.col);
-      const maxCol = Math.max(state.selStart.col, state.selEnd.col);
-      const from = Math.max(0, minCol - indent);
-      const to = Math.min(len, Math.max(0, maxCol - indent));
+      // Same row: if press == release position the user just clicked (no
+      // drag yet), still highlight the single cell under the cursor so they
+      // see the selection register. Otherwise highlight the dragged range.
+      let from = Math.max(0, Math.min(state.selStart.col, state.selEnd.col) - indent);
+      let to = Math.max(0, Math.max(state.selStart.col, state.selEnd.col) - indent);
+      if (to === from) to = from + 1; // single-cell click
+      to = Math.min(len, to);
       if (to <= from) return content;
       return highlightRange(content, from, to);
     }
@@ -511,31 +514,57 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
 
   /** Copy a string to the system clipboard: prefer terminal OSC-52 (works over
    *  ssh/inside any terminal that supports it), then xclip / xsel / wl-copy /
-   *  pbcopy for a real X11/Wayland/macOS clipboard. Best-effort, never throws. */
-  function copyToClipboard(text: string) {
-    if (!text) return;
-    // OSC-52 needs no local tools and survives remote sessions.
+   *  pbcopy for a real X11/Wayland/macOS clipboard. Best-effort, never throws.
+   *  Returns 'osc52' | 'x11' | 'wayland' | 'pbcopy' | 'failed' so callers can
+   *  tell the user whether their copy went through. */
+  function copyToClipboard(text: string): 'osc52' | 'x11' | 'wayland' | 'pbcopy' | 'failed' {
+    if (!text) return 'failed';
+    // OSC-52 needs no local tools and survives remote sessions. It is also
+    // silently absorbed if the terminal doesn't support it, so the binary
+    // fallback below handles the case where the host terminal doesn't have
+    // OSC-52 enabled but the user is sitting at a real desktop.
+    let osc52Ok = false;
     try {
-      process.stdout.write(`\x1b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\x07`);
+      osc52Ok = process.stdout.write(`\x1b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\x07`);
     } catch { /* ignore */ }
+    // Run the native-binary fallback on the next tick so the OSC-52 frame
+    // gets a chance to flush first.
+    let nativeResult: 'x11' | 'wayland' | 'pbcopy' | null = null;
     setImmediate(() => {
       const feed = (p: ReturnType<typeof spawn> | null) => {
         if (!p || !p.stdin) return;
         p.stdin.on('error', () => {});
         p.stdin.end(Buffer.from(text, 'utf8'));
       };
-      try {
-        if (process.env.WAYLAND_DISPLAY) {
-          const wl = spawn('wl-copy', ['--type', 'text/plain']);
-          wl.on('error', () => feed(spawn('xsel', ['-ib'])));
-          feed(wl);
-        } else {
-          const xclip = spawn('xclip', ['-selection', 'clipboard']);
-          xclip.on('error', () => feed(spawn('pbcopy')));
-          feed(xclip);
+      const tryChain = (cmds: Array<{ bin: string; args: string[]; tag: 'x11' | 'wayland' | 'pbcopy' }>, idx = 0): void => {
+        if (idx >= cmds.length) return;
+        const { bin, args, tag } = cmds[idx];
+        let p: ReturnType<typeof spawn>;
+        try {
+          p = spawn(bin, args);
+        } catch {
+          tryChain(cmds, idx + 1);
+          return;
         }
-      } catch { /* ignore */ }
+        p.on('error', () => tryChain(cmds, idx + 1));
+        p.on('spawn', () => {
+          nativeResult = tag;
+          feed(p);
+        });
+      };
+      if (process.env.WAYLAND_DISPLAY) {
+        tryChain([
+          { bin: 'wl-copy', args: ['--type', 'text/plain'], tag: 'wayland' },
+          { bin: 'xsel', args: ['-ib'], tag: 'x11' },
+        ]);
+      } else {
+        tryChain([
+          { bin: 'xclip', args: ['-selection', 'clipboard'], tag: 'x11' },
+          { bin: 'pbcopy', args: [], tag: 'pbcopy' },
+        ]);
+      }
     });
+    return osc52Ok ? 'osc52' : nativeResult ?? 'failed';
   }
 
   function beginSelection(row: number, col: number) {
@@ -557,9 +586,22 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     if (state.selActive) {
       const t = selectedText();
       if (t && t.length > 0) {
-        copyToClipboard(t);
-        push('system', `Copied ${t.length} character${t.length !== 1 ? 's' : ''} to clipboard.`);
+        const via = copyToClipboard(t);
+        const lines = t.split('\n').length;
+        const word = lines > 1 ? ` (${lines} lines)` : '';
+        if (via === 'failed') {
+          push(
+            'system',
+            `Selected ${t.length} char${t.length !== 1 ? 's' : ''}${word}, but clipboard copy failed. ` +
+              `Install xclip / wl-copy / pbcopy, or hold Shift while dragging for the host terminal's native selection.`,
+          );
+        } else {
+          const label = via === 'osc52' ? 'terminal' : via;
+          push('system', `Copied ${t.length} char${t.length !== 1 ? 's' : ''}${word} to clipboard via ${label}.`);
+        }
         scheduleRender();
+      } else {
+        clearSelection();
       }
     }
   }
@@ -1515,10 +1557,10 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     const text = COMMANDS.map(c => `${c.name.padEnd(12)} ${c.hint}`).join('\n');
     const tips =
       `\nTerminal shortcuts:\n` +
-      `  Drag to select text - release copies to clipboard\n` +
-      `  Wheel or PgUp/PgDn scroll the transcript - Home/End jump to top/bottom\n` +
-      `  Shift+drag for native host selection - Shift+Tab toggles auto-approve\n` +
-      `  Double Esc exits`;
+      `  Drag with the left mouse button to select text — release copies to clipboard.\n` +
+      `  Shift+drag bypasses inline highlight and uses the host terminal's native selection.\n` +
+      `  Wheel or PgUp/PgDn scroll the transcript — Home/End jump to top/bottom.\n` +
+      `  Shift+Tab toggles auto-approve, Double Esc exits.`;
     push('system', text + tips);
   }
 
@@ -1918,9 +1960,16 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   }
 
   function start() {
-    // Enable SGR mouse reporting so the scroll wheel (and future click-to-focus)
-    // reach stdin as escape sequences. Disabled again on exit.
-    process.stdout.write(ALT_ENTER + HIDE + '\x1b[?1000h\x1b[?1006h' + BRACKET_PASTE_ON);
+    // Enable SGR mouse reporting. The three modes do different things:
+    //   ?1000  — basic press/release (needed for click)
+    //   ?1002  — button-event tracking: forwards MOTION events while a button
+    //            is held (needed for drag-select to actually update the
+    //            highlight between press and release)
+    //   ?1006  — SGR encoding so columns >223 don't get truncated
+    // Without ?1002 a drag produces only a press+release pair — the user
+    // sees no inline highlight, and copy() returns the single character
+    // that was clicked. That's the "highlight doesn't work" bug.
+    process.stdout.write(ALT_ENTER + HIDE + '\x1b[?1000h\x1b[?1002h\x1b[?1006h' + BRACKET_PASTE_ON);
     process.stdin.setRawMode?.(true);
     process.stdin.resume();
     const keyListener = (buf: Buffer) => onKey(buf);
@@ -1928,7 +1977,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     const resizeListener = () => scheduleRender();
     process.stdout.on('resize', resizeListener);
     const exitListener = () => {
-      process.stdout.write(`${RESET}${SHOW}${ALT_EXIT}\x1b[?1000l\x1b[?1006l` + BRACKET_PASTE_OFF);
+      process.stdout.write(`${RESET}${SHOW}${ALT_EXIT}\x1b[?1000l\x1b[?1002l\x1b[?1006l` + BRACKET_PASTE_OFF);
     };
     process.on('exit', exitListener);
     runtime.events.onAll(onRuntimeEvent);
