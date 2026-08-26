@@ -2,12 +2,13 @@
 // through the real provider, the goal survives a daemon restart, and a
 // fresh daemon instance resumes it from the persisted workspace state.
 //
-// Skipped automatically when FREEINFERENCE_API_KEY is missing. Run explicitly
-// with:
+// This test makes real network calls and is slow by design (the goals
+// deepseek-v4-flash run takes 30-90s), so it is EXCLUDED from the default
+// `npm test` unit run. It only executes when explicitly opted in with both a
+// live key AND the MOCHI_LIVE=1 flag:
 //
-//   FREEINFERENCE_API_KEY=... npx vitest run src/daemon.live.test.ts
+//   MOCHI_LIVE=1 FREEINFERENCE_API_KEY=... npx vitest run src/daemon.live.test.ts
 //
-// Slow by design (the goals deepseek-v4-flash run takes 30-90s).
 import { describe, it, expect } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -15,7 +16,10 @@ import { resolve } from 'node:path';
 import type { MochiConfig } from './types.js';
 
 const HAS_KEY = Boolean(process.env.FREEINFERENCE_API_KEY);
-const suite = HAS_KEY ? describe : describe.skip;
+// Live test only runs on explicit opt-in (MOCHI_LIVE=1) WITH a key, so the
+// default `npm test` unit run never makes slow, flaky network calls.
+const LIVE_ENABLED = Boolean(process.env.MOCHI_LIVE) && HAS_KEY;
+const suite = LIVE_ENABLED ? describe : describe.skip;
 
 function makeConfig(): MochiConfig {
   return {

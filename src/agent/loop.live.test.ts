@@ -2,15 +2,15 @@
 // provider end-to-end (decompose -> plan -> run -> verify) and verify a real
 // model on a real file system produces a real, correct result.
 //
-// Skipped automatically when FREEINFERENCE_API_KEY is missing. Run explicitly
-// with:
+// These tests make real network calls and are SLOW by design (a single
+// deepseek-v4-flash call takes a few seconds, a full agent loop 30-90s), so
+// they are EXCLUDED from the default `npm test` unit run. They only execute
+// when explicitly opted in with both a live key AND the MOCHI_LIVE=1 flag:
 //
-//   FREEINFERENCE_API_KEY=... npx vitest run src/agent/loop.live.test.ts
+//   MOCHI_LIVE=1 FREEINFERENCE_API_KEY=... npx vitest run src/agent/loop.live.test.ts
 //
-// These tests are SLOW by design (a single deepseek-v4-flash call takes a
-// few seconds, a full agent loop takes 30-90s). They are not a substitute
-// for the scripted fake-openai unit tests; they exist to catch what the
-// scripted tests cannot:
+// They are not a substitute for the scripted fake-openai unit tests; they
+// exist to catch what the scripted tests cannot:
 //   - The model picks the right tool name and arguments for an unfamiliar task
 //   - File system effects are actually correct
 //   - The verify->fail->retry loop converges in practice
@@ -28,9 +28,12 @@ import { resolve } from 'node:path';
 import { execSync } from 'node:child_process';
 import type { MochiConfig } from '../types.js';
 const HAS_KEY = Boolean(process.env.FREEINFERENCE_API_KEY);
+// Live tests only run on explicit opt-in (MOCHI_LIVE=1) WITH a key, so the
+// default `npm test` unit run never makes slow, flaky network calls.
+const LIVE_ENABLED = Boolean(process.env.MOCHI_LIVE) && HAS_KEY;
 // describe.skip returns void, so a ternary alias doesn't work in vitest 2.x —
 // use an explicit if/else so the describe function is always called.
-const suite = HAS_KEY ? describe : describe.skip;
+const suite = LIVE_ENABLED ? describe : describe.skip;
 
 const PROVIDER = {
   provider: 'openai' as const,
