@@ -3,8 +3,6 @@
 // Exposes a single tool: wiki_lookup(query, lang?)
 // Run via: node dist/mcp/deepwiki-server.js
 // Or add to mochi config as an MCP server with command: "node" and args pointing to the compiled file.
-//
-// Test mode: set MOCHI_TEST_WIKI=mock to return a canned response (no real network).
 
 import { createInterface } from 'node:readline';
 
@@ -22,10 +20,6 @@ const TOOL_SCHEMA = {
 };
 
 async function wikiSummary(query: string, lang: string): Promise<string> {
-  // Test mode: return canned response
-  if (process.env.MOCHI_TEST_WIKI === 'mock') {
-    return `**${query}** (mocked)\n\nThis is a mocked Wikipedia summary for testing purposes. Query: "${query}", lang: "${lang}".`;
-  }
   const encoded = encodeURIComponent(query.replace(/ /g, '_'));
   const url = `https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encoded}`;
   const res = await fetch(url, {
