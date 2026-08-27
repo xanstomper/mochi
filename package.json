@@ -1,6 +1,6 @@
 {
   "name": "@mochi/agent",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "Minimal, fast, autonomous coding agent: Rust runtime core with a TypeScript frontend.",
   "type": "module",
   "bin": {
