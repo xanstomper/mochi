@@ -210,7 +210,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   const height = () => process.stdout.rows || 34;
 
   const push = (kind: LineKind, text: string) => {
-    state.splashDismissed = true;
+    // Splash stays visible until user sends a message
     const last = state.lines[state.lines.length - 1];
     if (last && last.kind === kind && last.text === text) return;
     state.lines.push({ kind, text });
@@ -1361,6 +1361,19 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     state.menuActive = false;
     state.menuItems = [];
     if (menuResolver) menuResolver(index);
+    if (state.menuTitle && state.menuTitle.includes('Auto-improve')) {
+      const runs = [3, 10, 20, 40, 0];
+      const chosen = runs[index] ?? 0;
+      if (chosen > 0) {
+        (runtime as any).__maxRuns = chosen;
+        state.autoApprove = true;
+        (runtime as any).__permPolicy = 'yolo';
+        push('system', 'Auto improve: ON — continuous ' + chosen + '-run loop with best-synthesis feedback.');
+      } else {
+        push('system', 'Auto improve: cancelled — current mode preserved.');
+      }
+      state.splashDismissed = true;
+    }
     menuResolver = undefined;
     scheduleRender();
   }
@@ -1782,12 +1795,20 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         continue;
       }
 
-      // 3. Shift+Tab: CSI Z
+      // 3. Shift+Tab: open interactive auto-improve selection menu
       if (rest.startsWith('\x1b[Z')) {
         i += 3;
-        state.autoApprove = !state.autoApprove;
-        (runtime as any).__permPolicy = state.autoApprove ? 'yolo' : 'strict';
-        push('system', state.autoApprove ? 'Auto improve: ON — autonomous continuous execution and verification active.' : 'Auto improve: OFF — strict permissions restored.');
+        state.menuActive = true;
+        state.menuTitle = 'Auto-improve — choose iteration count';
+        state.menuItems = [
+          '3 runs — quick improvement',
+          '10 runs — standard depth',
+          '20 runs — deep exploration',
+          '40 runs — maximum continuous improvement',
+          'Cancel — keep current mode',
+        ];
+        state.menuSelected = 0;
+        state.menuMark = new Set<number>();
         scheduleRender();
         continue;
       }
@@ -1827,6 +1848,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         const text = state.input;
         state.input = '';
         state.cursor = 0;
+        state.splashDismissed = true;
         if (text.trim()) {
           if (state.promptActive && pendingResolver) {
             pendingResolver(text.trim());
