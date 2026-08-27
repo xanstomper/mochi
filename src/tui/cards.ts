@@ -179,7 +179,7 @@ export function renderToolCard(
     statusColor = T.success ?? T.lime ?? T.fg;
   } else if (effective === 'error') {
     statusIcon = '✗';
-    statusColor = T.error ?? '#ff5555';
+    statusColor = T.error ?? T.warning ?? '#f87171';
   } else {
     statusIcon = '○';
     statusColor = T.gray;
@@ -194,23 +194,23 @@ export function renderToolCard(
   const headerInner = ` ${statusColor}${statusIcon}${T.reset} ${color}${T.bold}${name}${T.reset}${T.grayDark}${headerRight}${T.reset}`;
   const visibleHeader = headerInner.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
   const headerPad = ' '.repeat(Math.max(0, inner - visibleHeader.length));
-  const headerLine = `${T.grayDark}┌─${T.reset}${headerInner}${headerPad}${T.grayDark}─┐${T.reset}`;
+  const headerLine = `  ◈  ${statusColor}${statusIcon}${T.reset}  ${color}${T.bold}${name}${T.reset}${T.dim}${headerRight}${T.reset}`;
 
   const argText = describeToolArgs(rawTool, rawArgs);
   const lines: string[] = [headerLine];
 
   const argPadded = pad(truncate(argText, inner), inner);
-  lines.push(`${T.grayDark}│${T.reset} ${argPadded} ${T.grayDark}│${T.reset}`);
+  lines.push(`  ${argPadded}`);
 
   if (outcome) {
     const marker = outcome.kind === 'error' ? `${T.error}✗${T.reset}` : `${T.success ?? T.lime}→${T.reset}`;
     const summaryText = truncate(outcome.summary, inner - 2);
     const body = ` ${marker} ${summaryText}`;
     const bodyPadded = pad(body, inner);
-    lines.push(`${T.grayDark}│${T.reset}${bodyPadded}${T.grayDark}│${T.reset}`);
+    lines.push(`  ${marker} ${summaryText}`);
   }
 
-  const bottom = `${T.grayDark}└${'─'.repeat(width - 2)}┘${T.reset}`;
+  const bottom = `  ◈${T.dim}${T.grayDark}${'━'.repeat(Math.max(0, width - 6))}${T.reset}`;
   lines.push(bottom);
 
   return lines.join('\n');
@@ -257,7 +257,7 @@ export function renderTurnSummaryCard(s: TurnSummary): string {
   const headerInner = ` ${iconColor}${icon}${T.reset} ${T.bold}${label}${T.reset}${T.grayDark}${headerRight}${T.reset}`;
   const visH = headerInner.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
   const padH = ' '.repeat(Math.max(0, inner - visH.length));
-  const headerLine = `${T.grayDark}┌─${T.reset}${headerInner}${padH}${T.grayDark}─┐${T.reset}`;
+  const headerLine = `  ◈  ${iconColor}${icon}${T.reset}  ${T.bold}${label}${T.reset}${T.dim}${headerRight}${T.reset}`;
 
   const lines: string[] = [headerLine];
 
@@ -268,7 +268,7 @@ export function renderTurnSummaryCard(s: TurnSummary): string {
       const marker = `${iconColor}▸${T.reset}`;
       const text = truncate(firstLine, inner - 2);
       const body = ` ${marker} ${text}`;
-      lines.push(`${T.grayDark}│${T.reset}${pad(body, inner)}${T.grayDark}│${T.reset}`);
+      lines.push(`  ${pad(body, inner)}`);
     }
   }
 
@@ -296,7 +296,7 @@ export function renderTurnSummaryCard(s: TurnSummary): string {
     }
     text = truncate(text, budget);
     const body = ` ${marker} files: ${text}`;
-    lines.push(`${T.grayDark}│${T.reset}${pad(body, inner)}${T.grayDark}│${T.reset}`);
+    lines.push(`  ${pad(body, inner)}`);
   }
 
   // Tokens used (only if reported)
@@ -304,11 +304,11 @@ export function renderTurnSummaryCard(s: TurnSummary): string {
     const marker = `${T.magenta ?? T.fg}▸${T.reset}`;
     const text = `${s.tokensUsed.toLocaleString()} tokens`;
     const body = ` ${marker} ${text}`;
-    lines.push(`${T.grayDark}│${T.reset}${pad(body, inner)}${T.grayDark}│${T.reset}`);
+    lines.push(`  ${pad(body, inner)}`);
   }
 
-  const bottom = `${T.grayDark}└${'─'.repeat(width - 2)}┘${T.reset}`;
-  lines.push(bottom);
+  // Clean bottom separator — diamond + muted rule, no ugly box border
+  lines.push(`  ${T.dim}${T.grayDark}◈${T.reset}  ${T.dim}${T.grayDark}${'━'.repeat(Math.max(0, width - 6))}${T.reset}`);
 
   return lines.join('\n');
 }

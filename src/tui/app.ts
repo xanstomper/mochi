@@ -381,12 +381,12 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         break;
       }
       case 'tool': {
-        // ▷ gutter + accentToolPrefix for verb-coordinated color
+        // Beautiful card: diamond accent + colored header + muted left rule
         const wrapped = wrap(cleanText, Math.max(10, maxWidth - 6));
         for (let i = 0; i < wrapped.length; i++) {
           const w = wrapped[i];
-          if (i === 0) rows.push(`  ${R.toolMarker}${T.bold}${T.italic}◈${T.reset} ${accentToolPrefix(w)}`);
-          else rows.push(`  ${T.dim}${R.toolGenericName}${w}${T.reset}`);
+          if (i === 0) rows.push(`  ${R.toolMarker}${T.italic}${T.dim}${T.bold}◈${T.reset}  ${accentToolPrefix(w)}`);
+          else rows.push(`  ${R.toolMarker}${T.dim}${T.grayDark}│${T.reset}  ${T.dim}${w}${T.reset}`);
         }
         break;
       }

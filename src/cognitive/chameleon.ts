@@ -42,6 +42,8 @@ export interface EnhanceOptions {
   profile?: ModelProfile;
   budget?: BudgetEngine;
   cwd?: string;
+  maxRuns?: number;
+  autoSelect?: boolean;
 }
 
 export interface EnhanceResult {
@@ -214,7 +216,7 @@ export class ChameleonEngine {
     }
 
     const budget = opts.budget ?? new BudgetEngine(this.config.safety);
-    const passes = tier <= 2 ? 1 : tier <= 4 ? 2 : 3;
+    const maxRuns = opts.maxRuns ? Math.max(opts.maxRuns, 1) : (tier <= 2 ? 3 : tier <= 4 ? 10 : 40);
 
     let tokensUsed = 0;
     let costUsd = 0;
@@ -235,11 +237,11 @@ export class ChameleonEngine {
     ];
 
     try {
-      for (let i = 0; i < passes; i++) {
+      for (let i = 0; i < maxRuns; i++) {
         if (!budget.canMakeModelCall()) break;
         budget.recordModelCall();
 
-        const response = await this.provider.chat(messages, [], { temperature: 0.3 });
+        const response = await this.provider.chat(messages, [], { temperature: 0.25 + (i * 0.05) });
         const chunk = response.content ?? '';
         if (response.usage) {
           tokensUsed += response.usage.totalTokens;
@@ -247,13 +249,15 @@ export class ChameleonEngine {
           costUsd += estimateCostUsd(response.usage.totalTokens, this.config.model.model);
         }
         runs.push(chunk);
+        const bestSoFar = chunk.trim() ? chunk : (runs.length > 1 ? runs[runs.length - 2] : deterministicScaffold);
+        // Continuous improvement feedback loop: feed best synthesis back
+        messages.push({
+          role: 'user',
+          content: `Pass ${i + 1}/${maxRuns} — previous best:
+${bestSoFar.slice(0, 2500)}
 
-        if (i < passes - 1) {
-          messages.push({
-            role: 'user',
-            content: `Perform an adversarial critique pass: identify any remaining assumptions, fragile edge cases, or regression risks. Output the hardened, finalized synthesis.`,
-          });
-        }
+Improve further: deepen proofs, identify new edge cases, harden invariants. If weaker, revert.`,
+        });
       }
     } catch {
       // Graceful fallback to deterministic context on network/provider error
