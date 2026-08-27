@@ -510,23 +510,23 @@ export function renderMarkdown(text: string): string[] {
     const raw = rawLines[i];
     const trimmed = raw.trim();
 
-    // Fenced code blocks
+    // Fenced code blocks (clean terminal-native, no boxes)
     if (trimmed.startsWith('```')) {
       if (!inCodeBlock) {
         inCodeBlock = true;
         codeBlockLang = trimmed.slice(3).trim();
-        const tag = codeBlockLang ? ` ${R.codeType}${codeBlockLang}${T.reset} ` : ' ';
-        out.push(`${T.rule}┌──${tag}${'─'.repeat(Math.max(0, 36 - (codeBlockLang?.length || 0)))}┐${T.reset}`);
+        const tag = codeBlockLang ? `${R.codeType}${codeBlockLang}${T.reset}` : `${T.grayDark}code${T.reset}`;
+        out.push(`  ${T.grayDark}── ${tag}${T.reset}`);
       } else {
         inCodeBlock = false;
         codeBlockLang = '';
-        out.push(`${T.rule}└──${'─'.repeat(38)}┘${T.reset}`);
+        out.push(`  ${T.grayDark}──${T.reset}`);
       }
       continue;
     }
 
     if (inCodeBlock) {
-      out.push(`${T.rule}│${T.reset} ${highlightCodeLine(raw)}`);
+      out.push(`    ${highlightCodeLine(raw)}`);
       continue;
     }
 
@@ -597,7 +597,8 @@ export function renderEntry(entry: RenderEntry, expandTools = false): string[] {
     case 'thought':
       return text.split('\n').map((l) => `  ${R.thoughtGutter}◇ ${T.italic}${R.thoughtText}${l}${T.reset}`);
     case 'tool':
-      return [`  ${R.toolMarker}${T.bold}▷${T.reset} ${accentToolPrefix(text)}`];
+      // Compact tool rows already include their own semantic glyph from cards.ts
+      return text.split('\n').map((l) => `  ${l}`);
     case 'error': {
       const rest = text.startsWith('[ERR] ') ? text.slice(6) : text.replace(/^✗\s*/, '');
       return [`  ${R.errorMark}${T.bold}! [ERR]${T.reset} ${R.errorText}${rest}${T.reset}`];

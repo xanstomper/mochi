@@ -89,10 +89,17 @@ export function describeToolArgs(rawTool: string, rawArgs: unknown): string {
     if (a.path) {
       const p = String(a.path);
       if (a.oldText !== undefined && a.newText !== undefined) {
-        const oldLines = String(a.oldText).split('\n').length;
-        const newLines = String(a.newText).split('\n').length;
-        const sign = newLines >= oldLines ? '+' : '';
-        return `${p} (${sign}${newLines - oldLines} lines)`;
+        const oldLines = String(a.oldText).split('\n');
+        const newLines = String(a.newText).split('\n');
+        const max = Math.max(oldLines.length, newLines.length);
+        let added = 0, removed = 0;
+        for (let i = 0; i < max; i++) {
+          if (oldLines[i] !== newLines[i]) {
+            if (newLines[i] !== undefined) added++;
+            if (oldLines[i] !== undefined) removed++;
+          }
+        }
+        return `${p} (+${added}/-${removed})`;
       }
       if (a.content !== undefined) {
         const lines = String(a.content).split('\n').length;
@@ -146,6 +153,42 @@ export interface ToolCardOptions {
   width?: number;
 }
 
+function renderInlineDiff(oldText: string, newText: string, width: number): string[] {
+  const oldLines = oldText.split('\n');
+  const newLines = newText.split('\n');
+  const out: string[] = [];
+  const max = Math.max(oldLines.length, newLines.length);
+  let added = 0;
+  let removed = 0;
+
+  for (let i = 0; i < max; i++) {
+    const o = oldLines[i];
+    const n = newLines[i];
+    if (o === n) {
+      // context line, only show if few unchanged around changes
+      if (out.length > 0 && out.length < 5) {
+        out.push(`  ${T.grayDark}${truncate(o, width - 4)}${T.reset}`);
+      }
+    } else if (o !== undefined && n !== undefined) {
+      out.push(`  ${T.error}-${T.reset} ${truncate(o, width - 4)}`);
+      out.push(`  ${T.success}+${T.reset} ${truncate(n, width - 4)}`);
+      removed++;
+      added++;
+    } else if (n !== undefined) {
+      out.push(`  ${T.success}+${T.reset} ${truncate(n, width - 4)}`);
+      added++;
+    } else if (o !== undefined) {
+      out.push(`  ${T.error}-${T.reset} ${truncate(o, width - 4)}`);
+      removed++;
+    }
+    if (out.length >= 12) break;
+  }
+
+  const summary = `${T.grayDark}${added} change${added === 1 ? '' : 's'} · ${added} added · ${removed} removed${T.reset}`;
+  out.push(`  ${T.grayDark}↳${T.reset} ${summary}`);
+  return out;
+}
+
 export function renderToolCard(
   rawTool: string,
   rawArgs: unknown,
@@ -179,7 +222,11 @@ export function renderToolCard(
 
   const lines: string[] = [line];
 
-  if (outcome) {
+  // Edit/patch: render a compact inline diff
+  const args = typeof rawArgs === 'object' && rawArgs !== null ? (rawArgs as Record<string, unknown>) : null;
+  if ((tool === 'edit' || tool === 'patch') && args?.oldText && args?.newText) {
+    lines.push(...renderInlineDiff(String(args.oldText), String(args.newText), width));
+  } else if (outcome) {
     const summaryColor = outcome.kind === 'error' ? (T.error) : (T.grayDark);
     const meta = `  ${T.grayDark}↳${T.reset} ${summaryColor}${truncate(outcome.summary, width - 6)}${T.reset}`;
     lines.push(meta);
