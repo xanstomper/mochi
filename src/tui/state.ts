@@ -45,6 +45,17 @@ export interface TuiState {
   lastTokens?: number;
 }
 
+/**
+ * Soft cap on a single streaming line. Assistant text and reasoning/thinking
+ * are each appended token-by-token into ONE line, and every render re-wraps
+ * that actively-streaming line (see transcriptLines). Leaving it unbounded
+ * makes per-frame wrap cost grow linearly with the line, and since it grows
+ * every frame, total work is quadratic — a real freeze under long streaming
+ * reasoning. Rolling past-gap content into a fresh line keeps wrap cost
+ * bounded while still rendering continuously.
+ */
+export const STREAM_LINE_CAP = 16_000;
+
 export function createTuiState(limit = 500): TuiState {
   return {
     lines: [],
@@ -143,7 +154,7 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
         // frame fully re-wraps (the freeze/"bottles up" during long outputs).
         // Roll it into a fresh line once it passes a soft cap so wrap cost
         // stays bounded while still rendering continuously.
-        if (last.text.length > 16_000) pushLine(state, 'assistant', content);
+        if (last.text.length > STREAM_LINE_CAP) pushLine(state, 'assistant', content);
         else last.text += content;
       } else {
         pushLine(state, 'assistant', content);
@@ -253,7 +264,14 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
       if (!content) return false;
       const last = state.lines[state.lines.length - 1];
       if (last && last.kind === 'thought') {
-        last.text += content;
+        // Reasoning streams token-by-token into one 'thought' line. Without a
+        // cap (unlike assistant text above) it grew unboundedly, and since
+        // every render re-wraps the actively-streaming line this made per-frame
+        // work grow each frame — quadratic, a hard freeze during long
+        // reasoning. Roll past-cap content into a fresh line so re-wrap cost
+        // stays bounded (visually identical: thoughts flow continuously).
+        if (last.text.length > STREAM_LINE_CAP) pushLine(state, 'thought', content);
+        else last.text += content;
       } else {
         pushLine(state, 'thought', content);
       }

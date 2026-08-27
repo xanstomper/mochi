@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createTuiState, reduceEvent, pushLine, truncateArgs } from './state.js';
+import { STREAM_LINE_CAP } from './state.js';
 
 function ev(partial: Record<string, unknown>): Record<string, unknown> { return partial; }
 
@@ -25,7 +26,26 @@ describe('reduceEvent', () => {
     const assistantLines = s.lines.filter((l) => l.kind === 'assistant');
     expect(assistantLines.length).toBeGreaterThanOrEqual(2);
     const longest = Math.max(...assistantLines.map((l) => l.text.length));
-    expect(longest).toBeLessThanOrEqual(16_000 + 500);
+    expect(longest).toBeLessThanOrEqual(STREAM_LINE_CAP + 500);
+  });
+
+  it('rolls a huge streamed reasoning/thought line into fresh lines to keep re-wrap cost bounded (freeze fix)', () => {
+    const s = createTuiState();
+    // Reasoning streams token-by-token into a single 'thought' line; without
+    // a cap it grew unboundedly and every render re-wrapped it — quadratic
+    // work and a hard freeze under long reasoning. Verify rollover happens.
+    reduceEvent(s, ev({ type: 'agent:reasoning', content: 'prethink:' }));
+    const chunk = 'reasoning token reasoning token ';
+    for (let i = 0; i < 2000; i++) reduceEvent(s, ev({ type: 'agent:reasoning', content: chunk }));
+    const thoughtLines = s.lines.filter((l) => l.kind === 'thought');
+    // Multiple thought lines => rollover fired; none may be unbounded.
+    expect(thoughtLines.length).toBeGreaterThanOrEqual(2);
+    const longest = Math.max(...thoughtLines.map((l) => l.text.length));
+    expect(longest).toBeLessThanOrEqual(STREAM_LINE_CAP + 500);
+    // Content still flows across the rolled lines (nothing dropped by the cap).
+    const joined = thoughtLines.map((l) => l.text).join('');
+    expect(joined).toContain('prethink:');
+    expect(joined.length).toBeGreaterThan(STREAM_LINE_CAP);
   });
 
   it('tracks tasks through created -> started -> completed with stopReason', () => {
