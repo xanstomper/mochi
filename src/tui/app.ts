@@ -373,11 +373,10 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         break;
       }
       case 'assistant': {
-        // 2-space gutter + ▌ rule accent for each wrapped line (a
-        // vertical bar visually anchors the assistant's block on the grid)
+        // ◌ ring accent + italic anchor (clean, distinct)
         const wrapped = wrap(cleanText, Math.max(10, maxWidth - 4));
         for (const w of wrapped) {
-          rows.push(`  ${R.assistantGutter}▌${T.reset}${R.assistantText}${w}${T.reset}`);
+          rows.push(`  ${R.assistantGutter}${T.italic}${T.dim}◌${T.reset}${R.assistantText}${w}${T.reset}`);
         }
         break;
       }
@@ -386,8 +385,8 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         const wrapped = wrap(cleanText, Math.max(10, maxWidth - 6));
         for (let i = 0; i < wrapped.length; i++) {
           const w = wrapped[i];
-          if (i === 0) rows.push(`  ${R.toolMarker}${T.bold}▷${T.reset} ${accentToolPrefix(w)}`);
-          else rows.push(`  ${T.grayDark}${w}${T.reset}`);
+          if (i === 0) rows.push(`  ${R.toolMarker}${T.bold}${T.italic}◈${T.reset} ${accentToolPrefix(w)}`);
+          else rows.push(`  ${T.dim}${R.toolGenericName}${w}${T.reset}`);
         }
         break;
       }
@@ -415,7 +414,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         for (let i = 0; i < wrapped.length; i++) {
           const w = wrapped[i];
           if (i === 0) rows.push(`  ${R.taskMark}${T.bold}★ [TASK]${T.reset} ${R.taskText}${w}${T.reset}`);
-          else rows.push(`  ${T.grayDark}${w}${T.reset}`);
+          else rows.push(`  ${T.dim}${R.toolGenericName}${w}${T.reset}`);
         }
         break;
       }

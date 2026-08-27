@@ -963,7 +963,7 @@ Continue from 'Next:', do not redo completed progress.`,
         if (taskKind === 'chat') {
           this.chatToolRounds++;
           if (this.chatToolRounds >= 4) {
-            return this.finish(task, false, 'Stopped: chat task should not require repeated tool use.', 'tool_loop');
+            return this.finish(task, false, 'Stopped — chat tasks should not require repeated tool calls (loop guard).', 'tool_loop');
           }
         }
         // Global tool-call ceiling: was 40, raised to 200 because large multi-file
