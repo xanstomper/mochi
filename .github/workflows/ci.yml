@@ -16,7 +16,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: [20, 22]
+        # package.json declares engines.node >= 22 (and @types/node ^22); Node 20
+        # is unsupported, so only test the supported LTS major.
+        node: [22]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
