@@ -372,7 +372,7 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
       const role = String(event.role ?? 'subagent');
       const status = event.success ? 'succeeded' : 'failed';
       const summary = String(event.summary ?? '').slice(0, 100);
-      pushLine(state, event.success ? 'system' : 'error', `└── [Subagent: ${role}] ${status}: ${summary}`);
+      pushLine(state, event.success ? 'system' : 'error', `${event.success ? '✓' : '×'} subagent  ${role}: ${summary}`);
       return true;
     }
     case 'usage:updated': {
@@ -389,9 +389,12 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
       state.lastTokens = currentTotal;
       return false;
     }
-    case 'file:changed':
-      pushLine(state, 'system', `${event.operation} ${event.path}`);
+    case 'file:changed': {
+      const opGlyph: Record<string, string> = { create: '+', write: '+', edit: '~', patch: '~', delete: '−', read: '←', move: '→', rename: '→' };
+      const glyph = opGlyph[String(event.operation ?? '')] ?? '•';
+      pushLine(state, 'system', `${glyph} ${event.operation}  ${event.path}`);
       return true;
+    }
     case 'error':
       pushLine(state, 'error', String(event.error ?? ''));
       return true;

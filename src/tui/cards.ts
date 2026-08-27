@@ -1,47 +1,85 @@
 import { TOOL_ALIASES, normalizeToolArgs } from '../tools/index.js';
-import { T } from './view.js';
+import { T, R } from './view.js';
 
 const TOOL_NAMES: Record<string, string> = {
-  write: 'Write', edit: 'Edit', patch: 'Patch', delete: 'Delete',
-  read: 'Read', search: 'Search', glob: 'Glob', inspect: 'Inspect', tree: 'Tree',
-  fetch: 'Fetch', shell: 'Shell', git: 'Git',
-  verify: 'Verify', perf: 'Perf', test: 'Test',
-  memory: 'Memory', skill: 'Skill', subagent: 'Subagent', think: 'Think', todo: 'Todo',
+  write: 'write', edit: 'edit', patch: 'patch', delete: 'delete',
+  read: 'read', search: 'search', glob: 'glob', inspect: 'inspect', tree: 'tree',
+  fetch: 'fetch', shell: 'shell', git: 'git',
+  verify: 'verify', perf: 'perf', test: 'test',
+  memory: 'memory', skill: 'skill', subagent: 'subagent', think: 'think', todo: 'todo',
 };
 
+// Semantic color roles for tool categories
 function toolColor(tool: string): string {
-  if (['write', 'edit', 'patch', 'delete'].includes(tool)) return T.cyan ?? T.fg;
-  if (['read', 'search', 'glob', 'inspect', 'tree'].includes(tool)) return T.cyan ?? T.fg;
-  if (tool === 'shell' || tool === 'git') return T.orange ?? T.warning ?? T.fg;
-  if (['verify', 'perf', 'test'].includes(tool)) return T.success ?? T.lime ?? T.fg;
-  if (['memory', 'skill', 'subagent'].includes(tool)) return T.violet ?? T.magenta ?? T.fg;
-  return T.fg;
+  const t = TOOL_ALIASES[tool] || tool;
+  if (['write', 'edit', 'patch', 'delete'].includes(t)) return R.toolWriteName ?? T.cyan ?? T.fg;
+  if (['read', 'search', 'glob', 'inspect', 'tree'].includes(t)) return R.toolReadName ?? T.cyan ?? T.fg;
+  if (['fetch', 'web_search'].includes(t)) return T.violet ?? T.fg;
+  if (t === 'shell' || t === 'git') return R.toolShellName ?? T.orange ?? T.warning ?? T.fg;
+  if (['verify', 'perf', 'test'].includes(t)) return R.toolTestName ?? T.success ?? T.lime ?? T.fg;
+  if (['memory', 'skill', 'subagent'].includes(t)) return T.violet ?? T.fg;
+  return R.toolGenericName ?? T.fg;
 }
 
-function pad(s: string, width: number): string {
-  const visible = s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
-  const padLen = Math.max(0, width - visible.length);
-  return s + ' '.repeat(padLen);
+// File operation glyph
+function toolGlyph(tool: string): string {
+  const t = TOOL_ALIASES[tool] || tool;
+  if (t === 'write' || t === 'create') return '+';
+  if (t === 'edit' || t === 'patch') return '~';
+  if (t === 'delete') return '−';
+  if (t === 'read') return '←';
+  if (['search', 'glob', 'inspect', 'tree'].includes(t)) return '◇';
+  if (t === 'shell' || t === 'git' || t === 'bash') return '→';
+  if (['fetch', 'web_search'].includes(t)) return '↗';
+  if (['verify', 'perf', 'test'].includes(t)) return '✓';
+  return '◇';
+}
+
+function stripAnsi(s: string): string {
+  return s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
+}
+
+function visibleLen(s: string): number {
+  return stripAnsi(s).length;
+}
+
+function padEnd(s: string, n: number): string {
+  const vis = visibleLen(s);
+  if (vis >= n) return s;
+  return s + ' '.repeat(n - vis);
 }
 
 function truncate(s: string, max: number): string {
-  const visible = s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
-  if (visible.length <= max) return s;
+  const vis = visibleLen(s);
+  if (vis <= max) return s;
   let out = '';
   let cells = 0;
   let i = 0;
   while (i < s.length && cells < max - 1) {
-    if (s[i] === '\x1b' && s.slice(i).match(/^\x1b\[[0-9;]*[A-Za-z]/)) {
-      const m = s.slice(i).match(/^\x1b\[[0-9;]*[A-Za-z]/)![0];
-      out += m;
-      i += m.length;
-      continue;
+    if (s[i] === '\x1b') {
+      const m = s.slice(i).match(/^\x1b\[[0-9;]*[A-Za-z]/);
+      if (m) {
+        out += m[0];
+        i += m[0].length;
+        continue;
+      }
     }
     out += s[i];
     cells++;
     i++;
   }
-  return out + '…';
+  return out + T.reset + '…';
+}
+
+function formatDuration(ms: number | undefined): string {
+  if (ms === undefined || ms < 0) return '';
+  if (ms < 1) return '<1ms';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(1)}s`;
+  const m = Math.floor(s / 60);
+  const rem = Math.round(s % 60);
+  return `${m}m ${rem.toString().padStart(2, '0')}s`;
 }
 
 export function describeToolArgs(rawTool: string, rawArgs: unknown): string {
@@ -64,7 +102,7 @@ export function describeToolArgs(rawTool: string, rawArgs: unknown): string {
     }
     if (a.command) return `$ ${String(a.command).trim()}`;
     if (a.query) return `"${String(a.query)}"`;
-    if (a.pattern) return `pattern: ${String(a.pattern)}`;
+    if (a.pattern) return `${String(a.pattern)}`;
     if (tool === 'subagent') {
       if (Array.isArray(a.tasks)) return `${a.tasks.length} parallel subtask${a.tasks.length === 1 ? '' : 's'}`;
       const role = (a.role as string) ?? 'coder';
@@ -104,11 +142,10 @@ export function describeToolOutcome(
 }
 
 export interface ToolCardOptions {
-  status?: 'pending' | 'success' | 'error';
+  status?: 'pending' | 'running' | 'success' | 'error';
   width?: number;
 }
 
-// Cline-style tool card: rounded corners, strong semantic colors, clean body.
 export function renderToolCard(
   rawTool: string,
   rawArgs: unknown,
@@ -118,35 +155,35 @@ export function renderToolCard(
   const tool = TOOL_ALIASES[rawTool] || rawTool;
   const name = TOOL_NAMES[tool] ?? tool;
   const color = toolColor(tool);
+  const glyph = toolGlyph(tool);
   const effective = opts.status ?? (outcome ? (outcome.kind === 'success' ? 'success' : 'error') : 'pending');
-  const statusIcon = effective === 'success' ? '✓' : effective === 'error' ? '✗' : '○';
-  const statusColor = effective === 'success' ? (T.success ?? T.lime) : effective === 'error' ? (T.error ?? '#f87171') : T.grayDark;
 
-  const width = opts.width ?? 64;
-  const inner = width - 4;
+  const statusGlyph = effective === 'success' ? '✓' : effective === 'error' ? '×' : effective === 'running' ? '◌' : glyph;
+  const statusColor = effective === 'success' ? (T.success ?? T.lime)
+    : effective === 'error' ? (T.error ?? '#f87171')
+    : effective === 'running' ? (T.cyan ?? T.fg)
+    : (T.grayDark ?? T.fg);
 
-  const dur = outcome?.durationMs !== undefined ? `${outcome.durationMs}ms` : '';
-  const headerText = `${statusColor}${statusIcon}${T.reset} ${T.bold}${name}${T.reset}${T.grayDark}${dur ? ` · ${dur}` : ''}${T.reset}`;
-  const headerVis = headerText.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
-  const headerPad = ' '.repeat(Math.max(0, inner - headerVis.length));
+  const width = opts.width ?? (process.stdout.columns || 100);
+  const dur = outcome?.durationMs !== undefined ? formatDuration(outcome.durationMs) : '';
+  const argsText = describeToolArgs(rawTool, rawArgs);
 
-  const top = `${T.grayDark}  ╭${'─'.repeat(inner)}╮${T.reset}`;
-  const header = `${T.grayDark}  │${T.reset} ${color}${headerText}${headerPad}${T.grayDark} │${T.reset}`;
+  const primary = `${statusColor}${statusGlyph}${T.reset} ${color}${name}${T.reset} ${T.dim}${argsText}${T.reset}`;
+  const durText = dur ? `${T.grayDark}${dur}${T.reset}` : '';
+  const durVis = visibleLen(durText);
 
-  const argText = describeToolArgs(rawTool, rawArgs);
-  const argLine = `${T.grayDark}  │${T.reset} ${T.dim}${argText}${T.reset}${' '.repeat(Math.max(0, inner - 1 - argText.length))}${T.grayDark}│${T.reset}`;
-
-  const lines: string[] = [top, header, argLine];
-
-  if (outcome) {
-    const summaryText = truncate(outcome.summary, inner - 2);
-    const summaryColor = outcome.kind === 'error' ? T.error : T.fg;
-    const summaryLine = `${T.grayDark}  │${T.reset} ${summaryColor}${summaryText}${T.reset}${' '.repeat(Math.max(0, inner - 1 - outcome.summary.slice(0, inner).length))}${T.grayDark}│${T.reset}`;
-    lines.push(summaryLine);
+  let line = primary;
+  if (dur && visibleLen(primary) + durVis < width - 4) {
+    line = padEnd(primary, width - 4 - durVis) + ' ' + durText;
   }
 
-  const bottom = `${T.grayDark}  ╰${'─'.repeat(inner)}╯${T.reset}`;
-  lines.push(bottom);
+  const lines: string[] = [line];
+
+  if (outcome) {
+    const summaryColor = outcome.kind === 'error' ? (T.error) : (T.grayDark);
+    const meta = `  ${T.grayDark}↳${T.reset} ${summaryColor}${truncate(outcome.summary, width - 6)}${T.reset}`;
+    lines.push(meta);
+  }
 
   return lines.join('\n');
 }
@@ -174,60 +211,41 @@ export interface TurnSummary {
   summary: string;
 }
 
-// Cline-style turn summary card: rounded box, strong colors, clear metrics.
 export function renderTurnSummaryCard(s: TurnSummary): string {
-  const width = 68;
-  const inner = width - 4;
+  const width = process.stdout.columns || 100;
   const ok = s.success;
   const statusColor = ok ? (T.success ?? T.lime) : (T.error ?? '#f87171');
-  const label = ok ? 'Task complete' : `Task stopped: ${s.stopReason ?? 'aborted'}`;
-  const dur = `${Math.round(s.durationMs)}ms`;
-  const tools = `${s.toolCallsTotal} tool${s.toolCallsTotal === 1 ? '' : 's'}`;
+  const icon = ok ? '✓' : '×';
+  const rule = '─'.repeat(Math.max(0, Math.min(width - 2, 70)));
 
-  const headerText = `${statusColor}${ok ? '✓' : '✗'}${T.reset} ${T.bold}${label}${T.reset}${T.grayDark}  ${dur} · ${tools}${T.reset}`;
-  const headerVis = headerText.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
-  const headerPad = ' '.repeat(Math.max(0, inner - headerVis.length));
-
-  const top = `${T.grayDark}  ╭${'─'.repeat(inner)}╮${T.reset}`;
-  const header = `${T.grayDark}  │${T.reset} ${headerText}${headerPad}${T.grayDark} │${T.reset}`;
-
-  const lines: string[] = [top, header];
+  const lines: string[] = [
+    `${T.grayDark}${rule}${T.reset}`,
+    `${statusColor}${icon}${T.reset} ${T.bold}${ok ? 'Done' : 'Stopped'}${T.reset}${T.grayDark} · ${formatDuration(s.durationMs)} · ${s.toolCallsTotal} tool${s.toolCallsTotal === 1 ? '' : 's'}${s.tokensUsed ? ` · ${s.tokensUsed.toLocaleString()} tokens` : ''}${T.reset}`,
+  ];
 
   if (s.summary) {
     const firstLine = s.summary.trim().split('\n').map((l) => l.trim()).find((l) => l) ?? '';
     if (firstLine) {
-      const text = truncate(firstLine, inner - 2);
-      const body = `${T.grayDark}  │${T.reset} ${statusColor}▸${T.reset} ${text}${' '.repeat(Math.max(0, inner - 3 - text.length))}${T.grayDark}│${T.reset}`;
-      lines.push(body);
+      lines.push(`${T.fg}${truncate(firstLine, width - 4)}${T.reset}`);
     }
   }
 
   if (s.filesModified.length > 0) {
-    const labels = s.filesModified.map((f) => f.length > 30 ? '…' + f.slice(-29) : f);
+    const labels = s.filesModified.map((f) => f.length > 36 ? '…' + f.slice(-35) : f);
     const total = labels.length;
-    let shown = labels.slice(0, 4);
+    let shown = labels.slice(0, 5);
     let remaining = total - shown.length;
     let text = shown.join(', ');
     if (remaining > 0) text += ` (+${remaining} more)`;
-    while (text.length > inner - 11 && shown.length > 1) {
+    while (visibleLen(text) > width - 14 && shown.length > 1) {
       shown = shown.slice(0, -1);
       remaining = total - shown.length;
       text = shown.join(', ');
       if (remaining > 0) text += ` (+${remaining} more)`;
     }
-    text = truncate(text, inner - 11);
-    const body = `${T.grayDark}  │${T.reset} ${T.cyan}✎${T.reset} ${T.dim}files:${T.reset} ${text}${' '.repeat(Math.max(0, inner - 10 - text.length))}${T.grayDark}│${T.reset}`;
-    lines.push(body);
+    text = truncate(text, width - 14);
+    lines.push(`${T.cyan}~${T.reset} ${T.dim}files:${T.reset} ${text}`);
   }
-
-  if (s.tokensUsed !== undefined && s.tokensUsed > 0) {
-    const text = `${s.tokensUsed.toLocaleString()} tokens`;
-    const body = `${T.grayDark}  │${T.reset} ${T.magenta ?? T.fg}◈${T.reset} ${T.dim}tokens:${T.reset} ${text}${' '.repeat(Math.max(0, inner - 11 - text.length))}${T.grayDark}│${T.reset}`;
-    lines.push(body);
-  }
-
-  const bottom = `${T.grayDark}  ╰${'─'.repeat(inner)}╯${T.reset}`;
-  lines.push(bottom);
 
   return lines.join('\n');
 }
