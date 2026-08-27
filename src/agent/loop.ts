@@ -539,6 +539,27 @@ Continue from 'Next:', do not redo completed progress.`,
           chunks.push(chunk);
           if (chunk.reasoningContent) {
             this.events.emit({ type: 'agent:reasoning', content: chunk.reasoningContent, agentId: this.id });
+            // Reasoning loops (same block emitted hundreds of times) must feed
+            // the repetition guard too; they don't enter streamBuf otherwise.
+            const rChunk = chunk.reasoningContent || '';
+            for (let i = 0; i < rChunk.length; i++) {
+              const char = rChunk[i];
+              phraseBuf += char;
+              if (char === '\n' || char === ',' || char === '.') {
+                const phrase = phraseBuf.trim();
+                if (phrase.length >= 12) {
+                  recentPhrases.push(phrase);
+                  if (recentPhrases.length > 20) {
+                    const dropped = recentPhrases.shift()!;
+                    repCounts.set(dropped, Math.max(0, (repCounts.get(dropped) ?? 0) - 1));
+                  }
+                  const c = (repCounts.get(phrase) ?? 0) + 1;
+                  repCounts.set(phrase, c);
+                  if (c > maxRep) maxRep = c;
+                }
+                phraseBuf = '';
+              }
+            }
           }
           if (chunk.content) {
             const newChunk = chunk.content;
