@@ -39,6 +39,20 @@ jobs:
         run: npx vitest run
       - name: Build
         run: npm run build
+      - name: Verify the npm tarball ships runtime files (not raw source)
+        # Guard against the distributability regression: dist/ and native/bin
+        # are gitignored, so without a "files" whitelist npm would exclude them
+        # and ship raw src/*.ts instead, breaking main/bin/exports on install.
+        run: |
+          tar=$(npm pack --silent --pack-destination "$RUNNER_TEMP")
+          echo "tarball: $tar"
+          tar -tzf "$RUNNER_TEMP/$tar" > /tmp/tar-contents.txt
+          grep -q 'package/dist/cli.js' /tmp/tar-contents.txt || { echo "dist/cli.js missing"; exit 1; }
+          grep -q 'package/dist/index.js' /tmp/tar-contents.txt || { echo "dist/index.js missing"; exit 1; }
+          grep -q 'package/native/bin/mochi_core.node' /tmp/tar-contents.txt || { echo "native/bin missing"; exit 1; }
+          if grep -q 'package/src/.*\.ts' /tmp/tar-contents.txt; then echo "raw src/ leaked into tarball"; exit 1; fi
+          if grep -q '\.test\.ts' /tmp/tar-contents.txt; then echo "test files leaked into tarball"; exit 1; fi
+          echo "tarball contents OK"
       - name: Memory regression gate
         run: npm run bench:memory
       - name: Smoke test the CLI
