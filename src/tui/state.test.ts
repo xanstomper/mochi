@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createTuiState, reduceEvent, pushLine, truncateArgs } from './state.js';
+import { createTuiState, reduceEvent, pushLine, truncateArgs, toolFamily } from './state.js';
 import { STREAM_LINE_CAP } from './state.js';
 
 function ev(partial: Record<string, unknown>): Record<string, unknown> { return partial; }
@@ -124,5 +124,73 @@ describe('reduceEvent', () => {
     expect(s.lines.length).toBe(3);
     expect(s.lines[0].text).toBe('line7');
     expect(s.lines[2].text).toBe('line9');
+  });
+});
+describe('tool card routing (freeze/dedupe fix regressions)', () => {
+  it('replaces the NON-last pending card when an interleaved call completes first', () => {
+    const s = createTuiState();
+    reduceEvent(s, ev({ type: 'tool:called', tool: 'shell', tool_call_id: 'c1', args: { command: 'sleep 5' } }));
+    reduceEvent(s, ev({ type: 'message', role: 'system', content: 'noise between calls' }));
+    reduceEvent(s, ev({ type: 'tool:called', tool: 'edit', tool_call_id: 'c2', args: { path: 'a.ts' } }));
+    // c1 finishes while c2 (the LAST card) is still pending:
+    reduceEvent(s, ev({ type: 'tool:completed', tool: 'shell', result: { toolCallId: 'c1', name: 'shell', output: 'done-1', durationMs: 1 } }));
+    const shellCard = s.lines.find((l) => l.kind === 'tool' && l.text.includes('done-1'));
+    expect(shellCard).toBeDefined(); // landed on ITS OWN line...
+    const last = s.lines[s.lines.length - 1];
+    expect(last.kind).toBe('tool');
+    expect(last.text).not.toContain('done-1'); // ...and did NOT stomp c2's pending card
+    // Then c2 completes and lands on its own surviving card too.
+    reduceEvent(s, ev({ type: 'tool:completed', tool: 'edit', result: { toolCallId: 'c2', name: 'edit', output: 'patched a.ts', durationMs: 2 } }));
+    expect(s.lines.some((l) => l.kind === 'tool' && l.text.includes('patched a.ts'))).toBe(true);
+  });
+
+  it('keeps card ids valid across limit trims (absolute ids)', () => {
+    const s = createTuiState(4);
+    reduceEvent(s, ev({ type: 'tool:called', tool: 'shell', tool_call_id: 'old', args: { command: 'x' } }));
+    // Push enough lines to trim the old card out of the window entirely.
+    for (let i = 0; i < 10; i++) pushLine(s, 'system', `filler-${i}`);
+    reduceEvent(s, ev({ type: 'tool:completed', tool: 'shell', result: { toolCallId: 'old', name: 'shell', output: 'late result', durationMs: 3 } }));
+    // Trimmed-away card must not silently rewrite some unrelated row; the
+    // outcome still surfaces via the append/promote path.
+    expect(s.lines.some((l) => l.kind === 'tool' && l.text.includes('late result'))).toBe(true);
+    expect(s.trimmed).toBeGreaterThan(0);
+  });
+
+  it('does not swallow an unrelated consecutive tool card under pushLine collapse', () => {
+    const s = createTuiState();
+    pushLine(s, 'tool', '┌ shell — echo one');
+    pushLine(s, 'tool', '┌ edit — src/a.ts'); // different family: must stay its own line
+    const families = new Set(s.lines.filter((l) => l.kind === 'tool').map((l) => toolFamily(l.text)));
+    expect(families.size).toBe(2);
+    // Same family still collapses (live update behavior preserved):
+    pushLine(s, 'tool', '┌ edit — src/b.ts');
+    const editLines = s.lines.filter((l) => l.kind === 'tool' && l.text.includes('edit')).length;
+    expect(editLines).toBe(1);
+  });
+
+  it('tracks trimmed totals for cache realignment', () => {
+    const s = createTuiState(3);
+    expect(s.trimmed).toBe(0);
+    for (let i = 0; i < 7; i++) pushLine(s, 'system', `line${i}`);
+    expect(s.lines.length).toBe(3);
+    expect(s.trimmed).toBe(4);
+  });
+});
+
+describe('duplicate tool:called guard (dual-emitter dedupe)', () => {
+  it('collapses a back-to-back re-emit of the same call into ONE pending card', () => {
+    const s = createTuiState();
+    const call = { type: 'tool:called', tool: 'read', tool_call_id: 'c9', args: { path: 'a.ts' } };
+    reduceEvent(s, ev(call));
+    reduceEvent(s, ev(call)); // loop + executor double-fire
+    const cards = s.lines.filter((l) => l.kind === 'tool');
+    expect(cards.length).toBe(1);
+  });
+
+  it('still shows DISTINCT calls as separate cards', () => {
+    const s = createTuiState();
+    reduceEvent(s, ev({ type: 'tool:called', tool: 'read', tool_call_id: 'x1', args: { path: 'a.ts' } }));
+    reduceEvent(s, ev({ type: 'tool:called', tool: 'read', tool_call_id: 'x2', args: { path: 'b.ts' } }));
+    expect(s.lines.filter((l) => l.kind === 'tool').length).toBe(2);
   });
 });

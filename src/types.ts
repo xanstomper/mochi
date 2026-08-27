@@ -230,7 +230,7 @@ export type MochiEvent =
   | { type: 'agent:log'; agentId: string; message: string }
   | { type: 'agent:reasoning'; content: string; agentId: string }
   | { type: 'agent:iteration'; agentId: string; trace: IterationTrace }
-  | { type: 'tool:called'; tool: string; args: unknown; agentId: string }
+  | { type: 'tool:called'; tool: string; args: unknown; agentId: string; tool_call_id?: string }
   | { type: 'tool:completed'; tool: string; result: ToolResult; agentId: string }
   | { type: 'tool:failed'; tool: string; error: string; agentId: string }
   | { type: 'file:changed'; path: string; operation: 'write' | 'edit' | 'delete'; agentId: string }

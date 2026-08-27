@@ -5,7 +5,7 @@ import { findProjectRoot } from '../repo.js';
 import type { Runtime } from '../runtime.js';
 import type { MochiEvent } from '../types.js';
 import { PROVIDERS, providerById } from '../providers.js';
-import { reduceEvent } from './state.js';
+import { reduceEvent, trimTranscript } from './state.js';
 import { wrap, visibleLen } from './wrap.js';
 import pkg from '../../package.json' with { type: 'json' };
 import { kvCache } from '../kv-cache.js';
@@ -149,6 +149,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     lastTokens: 0 as number,
     lastStatus: '' as string,
     chatVer: 0 as number,
+    trimmed: 0 as number,
     limit: 500 as number,
     /** cline-style plan/act mode (Tab) */
     uiMode: (runtime.config.planMode ? 'plan' : 'act') as 'plan' | 'act',
@@ -202,6 +203,8 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
    *  transcript. This is the fix for the freeze while the agent works. */
   let transCache: { text: string; kind: LineKind; out: string[] }[] = [];
   let transMw = 0;
+  /** How many head-trims the cache has already absorbed (see transcriptLines). */
+  let transSeenTrimmed = 0;
 
   const width = () => process.stdout.columns || 100;
   const height = () => process.stdout.rows || 34;
@@ -212,7 +215,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     if (last && last.kind === kind && last.text === text) return;
     state.lines.push({ kind, text });
     state.chatVer++;
-    if (state.lines.length > state.limit) state.lines.splice(0, state.lines.length - state.limit);
+    trimTranscript(state);
     if (!state.userScrolled) state.scroll = 0;
     scheduleRender();
   };
@@ -309,6 +312,17 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     if (transMw !== maxWidth || transCache.length > state.lines.length) {
       transCache = [];
       transMw = maxWidth;
+      transSeenTrimmed = state.trimmed;
+    }
+    // Head-trim realignment: once the transcript passes `limit`, every new
+    // line drops the oldest one and shifts ALL indices down. Without this
+    // mirror-splice, the dirty-scan below mismatched at index 0 after every
+    // trim and re-wrapped the whole 500-line transcript every frame — the
+    // second, cap-triggered half of the "frozen while working" bug.
+    const trims = state.trimmed - transSeenTrimmed;
+    if (trims > 0) {
+      transCache.splice(0, Math.min(trims, transCache.length));
+      transSeenTrimmed = state.trimmed;
     }
     // Grow the cache to match lines, copying prior rows, then find the first
     // changed source line and re-wrap everything from there.

@@ -1571,7 +1571,7 @@ Continue from 'Next:', do not redo completed progress.`,
           }
         : {}),
     };
-    this.events.emit({ type: 'tool:called', tool: tc.function.name, args, agentId: this.id });
+    this.events.emit({ type: 'tool:called', tool: tc.function.name, args, agentId: this.id, tool_call_id: tc.id });
     const { output, error, durationMs } = await executeTool(tc.function.name, args, ctx, this.tools);
     // Instant diagnostics (the Crush LSP insight): after every edit, surface
     // type/syntax errors for the touched file in the SAME turn so the model

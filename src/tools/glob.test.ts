@@ -1,6 +1,6 @@
 // tools/glob.ts: file globbing across a real temp tree.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { globTool } from './glob.js';
@@ -64,4 +64,36 @@ describe('glob tool', () => {
     const out = await runGlob('**', 2);
     expect(out.split('\n').filter(Boolean).length).toBeLessThanOrEqual(2);
   });
+});
+
+// Walk-budget regressions: the old glob walker recursed synchronously over
+// every directory under cwd with no caps; pointed at a broad root it blocked
+// the event loop for minutes and froze the whole TUI mid-task.
+describe('glob walk bounds (event-loop freeze regressions)', () => {
+  it('completes quickly inside a huge tree instead of blocking the event loop', async () => {
+    // Synthetic fan-out far past the walker budgets: 40 dirs x 900 files.
+    mkdirSync(resolve(dir, 'huge'), { recursive: true });
+    for (let i = 0; i < 40; i++) {
+      const d = resolve(dir, 'huge', 'w' + i);
+      mkdirSync(d, { recursive: true });
+      for (let j = 0; j < 900; j++) writeFileSync(resolve(d, 'f' + j + '.txt'), '');
+    }
+    const t0 = Date.now();
+    const out = await runGlob('huge/**/f*.txt', 5);
+    const ms = Date.now() - t0;
+    expect(out.split('\n').filter(Boolean).length).toBeLessThanOrEqual(6); // limit(+note)
+    expect(ms).toBeLessThan(5000);
+  }, 10_000);
+
+  it('does not loop forever on a self-referencing symlinked directory', async () => {
+    try {
+      symlinkSync(dir, resolve(dir, 'selfloop'));
+    } catch {
+      return; // environment lacks symlink permission; nothing to prove here
+    }
+    const t0 = Date.now();
+    const out = await runGlob('**/nothing-matches-this.xyz', 10);
+    expect(Date.now() - t0).toBeLessThan(8000);
+    expect(typeof out).toBe('string');
+  }, 10_000);
 });

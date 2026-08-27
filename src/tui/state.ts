@@ -31,13 +31,20 @@ export interface TuiState {
    *  fallback). Stored at tool:called time so the matching tool:completed
    *  can render a complete card showing both the call and the result. */
   activeToolArgs: Map<string, unknown>;
-  /** Line index of each in-flight tool card, keyed by tool_call_id. Used to
-   *  replace the matching pending card on tool:completed instead of always
-   *  stomping the last line (which broke parallel tool execution). */
+  /** ABSOLUTE line id of each in-flight tool card, keyed by tool_call_id.
+   *  Absolute = (index at push time + trimmed-so-far), so the id stays valid
+   *  even after head trims shift array indices. Used to replace the matching
+   *  pending card on tool:completed instead of stomping whatever is last
+   *  (which broke parallel/interleaved tool execution). */
   activeToolLine: Map<string, number>;
   currentTask: string;
   currentTool: string;
   chatVer: number;
+  /** Total lines ever dropped from the head by limit trims. Wrap caches and
+   *  absolute card ids need this to realign across splices. */
+  trimmed: number;
+  /** Dedupe signature of the most recent tool:called (dual-emitter guard). */
+  lastToolCallSig?: { sig: string; at: number };
   /** Max transcript lines; oldest are dropped. */
   limit: number;
   tokenVelocity?: number;
@@ -66,8 +73,30 @@ export function createTuiState(limit = 500): TuiState {
     currentTask: '',
     currentTool: '',
     chatVer: 0,
+    trimmed: 0,
     limit,
   };
+}
+
+/** Drop oldest lines past the limit, tracking how many were removed so wrap
+ *  caches and absolute card ids can realign across index-shifting splices. */
+export function trimTranscript(state: TuiState): void {
+  if (state.lines.length <= state.limit) return;
+  const removed = state.lines.length - state.limit;
+  state.lines.splice(0, removed);
+  state.trimmed += removed;
+}
+
+/** Convert a current array index to its stable absolute id (trim-immune). */
+export function toAbsLine(state: TuiState, idx: number): number {
+  return idx + state.trimmed;
+}
+
+/** Convert an absolute id back to the current index, or undefined if that
+ *  line was trimmed away since the id was minted. */
+export function toRelLine(state: TuiState, abs: number): number | undefined {
+  const idx = abs - state.trimmed;
+  return idx >= 0 && idx < state.lines.length ? idx : undefined;
 }
 
 /** Truncate long args for display without losing the tool identity. */
@@ -114,17 +143,40 @@ export function formatToolCompleted(tool: string, result?: { output?: string; er
 }
 
 export function pushLine(state: TuiState, kind: LineKind, text: string): void {
-  // Collapse duplicate tool lines into their changing args (live tools update
-  // in place instead of stacking one line per call).
+  // Collapse consecutive tool cards of the SAME tool family while streaming
+  // (live tools update in place instead of stacking one line per call).
+  // Card text is ANSI-wrapped, so identity comes from the tool WORD somewhere
+  // in the line, never from raw prefixes. The old `prev.text.includes(':')`
+  // test matched virtually every formatted card (headers all contain ':'),
+  // silently swallowing a second unrelated call's pending card.
   if (kind === 'tool' && state.lines.length && state.lines[state.lines.length - 1].kind === 'tool') {
     const prev = state.lines[state.lines.length - 1];
-    if (prev.text.includes(':') || prev.text.startsWith(text.slice(0, 8))) {
+    const prevFamily = toolFamily(prev.text);
+    if (prevFamily !== '' && prevFamily === toolFamily(text)) {
       prev.text = text;
       return;
     }
   }
   state.lines.push({ kind, text });
-  if (state.lines.length > state.limit) state.lines.splice(0, state.lines.length - state.limit);
+  trimTranscript(state);
+}
+
+/** Which tool a formatted card/line refers to ("shell", "edit", ...), or ''
+ *  when no recognizable tool word is present (never collapses unknowns). */
+const TOOL_WORD_RE = /\b(shell|edit|write|read|delete|patch|search|glob|git|inspect|memory|fetch|web_search|bg_task|subagent)\b/i;
+export function toolFamily(text: string): string {
+  const plain = text.replace(/\x1b\[[0-9;]*m/g, '');
+  const m = plain.match(TOOL_WORD_RE);
+  return m ? m[1].toLowerCase() : '';
+}
+
+/** Stable signature of a tool-call payload for duplicate detection. */
+function safeArgsSig(args: unknown): string {
+  try {
+    return JSON.stringify(args ?? null);
+  } catch {
+    return String(args);
+  }
 }
 
 /** Apply one runtime event to the TUI state. Returns true when a re-render
@@ -164,12 +216,21 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
     }
     case 'tool:called': {
       state.currentTool = String(event.tool ?? '');
-      // Remember the args so the matching tool:completed can render the
-      // full card with both the tool name and the outcome in one frame.
-      // Keyed by the tool_call_id when the runtime provides one, otherwise
-      // by the tool name (last call wins in pathological cases — the
-      // wrapping state machine guarantees one outstanding call per tool).
       const key = String(event.tool_call_id ?? event.callId ?? event.tool ?? '');
+      // Duplicate-call guard: some flows emit tool:called from BOTH the agent
+      // loop and the tool executor (same id/args milliseconds apart). Without
+      // this, the TUI stacked TWO pending cards per call — the visible half
+      // of the "deduping" bug. A repeat with identical key+args while the
+      // first card is still pending updates that card in place instead.
+      if (state.lastToolCallSig) {
+        const sig = key + '\u0000' + safeArgsSig(event.args);
+        if (sig === state.lastToolCallSig.sig && Date.now() - state.lastToolCallSig.at < 1500) {
+          return false;
+        }
+        state.lastToolCallSig = { sig, at: Date.now() };
+      } else {
+        state.lastToolCallSig = { sig: key + '\u0000' + safeArgsSig(event.args), at: Date.now() };
+      }
       state.activeToolArgs.set(key, event.args);
       const cardText = formatToolInvocationCard(state.currentTool, event.args);
       // Track the line index so the matching tool:completed can replace
@@ -178,9 +239,9 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
       // each other: t1 calls push, t2 calls push, t1 completes and
       // overwrites t2's pending card with t1's outcome.
       const idx = state.lines.length;
-      state.activeToolLine.set(key, idx);
+      state.activeToolLine.set(key, toAbsLine(state, idx));
       state.lines.push({ kind: 'tool', text: cardText });
-      if (state.lines.length > state.limit) state.lines.splice(0, state.lines.length - state.limit);
+      trimTranscript(state);
       state.chatVer++;
       return true;
     }
@@ -201,16 +262,22 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
         args,
         event.result as any,
       );
+      // Capture the pending card's ABSOLUTE line id BEFORE cleaning up the
+      // maps. The old code deleted the key first and only then read it back,
+      // so indexed replacement was dead code and every completion fell
+      // through to stomp-or-append on whatever card happened to be last —
+      // interleaved calls got each other's outcomes (the "deduped/duplicated
+      // tool cards" bug).
+      const pendingAbs = state.activeToolLine.get(lookupKey);
       if (callId) {
         state.activeToolArgs.delete(callId);
         state.activeToolLine.delete(callId);
       }
       if (state.activeToolLine.has(fallbackKey)) state.activeToolLine.delete(fallbackKey);
-      // Replace the matching pending card by callId; otherwise append.
-      const targetIdx = state.activeToolLine.size > 0 ? state.activeToolLine.get(lookupKey) : undefined;
-      if (targetIdx !== undefined && targetIdx >= 0 && targetIdx < state.lines.length) {
-        const t = state.lines[targetIdx];
-        if (t && t.kind === 'tool') t.text = formatted;
+      // Replace the matching pending card by absolute id; otherwise append.
+      const rel = pendingAbs !== undefined ? toRelLine(state, pendingAbs) : undefined;
+      if (rel !== undefined && state.lines[rel]?.kind === 'tool') {
+        state.lines[rel].text = formatted;
       } else {
         // Promote: the matching tool:called may have been trimmed from the
         // head of the buffer (limit reached) or never recorded because the
