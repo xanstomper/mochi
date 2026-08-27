@@ -211,7 +211,13 @@ export function renderToolCard(
   const dur = outcome?.durationMs !== undefined ? formatDuration(outcome.durationMs) : '';
   const argsText = describeToolArgs(rawTool, rawArgs);
 
-  const primary = `${statusColor}${statusGlyph}${T.reset} ${color}${name}${T.reset} ${T.dim}${argsText}${T.reset}`;
+  // Use a distinct, readable color for the primary argument (path/command/query)
+  const argColor = tool === 'shell' || tool === 'git' ? (T.orange ?? T.warning ?? T.fg)
+    : ['read', 'edit', 'write', 'patch', 'delete'].includes(tool) ? (T.cyan ?? T.fg)
+    : ['search', 'glob', 'inspect', 'tree'].includes(tool) ? (T.violet ?? T.fg)
+    : T.fg;
+
+  const primary = `${statusColor}${statusGlyph}${T.reset} ${color}${name}${T.reset} ${argColor}${argsText}${T.reset}`;
   const durText = dur ? `${T.grayDark}${dur}${T.reset}` : '';
   const durVis = visibleLen(durText);
 
