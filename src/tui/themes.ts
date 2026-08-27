@@ -103,6 +103,55 @@ export interface MochiTheme {
   splashStops: Array<[number, number, number]>;
 }
 
+/** Nearest xterm-256 index for an RGB triple. */
+function rgbTo256(r: number, g: number, b: number): number {
+  const cube = (v: number) => (v < 48 ? 0 : v < 115 ? 1 : Math.min(5, Math.round((v - 35) / 40)));
+  const cr = cube(r), cg = cube(g), cb = cube(b);
+  const cubeIdx = 16 + 36 * cr + 6 * cg + cb;
+  const gray = Math.round((r + g + b) / 3);
+  const grayIdx = gray < 8 ? 16 : gray > 248 ? 231 : Math.round((gray - 8) / 247 * 24) + 232;
+  const cubeRgb = (i: number): [number, number, number] => {
+    const c = Math.floor((i - 16) / 36), rem = (i - 16) % 36;
+    const g2 = Math.floor(rem / 6), b2 = rem % 6;
+    const comp = (x: number) => x === 0 ? 0 : x === 1 ? 95 : 95 + 40 * (x - 1);
+    return [comp(c), comp(g2), comp(b2)];
+  };
+  const dist = (a: [number, number, number]) => (a[0]-r)**2 + (a[1]-g)**2 + (a[2]-b)**2;
+  const cubeDist = dist(cubeRgb(cubeIdx));
+  const grayDist = (gray - r)**2 + (gray - g)**2 + (gray - b)**2;
+  return grayDist < cubeDist ? grayIdx : cubeIdx;
+}
+
+/** Rewrite a color string's 24-bit codes as 256-color codes. */
+function downgradeColorCodes(s: string): string {
+  return s.replace(/\x1b\[38;2;(\d+);(\d+);(\d+)m/g, (_m, r: string, g: string, b: string) =>
+    `\x1b[38;5;${rgbTo256(Number(r), Number(g), Number(b))}m`);
+}
+
+/** True when the terminal advertises 24-bit color support. */
+export function supportsTruecolor(): boolean {
+  const ct = (process.env.COLORTERM ?? '').toLowerCase();
+  if (ct.includes('truecolor') || ct.includes('24bit')) return true;
+  const term = (process.env.TERM ?? '').toLowerCase();
+  return term.includes('truecolor') || term.includes('24bit');
+}
+
+/** Downgrade all theme colors to xterm-256 when the terminal lacks truecolor
+ *  support so semantic colors still render instead of being stripped/ignored. */
+export function adaptThemeColors(t: MochiTheme): MochiTheme {
+  if (supportsTruecolor()) return t;
+  const downgradeEntries = (obj: Record<string, unknown>) => Object.fromEntries(
+    Object.entries(obj).map(([k, v]) => [k, typeof v === 'string' ? downgradeColorCodes(v) : v]),
+  );
+  return {
+    ...t,
+    colors: downgradeEntries(t.colors as unknown as Record<string, unknown>) as unknown as ThemeColors,
+    roleColors: t.roleColors
+      ? (downgradeEntries(t.roleColors as unknown as Record<string, unknown>) as Partial<RoleColors>)
+      : undefined,
+  };
+}
+
 export const THEMES: MochiTheme[] = [
   {
     id: 'cyber-void',

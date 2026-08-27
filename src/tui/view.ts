@@ -22,13 +22,13 @@ import type { LineKind } from './state.js';
 
 import {
   THEMES, getTheme, getAllThemes, getCurrentTheme, applyTheme, themeSwatch,
-  defaultRoleColors, resolveRoleColors,
+  defaultRoleColors, resolveRoleColors, adaptThemeColors,
   type MochiTheme, type RoleColors,
 } from './themes.js';
 
 export {
   THEMES, getTheme, getAllThemes, getCurrentTheme, applyTheme, themeSwatch,
-  defaultRoleColors, resolveRoleColors,
+  defaultRoleColors, resolveRoleColors, adaptThemeColors,
   type MochiTheme, type RoleColors,
 };
 
@@ -39,7 +39,7 @@ export const T = {
   dim: '\x1b[2m',
   italic: '\x1b[3m',
   underline: '\x1b[4m',
-  ...getCurrentTheme().colors,
+  ...adaptThemeColors(getCurrentTheme()).colors,
 };
 
 /** Semantic role colors. Initialized from the current theme and refreshed
@@ -47,13 +47,13 @@ export const T = {
  *  instead of hardcoded token names so themes can legitimately re-color
  *  roles. T.<token> stays available for generic surfaces that just want
  *  the palette. */
-export const R: RoleColors = resolveRoleColors(getCurrentTheme());
+export const R: RoleColors = resolveRoleColors(adaptThemeColors(getCurrentTheme()));
 
 /** Switch active theme dynamically. Updates T (palette) AND R (role colors)
  *  in place so any code that has a reference to either sees the new theme
  *  immediately without re-importing. */
 export function setTheme(themeId: string): MochiTheme {
-  const t = applyTheme(themeId);
+  const t = adaptThemeColors(applyTheme(themeId));
   Object.assign(T, t.colors);
   Object.assign(R, resolveRoleColors(t));
   return t;
@@ -591,11 +591,11 @@ export function renderEntry(entry: RenderEntry, expandTools = false): string[] {
       // Background-highlighted user input (left gutter through end of text).
       return [`  ${R.userGutter}${T.bold}❯${T.reset} ${R.userBg}${R.userFg}${T.bold}${text}${T.reset}`];
     case 'assistant':
-      return [
-        ...renderMarkdown(text).map((l) => `  ${R.assistantGutter}▌${T.reset}${l.replace(/^\s*/, '')}`),
-      ];
+      // Terminal prose — no per-line gutters, markdown only.
+      return renderMarkdown(text);
     case 'thought':
-      return text.split('\n').map((l) => `  ${R.thoughtGutter}◇ ${T.italic}${R.thoughtText}${l}${T.reset}`);
+      // Internal reasoning rendered as plain dim italic prose, no glyph spam.
+      return text.split('\n').filter((l) => l.trim()).map((l) => `  ${T.dim}${T.italic}${T.gray}${l}${T.reset}`);
     case 'tool':
       // Compact tool rows already include their own semantic glyph from cards.ts
       return text.split('\n').map((l) => `  ${l}`);
