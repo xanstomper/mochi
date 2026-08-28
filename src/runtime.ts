@@ -252,6 +252,54 @@ export class Runtime {
     }
   }
 
+  /**
+   * Continuous improvement loop: run the prompt multiple times in series,
+   * each iteration receiving the previous run's summary as a "previous best"
+   * context block. The agent is poked to keep deepening the work instead
+   * of finishing at the first pass. The iteration cap raises the
+   * safety.maxIterations ceiling for the duration of the loop so the agent
+   * is not artificially bounded at 8 internal iterations per pass.
+   */
+  async autoImprove(prompt: string, runs: number, opts?: { sessionId?: string; onProgress?: (i: number, lastSummary: string) => void; signal?: AbortSignal }): Promise<{ summaries: string[]; finalSummary: string; tokensUsed: number; costUsd: number; durationMs: number }> {
+    const boundedRuns = Math.max(1, Math.min(40, runs | 0));
+    const cap = this.config.safety.maxIterations;
+    if (cap < 50) (this.config.safety as { maxIterations: number }).maxIterations = 50;
+    const startedAt = performance.now();
+    const summaries: string[] = [];
+    let tokensUsed = 0;
+    let costUsd = 0;
+    const sessionId = opts?.sessionId ?? this.activeSessionId;
+    try {
+      let priorSummary = '';
+      for (let i = 0; i < boundedRuns; i++) {
+        if (opts?.signal?.aborted) break;
+        const iterPrompt = priorSummary && priorSummary.trim()
+          ? `${prompt}\n\n---\n[Auto-improve pass ${i + 1}/${boundedRuns}]\n\nPrevious best answer:\n${priorSummary.slice(0, 4000)}\n\nContinue: refine, fix any remaining issues you can see, and deepen the work. Don't repeat what already works.`
+          : `${prompt}\n\n---\n[Auto-improve pass ${i + 1}/${boundedRuns}]\n\nProduce the strongest first pass you can. Subsequent passes will refine.`;
+        const summary = await this.runPrompt(iterPrompt, { sessionId });
+        summaries.push(summary);
+        if (summary) priorSummary = summary;
+        opts?.onProgress?.(i + 1, priorSummary);
+        this.events.emit({
+          type: 'agent:log',
+          agentId: 'auto-improve',
+          message: `[auto-improve] pass ${i + 1}/${boundedRuns} complete (${summary.length} chars)`,
+        } as any);
+      }
+    } finally {
+      if (cap < 50) (this.config.safety as { maxIterations: number }).maxIterations = cap;
+    }
+    const finalSummary = summaries[summaries.length - 1] ?? '';
+    const t = this.usage.total();
+    return {
+      summaries,
+      finalSummary,
+      tokensUsed: (t.tokensIn ?? 0) + (t.tokensOut ?? 0),
+      costUsd: t.costUsd ?? 0,
+      durationMs: Math.round(performance.now() - startedAt),
+    };
+  }
+
   async team(objective: string, opts?: { enhance?: boolean; enhanceMode?: string }): Promise<string> {
     // Real team run: decompose, assign specialist roles (coder/tester/
     // reviewer/...), and execute through the scheduler concurrently.

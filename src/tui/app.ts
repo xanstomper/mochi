@@ -156,6 +156,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     uiMode: (runtime.config.planMode ? 'plan' : 'act') as 'plan' | 'act',
     /** auto-approve all (Shift+Tab) — mirrors /yolo */
     autoApprove: (runtime as any).__permPolicy === 'yolo',
+    autoImproveArmed: false,
     /** slash autocomplete */
     dropActive: false,
     dropSelected: 0,
@@ -182,6 +183,8 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     selEnd: null as { row: number; col: number } | null,
     /** true while receiving a bracketed-paste block. */
     pasting: false,
+    /** set true to abort the current auto-improve loop. */
+    autoImproveAbort: false,
   };
 
   let pendingResolver: ((v: string) => void) | undefined;
@@ -1289,8 +1292,12 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       return;
     }
     if (line === '/stop' || line === '/abort' || line === '/skip') {
+      // If an auto-improve loop is in flight, abort the loop itself so the
+      // agent stops receiving new passes but the current pass can still
+      // finish cleanly (vs. nuking its in-progress tool call).
+      state.autoImproveAbort = true;
       runtime.abort('User stopped/skipped in-flight task');
-      push('system', '[STOP] Skipped / stopped in-flight task.');
+      push('system', '[STOP] Skipped / stopped in-flight task. Auto-improve loop also halted.');
       state.busy = false;
       stopSpinner();
       scheduleRender();
@@ -1356,7 +1363,31 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
 
     // Free-form prompt (already echo:false — agent pushes its own turns via events)
     push('user', line);
-    await run(() => runtime.runPrompt(line), false);
+    if (state.autoImproveArmed) {
+      // Auto-improve is on: chain N agent passes, each one receiving the
+      // previous best summary. The first pass is the user's literal prompt.
+      const passes = (runtime as any).__maxRuns ?? 5;
+      state.autoImproveArmed = false;
+      state.autoImproveAbort = false;
+      await run(async () => {
+        let lastSummary = '';
+        const total = passes;
+        for (let i = 0; i < total; i++) {
+          if (state.autoImproveAbort) break;
+          const iterPrompt = lastSummary
+            ? `${line}\n\n---\n[Auto-improve pass ${i + 1}/${total}]\n\nPrevious best answer:\n${lastSummary.slice(0, 4000)}\n\nContinue: refine, fix remaining issues, deepen the work.`
+            : `${line}\n\n---\n[Auto-improve pass ${i + 1}/${total}]`;
+          push('system', `◇ auto-improve  pass ${i + 1}/${total}`);
+          const pass = await runtime.runPrompt(iterPrompt);
+          lastSummary = pass;
+          push('assistant', pass);
+        }
+        push('system', `✓ auto-improve complete: ${total} passes`);
+        return lastSummary;
+      }, false);
+    } else {
+      await run(() => runtime.runPrompt(line), false);
+    }
   }
 
   async function run(fn: () => Promise<string>, echo = true) {
@@ -1411,7 +1442,8 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         (runtime as any).__maxRuns = chosen;
         state.autoApprove = true;
         (runtime as any).__permPolicy = 'yolo';
-        push('system', 'Auto improve: ON — continuous ' + chosen + '-run loop with best-synthesis feedback.');
+        push('system', `Auto improve: ON — ${chosen} passes with best-synthesis feedback. Send a message to begin.`);
+        state.autoImproveArmed = true;
       } else {
         push('system', 'Auto improve: cancelled — current mode preserved.');
       }

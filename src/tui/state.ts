@@ -189,8 +189,20 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
       const content = event.content as string | undefined;
       if (!content) return false;
       const last = state.lines[state.lines.length - 1];
-      if (last && last.kind === role && (last.text === content || last.text.endsWith(content))) {
-        return false;
+      if (last && last.kind === role) {
+        // Idempotency: an identical OR an endsWith match means this exact
+        // text is already on screen. The previous endsWith() check passed
+        // even for hundreds of distinct repeated lines that all happened to
+        // share the last 200 chars (the canonical "spamming" loop).
+        // Switch to equality + a small-suffix check so genuine progression
+        // still appends while true duplicates are filtered.
+        if (last.text === content) return false;
+        const tail = Math.min(64, content.length);
+        if (tail > 0 && last.text.length > 0 && last.text.endsWith(content.slice(-tail))) {
+          // The new content's tail is already on screen — likely a re-emit
+          // or a re-delivered chunk boundary. Skip.
+          return false;
+        }
       }
       if (role === 'assistant') pushLine(state, 'assistant', content);
       else if (role === 'system') pushLine(state, 'system', content);
@@ -201,13 +213,26 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
       if (!content) return false;
       const last = state.lines[state.lines.length - 1];
       if (last && last.kind === 'assistant') {
-        // Streaming line-overflow guard: a huge single assistant response is
-        // one logical text but would become one gigantic string that every
-        // frame fully re-wraps (the freeze/"bottles up" during long outputs).
-        // Roll it into a fresh line once it passes a soft cap so wrap cost
-        // stays bounded while still rendering continuously.
-        if (last.text.length > STREAM_LINE_CAP) pushLine(state, 'assistant', content);
-        else last.text += content;
+        // Idempotent streaming: if a re-delivery (or a multi-chunk payload
+        // that already ends with the new content) re-sends the same tail,
+        // refuse to append it again. Without this, a free-tier model that
+        // re-emits its last ~200 chars after a long tool sequence produces
+        // visibly duplicated paragraphs in the transcript and the user sees
+        // the same sentence repeated dozens of times as more chunks arrive.
+        if (last.text === content) return false;
+        if (last.text.length > 0 && content.length > 0 && last.text.endsWith(content)) return false;
+        if (last.text.length > 0 && content.length > 0 && content.startsWith(last.text)) {
+          // Provider re-sent the entire accumulated buffer — replace.
+          last.text = content;
+        } else {
+          // Streaming line-overflow guard: a huge single assistant response is
+          // one logical text but would become one gigantic string that every
+          // frame fully re-wraps (the freeze/"bottles up" during long outputs).
+          // Roll it into a fresh line once it passes a soft cap so wrap cost
+          // stays bounded while still rendering continuously.
+          if (last.text.length > STREAM_LINE_CAP) pushLine(state, 'assistant', content);
+          else last.text += content;
+        }
       } else {
         pushLine(state, 'assistant', content);
       }

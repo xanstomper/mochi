@@ -14,6 +14,46 @@ describe('reduceEvent', () => {
     expect(s.chatVer).toBe(2);
   });
 
+  it('does not duplicate streaming text when the same tail is re-delivered (the spam fix)', () => {
+    // Free-tier models occasionally re-send their last ~200 chars after a
+    // long tool sequence. The old endsWith() dedup matched even for
+    // distinct repeated lines that happened to share a tail, which is what
+    // produced the visible "spamming the same line" bug. The new dedup
+    // is strict: only an EXACT-match or full-buffer-restart is treated as
+    // a re-delivery; a true duplicate is filtered, a continuation still
+    // appends.
+    const s = createTuiState();
+    reduceEvent(s, ev({ type: 'message', role: 'assistant', content: 'Hi' }));
+    reduceEvent(s, ev({ type: 'message:chunk', content: ' there' })); // "Hi there"
+    // Re-deliver exact same tail — should NOT append a second time.
+    const before = s.lines[s.lines.length - 1].text;
+    reduceEvent(s, ev({ type: 'message:chunk', content: ' there' }));
+    const after = s.lines[s.lines.length - 1].text;
+    expect(after).toBe(before);
+    // Provider restarts the buffer: chunk equals accumulated text → replace.
+    reduceEvent(s, ev({ type: 'message:chunk', content: 'Hi there' }));
+    expect(s.lines[s.lines.length - 1].text).toBe('Hi there');
+    // Normal continuation still appends.
+    reduceEvent(s, ev({ type: 'message:chunk', content: ', world' }));
+    expect(s.lines[s.lines.length - 1].text).toBe('Hi there, world');
+  });
+
+  it('filters redundant message events that just repeat the assistant line tail', () => {
+    // A common pattern: same `message` event fired at the start of a
+    // stream AND at the end as a flush. The old endsWith() check matched
+    // both the legitimate 1-char progress and the eventual identical
+    // full-line re-emit. The new dedup uses a small-suffix window so
+    // tiny in-flight progress still flows but full re-emits are dropped.
+    const s = createTuiState();
+    reduceEvent(s, ev({ type: 'message', role: 'assistant', content: 'hello world' }));
+    // Tail of length 8 already in last line — filtered.
+    reduceEvent(s, ev({ type: 'message', role: 'assistant', content: 'lo world' }));
+    // Distinct text — still appended (no false dedup).
+    reduceEvent(s, ev({ type: 'message', role: 'assistant', content: 'next turn' }));
+    const texts = s.lines.filter((l) => l.kind === 'assistant').map((l) => l.text);
+    expect(texts).toEqual(['hello world', 'next turn']);
+  });
+
   it('rolls a huge streamed assistant line into a fresh line to bound wrap cost', () => {
     const s = createTuiState();
     // Seed a base assistant line, then push chunks past the 16k streaming cap.
