@@ -20,14 +20,48 @@ export interface FuzzyMatch {
 }
 
 /** Normalize one line for comparison: trim ends, collapse inner whitespace. */
-function normalizeLine(line: string): string {
+export function normalizeLine(line: string): string {
   return line.trim().replace(/\s+/g, ' ');
+}
+
+/** Levenshtein distance between two strings */
+export function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+
+  const v0 = new Int32Array(b.length + 1);
+  const v1 = new Int32Array(b.length + 1);
+
+  for (let i = 0; i <= b.length; i++) v0[i] = i;
+
+  for (let i = 0; i < a.length; i++) {
+    v1[0] = i + 1;
+    for (let j = 0; j < b.length; j++) {
+      const cost = a[i] === b[j] ? 0 : 1;
+      v1[j + 1] = Math.min(v1[j] + 1, v0[j + 1] + 1, v0[j] + cost);
+    }
+    for (let j = 0; j <= b.length; j++) v0[j] = v1[j];
+  }
+
+  return v1[b.length];
+}
+
+/** Line similarity ratio from 0.0 to 1.0 */
+export function lineSimilarity(a: string, b: string): number {
+  const normA = normalizeLine(a);
+  const normB = normalizeLine(b);
+  if (normA === normB) return 1.0;
+  const maxLen = Math.max(normA.length, normB.length);
+  if (maxLen === 0) return 1.0;
+  const dist = levenshtein(normA, normB);
+  return Math.max(0, 1 - dist / maxLen);
 }
 
 /**
  * Find the single region in `text` that matches `needle` after whitespace
- * normalization. Returns null when there is no match, or when the match is
- * ambiguous (more than one region). Line-ending differences (\r\n vs \n) are
+ * normalization or tolerant line similarity healing. Returns null when there is no match,
+ * or when the match is ambiguous (more than one region). Line-ending differences (\r\n vs \n) are
  * normalized away as well.
  */
 export function fuzzyFindUnique(text: string, needle: string): FuzzyMatch | null {
@@ -61,5 +95,37 @@ export function fuzzyFindUnique(text: string, needle: string): FuzzyMatch | null
   }
 
   if (matches.length === 1) return matches[0];
+  if (matches.length > 1) return null; // Ambiguous exact matches
+
+  // 3-Way Tolerant Fallback: if strict whitespace match found 0 occurrences (e.g. 1 drifted line),
+  // slide a window of size `normNeedle.length` across `normText` and score overall block similarity.
+  let bestScore = 0;
+  let bestIndex = -1;
+  let secondBestScore = 0;
+
+  for (let i = 0; i + normNeedle.length <= normText.length; i++) {
+    let totalSim = 0;
+    for (let j = 0; j < normNeedle.length; j++) {
+      totalSim += lineSimilarity(normText[i + j], normNeedle[j]);
+    }
+    const avgSim = totalSim / normNeedle.length;
+    if (avgSim > bestScore) {
+      secondBestScore = bestScore;
+      bestScore = avgSim;
+      bestIndex = i;
+    } else if (avgSim > secondBestScore) {
+      secondBestScore = avgSim;
+    }
+  }
+
+  // Require high overall similarity (>= 80%) and clear uniqueness margin (>= 15% above 2nd best)
+  if (bestScore >= 0.80 && bestScore - secondBestScore >= 0.15 && bestIndex !== -1) {
+    let start = 0;
+    for (let k = 0; k < bestIndex; k++) start += textLines[k].length + 1;
+    let end = start;
+    for (let k = bestIndex; k < bestIndex + normNeedle.length; k++) end += textLines[k].length + 1;
+    return { start, end: Math.max(start, end - 1) };
+  }
+
   return null;
 }
