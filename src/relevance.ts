@@ -11,9 +11,11 @@ const STOPWORDS = new Set([
 ]);
 
 function tokenize(text: string): string[] {
-  return text
+  const expanded = text
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
     .toLowerCase()
-    .replace(/[^a-z0-9_]+/g, ' ')
+    .replace(/[^a-z0-9_]+/g, ' ');
+  return expanded
     .split(/\s+/)
     .map((t) => t.trim())
     .filter((t) => t.length > 1 && !STOPWORDS.has(t));

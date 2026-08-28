@@ -263,6 +263,7 @@ export type MochiEvent =
   | ({ type: 'plan:updated'; planId: string; steps: PlanStep[]; agentId: string } & EventMeta)
   // Approval gate: mutating work waiting on the user.
   | ({ type: 'approval:required'; agentId: string; action: string; detail?: string; executionId?: string } & EventMeta)
+  | ({ type: 'warning'; message: string; agentId?: string; source?: string } & EventMeta)
   // Cancellation lifecycle (Phase 5): first-class, observable, propagating.
   | ({ type: 'cancellation:requested'; agentId: string; reason?: string } & EventMeta)
   | ({ type: 'cancellation:completed'; agentId: string; canceledExecutions: number } & EventMeta)
@@ -275,6 +276,18 @@ export type MochiEvent =
   // Summary + context lifecycle (Phases 9/20/21).
   | ({ type: 'summary:started'; agentId: string; trigger: 'task-completion' | 'context-limit' | 'manual' } & EventMeta)
   | ({ type: 'summary:completed'; agentId: string; sections: string[]; durationMs: number } & EventMeta)
+  | ({
+      type: 'summary:rendered';
+      agentId: string;
+      success: boolean;
+      stopReason: string;
+      durationMs: number;
+      toolCallsTotal: number;
+      tokensUsed?: number;
+      filesModified: string[];
+      summary: string;
+      doc?: unknown;
+    } & EventMeta)
   | ({ type: 'context:compacted'; agentId: string; beforeTokens: number; afterTokens: number; preservedSections: string[] } & EventMeta)
   | ({ type: 'session:completed'; agentId: string; stopReason: string; durationMs: number } & EventMeta);
 

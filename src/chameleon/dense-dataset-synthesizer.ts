@@ -56,7 +56,10 @@ export function synthesizeDenseDataset(task: string, cwd?: string, difficultyMod
   const foundSymbols: string[] = [];
   if (hasSqlite()) {
     try {
-      const words = task.split(/\W+/).filter((w) => w.length >= 4 && !['implement', 'create', 'update', 'refactor', 'function', 'class', 'method'].includes(w.toLowerCase()));
+      const words = task
+        .replace(/([a-z])([A-Z])/g, '$1 $2')
+        .split(/\W+/)
+        .filter((w) => w.length >= 4 && !['implement', 'create', 'update', 'refactor', 'function', 'class', 'method'].includes(w.toLowerCase()));
       for (const word of words.slice(0, 3)) {
         const res = querySymbolGraphSync(root, `SELECT file, name, line, kind FROM symbols WHERE name LIKE '%${word.replace(/['"]/g, '')}%' LIMIT 3`);
         if (!res || !('rows' in res) || !Array.isArray(res.rows)) continue;

@@ -229,4 +229,37 @@ describe('duplicate tool:called guard (dual-emitter dedupe)', () => {
     reduceEvent(s, ev({ type: 'tool:called', tool: 'read', tool_call_id: 'x2', args: { path: 'b.ts' } }));
     expect(s.lines.filter((l) => l.kind === 'tool').length).toBe(2);
   });
+
+  it('renders rich structured summary when doc is present in summary:rendered', () => {
+    const s = createTuiState();
+    const doc = {
+      status: 'complete',
+      overview: 'Refactored auth module.',
+      metrics: [{ label: 'FILES', value: '2 changed' }],
+      whatChanged: [{ text: 'edit: src/auth.ts', priority: 'P1' }],
+      verification: [{ text: '✓ npm test', priority: 'P1' }],
+      failures: [],
+      warnings: [],
+      references: [],
+      next: [],
+      populatedSections: ['overview', 'metrics', 'whatChanged', 'verification'],
+    };
+    reduceEvent(s, ev({
+      type: 'summary:rendered',
+      agentId: 'a1',
+      success: true,
+      stopReason: 'completed',
+      durationMs: 1200,
+      toolCallsTotal: 3,
+      filesModified: ['src/auth.ts'],
+      summary: 'Done',
+      doc,
+    }));
+    const toolLines = s.lines.filter((l) => l.kind === 'tool');
+    expect(toolLines.length).toBeGreaterThan(0);
+    const joined = toolLines.map((l) => l.text).join('\n');
+    expect(joined).toContain('SUMMARY');
+    expect(joined).toContain('FILES');
+    expect(joined).toContain('WHAT CHANGED');
+  });
 });

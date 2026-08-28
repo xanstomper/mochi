@@ -231,7 +231,7 @@ export class ContextEngine {
       const allModularRules = loadRules(this.projectRoot);
       const active = selectActiveRules(
         allModularRules,
-        this.state.filesModified.concat(this.state.filesRead ?? []),
+        [],
         task ? `${task.title} ${task.description}` : this.state.goal ?? ''
       );
       for (const r of active) {
@@ -377,6 +377,19 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}${contractSection(this.pr
         } catch {
           /* continue */
         }
+      }
+      try {
+        const allModularRules = loadRules(this.projectRoot);
+        const activeFileRules = selectActiveRules(
+          allModularRules,
+          this.state.filesModified.concat(this.state.filesRead ?? []),
+          ''
+        ).filter((r) => r.globs && r.globs.length > 0);
+        for (const r of activeFileRules) {
+          parts.push(`Active file rule [${r.title}]:\n${r.content}`);
+        }
+      } catch {
+        /* continue */
       }
     }
     return parts.join('\n\n');

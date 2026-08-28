@@ -58,6 +58,8 @@ import { LoopStateMachine } from './loop-state.js';
 import { scanDiffForHygiene, renderHygieneFindings, type HygieneFinding } from '../core/diff-hygiene.js';
 import { parseCompilerDiagnostics, renderCompilerAdvisory } from './error-diagnostics.js';
 import { AnchorEngine } from '../cognitive/anchor.js';
+import { summarize } from '../summary/engine.js';
+import { compactSession, compactToPrompt } from '../summary/compact.js';
 
 export function stripThinkTags(text: string): string {
   if (!text) return '';
@@ -1217,7 +1219,17 @@ Continue from 'Next:', do not redo completed progress.`,
       // Sanity: a usable checkpoint mentions at least Goal or Progress.
       if (text.length > 40 && /(goal|progress)/i.test(text)) checkpoint = text;
     } catch {
-      checkpoint = undefined; // heuristic fallback inside compact()
+      checkpoint = undefined;
+    }
+    if (!checkpoint) {
+      try {
+        const compactCtx = compactSession(this.events.snapshot(), { goal: this.context.state.goal });
+        if (!compactCtx.isEmpty) {
+          checkpoint = compactToPrompt(compactCtx);
+        }
+      } catch {
+        /* heuristic fallback inside compact() */
+      }
     }
     await this.context.compact(checkpoint);
     // Phase 7: durable checkpoint — survives process restarts for resume.
@@ -2220,6 +2232,12 @@ Continue from 'Next:', do not redo completed progress.`,
     }
     const durationMs = Math.round(performance.now() - this.startTime);
     this.events.emit({ type: 'agent:completed', id: this.id, taskId: task.id });
+    let doc;
+    try {
+      doc = summarize(this.events.snapshot(), { goal: task.title });
+    } catch {
+      /* ignore summary error */
+    }
     this.events.emit({
       type: 'summary:rendered',
       agentId: this.id,
@@ -2230,7 +2248,8 @@ Continue from 'Next:', do not redo completed progress.`,
       tokensUsed: this.tokensUsed,
       filesModified: [...new Set(this.context['state'].filesModified)],
       summary,
-    } as any);
+      doc,
+    });
     return {
       success,
       summary,

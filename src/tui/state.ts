@@ -1,5 +1,7 @@
 import { TOOL_ALIASES, normalizeToolArgs } from '../tools/index.js';
 import { formatToolInvocationCard, formatToolCompletedCard, renderTurnSummaryCard } from './cards.js';
+import { renderSummary } from './summary-render.js';
+import type { SummaryDocument } from '../summary/engine.js';
 
 export type LineKind = 'user' | 'assistant' | 'system' | 'error' | 'tool' | 'task' | 'goal' | 'plain' | 'thought';
 
@@ -427,6 +429,15 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
       // Render the post-turn "what I did" summary as a Cline-style card.
       // Skip when the turn was a no-op (zero tool calls) — a summary card
       // for "the model said hi" is noise.
+      const doc = event.doc as SummaryDocument | undefined;
+      if (doc && doc.populatedSections && doc.populatedSections.length > 0) {
+        const width = process.stdout.columns || 80;
+        const lines = renderSummary(doc, width);
+        for (const l of lines) {
+          pushLine(state, 'tool', l);
+        }
+        return true;
+      }
       const files = Array.isArray(event.filesModified) ? (event.filesModified as unknown[]).map((f) => String(f)) : [];
       const tcTotal = Number(event.toolCallsTotal ?? 0);
       if (tcTotal === 0 && files.length === 0) return false;

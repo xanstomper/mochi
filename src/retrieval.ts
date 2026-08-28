@@ -141,7 +141,7 @@ export class RetrievalEngine {
     const f = file.toLowerCase();
     if (f === q) return 100;
     if (f.includes(q)) return 60;
-    const terms = q.split(/[\s/_-]+/).filter(Boolean);
+    const terms = q.replace(/([a-z])([A-Z])/g, '$1 $2').split(/[\s/_\-.]+/).filter(Boolean);
     let score = 0;
     for (const term of terms) if (f.includes(term)) score += 10;
     if (f.endsWith('.ts') || f.endsWith('.tsx') || f.endsWith('.js') || f.endsWith('.py')) score += 2;
