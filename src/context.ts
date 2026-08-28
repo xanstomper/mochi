@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, hostname, platform, arch, totalmem, freemem, cpus, release } from 'node:os';
 import { resolve } from 'node:path';
 import { MemoryStore } from './memory.js';
 import type { MemoryEntry } from './memory.js';
@@ -20,6 +20,52 @@ import { feedbackDigest } from './feedback.js';
 import { detectCircle } from './circle.js';
 
 const CANDIDATE_RULES = ['MOCHI.md', 'mochi.md', 'AGENTS.md', 'CLAUDE.md'];
+
+/**
+ * Cheap, synchronous environment snapshot (node:os only — never spawns
+ * subprocesses, so the stable system-prompt builder stays sync + prefix-
+ * cacheable). Gives the agent explicit awareness that it runs on the user's
+ * machine with local access, plus one CPU/mem line so it can reason about
+ * expensive-but-feasible operations without a system_info round-trip.
+ */
+export function machineAccessBlock(): string {
+  const os = (() => {
+    try { return `${platform()} ${release()} (${arch()})`; } catch { return `${platform()} (${arch()})`; }
+  })();
+  const mem = (() => {
+    try {
+      const total = (totalmem() / 1073741824).toFixed(1);
+      const free = (freemem() / 1073741824).toFixed(1);
+      return `${free} GB free / ${total} GB total`;
+    } catch { return 'unknown'; }
+  })();
+  const cpu = (() => {
+    try {
+      const cores = cpus();
+      const model = cores[0]?.model?.trim()?.replace(/\s+/g, ' ') || 'Generic';
+      return `${cores.length} cores (${model})`;
+    } catch { return 'unknown'; }
+  })();
+  const host = (() => { try { return hostname(); } catch { return ''; } })();
+  return [
+    '# Environment & Machine Access',
+    `You are running locally on the user's machine${host ? ` (host \`${host}\`)` : ''}.`,
+    `- OS: ${os}`,
+    `- CPU: ${cpu} | Memory: ${mem}`,
+    `- Home: ${homedir()}`,
+    '',
+    'You have real, local control of this machine: read/write any file, execute',
+    'shell commands, run builds/tests, install packages, use git, spawn background',
+    'processes, and call the network — subject only to the configured permission',
+    'policy (planMode/ask mode may veto mutating actions). Nothing is simulated or',
+    'restricted to a mock sandbox unless the permission layer says so.',
+    '',
+    'You are NOT limited to the current task\'s files. Use `search`, `glob`,',
+    '`codegraph`, and `sql_codebase_query` to inspect ANY file in the repo, and',
+    '`session_recall` to pull context from past sessions before a task. Treat the',
+    'whole workspace as your working area; verify your changes against real tooling.',
+  ].join('\n');
+}
 
 // Cost-effective change detection: skip a file entirely when absent; otherwise
 // fingerprint on size+mtime so a long agent run picks up edits without
@@ -234,6 +280,8 @@ Repository Context:
 
     return `You are Mochi, an advanced agentic software engineering assistant. You pair-program with the user to solve engineering tasks with high precision, clear explanations, and rigorous verification.
 
+${machineAccessBlock()}
+
 # I. Core Directives
 1. **Explain What & Why**: Like top AI coding agents (Antigravity, Claude Code, Cline), always explain your analysis, strategy, and reasoning clearly to the user. When performing actions (e.g. searching, reading files, editing code, running commands, or refactoring), briefly explain *what* you are doing and *why* so the user understands the exact progress being made.
 2. **Surgical Precision**: Prioritize minimal, clean, targeted changes over sprawling rewrites. Fit seamlessly into the existing codebase architecture, type systems, and stylistic conventions.
@@ -291,6 +339,7 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}${contractSection(this.pr
     add(['blast_radius'], 'blast_radius: analyze the downstream impact and caller call sites of a symbol before modifying or refactoring it.');
     add(['chameleon'], 'chameleon: run test-time compute expansion and cellular MoE decomposition for complex algorithms or architectural refactors.');
     add(['session_recall'], 'session_recall: search, list, or retrieve transcripts from past conversation sessions to recall earlier architectural discussions or previous solutions.');
+    add(['sql_codebase_query'], 'sql_codebase_query: run read-only SQL over the code graph (symbols, calls, relations) to do multi-file symbol/dependency analysis in one query — e.g. WHERE name LIKE, join calls to callees. Faster than many read/glob calls. Query is auto-LIMIT 50.');
     add(['web_search', 'web_crawl', 'fetch'], 'web_search / web_crawl / fetch: for research. Search first; fetch a known URL; crawl a documentation site (same-host by default).');
     lines.push('   - plan mode (when active): research with read-only tools and return a plan. Mutating calls are vetoed.');
     return lines.join('\n');
