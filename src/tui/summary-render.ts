@@ -1,12 +1,18 @@
 // Summary renderer (master rebuild Phase 19 + 43): renders a SummaryDocument
-// as the Cline/Claude-Code-style structured summary — metrics grid box,
-// priority-weighted sections, status header. Structure first: empty sections
-// are never rendered; layout adapts to the populated sections.
+// as the Cline/Claude-Code-style structured summary — compact status header,
+// one-line metric strip, priority-weighted sections. NO fixed-width box
+// drawing: every line is plain content that reflows natively at any terminal
+// width (windowed mode included), so the card never looks compressed.
+// Structure first: empty sections are never rendered; layout adapts to the
+// populated sections.
+//
+// Color contract: important tool calls, code edits, and prose are color-coded
+// semantically instead of all-white — ops bold orange, paths cyan, checks
+// green/red, warnings yellow, numbers in the theme's number color.
 
-import { T } from './view.js';
-import { visibleLen, padEnd } from './view.js';
+import { T, R } from './view.js';
 import { wrap } from './wrap.js';
-import { paint, paintPriority, statusLabel, SEMANTIC_COLOR } from './semantic.js';
+import { statusLabel, SEMANTIC_COLOR } from './semantic.js';
 import type { Semantic } from './semantic.js';
 import type { SummaryDocument, SummaryItem } from '../summary/engine.js';
 
@@ -15,75 +21,79 @@ export function renderSummary(doc: SummaryDocument, width = 80): string[] {
   const lines: string[] = [];
   const status: 'complete' | 'failed' | 'partial' = doc.status;
   const statusKind = status === 'complete' ? 'completed' : status === 'failed' ? 'failed' : 'warning';
+  // Content width: leaves room for the transcript's 2-space gutter so lines
+  // fit WITHOUT a second wrap pass in the renderer (no mid-ANSI re-splitting,
+  // no compressed look in narrow/windowed terminals).
+  const textWidth = Math.max(24, width - 2);
 
-  // Header box: SUMMARY + status
-  const title = ` SUMMARY `;
-  const right = statusLabel(statusKind as 'completed' | 'failed' | 'warning');
-  const inner = Math.max(24, Math.min(width - 2, 60));
-  const titleLen = visibleLen(title);
-  const rightLen = visibleLen(right);
-  const pad = Math.max(1, inner - titleLen - rightLen - 1);
-  lines.push(`${T.grayDark}╭${'─'.repeat(inner)}╮${T.reset}`);
-  lines.push(`${T.grayDark}│${T.reset}${T.bold}${title}${T.reset}${' '.repeat(pad)}${right}${T.reset} ${T.grayDark}│${T.reset}`);
-  lines.push(`${T.grayDark}╰${'─'.repeat(inner)}╯${T.reset}`);
+  // Compact status header: bold SUMMARY + colored status glyph. No border box.
+  lines.push(`${T.bold}SUMMARY${T.reset}  ${statusLabel(statusKind as 'completed' | 'failed' | 'warning')}`);
 
-  // Metrics grid (2 columns of label/value cells)
+  // Metric strip: one line of muted labels + colored values (no box cells).
+  // Chunks onto multiple strip lines at narrow widths so it never spills
+  // past the terminal (windowed mode stays clean).
   if (doc.metrics.length) {
-    lines.push(...renderMetricsGrid(doc.metrics, Math.min(width - 2, inner)));
-    lines.push('');
+    lines.push(...renderMetricStrip(doc.metrics, textWidth));
   }
 
-  const section = (header: string, semantic: Semantic, items: SummaryItem[]) => {
-    if (!items.length) return;
-    lines.push(`${SEMANTIC_COLOR[semantic]}${header}${T.reset}`);
-    lines.push(`${T.grayDark}${'─'.repeat(Math.min(header.length + 2, inner))}${T.reset}`);
-    for (const item of items) {
-      lines.push(...wrapPriorityItem(item, inner));
-    }
-    lines.push('');
+  // Exactly one blank line between blocks (never stacks — kills the
+  // "lots of enters" wall-of-gaps the per-line renderer produced).
+  const gap = () => {
+    if (lines.length && lines[lines.length - 1] !== '') lines.push('');
   };
 
   if (doc.overview) {
-    const wrappedOverview = wrap(doc.overview, inner);
-    for (const l of wrappedOverview) {
-      lines.push(`${T.fg}${l}${T.reset}`);
-    }
-    lines.push('');
+    for (const l of wrap(paintNumbers(doc.overview), textWidth)) lines.push(l);
+    gap();
   }
-  section('WHAT CHANGED', 'CHANGE', doc.whatChanged);
-  section('VERIFICATION', 'TEST', doc.verification);
-  section('FAILED', 'ERROR', doc.failures);
-  section('WARNINGS', 'WARNING', doc.warnings);
-  section('REFERENCES', 'REFERENCE', doc.references);
-  section('NEXT', 'PLAN', doc.next);
+
+  const section = (header: string, semantic: Semantic, items: SummaryItem[], painter: (line: string) => string) => {
+    if (!items.length) return;
+    gap();
+    lines.push(`${SEMANTIC_COLOR[semantic]}${T.bold}${header}${T.reset}`);
+    lines.push(`${SEMANTIC_COLOR[semantic]}${'─'.repeat(header.length)}${T.reset}`);
+    for (const item of items) {
+      for (const l of wrap(item.text, Math.max(10, textWidth - 2))) {
+        lines.push(`  ${painter(l)}`);
+      }
+    }
+  };
+
+  section('WHAT CHANGED', 'CHANGE', doc.whatChanged, paintChangeLine);
+  section('VERIFICATION', 'TEST', doc.verification, paintVerifyLine);
+  section('FAILED', 'ERROR', doc.failures, (l) => `${T.error}${l}${T.reset}`);
+  section('WARNINGS', 'WARNING', doc.warnings, (l) => `${T.warning}${l}${T.reset}`);
+  section('REFERENCES', 'REFERENCE', doc.references, paintReferenceLine);
+  section('NEXT', 'PLAN', doc.next, (l) => `${SEMANTIC_COLOR.PLAN}${l}${T.reset}`);
 
   return lines;
 }
 
-/** 2-column metrics grid: ┌ FILES ────┬ TESTS ───┐ style cells. */
-export function renderMetricsGrid(metrics: Array<{ label: string; value: string }>, width: number): string[] {
-  const cells = metrics.slice(0, 4).map((m) => ({
-    label: m.label,
-    value: m.value,
-    color: metricColor(m.label),
+/** Metric strip: "FILES 2 changed · CHECKS 2 passed · …" — chunked to fit
+ *  `width` visible columns (chunks only at metric boundaries, never mid-ANSI). */
+export function renderMetricStrip(metrics: Array<{ label: string; value: string }>, width = 100): string[] {
+  const sep = `${T.grayDark} · ${T.reset}`;
+  const cells = metrics.slice(0, 6).map((m) => ({
+    text: `${T.grayDark}${m.label}${T.reset} ${metricColor(m.label)}${m.value}${T.reset}`,
+    vis: m.label.length + 1 + m.value.length,
   }));
-  const rows: string[] = [];
-  const cols = width < 50 ? 2 : cells.length >= 3 ? 3 : Math.max(1, cells.length);
-  const colWidth = Math.max(8, Math.floor((width - (cols * 2)) / cols));
-  for (let i = 0; i < cells.length; i += cols) {
-    const row = cells.slice(i, i + cols);
-    const top = row.map(() => `${T.grayDark}┌${'─'.repeat(colWidth)}┐${T.reset}`).join('');
-    const body = row.map((c) => {
-      const content = `${c.label} ${c.value}`;
-      const rem = Math.max(0, colWidth - visibleLen(content));
-      return `${T.grayDark}│${T.reset}${T.gray}${c.label}${T.reset} ${c.color}${c.value}${T.reset}${' '.repeat(rem)}${T.grayDark}│${T.reset}`;
-    }).join('');
-    const bot = row.map(() => `${T.grayDark}└${'─'.repeat(colWidth)}┘${T.reset}`).join('');
-    if (i === 0) rows.push(top);
-    rows.push(body);
-    rows.push(bot);
+  const out: string[] = [];
+  let cur: typeof cells = [];
+  let curVis = 0;
+  const flush = () => {
+    if (!cur.length) return;
+    out.push(cur.map((c) => c.text).join(sep));
+    cur = [];
+    curVis = 0;
+  };
+  for (const c of cells) {
+    const add = cur.length ? 3 + c.vis : c.vis; // " · ".length = 3
+    if (curVis + add > Math.max(12, width)) flush();
+    cur.push(c);
+    curVis += cur.length === 1 ? c.vis : 3 + c.vis;
   }
-  return rows;
+  flush();
+  return out;
 }
 
 function metricColor(label: string): string {
@@ -96,10 +106,40 @@ function metricColor(label: string): string {
   }
 }
 
-/** Wrap a summary item at width, keeping its priority weight on every line. */
-function wrapPriorityItem(item: SummaryItem, width: number): string[] {
-  const maxLine = Math.max(10, width - 4);
-  const plain = item.text;
-  const wrapped = wrap(plain, maxLine);
-  return wrapped.map((l) => `  ${paintPriority(l, item.priority)}`);
+/** WHAT CHANGED line: "edit: path" → bold-orange op + cyan path, with
+ *  "(+a/-d)" diff counts painted green/red. */
+function paintChangeLine(line: string): string {
+  const opM = /^([a-z][\w-]*):(.*)$/.exec(line);
+  if (opM) {
+    const op = `${T.orange}${T.bold}${opM[1]}:${T.reset}`;
+    return `${op} ${paintPathAndDiff(opM[2].trimStart())}`;
+  }
+  return paintPathAndDiff(line);
+}
+
+function paintPathAndDiff(text: string): string {
+  const dM = /^(.*\S)\s*\(\+(\d+)\/-(\d+)\)$/.exec(text);
+  if (dM) {
+    return `${SEMANTIC_COLOR.FILE}${dM[1]}${T.reset} (${T.success}+${dM[2]}${T.reset}/${T.error}-${dM[3]}${T.reset})`;
+  }
+  return `${SEMANTIC_COLOR.FILE}${text}${T.reset}`;
+}
+
+/** VERIFICATION line: ✓ green / ✗ red glyph, command text in COMMAND teal. */
+function paintVerifyLine(line: string): string {
+  if (line.startsWith('✓')) return `${T.success}✓${T.reset} ${SEMANTIC_COLOR.COMMAND}${line.slice(1).trim()}${T.reset}`;
+  if (line.startsWith('✗')) return `${T.error}✗${T.reset} ${SEMANTIC_COLOR.COMMAND}${line.slice(1).trim()}${T.reset}`;
+  return `${SEMANTIC_COLOR.COMMAND}${line}${T.reset}`;
+}
+
+/** REFERENCES line: "tool: output" → bold-orange tool name, muted output. */
+function paintReferenceLine(line: string): string {
+  const m = /^([\w-]+):\s*(.*)$/.exec(line);
+  if (m) return `${T.orange}${T.bold}${m[1]}:${T.reset} ${T.grayDark}${m[2]}${T.reset}`;
+  return line;
+}
+
+/** Bare counts in prose get the theme's number color (orange by default). */
+function paintNumbers(text: string): string {
+  return text.replace(/\b\d[\d.,]*\b/g, (n) => `${R.codeNumber}${n}${T.reset}`);
 }

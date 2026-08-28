@@ -40,6 +40,7 @@ export interface SummaryDocument {
   /** Only metrics with real data appear; never a fabricated zero. */
   metrics: SummaryMetric[];
   whatChanged: SummaryItem[];
+  files?: Array<{ path: string; op: 'modified' | 'added' | 'deleted' | 'read' }>;
   verification: SummaryItem[];
   failures: SummaryItem[];
   warnings: SummaryItem[];
@@ -210,6 +211,11 @@ export function summarize(events: readonly MochiEvent[], opts: { goal?: string }
     const secs = Math.max(0, Math.round((lastTs - firstTs) / 100) / 10);
     if (secs > 0) doc.metrics.push({ label: 'DURATION', value: `${secs}s` });
   }
+
+  doc.files = Array.from(changedFiles).map((path) => ({
+    path,
+    op: (fileOps.get(path) as 'modified' | 'added' | 'deleted' | 'read') || 'modified',
+  }));
 
   doc.verification = verificationItems;
   doc.references = referenceItems;

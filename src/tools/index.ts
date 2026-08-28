@@ -50,9 +50,11 @@ import { codeSimilarityTool } from './code-similarity.js';
 import { securityAuditTool } from './security-audit.js';
 import { skillManageTool } from '../skill-manager.js';
 import { astSliceTool } from './ast-slice.js';
+import { compilePromptTool } from './compile-prompt.js';
 
 export const ALL_TOOLS: Tool[] = [
   readTool, writeTool, editTool, deleteTool, shellTool, searchTool, globTool, outlineTool, astSliceTool,
+  compilePromptTool,
   gitTool, inspectTool, memoryTool, sessionRecallTool, todoTool, skillTool, subagentTool, patchTool,
   bgTaskTool, fetchTool, diffTool, treeTool, regexReplaceTool, deepwikiTool, clipboardTool, sqlCodebaseTool,
   searchReplaceMultiTool, analyzeCodeTool, verifyTool, perfTool,
@@ -71,6 +73,7 @@ export const ALL_TOOLS: Tool[] = [
  */
 const CORE_TOOL_NAMES = new Set([
   'read', 'write', 'edit', 'patch', 'replace_symbol', 'delete', 'shell', 'search', 'glob', 'outline', 'ast_slice',
+  'compile_prompt',
   'git', 'inspect', 'todo', 'skill', 'subagent', 'bg_task', 'fetch', 'web_search', 'web_crawl', 'think', 'chameleon', 'blast_radius', 'session_recall'
 ]);
 

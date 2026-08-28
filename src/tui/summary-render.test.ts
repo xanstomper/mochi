@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderSummary, renderMetricsGrid } from './summary-render.js';
+import { renderSummary, renderMetricStrip } from './summary-render.js';
 import { STATUS_GLYPH, SEMANTIC_COLOR, paint, paintPriority, statusLabel } from './semantic.js';
 import { stripAnsi } from './view.js';
 import { visibleLen } from './wrap.js';
@@ -32,18 +32,21 @@ function sampleDoc(): SummaryDocument {
 }
 
 describe('summary renderer', () => {
-  it('renders a header box with a status glyph', () => {
+  it('renders a compact header with a status glyph (no border box)', () => {
     const lines = renderSummary(sampleDoc(), 80);
     const plain = lines.map(stripAnsi).join('\n');
     expect(plain).toContain('SUMMARY');
     expect(plain).toContain(STATUS_GLYPH.completed);
-    expect(lines[0]).toContain('╭');
+    // No fixed-width box drawing anywhere in the card.
+    expect(plain).not.toContain('╭');
+    expect(plain).not.toContain('┌');
   });
 
-  it('renders all four metrics in a grid', () => {
+  it('renders all four metrics on one strip line', () => {
     const lines = renderSummary(sampleDoc(), 80);
-    const plain = lines.map(stripAnsi).join('\n');
-    expect(plain).toContain('FILES');
+    const strip = lines.filter((l) => stripAnsi(l).includes('FILES'));
+    expect(strip).toHaveLength(1);
+    const plain = stripAnsi(strip[0]);
     expect(plain).toContain('2 changed');
     expect(plain).toContain('CHECKS');
     expect(plain).toContain('TOOLS');
@@ -62,7 +65,7 @@ describe('summary renderer', () => {
     expect(plain).toContain('VERIFICATION');
   });
 
-  it('renders failures with P0 weight and failed status glyph', () => {
+  it('renders failures with failed status glyph', () => {
     const doc = sampleDoc();
     doc.status = 'failed';
     doc.failures = [{ text: 'npm test failed: 2 assertions', priority: 'P0' }];
@@ -77,12 +80,43 @@ describe('summary renderer', () => {
     doc.whatChanged = [{ text: 'edit: ' + 'x'.repeat(200), priority: 'P1' }];
     const lines = renderSummary(doc, 40);
     const maxLen = Math.max(...lines.map((l) => visibleLen(l)));
-    expect(maxLen).toBeLessThanOrEqual(42);
+    expect(maxLen).toBeLessThanOrEqual(40);
   });
 
-  it('metrics grid respects column count for 2 metrics', () => {
-    const rows = renderMetricsGrid([{ label: 'FILES', value: '1' }, { label: 'CHECKS', value: '2' }], 60);
-    expect(rows).toHaveLength(3); // top, body, bottom
+  it('never emits stacked blank lines (compressed look)', () => {
+    const lines = renderSummary(sampleDoc(), 80);
+    for (let i = 1; i < lines.length; i++) {
+      if (stripAnsi(lines[i]).trim() === '') {
+        expect(stripAnsi(lines[i - 1]).trim()).not.toBe('');
+      }
+    }
+  });
+
+  it('color-codes change ops, paths, and verification commands (not all white)', () => {
+    const lines = renderSummary(sampleDoc(), 80);
+    const changeLine = lines.find((l) => stripAnsi(l).includes('runner.ts')) ?? '';
+    expect(changeLine).toContain('\x1b[');
+    const verifyLine = lines.find((l) => stripAnsi(l).includes('npm test')) ?? '';
+    expect(verifyLine).toContain('\x1b[');
+  });
+
+  it('metric strip composes label/value pairs with separators', () => {
+    const strip = renderMetricStrip([{ label: 'FILES', value: '2 changed' }, { label: 'CHECKS', value: '2 passed' }]);
+    expect(strip).toHaveLength(1);
+    const plain = stripAnsi(strip[0]);
+    expect(plain).toContain('FILES 2 changed');
+    expect(plain).toContain('·');
+  });
+
+  it('metric strip chunks at narrow widths instead of spilling', () => {
+    const strip = renderMetricStrip([
+      { label: 'FILES', value: '12 changed' },
+      { label: 'CHECKS', value: '30 passed, 2 failed' },
+      { label: 'TOOLS', value: '48 calls' },
+      { label: 'DURATION', value: '125.4s' },
+    ], 30);
+    for (const l of strip) expect(visibleLen(l)).toBeLessThanOrEqual(30);
+    expect(strip.length).toBeGreaterThan(1);
   });
 });
 
