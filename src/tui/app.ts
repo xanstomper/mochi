@@ -9,6 +9,8 @@ import { reduceEvent, trimTranscript } from './state.js';
 import { wrap, visibleLen } from './wrap.js';
 import pkg from '../../package.json' with { type: 'json' };
 import { kvCache } from '../kv-cache.js';
+import { recordFeedback } from '../feedback.js';
+import type { FeedbackVerdict } from '../feedback.js';
 import { formatModes } from '../modes.js';
 import {
   T,
@@ -87,6 +89,10 @@ const COMMANDS = [
   { name: '/plugins', hint: 'List installed plugins' },
   { name: '/profiles', hint: 'List specialized agent profiles' },
   { name: '/memory', hint: 'Show project memory and learned rules' },
+  { name: '/rules', hint: 'Show/edit the MOCHI.md behavioral contract' },
+  { name: '/facts', hint: 'List durable project facts across sessions' },
+  { name: '/feedback', hint: 'Show recent 👍/👎 feedback signal' },
+  { name: '/circle', hint: 'Run circle-detector on recent turns (debug) ' },
   { name: '/history', hint: 'Interactive session manager & history' },
   { name: '/rename', hint: 'Rename current conversation session' },
   { name: '/export', hint: 'Export session transcript to JSON' },
@@ -1092,6 +1098,13 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     }
     if (line === '/profiles') { await run(async () => runtime.profiles().map(p => `${p.name} (${p.role}) model=${p.defaultModel ?? 'coding'} verification=${p.verification ?? 'optional'}`).join('\n')); return; }
     if (line === '/memory') { await run(async () => runtime.memory() || 'No project memory yet.'); return; }
+    if (line === '/rules') { await run(async () => { const { loadRules, listRules } = await import('../contract.js'); const r = listRules(runtime.cwd); if (r.length === 0) return 'No MOCHI.md rules yet. Try: /rules add <rule>'; return r.map((x, i) => `${i + 1}. ${x}`).join('\n'); }); return; }
+    if (line.startsWith('/rules add ')) { await run(async () => { const { appendRule } = await import('../contract.js'); const rule = line.slice('/rules add '.length).trim(); if (!rule) return 'empty rule'; const r = appendRule(runtime.cwd, rule); return `appended → ${r.file}`; }); return; }
+    if (line === '/facts') { await run(async () => { const { memoryDigest } = await import('../memory-store.js'); const d = memoryDigest(); return d || 'No durable facts yet.'; }); return; }
+    if (line.startsWith('/fact ')) { await run(async () => { const { addFact } = await import('../memory-store.js'); const stmt = line.slice(6).trim(); if (!stmt) return 'usage: /fact <statement>'; addFact(stmt, 'fact', 'user'); return `remembered: ${stmt}`; }); return; }
+    if (line.startsWith('/forget ')) { await run(async () => { const { forgetFact } = await import('../memory-store.js'); const q = line.slice(8).trim(); if (!q) return 'usage: /forget <substring|id>'; const n = forgetFact(q); return `forgot ${n} fact(s)`; }); return; }
+    if (line === '/feedback') { await run(async () => { const { recentFeedback } = await import('../feedback.js'); const r = recentFeedback(15); if (r.length === 0) return 'No feedback recorded yet. Press g/b on an assistant turn to rate.'; return r.map((e) => `${new Date(e.ts).toISOString().slice(11,16)} ${e.verdict === 'good' ? '👍' : '👎'} turn#${e.turn} "${e.snippet.slice(0,80)}"`).join('\n'); }); return; }
+    if (line === '/circle') { await run(async () => { const v = (await import('../circle.js')).detectCircle((runtime as any).messages ?? [], 4); return v.circling ? `CIRCLE: ${v.signals.join(' · ')}` : `ok (signals=${v.signals.length})`; }); return; }
     if (line === '/tasks') { await run(async () => listTasks()); return; }
     if (line === '/checkpoint') { await run(async () => { const cp = await runtime.checkpoint(); return `${cp.type} ${cp.ref}`; }); return; }
     if (line === '/rollback') { await run(async () => runtime.rollback()); return; }
@@ -2054,6 +2067,30 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         }
         state.dropActive = currentDropItems().length > 0;
         scheduleRender();
+        i++;
+        continue;
+      }
+
+      // Feedback keys: g = 👍 on most-recent assistant turn, b = 👎.
+      // Only fire when the composer is empty so they never collide with typing.
+      if ((c === 'g' || c === 'b') && state.input.length === 0 && !state.menuActive) {
+        const recent = [...state.lines].reverse().find((l) => l.kind === 'assistant');
+        if (recent) {
+          const verdict: FeedbackVerdict = c === 'g' ? 'good' : 'bad';
+          const turn = state.lines.filter((l) => l.kind === 'assistant').indexOf(recent);
+          recordFeedback({
+            ts: Date.now(),
+            session: runtime.activeSessionId ?? 'default',
+            turn,
+            verdict,
+            snippet: recent.text.slice(0, 200),
+          });
+          push('system', `${verdict === 'good' ? '👍 recorded (good)' : '👎 recorded (bad)'} — turn #${turn}`);
+          scheduleRender();
+        } else {
+          push('system', 'No assistant turn yet to rate.');
+          scheduleRender();
+        }
         i++;
         continue;
       }

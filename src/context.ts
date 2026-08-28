@@ -14,6 +14,10 @@ import { isWeakModel, TOOL_ALIASES, normalizeToolArgs } from './tools/index.js';
 import { getCachedScaffold } from './cognitive/chameleon.js';
 import { isMode, modeInstruction } from './modes.js';
 import { loadRules, selectActiveRules } from './rules.js';
+import { contractSection } from './contract.js';
+import { memoryDigest } from './memory-store.js';
+import { feedbackDigest } from './feedback.js';
+import { detectCircle } from './circle.js';
 
 const CANDIDATE_RULES = ['MOCHI.md', 'mochi.md', 'AGENTS.md', 'CLAUDE.md'];
 
@@ -262,7 +266,7 @@ ${this.toolGuidelines(tools)}
 - **Insightful & Professional**: Provide clear technical insights without unnecessary fluff, but always communicate your plans, findings, and outcomes.
 - **Clean Markdown Formatting**: Use concise GitHub-flavored markdown with code snippets, paths, and clear bullet points where helpful.
 
-${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}
+${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}${contractSection(this.projectRoot)}${memoryDigest()}${feedbackDigest()}${detectCircle(this.messages).stopDirective}
 `.trim();
   }
 
