@@ -340,6 +340,7 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}${contractSection(this.pr
     add(['chameleon'], 'chameleon: run test-time compute expansion and cellular MoE decomposition for complex algorithms or architectural refactors.');
     add(['session_recall'], 'session_recall: search, list, or retrieve transcripts from past conversation sessions to recall earlier architectural discussions or previous solutions.');
     add(['sql_codebase_query'], 'sql_codebase_query: run read-only SQL over the code graph (symbols, calls, relations) to do multi-file symbol/dependency analysis in one query — e.g. WHERE name LIKE, join calls to callees. Faster than many read/glob calls. Query is auto-LIMIT 50.');
+    add(['skill_manage'], 'skill_manage: create/edit/patch YOUR OWN reusable SKILL.md skills to persist repeatable procedures. When you solve a task class that recurs (or a lesson sticks), author a concise one so the next time is faster. delete archives (recoverable) — nothing is hard-deleted.');
     add(['web_search', 'web_crawl', 'fetch'], 'web_search / web_crawl / fetch: for research. Search first; fetch a known URL; crawl a documentation site (same-host by default).');
     lines.push('   - plan mode (when active): research with read-only tools and return a plan. Mutating calls are vetoed.');
     return lines.join('\n');

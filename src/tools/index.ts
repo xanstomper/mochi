@@ -48,6 +48,7 @@ import { outlineTool } from './outline.js';
 import { mergeConflictTool } from './merge-conflict.js';
 import { codeSimilarityTool } from './code-similarity.js';
 import { securityAuditTool } from './security-audit.js';
+import { skillManageTool } from '../skill-manager.js';
 
 export const ALL_TOOLS: Tool[] = [
   readTool, writeTool, editTool, deleteTool, shellTool, searchTool, globTool, outlineTool,
@@ -59,6 +60,7 @@ export const ALL_TOOLS: Tool[] = [
   dbInspectTool, createPrTool, thinkTool, webCrawlTool, renameSymbolTool, replTool,
   blastRadiusTool, mergeConflictTool, codeSimilarityTool, securityAuditTool,
   ...symbolTools, replaceSymbolTool, chameleonTool,
+  skillManageTool,
 ];
 
 /**
@@ -103,7 +105,8 @@ export function buildTools(config: MochiConfig, allowed?: string[]): Map<string,
       name === 'blast_radius' ||
       name === 'think' ||
       name === 'session_recall' ||
-      name === 'memory';
+      name === 'memory' ||
+      name === 'skill_manage';
     if (allowed && !allowed.includes(name) && !alwaysInclude) continue;
     // For weak models, only include core tools to keep tool schema lean.
     if (weak && !CORE_TOOL_NAMES.has(name) && !alwaysInclude) continue;

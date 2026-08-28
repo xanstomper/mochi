@@ -18,6 +18,7 @@ import type { AgentProfile } from '../types.js';
 import { AgentProfileService } from '../agents/profile.js';
 import { BudgetEngine, estimateCostUsd } from '../budget.js';
 import { SpeculativeEngine } from '../speculative.js';
+import { detectSkillOpportunities, opportunitiesToPrompt } from '../skill-curator.js';
 import { LearningStore } from '../learning.js';
 import { classifyFailure as classifyErrorPattern } from '../learning.js';
 import {
@@ -262,6 +263,7 @@ export class Agent {
    *  (bounded at 1 so the guard can never itself loop). */
   private proseRunwayNudges = 0;
   private specPreflighted = false;
+  private skillNudged = false;
   /** Diff-hygiene: one bounded cleanup nudge for debug logs / TODO /
    *  suppressed-check debris the model added before we accept "done". */
   private hygieneNudges = 0;
@@ -1878,6 +1880,27 @@ Continue from 'Next:', do not redo completed progress.`,
     }
   }
 
+  /** Auto-skill-creation trigger (Hermes-faithful). When a lesson or repeated
+   *  failure pattern signals a task class that recurs, inject a bounded hint
+   *  telling the model it may author a SKILL.md via the skill_manage tool.
+   *  Fires at most once per task and is pure guidance — it never blocks. */
+  private maybeSuggestSkill(): void {
+    if (this.skillNudged || this.planMode) return;
+    this.skillNudged = true;
+    try {
+      const lessons = (this.lastLessons ?? []).map((l) => ({ title: l.lesson }));
+      const errorPattern = this.diagnosis?.kind;
+      const repeatCount = this.strategyRepeats ?? 0;
+      const opps = detectSkillOpportunities(lessons, errorPattern, repeatCount);
+      const hint = opportunitiesToPrompt(opps);
+      if (!hint) return;
+      this.context.addMessage({ role: 'system', content: hint });
+      this.events.emit({ type: 'agent:log', agentId: this.id, message: '[skills] flagged auto-skill creation opportunity' });
+    } catch (e) {
+      this.events.emit({ type: 'agent:log', agentId: this.id, message: `[skills] suggest skipped: ${String(e).slice(0, 100)}` });
+    }
+  }
+
   private pulse(iteration: number, task: Task): { abort: boolean; reason?: string; message?: string } {
     const recentErrors = this.errors.slice(-3);
     const allSame = recentErrors.length === 3 && new Set(recentErrors).size === 1;
@@ -1981,6 +2004,9 @@ Continue from 'Next:', do not redo completed progress.`,
     parts.push(failureText);
     parts.push('Pick the most likely hypothesis (or your own), take ONE focused action, then re-run verification. Do not just retry the same edit.');
     this.context.addMessage({ role: 'user', content: parts.join('\n\n') });
+    // A lesson was just surfaced; if this task class recurs, nudge the model to
+    // persist a reusable SKILL.md via skill_manage (auto skill creation).
+    this.maybeSuggestSkill();
   }
 
   /** Fire a small read-only probe and capture its output. Now properly awaited
