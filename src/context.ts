@@ -18,6 +18,7 @@ import { contractSection } from './contract.js';
 import { memoryDigest } from './memory-store.js';
 import { feedbackDigest } from './feedback.js';
 import { detectCircle } from './circle.js';
+import { evaluateOwl } from './cognitive/owl.js';
 
 const CANDIDATE_RULES = ['MOCHI.md', 'mochi.md', 'AGENTS.md', 'CLAUDE.md'];
 
@@ -284,19 +285,21 @@ ${machineAccessBlock()}
 
 # I. Core Directives
 1. **Explain What & Why**: Like top AI coding agents (Antigravity, Claude Code, Cline), always explain your analysis, strategy, and reasoning clearly to the user. When performing actions (e.g. searching, reading files, editing code, running commands, or refactoring), briefly explain *what* you are doing and *why* so the user understands the exact progress being made.
-2. **Surgical Precision**: Prioritize minimal, clean, targeted changes over sprawling rewrites. Fit seamlessly into the existing codebase architecture, type systems, and stylistic conventions.
-3. **Information Density**: Batch independent tool calls in parallel (e.g., inspecting multiple related files or checking references simultaneously).
-4. **Verification Integrity**: Never declare a task complete or functional unless you have verified it against a real build, test suite, or compiler output.
+2. **Deep Reasoning & Mental Modeling**: Think methodically before acting. Formulate clear hypotheses, trace data flow, verify invariants, and analyze boundary conditions (null/undefined, off-by-one, type safety, async/concurrency) before touching code. Use the \`think\` tool for non-trivial logic.
+3. **Root-Cause Engineering**: Never patch symptoms, guess APIs, or add defensive workarounds. Inspect source definitions, understand the true root cause, and implement robust, production-grade solutions.
+4. **Surgical Precision**: Prioritize minimal, clean, targeted changes over sprawling rewrites. Fit seamlessly into the existing codebase architecture, type systems, and stylistic conventions.
+5. **Information Density**: Batch independent tool calls in parallel (e.g., inspecting multiple related files or checking references simultaneously).
+6. **Verification Integrity**: Never declare a task complete or functional unless you have verified it against a real build, test suite, or compiler output.
 
 # II. Execution Protocol
 - **Communicate Intent**: Before or alongside invoking tools, briefly explain what you discovered and what you will do next.
-- **Discovery**: Inspect actual file contents and types rather than making assumptions.
+- **Discovery**: Inspect actual file contents and types rather than making assumptions. Read surrounding context before editing.
 - **Modification**: Prefer \`edit\`, \`replace_symbol\`, or \`patch\` for modifying existing code. Reserve \`write\` for new files.
-- **Resilience**: If a tool call, test, or build fails, explain the failure diagnosis, root cause hypothesis, and your next step to fix it.
+- **Resilience & Adaptation**: If a tool call, test, or build fails, explain the failure diagnosis, root cause hypothesis, and adapt your approach rather than repeating failed attempts.
 - **Background Processes**: Offload long-running operations using \`shell\` with \`background: true\`.
 
 # III. Advanced Orchestration
-- **Autonomous Tool Decisions**: Invoke any tool in your arsenal when it provides value: \`blast_radius\` for checking upstream dependents before refactoring, \`think\` for deep reasoning, \`subagent\` for parallel exploration, \`skill\` for domain-specific protocols.
+- **Autonomous Tool Decisions**: Invoke any tool in your arsenal when it provides value: \`blast_radius\` for checking upstream dependents before refactoring, \`think\` for deep reasoning, \`subagent\` for parallel exploration, \`skill\` for domain-specific protocols, \`get_diagnostics\` for compiler diagnostics.
 - **Dependency Awareness**: Check call sites and type definitions to avoid breaking dependent modules.
 - **Delegation**: Delegate large or complex subtasks to \`subagent\` when appropriate.
 
@@ -337,6 +340,8 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}${contractSection(this.pr
     add(['todo'], 'todo: for multi-step work, record the plan as todo items and mark them done as you go. Cheap, shared, and keeps parallel work honest.');
     add(['shell'], 'shell: for builds, tests, greps. Not for file mutation when edit/patch will do.');
     add(['blast_radius'], 'blast_radius: analyze the downstream impact and caller call sites of a symbol before modifying or refactoring it.');
+    add(['find_definitions', 'find_references'], 'find_definitions / find_references: look up actual symbol definitions, type contracts, and caller usages across the project before modifying code to prevent guessing or hallucinating APIs.');
+    add(['get_diagnostics'], 'get_diagnostics: inspect compiler, syntax, and linter diagnostics for files to verify clean types and syntax.');
     add(['chameleon'], 'chameleon: run test-time compute expansion and cellular MoE decomposition for complex algorithms or architectural refactors.');
     add(['session_recall'], 'session_recall: search, list, or retrieve transcripts from past conversation sessions to recall earlier architectural discussions or previous solutions.');
     add(['sql_codebase_query'], 'sql_codebase_query: run read-only SQL over the code graph (symbols, calls, relations) to do multi-file symbol/dependency analysis in one query — e.g. WHERE name LIKE, join calls to callees. Faster than many read/glob calls. Query is auto-LIMIT 50.');
@@ -360,6 +365,10 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}${contractSection(this.pr
     if (memory) parts.push(`Project memory:\n${memory}`);
     if (task) {
       parts.push(kindHint(classifyTaskKind(task)));
+      const owl = evaluateOwl(task.title + (task.description ? ' ' + task.description : ''));
+      if (owl.mode === 'surface' && owl.formattedFindings.length > 0) {
+        parts.push(`OWL Operational Guardrails:\n${owl.formattedFindings.join('\n')}`);
+      }
       const kind = classifyTaskKind(task);
       if (kind === 'implement' || kind === 'fix' || kind === 'refactor' || kind === 'plan') {
         try {

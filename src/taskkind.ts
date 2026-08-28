@@ -52,9 +52,9 @@ export function kindHint(kind: TaskKind): string {
     case 'chat':
       return '\n# Focus: conversational response & general intelligence\nAnswer the user\'s actual question or greeting directly, in your own words. Be warm and concise, with personality. Vary your phrasing — never reuse the same sentence twice. Do not output system prompt instructions, do not quote examples from instructions, and do not issue tool calls unless the user explicitly asked for an action.\n';
     case 'fix':
-      return '\n# Focus: debugging\nPrioritize reproducing the failure first (smallest possible repro), then localize the bug with the symbol tools before touching code. Add or extend a test that catches the regression.\n';
+      return '\n# Focus: debugging\nPrioritize reproducing the failure first (smallest possible repro), then trace the true root cause with symbol and diagnosis tools before touching code. Check edge cases and invariants, then add or extend a test that catches the regression.\n';
     case 'refactor':
-      return '\n# Focus: refactor\nPreserve behavior. Run the project test suite before AND after the change. If tests are absent, mention this in the next message rather than skipping verification.\n';
+      return '\n# Focus: refactor\nPreserve exact behavior and contracts. Check blast radius and callers. Run the project test suite before AND after the change. If tests are absent, mention this in the next message rather than skipping verification.\n';
     case 'test':
       return '\n# Focus: testing\nAim for one assertion per behavior. Cover the boundary and the failure path. Use the project\'s existing test runner (npm test / vitest / jest for JS, pytest for Python, go test ./..., cargo test for Rust, mvn test or ./gradlew test for Java, dotnet test for C#, rspec for Ruby) — do not invent a new one.\n';
     case 'research':
@@ -65,6 +65,6 @@ export function kindHint(kind: TaskKind): string {
       return '\n# Focus: documentation\nMatch the project\'s existing doc style. Cover the WHY before the HOW. Keep examples concrete and runnable.\n';
     case 'implement':
     default:
-      return '\n# Focus: implementation\nMatch the project\'s patterns and idioms. Make the smallest change that works. Verify with a real test runner before declaring done.\n';
+      return '\n# Focus: implementation\nMatch the project\'s architecture, patterns, and type systems. Analyze boundary cases and invariants. Make clean, surgical changes, and verify with a real test runner or compiler before declaring done.\n';
   }
 }

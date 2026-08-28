@@ -23,6 +23,11 @@ export const thinkTool: Tool = {
     const thought = String(args.thought ?? '').slice(0, 4000);
     if (!thought.trim()) return 'Nothing recorded.';
     ctx.events.emit({
+      type: 'agent:reasoning',
+      content: `[think] ${thought}\n`,
+      agentId: ctx.agentId,
+    });
+    ctx.events.emit({
       type: 'message',
       role: 'system',
       content: `[think] ${thought}`,

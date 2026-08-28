@@ -153,6 +153,17 @@ export function evaluateOwl(task: string, knownContext = ''): OwlEvaluationResul
     });
   }
 
+  // 8. Algorithmic Complexity & Performance Guard
+  if (/\b(optimize|performance|bottleneck|leak|complexity|benchmark|algorithm|latency|throughput)\b/.test(taskLower)) {
+    signals.push({
+      principle: 'simplicity',
+      finding: 'Performance optimization or algorithmic complexity task detected.',
+      implication: 'Audit asymptotic complexity (O(N) vs O(N^2)), prevent premature pessimization, and verify invariants under scale.',
+      weight: 0.5,
+      surface: true,
+    });
+  }
+
   const cumulativeWeight = signals.reduce((sum, s) => sum + s.weight, 0);
   const mode = cumulativeWeight >= 1.0 ? 'surface' : 'silent';
   const formattedFindings = signals

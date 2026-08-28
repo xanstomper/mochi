@@ -98,8 +98,10 @@ export function createOpenAIProvider(config: ProviderConfig) {
       stream: true,
       stream_options: { include_usage: true },
       ...(tools.length ? { tools: openAITools(tools), tool_choice: 'auto' } : {}),
-      ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
-      ...(options?.maxTokens !== undefined ? { max_tokens: options.maxTokens } : {}),
+      ...(options?.temperature !== undefined && !/^(o1|o3|o4)/i.test(model) ? { temperature: options.temperature } : {}),
+      ...(options?.maxTokens !== undefined
+        ? (/^(o1|o3|o4)/i.test(model) ? { max_completion_tokens: options.maxTokens } : { max_tokens: options.maxTokens })
+        : {}),
       ...(() => {
         const rawEffort = String((options as any)?.reasoningEffort || process.env.MOCHI_REASONING || '').toLowerCase().trim();
         if (rawEffort === 'max' || rawEffort === 'extreme' || rawEffort === 'deep' || rawEffort === 'high' || rawEffort === 'hard') {

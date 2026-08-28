@@ -161,6 +161,23 @@ export async function diagnoseFile(path: string, cwd: string): Promise<FileDiagn
       return diagnoseTsViaCli(path, root);
     }
     if (/\.py$/.test(path)) return diagnosePython(path, cwd);
+    if (/\.json$/i.test(path)) {
+      try {
+        const { readFileSync } = await import('node:fs');
+        const text = readFileSync(path, 'utf8');
+        JSON.parse(text);
+        return { path, ok: true, errors: [], warnings: [], ms: Date.now() - t0 };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { path, ok: false, errors: [`JSON Parse Error: ${msg}`], warnings: [], ms: Date.now() - t0 };
+      }
+    }
+    if (/\.go$/i.test(path)) {
+      const { code, out } = await exec('gofmt', ['-e', path], cwd, 5_000);
+      if (code === 0 || code === 127) return { path, ok: true, errors: [], warnings: [], ms: Date.now() - t0 };
+      const errs = out.split('\n').filter((l) => l.trim()).slice(0, MAX_LINES);
+      return { path, ok: errs.length === 0, errors: errs, warnings: [], ms: Date.now() - t0 };
+    }
     return { path, ok: true, errors: [], warnings: [], ms: Date.now() - t0 };
   } catch {
     return { path, ok: true, errors: [], warnings: [], ms: Date.now() - t0 };

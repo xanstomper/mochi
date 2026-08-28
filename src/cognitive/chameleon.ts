@@ -216,7 +216,7 @@ export class ChameleonEngine {
     }
 
     const budget = opts.budget ?? new BudgetEngine(this.config.safety);
-    const maxRuns = opts.maxRuns ? Math.max(opts.maxRuns, 1) : (tier <= 2 ? 3 : tier <= 4 ? 10 : 40);
+    const maxRuns = opts.maxRuns ? Math.max(opts.maxRuns, 1) : (tier <= 2 ? 1 : tier === 3 ? 2 : tier === 4 ? 3 : tier === 5 ? 4 : 6);
 
     let tokensUsed = 0;
     let costUsd = 0;

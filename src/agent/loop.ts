@@ -57,6 +57,7 @@ import { nativeStripThinkTags } from '../native/core.js';
 import { LoopStateMachine } from './loop-state.js';
 import { scanDiffForHygiene, renderHygieneFindings, type HygieneFinding } from '../core/diff-hygiene.js';
 import { parseCompilerDiagnostics, renderCompilerAdvisory } from './error-diagnostics.js';
+import { AnchorEngine } from '../cognitive/anchor.js';
 
 export function stripThinkTags(text: string): string {
   if (!text) return '';
@@ -235,6 +236,7 @@ export class Agent {
   private hypotheses: Hypothesis[] = [];
   private diagnosis: DiagnosisResult | undefined;
   private lastLessons: Lesson[] = [];
+  private anchor = new AnchorEngine();
   private fileChanged = false;
   /** Checkpoint taken before the first file edit, restored if verification
    *  fails repeatedly so a broken agent run never leaves the tree dirty. */
@@ -322,12 +324,12 @@ export class Agent {
     // Adjustable reasoning mode: read from config or env and inject directive.
     const reasoning = (this.config.reasoning || process.env.MOCHI_REASONING || 'max').trim().toLowerCase();
     const blurb = reasoning === 'max' || reasoning === 'extreme' || reasoning === 'deep'
-      ? 'Engage MAXIMUM reasoning compute & cognitive depth: perform exhaustive multi-angle decomposition, analyze AST dependency blast radius, synthesize formal invariants (Chameleon reasoning), and thoroughly verify correctness before concluding.'
+      ? 'Engage MAXIMUM reasoning compute & cognitive depth: perform exhaustive multi-angle decomposition, trace full AST dependency blast radius, synthesize formal invariants (Chameleon reasoning), check all edge cases, and thoroughly verify correctness before concluding.'
       : reasoning === 'high' || reasoning === 'hard'
-        ? 'Engage HIGH reasoning depth: thoroughly analyze edge cases, evaluate invariants, trace AST caller dependencies, and confirm correctness with concrete checks.'
+        ? 'Engage HIGH reasoning depth: thoroughly analyze edge cases, evaluate invariants, trace AST caller dependencies, isolate root causes, and confirm correctness with concrete checks.'
         : reasoning === 'low' || reasoning === 'easy'
           ? 'Engage LOW reasoning mode: act fast and decisively with minimal thinking overhead, make direct edits, verify quickly, and respond concisely.'
-          : 'Engage MEDIUM balanced reasoning: carefully inspect relevant context, maintain system invariants, and verify changes.';
+          : 'Engage MEDIUM balanced reasoning: carefully inspect relevant context, isolate root causes before modifying code, maintain system invariants, and verify changes with concrete tests/checks.';
     this.context.addMessage({ role: 'system', content: `Active reasoning mode: ${reasoning.toUpperCase()}. ${blurb}` });
     // Each task gets a fresh autopsy record (idempotent on resume via
     // loadOrCreateAutopsy) so failure trajectories are durable and inspectable.
@@ -1643,10 +1645,10 @@ Continue from 'Next:', do not redo completed progress.`,
       }
 
       const errLower = error.toLowerCase();
-      if (errLower.includes('enoent') || errLower.includes('not found') || errLower.includes('no such file')) {
-        recoveryHint += '\n[Harness Hint: Target file was not found. Use glob or search to verify paths before editing/reading.]';
-      } else if (errLower.includes('did not match') || errLower.includes('patch')) {
+      if (errLower.includes('oldtext') || errLower.includes('did not match') || errLower.includes('patch')) {
         recoveryHint += '\n[Harness Hint: Target text was not found verbatim in the file. Call read tool to inspect current lines before editing.]';
+      } else if (errLower.includes('enoent') || errLower.includes('file not found') || errLower.includes('no such file') || (errLower.includes('not found') && !errLower.includes('oldtext'))) {
+        recoveryHint += '\n[Harness Hint: Target file was not found. Use glob or search to verify paths before editing/reading.]';
       } else if (toolName === 'shell' && (errLower.includes('exit') || errLower.includes('failed') || errLower.includes('command not found'))) {
         recoveryHint += '\n[Harness Hint: Shell command failed. Review the terminal error above to fix syntax or missing packages.]';
       }
@@ -1995,10 +1997,16 @@ Continue from 'Next:', do not redo completed progress.`,
       this.events.emit({ type: 'agent:log', agentId: this.id, message: `[diagnosis] ${autopsyOneLine(this.autopsy)}` });
     }
 
+    if (top?.description) {
+      this.anchor.rejectApproach(top.description, failureText.slice(0, 120));
+    }
+
     // Surface the diagnostic to the model. Lessons first (they're the most
     // actionable), then the hypothesis ordering, then the raw failure text.
     const parts = ['Verification failed. Treat this as a HYPOTHESIS rather than a generic retry:'];
     if (this.lastLessons.length) parts.push(lessonsToPrompt(this.lastLessons));
+    const continuity = this.anchor.renderContinuityContext();
+    if (continuity) parts.push(continuity);
     parts.push(diagnosisToPrompt(this.diagnosis));
     parts.push('--- failure evidence ---');
     parts.push(failureText);
@@ -2042,6 +2050,7 @@ Continue from 'Next:', do not redo completed progress.`,
   /** Called when verification finally passed; finalize the autopsy with the
    *  resolved outcome and write a procedural lesson from the top hypothesis. */
   private recordSuccess(task: Task, repo: ReturnType<typeof detectRepo>): void {
+    this.anchor.recordClaim(task.title, 'Verified', 'Verification passed');
     if (this.autopsy) {
       const confirmed = this.hypotheses.find((h) => h.status === 'confirmed');
       const fixApplied = (this.context['state']?.filesModified ?? []).slice(-1)[0];

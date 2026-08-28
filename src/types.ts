@@ -232,7 +232,6 @@ export interface RepoInfo {
 export type MochiEvent =
   | { type: 'goal:created'; goal: Goal }
   | { type: 'task:created'; task: Task }
-  | { type: 'task:ready'; task: Task }
   | { type: 'task:started'; task: Task; agentId: string }
   | { type: 'task:completed'; task: Task; agentId: string; stopReason?: string }
   | { type: 'task:failed'; task: Task; agentId: string; reason: string; stopReason?: string }
@@ -251,4 +250,54 @@ export type MochiEvent =
   | { type: 'usage:updated'; agentId: string; inputTokens: number; outputTokens: number; cacheTokens: number; totalTokens: number; costUsd?: number }
   | { type: 'error'; error: string; agentId?: string }
   | { type: 'pulse'; state: AgentState }
-  | { type: 'message'; role: 'user' | 'assistant' | 'system'; content: string; agentId?: string };
+  | { type: 'message'; role: 'user' | 'assistant' | 'system'; content: string; agentId?: string }
+  // ── Phase-1 structured events (master rebuild) ──────────────────────────
+  // Command lifecycle: every shell invocation is observable end-to-end.
+  | ({ type: 'command:requested'; command: string; cwd?: string; executionId: string } & EventMeta)
+  | ({ type: 'command:started'; command: string; executionId: string; pid?: number } & EventMeta)
+  | ({ type: 'command:output'; command: string; executionId: string; stream: 'stdout' | 'stderr'; chunk: string } & EventMeta)
+  | ({ type: 'command:completed'; command: string; executionId: string; exitCode: number; durationMs: number; truncated: boolean; stdoutTail?: string; stderrTail?: string } & EventMeta)
+  | ({ type: 'command:failed'; command: string; executionId: string; error: string; durationMs: number } & EventMeta)
+  // Plan lifecycle: structured plan state the renderer can display.
+  | ({ type: 'plan:created'; planId: string; steps: PlanStep[]; agentId: string } & EventMeta)
+  | ({ type: 'plan:updated'; planId: string; steps: PlanStep[]; agentId: string } & EventMeta)
+  // Approval gate: mutating work waiting on the user.
+  | ({ type: 'approval:required'; agentId: string; action: string; detail?: string; executionId?: string } & EventMeta)
+  // Cancellation lifecycle (Phase 5): first-class, observable, propagating.
+  | ({ type: 'cancellation:requested'; agentId: string; reason?: string } & EventMeta)
+  | ({ type: 'cancellation:completed'; agentId: string; canceledExecutions: number } & EventMeta)
+  // Diffs + references as first-class citizens (Phases 12/13).
+  | ({ type: 'diff:generated'; path: string; additions: number; deletions: number; agentId: string; truncated: boolean } & EventMeta)
+  | ({ type: 'reference:created'; kind: 'file' | 'symbol' | 'url' | 'command'; value: string; agentId: string } & EventMeta)
+  // Search lifecycle for observability of expensive queries.
+  | ({ type: 'search:started'; query: string; tool: string; agentId: string } & EventMeta)
+  | ({ type: 'search:completed'; query: string; tool: string; agentId: string; results: number; durationMs: number } & EventMeta)
+  // Summary + context lifecycle (Phases 9/20/21).
+  | ({ type: 'summary:started'; agentId: string; trigger: 'task-completion' | 'context-limit' | 'manual' } & EventMeta)
+  | ({ type: 'summary:completed'; agentId: string; sections: string[]; durationMs: number } & EventMeta)
+  | ({ type: 'context:compacted'; agentId: string; beforeTokens: number; afterTokens: number; preservedSections: string[] } & EventMeta)
+  | ({ type: 'session:completed'; agentId: string; stopReason: string; durationMs: number } & EventMeta);
+
+/**
+ * Structured envelope fields shared by all Phase-1 events. `id` + `timestamp`
+ * are stamped by the EventBus at emit time when absent, so emit sites stay
+ * clean while every consumer can rely on identity + ordering.
+ */
+export interface EventMeta {
+  /** Unique event id (monotonic counter + random suffix). */
+  id?: string;
+  /** Epoch ms. Stamped by the bus when absent. */
+  timestamp?: number;
+  severity?: 'debug' | 'info' | 'warning' | 'error' | 'critical';
+  status?: 'queued' | 'running' | 'waiting' | 'paused' | 'completed' | 'failed' | 'canceled' | 'skipped';
+  /** Attempt number for retried executions (1-based). */
+  attempt?: number;
+}
+
+/** One step inside a plan:created / plan:updated event. */
+export interface PlanStep {
+  id: string;
+  title: string;
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+  detail?: string;
+}
