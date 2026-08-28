@@ -68,26 +68,22 @@ describe('reduceEvent', () => {
     expect(s.lines.some((l) => l.kind === 'error' && l.text.includes('Break'))).toBe(true);
   });
 
-  it('renders tool calls as boxed cards and truncates huge args inside them', () => {
+  it('renders tool calls as compact semantic rows and truncates huge args', () => {
     const s = createTuiState();
     reduceEvent(s, ev({ type: 'tool:called', tool: 'shell', args: { command: 'x'.repeat(500) } }));
     const last = s.lines[s.lines.length - 1];
     expect(last.kind).toBe('tool');
-    // Card is multi-line: header, body, footer. Even with a 500-char
-    // command the body line must be visibly truncated so it never wraps
-    // and breaks the grid alignment.
+    // Compact row: even with a 500-char command the row must be visibly
+    // truncated so it never wraps and breaks the grid alignment.
     const lines = last.text.split('\n');
-    expect(lines.length).toBeGreaterThanOrEqual(3);
-    const bodyLine = lines[1] ?? '';
-    // The visible cells of the body line (ignoring ANSI) must fit inside
-    // the card's interior width — ~50 chars.
-    const visible = bodyLine.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
-    expect(visible.length).toBeLessThanOrEqual(64);
-    expect(visible).toContain('…'); // ellipsis marks truncation
+    expect(lines.length).toBeGreaterThanOrEqual(1);
+    const visible = lines.map((l) => l.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/…/g, 'x'));
+    for (const v of visible) expect(v.length).toBeLessThanOrEqual(104);
+    expect(lines.join('\n')).toContain('…'); // ellipsis marks truncation
     expect(truncateArgs('short')).toBe('short');
   });
 
-  it('renders tool completions as cards with outcome line', () => {
+  it('renders tool completions as compact rows with outcome line', () => {
     const s = createTuiState();
     reduceEvent(s, ev({ type: 'tool:called', tool: 'edit', tool_call_id: 'c1', args: { path: 'src/foo.ts', oldText: 'a', newText: 'b' } }));
     reduceEvent(s, ev({
@@ -97,25 +93,25 @@ describe('reduceEvent', () => {
     }));
     const last = s.lines[s.lines.length - 1];
     expect(last.kind).toBe('tool');
-    expect(last.text).toContain('EDIT');
+    expect(last.text).toContain('edit');
     expect(last.text).toContain('src/foo.ts');
     expect(last.text).toContain('42ms');
-    expect(last.text).toContain('updated src/foo.ts');
+    expect(last.text).toContain('1 change'); // inline diff outcome line
   });
 
   it('tracks subagent lifecycle events and active map', () => {
     const s = createTuiState();
     reduceEvent(s, ev({ type: 'subagent:started', agentId: 'sub-1', role: 'architect', prompt: 'Design database schema' }));
-    expect(s.lines.some((l) => l.kind === 'system' && l.text.includes('┌── [Subagent: architect] started'))).toBe(true);
+    expect(s.lines.some((l) => l.kind === 'system' && l.text.includes('◇ subagent') && l.text.includes('[architect]'))).toBe(true);
     expect(s.activeSubagents.has('sub-1')).toBe(true);
     expect(s.activeSubagents.get('sub-1')?.role).toBe('architect');
 
     reduceEvent(s, ev({ type: 'subagent:completed', agentId: 'sub-1', role: 'architect', success: true, summary: 'Schema design complete' }));
-    expect(s.lines.some((l) => l.kind === 'system' && l.text.includes('└── [Subagent: architect] succeeded'))).toBe(true);
+    expect(s.lines.some((l) => l.kind === 'system' && l.text.includes('✓ subagent') && l.text.includes('Schema design complete'))).toBe(true);
     expect(s.activeSubagents.has('sub-1')).toBe(false);
 
     reduceEvent(s, ev({ type: 'subagent:completed', agentId: 'sub-2', role: 'tester', success: false, summary: 'Tests failed' }));
-    expect(s.lines.some((l) => l.kind === 'error' && l.text.includes('└── [Subagent: tester] failed'))).toBe(true);
+    expect(s.lines.some((l) => l.kind === 'error' && l.text.includes('× subagent') && l.text.includes('Tests failed'))).toBe(true);
   });
 
   it('caps the transcript at the configured limit, dropping oldest', () => {

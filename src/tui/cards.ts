@@ -217,7 +217,13 @@ export function renderToolCard(
     : ['search', 'glob', 'inspect', 'tree'].includes(tool) ? (T.violet ?? T.fg)
     : T.fg;
 
-  const primary = `${statusColor}${statusGlyph}${T.reset} ${color}${name}${T.reset} ${argColor}${argsText}${T.reset}`;
+  // Never let the primary argument overflow the row: budget for the status
+  // glyph + tool name + a duration slot, then ellipsize the argument.
+  const prefixVis = 2 + name.length + 1;
+  const argsBudget = Math.max(12, width - prefixVis - 12);
+  const argsShown = visibleLen(argsText) > argsBudget ? truncate(argsText, argsBudget) : argsText;
+
+  const primary = `${statusColor}${statusGlyph}${T.reset} ${color}${name}${T.reset} ${argColor}${argsShown}${T.reset}`;
   const durText = dur ? `${T.grayDark}${dur}${T.reset}` : '';
   const durVis = visibleLen(durText);
 

@@ -28,6 +28,7 @@ import {
   highlightShellCommand,
   renderMetricGauge,
 } from './view.js';
+import { formatToolInvocationCard } from './cards.js';
 
 function baseStatus(over: Partial<Parameters<typeof statusBarRow1>[0]> = {}) {
   return {
@@ -165,8 +166,8 @@ describe('renderEntry', () => {
   });
 
   // ---- Coordinated visual language (grid + gutter markers) ----------------
-  it('every transcript entry starts with a 2-space left gutter for grid alignment', () => {
-    const kinds = ['user', 'assistant', 'thought', 'tool', 'error', 'system', 'task', 'goal'] as const;
+  it('most transcript entries start with a 2-space left gutter for grid alignment', () => {
+    const kinds = ['user', 'thought', 'tool', 'error', 'system', 'task', 'goal'] as const;
     for (const kind of kinds) {
       const rows = renderEntry({ kind, text: 'x' });
       expect(rows.length).toBeGreaterThan(0);
@@ -182,19 +183,19 @@ describe('renderEntry', () => {
     expect(row).toContain(T.fg);
   });
 
-  it('thought uses ◇ gutter marker', () => {
+  it('thought renders as plain dim italic prose (no glyph gutters)', () => {
     const [row] = renderEntry({ kind: 'thought', text: 'analyzing AST' });
-    expect(row).toContain('◇');
     expect(row).toContain('analyzing AST');
+    expect(row).toContain(T.italic);
+    const plain = row.replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).not.toContain('◇');
   });
 
-  it('tool uses ▷ gutter + the verb-colored prefix', () => {
-    const [row] = renderEntry({ kind: 'tool', text: 'write({"path":"a.ts"})' });
-    expect(row).toContain('▷');
-    // The write verb's color comes from R.toolWriteName — verified across
-    // all themes by the "all themes render tools with R.toolWriteName or
-    // fallback" test in this file.
-    expect(row).toContain(R.toolWriteName);
+  it('tool rows pass through compact semantic card text', () => {
+    const [row] = renderEntry({ kind: 'tool', text: '✓ edit src/a.ts' });
+    const plain = row.replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).toContain('edit');
+    expect(plain).toContain('src/a.ts');
   });
 
   it('system uses ◆ gutter and gray text', () => {
@@ -226,11 +227,11 @@ describe('renderEntry', () => {
     expect(plain).toContain('[ERR] boom');
   });
 
-  it('assistant markdown lines are prefixed with ▌ rule accent', () => {
+  it('assistant markdown renders as terminal prose (no glyph rule)', () => {
     const rows = renderEntry({ kind: 'assistant', text: 'hello\nworld' });
     expect(rows.length).toBeGreaterThanOrEqual(2);
     const plain = rows.map((r) => r.replace(/\x1b\[[0-9;]*m/g, '')).join('\n');
-    expect(plain).toContain('▌');
+    expect(plain).not.toContain('▌');
     expect(plain).toContain('hello');
     expect(plain).toContain('world');
   });
@@ -420,12 +421,12 @@ describe('color coordination', () => {
 
   it('edit tools use R.toolWriteName and read tools use R.toolReadName', () => {
     // Cyber Void's roleColors map write=hot-pink, read=cyan — distinct
-    // colors that match the theme's intent rather than a hardcoded "violet".
-    const edit = renderEntry({ kind: 'tool', text: 'write({"path":"a.ts"})' });
-    expect(edit[0]).toContain(R.toolWriteName);
-    expect(edit[0]).not.toContain(R.toolReadName);
-    const read = renderEntry({ kind: 'tool', text: 'read({"path":"a.ts"})' });
-    expect(read[0]).toContain(R.toolReadName);
+    // colors that match the theme's intent. The compact card rows carry
+    // these colors on the tool-name token.
+    const edit = formatToolInvocationCard('write', { path: 'a.ts', content: 'x' });
+    expect(edit).toContain(R.toolWriteName);
+    const read = formatToolInvocationCard('read', { path: 'a.ts' });
+    expect(read).toContain(R.toolReadName);
   });
 
   it('errors are bold red with [ERR]', () => {

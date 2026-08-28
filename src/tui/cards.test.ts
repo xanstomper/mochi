@@ -12,7 +12,8 @@ describe('tool cards', () => {
   describe('describeToolArgs', () => {
     it('shows path for file tools', () => {
       expect(describeToolArgs('read', { path: 'src/foo.ts' })).toBe('src/foo.ts');
-      expect(describeToolArgs('write', { path: 'src/foo.ts', content: 'x' })).toBe('src/foo.ts  (1 line)');
+      expect(describeToolArgs('write', { path: 'src/foo.ts', content: 'x' })).toContain('src/foo.ts');
+      expect(describeToolArgs('write', { path: 'src/foo.ts', content: 'x' })).toContain('1 line');
       expect(describeToolArgs('edit', { path: 'src/foo.ts', oldText: 'a', newText: 'b' })).toContain('src/foo.ts');
       expect(describeToolArgs('delete', { path: 'src/foo.ts' })).toBe('src/foo.ts');
     });
@@ -24,7 +25,7 @@ describe('tool cards', () => {
 
     it('quotes search/glob queries', () => {
       expect(describeToolArgs('search', { query: 'foo' })).toBe('"foo"');
-      expect(describeToolArgs('glob', { pattern: '*.ts' })).toBe('pattern: *.ts');
+      expect(describeToolArgs('glob', { pattern: '*.ts' })).toBe('*.ts');
     });
 
     it('shows subagent role + prompt preview', () => {
@@ -61,69 +62,67 @@ describe('tool cards', () => {
   });
 
   describe('renderToolCard', () => {
-    it('produces a header, body line, and bottom border', () => {
+    it('produces a compact semantic row + inline diff (no boxes)', () => {
       const card = renderToolCard('edit', { path: 'src/foo.ts', oldText: 'a', newText: 'b' });
       const lines = card.split('\n');
-      expect(lines.length).toBe(3);
-      // Header: top-left corner with the tool name.
-      expect(lines[0]).toMatch(/┌─/);
-      expect(lines[0]).toContain('EDIT');
-      // Body line has the path.
-      expect(lines[1]).toContain('src/foo.ts');
-      // Bottom border.
-      expect(lines[2]).toMatch(/└─+┘/);
+      expect(lines[0]).toContain('edit');
+      expect(lines[0]).toContain('src/foo.ts');
+      expect(card).not.toMatch(/┌|└|─+┐/);
     });
 
-    it('renders the success outcome line with duration in the header', () => {
+    it('renders the success duration in the primary row and diff summary', () => {
       const card = renderToolCard(
         'edit',
         { path: 'src/foo.ts', oldText: 'a', newText: 'b' },
         { kind: 'success', summary: 'updated src/foo.ts', durationMs: 42 },
       );
       const lines = card.split('\n');
-      expect(lines.length).toBe(4); // header + body + outcome + bottom
+      expect(lines[0]).toContain('✓');
       expect(lines[0]).toContain('42ms');
-      expect(lines[2]).toContain('updated src/foo.ts');
+      expect(card).toContain('1 change');
     });
 
-    it('uses ✗ for errors', () => {
+    it('uses × for errors', () => {
       const card = renderToolCard(
         'edit',
         { path: 'src/foo.ts' },
         { kind: 'error', summary: 'ENOENT' },
         { status: 'error' },
       );
+      expect(card).toContain('×');
       expect(card).toContain('ENOENT');
     });
 
-    it('keeps cards narrow enough to never wrap mid-card', () => {
+    it('keeps rows narrow enough to never wrap mid-row', () => {
       const card = renderToolCard('read', { path: 'a/very/long/path/that/would/otherwise/wrap/very/awkwardly/in/a/narrow/terminal/window.ts' });
       for (const line of card.split('\n')) {
         const visible = line.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
-        // Card width is 56 cells by default; allow ~2 cells for borders.
-        expect(visible.length).toBeLessThanOrEqual(60);
+        expect(visible.length).toBeLessThanOrEqual(104);
       }
     });
   });
 
   describe('formatToolInvocationCard / formatToolCompletedCard', () => {
-    it('invocation has no outcome line (pending)', () => {
+    it('invocation is a single pending row (no outcome line)', () => {
       const card = formatToolInvocationCard('read', { path: 'src/foo.ts' });
-      expect(card.split('\n').length).toBe(3); // header + body + bottom, no outcome
+      expect(card.split('\n').length).toBe(1);
+      expect(card).toContain('read');
+      expect(card).not.toContain('↳');
     });
 
     it('completion includes the outcome line', () => {
       const card = formatToolCompletedCard(
-        'edit',
+        'read',
         { path: 'src/foo.ts' },
         { output: 'updated src/foo.ts', durationMs: 42 },
       );
-      expect(card.split('\n').length).toBe(4);
+      expect(card).toContain('✓');
       expect(card).toContain('updated src/foo.ts');
       expect(card).toContain('42ms');
     });
   });
 });
+
 describe('renderTurnSummaryCard', () => {
   it('renders a success summary with files modified and tool count', () => {
     const card = renderTurnSummaryCard({
@@ -135,14 +134,13 @@ describe('renderTurnSummaryCard', () => {
       filesModified: ['src/a.ts', 'src/b.ts'],
       summary: 'Refactored tool rendering.',
     });
-    const lines = card.split('\n');
-    expect(lines[0]).toMatch(/┌─/);
-    expect(card).toContain('TURN COMPLETE');
-    expect(card).toContain('4523ms');
+    expect(card).toContain('Done');
+    expect(card).toContain('4.5s');
     expect(card).toContain('8 tools');
     expect(card).toContain('src/a.ts');
     expect(card).toContain('Refactored tool rendering.');
     expect(card).toContain('4,231 tokens');
+    expect(card).not.toContain('TURN COMPLETE');
   });
 
   it('renders a failure summary showing the stop reason', () => {
@@ -155,9 +153,8 @@ describe('renderTurnSummaryCard', () => {
       filesModified: [],
       summary: 'Model got stuck in a loop.',
     });
-    expect(card).toContain('TURN STOPPED');
-    expect(card).toContain('tool_loop');
-    // No "files:" row when none modified.
+    expect(card).toContain('Stopped');
+    expect(card).toContain('Model got stuck in a loop.');
     expect(card).not.toContain('files:');
   });
 
@@ -182,12 +179,9 @@ describe('renderTurnSummaryCard', () => {
       filesModified: files,
       summary: 'Refactor',
     });
-    // Some of the first 4 paths are shown, the rest are summarised with "+N more".
     expect(card).toMatch(/\(\+\d+ more\)/);
     expect(card).toContain('file0.ts');
     expect(card).toContain('file1.ts');
-    // The total "more" count is the difference between files.length and what
-    // fits in the card, so it must be < files.length and >= 1.
     const m = card.match(/\(\+(\d+) more\)/);
     expect(m).not.toBeNull();
     const more = Number(m![1]);

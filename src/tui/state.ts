@@ -363,7 +363,7 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
       const role = String(event.role ?? 'subagent');
       const prompt = String(event.prompt ?? '').slice(0, 80);
       state.activeSubagents.set(subId, { id: subId, role, prompt, startedAt: Date.now() });
-      pushLine(state, 'system', `┌── [Subagent: ${role}] started: "${prompt}"`);
+      pushLine(state, 'system', `◇ subagent  [${role}] ${prompt}`);
       return true;
     }
     case 'subagent:completed': {

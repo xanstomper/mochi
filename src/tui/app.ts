@@ -25,7 +25,7 @@ import {
   statusBarRow2,
   renderEntry,
   renderDropdown,
-  accentToolPrefix,
+
   composerRow,
   composerPlaceholderRow,
   composerTopRule,
@@ -348,17 +348,54 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     return outLines;
   }
 
+  /** ANSI-aware wrap: split a colored line into rows <= max visible columns,
+   *  preserving the active SGR state across line breaks. */
+  function wrapAnsi(line: string, max: number): string[] {
+    if (visibleLen(line) <= max) return [line];
+    const rows: string[] = [];
+    let cur = '';
+    let curLen = 0;
+    let lastSpace = -1;
+    let sgr = '';
+    const parts = line.match(/(\x1b\[[0-9;]*m|[^\n])/g) ?? [];
+    for (const p of parts) {
+      if (p.startsWith('\x1b')) {
+        cur += p;
+        sgr = p === '\x1b[0m' ? '' : p;
+        continue;
+      }
+      if (curLen >= max) {
+        if (lastSpace > 0) {
+          const head = cur.slice(0, lastSpace);
+          const tail = cur.slice(lastSpace + 1);
+          rows.push(head);
+          cur = sgr + tail + p;
+          curLen = visibleLen(tail) + 1;
+          lastSpace = -1;
+        } else {
+          rows.push(cur);
+          cur = sgr + p;
+          curLen = 1;
+        }
+      } else {
+        if (p === ' ') lastSpace = curLen;
+        cur += p;
+        curLen++;
+      }
+    }
+    if (cur) rows.push(cur);
+    return rows;
+  }
+
   /** Wrap a single transcript line into rendered, wrapped output rows.
-   *  Uses the coordinated visual language from view.ts: 2-space left gutter,
-   *  single-character kind marker (color = role accent), and the same color
-   *  tokens as the legend in renderEntry so the TUI's own rendering matches
-   *  the print-mode rendering. */
+   *  Production visual language: compact semantic rows from cards.ts keep
+   *  their ANSI colors; agent prose renders as terminal prose (no glyph
+   *  gutters); metadata stays muted. */
   function wrapLine(line: Line, maxWidth: number): string[] {
     if (line.kind === 'goal') return [];
     if (line.kind === 'system' && line.text.startsWith('Tokens used:')) return [];
-    const text = prettifyToolCall(line.text) ?? line.text;
-    if (!text.trim()) return [];
-    const cleanText = text.replace(/\x1b\[[0-9;]*m/g, '');
+    if (!line.text.trim()) return [];
+    const cleanText = line.text.replace(/\x1b\[[0-9;]*m/g, '');
     const rows: string[] = [];
 
     switch (line.kind) {
@@ -373,20 +410,22 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         break;
       }
       case 'assistant': {
-        // ◌ ring accent + italic anchor (clean, distinct)
-        const wrapped = wrap(cleanText, Math.max(10, maxWidth - 4));
+        // Terminal prose — plain foreground, no glyph gutters.
+        const wrapped = wrap(cleanText, Math.max(10, maxWidth - 2));
         for (const w of wrapped) {
-          rows.push(`  ${R.assistantGutter}${T.italic}${T.dim}◌${T.reset}${R.assistantText}${w}${T.reset}`);
+          rows.push(`  ${R.assistantText}${w}${T.reset}`);
         }
         break;
       }
       case 'tool': {
-        // Beautiful card: diamond accent + colored header + muted left rule
-        const wrapped = wrap(cleanText, Math.max(10, maxWidth - 6));
-        for (let i = 0; i < wrapped.length; i++) {
-          const w = wrapped[i];
-          if (i === 0) rows.push(`  ${R.toolMarker}${T.italic}${T.dim}${T.bold}◈${T.reset}  ${accentToolPrefix(w)}`);
-          else rows.push(`  ${R.toolMarker}${T.dim}${T.grayDark}│${T.reset}  ${T.dim}${w}${T.reset}`);
+        // Compact semantic rows from cards.ts — keep ANSI colors intact.
+        const text = prettifyToolCall(line.text) ?? line.text;
+        if (!text.trim()) return [];
+        for (const src of text.split('\n')) {
+          if (!src.trim()) { rows.push(''); continue; }
+          for (const r of wrapAnsi(src, Math.max(20, maxWidth - 2))) {
+            rows.push(`  ${r}`);
+          }
         }
         break;
       }
@@ -401,10 +440,10 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         break;
       }
       case 'system': {
-        // ◆ gutter, italic text — every line carries the marker
+        // Muted secondary info — no per-line glyphs.
         const wrapped = wrap(cleanText, Math.max(10, maxWidth - 4));
         for (const w of wrapped) {
-          rows.push(`  ${R.systemMark}◆ ${T.italic}${R.systemText}${w}${T.reset}`);
+          rows.push(`  ${T.dim}${R.systemText}${w}${T.reset}`);
         }
         break;
       }
@@ -419,10 +458,10 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         break;
       }
       case 'thought': {
-        // ◇ gutter, italic dim text — hidden reasoning
+        // Hidden reasoning — plain dim italic, no glyph spam.
         const wrapped = wrap(cleanText, Math.max(10, maxWidth - 4));
         for (const w of wrapped) {
-          rows.push(`  ${R.thoughtGutter}◇ ${T.italic}${R.thoughtText}${w}${T.reset}`);
+          rows.push(`  ${T.dim}${T.italic}${R.thoughtText}${w}${T.reset}`);
         }
         break;
       }
