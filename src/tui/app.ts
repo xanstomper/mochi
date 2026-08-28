@@ -49,7 +49,7 @@ const BRACKET_PASTE_ON = '\x1b[?2004h';
 const BRACKET_PASTE_OFF = '\x1b[?2004l';
 const RESET = '\x1b[0m';
 
-type LineKind = 'user' | 'assistant' | 'system' | 'error' | 'tool' | 'task' | 'goal' | 'plain' | 'thought';
+type LineKind = 'user' | 'assistant' | 'system' | 'error' | 'tool' | 'task' | 'goal' | 'plain' | 'thought' | 'summary';
 
 interface Line {
   kind: LineKind;
@@ -433,6 +433,17 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
           for (const w of wrapAnsi(prefixed, Math.max(20, maxWidth - 2))) {
             rows.push(w);
           }
+        }
+        break;
+      }
+      case 'summary': {
+        // Pre-rendered summary card (one line, newline-joined). Pass rows
+        // through verbatim: no re-wrap, no prettify, no added gutters —
+        // renderSummary already wrapped to terminal width, so windowed
+        // mode gets identical layout to fullscreen. Only the intentional
+        // blank separators inside the card survive (no per-row blanks).
+        for (const src of line.text.split('\n')) {
+          rows.push(src);
         }
         break;
       }

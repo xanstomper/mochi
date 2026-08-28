@@ -3,7 +3,7 @@ import { formatToolInvocationCard, formatToolCompletedCard, renderTurnSummaryCar
 import { renderSummary } from './summary-render.js';
 import type { SummaryDocument } from '../summary/engine.js';
 
-export type LineKind = 'user' | 'assistant' | 'system' | 'error' | 'tool' | 'task' | 'goal' | 'plain' | 'thought';
+export type LineKind = 'user' | 'assistant' | 'system' | 'error' | 'tool' | 'task' | 'goal' | 'plain' | 'thought' | 'summary';
 
 export interface TuiLine {
   kind: LineKind;
@@ -151,6 +151,8 @@ export function pushLine(state: TuiState, kind: LineKind, text: string): void {
   // in the line, never from raw prefixes. The old `prev.text.includes(':')`
   // test matched virtually every formatted card (headers all contain ':'),
   // silently swallowing a second unrelated call's pending card.
+  // ('summary' is exempt: the summary card is a single logical unit and must
+  // never be swallowed by an in-flight tool card right before it renders.)
   if (kind === 'tool' && state.lines.length && state.lines[state.lines.length - 1].kind === 'tool') {
     const prev = state.lines[state.lines.length - 1];
     const prevFamily = toolFamily(prev.text);
@@ -432,10 +434,11 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
       const doc = event.doc as SummaryDocument | undefined;
       if (doc && doc.populatedSections && doc.populatedSections.length > 0) {
         const width = process.stdout.columns || 80;
-        const lines = renderSummary(doc, width);
-        for (const l of lines) {
-          pushLine(state, 'tool', l);
-        }
+        // The whole card travels as ONE line (newline-joined); wrapLine
+        // treats kind 'summary' as pre-rendered and passes rows through
+        // verbatim. Per-line pushing double-wrapped and blank-spaced the
+        // card into a compressed mess at windowed widths.
+        pushLine(state, 'summary', renderSummary(doc, width).join('\n'));
         return true;
       }
       const files = Array.isArray(event.filesModified) ? (event.filesModified as unknown[]).map((f) => String(f)) : [];

@@ -475,12 +475,14 @@ describe('renderMarkdown', () => {
     expect(plain.every((l) => !l.includes('## Next steps'))).toBe(true);
   });
 
-  it('uses a consistent 2-space gutter for bullets and code fences', () => {
+  it('renders bullets as auto-incrementing orange numbers (no • glyphs)', () => {
     const rows = m.renderMarkdown('- one\n- two\n\n```ts\nconst x = 1;\n```\n');
     const plain = rows.map((r) => r.replace(/\x1b\[[0-9;]*m/g, ''));
     // bullets get the gutter
-    expect(plain.some((l) => l.startsWith('  • one'))).toBe(true);
-    expect(plain.some((l) => l.startsWith('  • two'))).toBe(true);
+    expect(plain.some((l) => l.startsWith('  1. one'))).toBe(true);
+    expect(plain.some((l) => l.startsWith('  2. two'))).toBe(true);
+    // no blue bullet glyph anywhere
+    expect(plain.some((l) => l.includes('•'))).toBe(false);
   });
 
   it('collapses blank lines (paragraphs merge, no double blanks)', () => {

@@ -523,6 +523,7 @@ export function renderMarkdown(text: string): string[] {
   let inCodeBlock = false;
   let codeBlockLang = '';
   let paragraph: string[] = [];
+  let bulletNum = 0; // auto-number for consecutive "-"/*"/+" bullets
 
   const flushParagraph = () => {
     if (!paragraph.length) return;
@@ -533,6 +534,7 @@ export function renderMarkdown(text: string): string[] {
     const joined = paragraph.join(' ').replace(/\s+/g, ' ').trim();
     paragraph = [];
     if (!joined) return;
+    bulletNum = 0; // a paragraph break restarts bullet numbering
     out.push(formatInlineMarkdown(joined));
   };
 
@@ -598,15 +600,18 @@ export function renderMarkdown(text: string): string[] {
       continue;
     }
 
-    // Unordered bullet — consistent 2-space grid: "  • text".
+    // Unordered bullet — rendered as an orange auto-number on the same
+    // 2-space grid as numbered lists (no blue bullet glyphs; lists always
+    // number, matching the orange numbered-list treatment).
     if (/^[\*\-\+]\s+/.test(trimmed)) {
       flushParagraph();
+      bulletNum += 1;
       const content = trimmed.replace(/^[\*\-\+]\s+/, '');
-      out.push(`${R.mdLink}  •${T.reset} ${formatInlineMarkdown(content)}`);
+      out.push(`${R.codeNumber}  ${bulletNum}.${T.reset} ${formatInlineMarkdown(content)}`);
       continue;
     }
-
-    // Numbered list — same 2-space grid as bullets.
+    bulletNum = 0;
+    // Numbered list — same 2-space grid, orange numbers.
     const numMatch = trimmed.match(/^(\d+)\.\s+(.*)$/);
     if (numMatch) {
       flushParagraph();

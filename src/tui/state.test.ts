@@ -255,7 +255,7 @@ describe('duplicate tool:called guard (dual-emitter dedupe)', () => {
       summary: 'Done',
       doc,
     }));
-    const toolLines = s.lines.filter((l) => l.kind === 'tool');
+    const toolLines = s.lines.filter((l) => l.kind === 'summary');
     expect(toolLines.length).toBeGreaterThan(0);
     const joined = toolLines.map((l) => l.text).join('\n');
     expect(joined).toContain('SUMMARY');
