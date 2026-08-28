@@ -49,9 +49,10 @@ import { mergeConflictTool } from './merge-conflict.js';
 import { codeSimilarityTool } from './code-similarity.js';
 import { securityAuditTool } from './security-audit.js';
 import { skillManageTool } from '../skill-manager.js';
+import { astSliceTool } from './ast-slice.js';
 
 export const ALL_TOOLS: Tool[] = [
-  readTool, writeTool, editTool, deleteTool, shellTool, searchTool, globTool, outlineTool,
+  readTool, writeTool, editTool, deleteTool, shellTool, searchTool, globTool, outlineTool, astSliceTool,
   gitTool, inspectTool, memoryTool, sessionRecallTool, todoTool, skillTool, subagentTool, patchTool,
   bgTaskTool, fetchTool, diffTool, treeTool, regexReplaceTool, deepwikiTool, clipboardTool, sqlCodebaseTool,
   searchReplaceMultiTool, analyzeCodeTool, verifyTool, perfTool,
@@ -69,7 +70,7 @@ export const ALL_TOOLS: Tool[] = [
  * models with sufficient context to handle them without degenerating.
  */
 const CORE_TOOL_NAMES = new Set([
-  'read', 'write', 'edit', 'patch', 'replace_symbol', 'delete', 'shell', 'search', 'glob', 'outline',
+  'read', 'write', 'edit', 'patch', 'replace_symbol', 'delete', 'shell', 'search', 'glob', 'outline', 'ast_slice',
   'git', 'inspect', 'todo', 'skill', 'subagent', 'bg_task', 'fetch', 'web_search', 'web_crawl', 'think', 'chameleon', 'blast_radius', 'session_recall'
 ]);
 
@@ -214,6 +215,12 @@ export const TOOL_ALIASES: Record<string, string> = {
   read_url_content: 'fetch',
   search_web: 'web_search',
   google_search: 'web_search',
+
+  // AST & Code Slicing
+  slice_symbol: 'ast_slice',
+  slice_code: 'ast_slice',
+  symbol_slice: 'ast_slice',
+  astSlice: 'ast_slice',
 };
 
 export function normalizeToolArgs(toolName: string, args: Record<string, unknown>): Record<string, unknown> {
@@ -264,6 +271,11 @@ export function normalizeToolArgs(toolName: string, args: Record<string, unknown
   }
   if (norm.action === undefined) {
     norm.action = norm.Action ?? norm.operation ?? norm.op;
+  }
+
+  // 8. Symbol name normalization
+  if (norm.symbol === undefined) {
+    norm.symbol = norm.symbol_name ?? norm.symbolName ?? norm.name ?? norm.targetSymbol;
   }
 
   return norm;

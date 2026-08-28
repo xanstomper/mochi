@@ -2,11 +2,12 @@
 // every subsystem so an operator can see at a glance whether Mochi is ready
 // and where the gaps are: provider keys, sqlite index, code symbol index,
 // background tasks, cron jobs, sessions, and the running daemon.
-import { existsSync } from 'node:fs';
+import { existsSync, statSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { hasSqlite, sqliteSource } from './sqlite.js';
 import { listJobs } from './cron.js';
 import { SessionStore } from './session-store.js';
+import { runRetention } from './retention.js';
 
 export interface DoctorReport {
   runtime: { node: string; sqlite: boolean };
@@ -157,6 +158,18 @@ export async function repairDoctor(opts: {
   } else {
     items.push({ name: 'Git Repository', status: 'already_ok', details: 'Git repository initialized' });
   }
+
+  // 4. Disk retention / GC: prune stale session state and traces (>14 days)
+  const retentionResult = runRetention({ workspaceDir: opts.workspaceDir, maxAgeDays: 14 });
+  const retentionFixed = (retentionResult.state.deletedFiles + retentionResult.traces.deletedFiles) > 0;
+  const freedMB = (retentionResult.state.freedBytes + retentionResult.traces.freedBytes) / (1024 * 1024);
+  items.push({
+    name: 'Disk Retention',
+    status: retentionFixed ? 'fixed' : 'already_ok',
+    details: retentionFixed
+      ? `Cleaned ${retentionResult.state.deletedFiles + retentionResult.traces.deletedFiles} stale files (${freedMB.toFixed(1)} MB freed)`
+      : 'No stale session/traces files to clean',
+  });
 
   const fixedCount = items.filter((i) => i.status === 'fixed').length;
   const summary = `🩺 Auto-Repair: ${fixedCount} issue(s) resolved, ${items.filter((i) => i.status === 'already_ok').length} already healthy.`;
