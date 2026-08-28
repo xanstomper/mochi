@@ -19,6 +19,7 @@ import { memoryDigest } from './memory-store.js';
 import { feedbackDigest } from './feedback.js';
 import { detectCircle } from './circle.js';
 import { evaluateOwl } from './cognitive/owl.js';
+import { formatEnvironmentBlock } from './core/env-profiler.js';
 
 const CANDIDATE_RULES = ['MOCHI.md', 'mochi.md', 'AGENTS.md', 'CLAUDE.md', '.cursorrules', '.github/copilot-instructions.md'];
 
@@ -65,7 +66,9 @@ export function machineAccessBlock(): string {
     '`codegraph`, and `sql_codebase_query` to inspect ANY file in the repo, and',
     '`session_recall` to pull context from past sessions before a task. Treat the',
     'whole workspace as your working area; verify your changes against real tooling.',
-  ].join('\n');
+    '',
+    formatEnvironmentBlock(),
+  ].filter(Boolean).join('\n');
 }
 
 // Cost-effective change detection: skip a file entirely when absent; otherwise
