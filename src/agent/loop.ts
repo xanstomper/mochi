@@ -17,6 +17,7 @@ import { diagnoseFile, renderDiagnostics } from '../diagnostics.js';
 import type { AgentProfile } from '../types.js';
 import { AgentProfileService } from '../agents/profile.js';
 import { BudgetEngine, estimateCostUsd } from '../budget.js';
+import { SpeculativeEngine } from '../speculative.js';
 import { LearningStore } from '../learning.js';
 import { classifyFailure as classifyErrorPattern } from '../learning.js';
 import {
@@ -260,6 +261,7 @@ export class Agent {
   /** Phase 9 (VNext): how many times the prose-runaway rewrite was requested
    *  (bounded at 1 so the guard can never itself loop). */
   private proseRunwayNudges = 0;
+  private specPreflighted = false;
   /** Diff-hygiene: one bounded cleanup nudge for debug logs / TODO /
    *  suppressed-check debris the model added before we accept "done". */
   private hygieneNudges = 0;
@@ -419,6 +421,17 @@ Continue from 'Next:', do not redo completed progress.`,
     });
     if (oneShot.suggests && !this.planMode && taskKind !== 'chat') {
       this.context.addMessage({ role: 'system', content: oneShot.suggests });
+    }
+
+    // Speculative reasoning preflight (opt-in via model.speculative.preflight).
+    // For hard non-chat tasks, run the existing SpeculativeEngine once and
+    // inject its chosen approach + pitfall notes as a system hint that biases
+    // the main reasoning path — DeepSeek/Cline-style "think a cheap model ahead,
+    // then commit the fast model to a better plan" before it fires tools.
+    // Bounded: runs at most once (guarded by speculativePreflighted), only if
+    // budget allows, and swallows any failure so it never blocks the task.
+    if (!this.planMode && taskKind !== 'chat' && this.specPreflightEnabled() && !this.specPreflighted) {
+      await this.maybeSpeculativePreflight(task);
     }
 
     // Wire any configured MCP servers into the toolset. These tools are closed
@@ -1816,6 +1829,53 @@ Continue from 'Next:', do not redo completed progress.`,
       return { passed: false, summary: `Check failed: ${cmd}\n${truncateMiddle(out, 1200)}` };
     }
     return { passed: true, summary: `All checks passed: ${checks.join(', ')}` };
+  }
+
+  /**
+   * Speculative reasoning preflight. Opt-in gate: only active when
+   * model.speculative.preflight is true AND the primary provider is configured
+   * with a 'reasoning' profile we can borrow (the SpeculativeEngine builds its
+   * own provider from this.config.model). We bind the engine to a fresh budget
+   * that borrows the shared run budget's limits so a runaway preflight can't
+   * silently overspend the task's model-call allocation.
+   */
+  private specPreflightEnabled(): boolean {
+    return !!this.config.model?.speculative?.preflight;
+  }
+
+  private async maybeSpeculativePreflight(task: Task): Promise<void> {
+    this.specPreflighted = true;
+    // Never block a task on the preflight. Any failure (provider down, budget
+    // exhausted, aborted) degrades to a no-op; the main loop proceeds normally.
+    try {
+      if (this.abortSignal?.aborted) return;
+      if (this.budget && !this.budget.canMakeModelCall()) return;
+      const shared = this.budget;
+      const budget = shared ?? new BudgetEngine(this.config.safety);
+      budget.start();
+      const engine = new SpeculativeEngine(this.config, budget, 2 /* candidateCount */);
+      const question = task.title + (task.description ? `\n\nContext: ${task.description}` : '');
+      const result = await engine.speculate(question);
+      if (this.abortSignal?.aborted) return;
+      const best = result.best ?? result.candidates[0];
+      if (!best) return;
+      const note = best.response?.trim() || best.strategy;
+      if (!note) return;
+      const lines = result.candidates.slice(0, 2).map((c, i) => `[candidate ${i + 1}] ${c.strategy}`).join('\n');
+      this.context.addMessage({
+        role: 'system',
+        content:
+          'SPECULATIVE PREFLIGHT (cheap reasoning pass before committing):\n' +
+          `Chosen approach: ${best.strategy}\n` +
+          `Notes: ${note}\n` +
+          `Alternatives considered:\n${lines}\n` +
+          'Use this as a starting hypothesis. If it is wrong once you gather real' +
+          ' evidence from the repo, discard it and re-plan — do not force it.',
+      });
+      this.events.emit({ type: 'agent:log', agentId: this.id, message: '[speculative-preflight] injected approach hint' });
+    } catch (e) {
+      this.events.emit({ type: 'agent:log', agentId: this.id, message: `[speculative-preflight] skipped: ${String(e).slice(0, 120)}` });
+    }
   }
 
   private pulse(iteration: number, task: Task): { abort: boolean; reason?: string; message?: string } {

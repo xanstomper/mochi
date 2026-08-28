@@ -13,6 +13,19 @@ export interface ModelConfig {
    *  model); profiles fall back to the primary's when unset. Mid-stream
    *  failures are NOT retried on a fallback (partial output can't be replayed). */
   failover?: ModelConfig[];
+  /** Speculative reasoning preflight (DeepSeek/Cline-style "think before
+   *  acting"). When enabled, hard non-chat tasks run the SpeculativeEngine
+   *  once before the main model call and inject its chosen approach + pitfall
+   *  notes as a system hint that biases the main reasoning path. Opt-in so the
+   *  default loop stays lean for simple turns. */
+  speculative?: {
+    /** Run the preflight on the first iteration of implementation/verify tasks. */
+    preflight?: boolean;
+    /** On the first verification failure of a hard task, inject a structured
+     *  self-critique + repair directive alongside the existing autopsy/lessons
+     *  flow so the next attempt is a deliberate repair, not a blind retry. */
+    selfCritique?: boolean;
+  };
 }
 
 export interface PermissionConfig {

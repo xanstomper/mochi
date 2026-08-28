@@ -122,6 +122,14 @@ mochi inspect "SessionManager"
 mochi speculate "difficult TS2345 failure"
 ```
 
+> **Speculative preflight** (`model.speculative.preflight: true` in config): for hard
+> non-chat tasks, mochi runs a cheap speculative pass before the main loop call and
+> injects the chosen approach + alternatives as a system hint, so the model commits
+> to a better plan before firing tools (DeepSeek/Cline-style "think a cheap model
+> ahead"). `model.speculative.selfCritique: true` reinforces the loop's existing
+> failure-repair flow on the first verification miss. Both are opt-in and never block
+> the task — a failed/skipped preflight degrades to a normal run.
+
 ## Configuration
 
 Global: `~/.config/mochi/config.json`
@@ -138,6 +146,10 @@ Project: `.mochi/config.json`
       "coding": "opencode/deepseek-v4-flash-free",
       "reasoning": "opencode/deepseek-v4-flash-free",
       "review": "opencode/deepseek-v4-flash-free"
+    },
+    "speculative": {
+      "preflight": true,
+      "selfCritique": true
     }
   },
   "safety": {
