@@ -24,6 +24,7 @@ import {
   statusBarRow1,
   statusBarRow2,
   renderEntry,
+  renderMarkdown,
   renderDropdown,
 
   composerRow,
@@ -410,10 +411,13 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         break;
       }
       case 'assistant': {
-        // Terminal prose — plain foreground, no glyph gutters.
-        const wrapped = wrap(cleanText, Math.max(10, maxWidth - 2));
-        for (const w of wrapped) {
-          rows.push(`  ${R.assistantText}${w}${T.reset}`);
+        // Terminal prose — live markdown rendering (bold, inline code,
+        // headings, bullets, code blocks), ANSI-wrapped to viewport width.
+        const mdRows = renderMarkdown(cleanText);
+        for (const r of mdRows) {
+          for (const w of wrapAnsi(r, Math.max(20, maxWidth - 2))) {
+            rows.push(`  ${w}`);
+          }
         }
         break;
       }
