@@ -1790,6 +1790,10 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     if (exited) return;
     exited = true;
     stopSpinner();
+    // Restore the tty BEFORE anything else: raw mode (no echo, no canonical
+    // line processing) is a termios attribute that outlives the process, so
+    // skipping this leaves the user's terminal looking frozen after exit.
+    process.stdin.setRawMode?.(false);
     process.stdout.write(`${RESET}${SHOW}${ALT_EXIT}`);
     for (const fn of cleanupFns) fn();
     process.exit(0);
@@ -2232,15 +2236,28 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     const resizeListener = () => scheduleRender();
     process.stdout.on('resize', resizeListener);
     const exitListener = () => {
+      // Runs on EVERY exit path including hard crashes (uncaughtException →
+      // process.exit). Raw mode and mouse/paste modes must be undone here or
+      // the user's terminal is left broken ("frozen") after any crash.
+      process.stdin.setRawMode?.(false);
       process.stdout.write(`${RESET}${SHOW}${ALT_EXIT}\x1b[?1000l\x1b[?1002l\x1b[?1006l` + BRACKET_PASTE_OFF);
     };
     process.on('exit', exitListener);
+    // External signals (kill, terminal close) bypass the 'exit'-only restore:
+    // convert them to the graceful exit() so the tty is always restored.
+    const signalExit = () => exit();
+    process.on('SIGINT', signalExit);
+    process.on('SIGTERM', signalExit);
+    process.on('SIGHUP', signalExit);
     runtime.events.onAll(onRuntimeEvent);
     void refreshGitStats(); // seed the status bar diff stats
     cleanupFns = [
       () => process.stdin.off('data', keyListener),
       () => process.stdout.off('resize', resizeListener),
       () => process.off('exit', exitListener),
+      () => process.off('SIGINT', signalExit),
+      () => process.off('SIGTERM', signalExit),
+      () => process.off('SIGHUP', signalExit),
     ];
     startSpinner();
     scheduleRender();

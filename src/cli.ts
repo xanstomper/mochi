@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Sync fs/url/path imports at module top (ESM-safe; no require() in output).
-import { readFileSync, statSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, statSync, existsSync, readdirSync, mkdirSync, appendFileSync } from 'node:fs';
 import { dirname, resolve, join as pathJoin } from 'node:path';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { findProjectRoot } from './repo.js';
 import type { MochiConfig } from './types.js';
@@ -16,6 +17,35 @@ try {
 } catch {
   /* compiled binary: use the baked-in default */
 }
+
+// Global crash safety net (P0 reliability): a stray unhandled rejection must
+// never kill a running session mid-task (the classic "mochi froze" experience),
+// and a hard crash must leave the user's terminal usable. Details land in
+// ~/.mochi/logs/crash.log for post-mortem; `mochi doctor` can surface them.
+function logCrash(kind: string, err: unknown): void {
+  try {
+    const dir = pathJoin(homedir(), '.mochi', 'logs');
+    mkdirSync(dir, { recursive: true });
+    const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
+    appendFileSync(pathJoin(dir, 'crash.log'), `[${new Date().toISOString()}] ${kind}: ${detail}\n`);
+  } catch {
+    /* never throw from the crash logger */
+  }
+}
+
+process.on('unhandledRejection', (reason) => {
+  // Log-and-continue: the agent loop, watchdogs, and per-tool timeouts own
+  // recovery. Dying here is what turned a recoverable hiccup into a "frozen"
+  // session with a broken terminal.
+  logCrash('unhandledRejection', reason);
+});
+process.on('uncaughtException', (err: unknown) => {
+  // Synchronous state is undefined after this; log, restore, and bail.
+  // The TUI's process.on('exit') listener still runs and restores the tty.
+  logCrash('uncaughtException', err);
+  console.error(`[fatal] ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+  process.exit(1);
+});
 
 const BOOLEAN_FLAGS = new Set([
   'p', 'print', 'auto', 'quiet', 'q', 'verbose', 'v', 'debug', 'h', 'help', 'version', 'offline', 'enhance', 'install', 'plan',
