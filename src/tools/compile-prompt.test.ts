@@ -14,12 +14,15 @@ function makeCtx() {
 }
 
 describe('compile_prompt tool', () => {
-  it('defaults to max tier and returns 5-phase blueprint', async () => {
+  it('defaults to max tier and returns full methodology blueprint', async () => {
     const result = await compilePromptTool.execute({ prompt: 'fix authentication jwt expiry bug' }, makeCtx());
-    expect(result).toContain('# MOCHI MASTER EXECUTION BLUEPRINT');
-    expect(result).toContain('MAX (DEEP ARCHITECTURAL SPEC)');
-    expect(result).toContain('Phase 0 — Full System');
-    expect(result).toContain('Anti-Loop');
+    expect(result).toContain('# TASK');
+    expect(result).toContain('## OBJECTIVE');
+    expect(result).toContain('MAX (Exhaustive Architectural Decomposition)');
+    expect(result).toContain('## REASONING STRATEGY §21');
+    expect(result).toContain('## VERIFICATION STRATEGY §22');
+    expect(result).toContain('## ANTI-LOOP RULES §26');
+    expect(result).toContain('## FINAL OUTPUT FORMAT §39');
   });
 
   it('produces low-tier compact directive when reasoning=low', async () => {

@@ -45,18 +45,52 @@ describe('MochiPromptCompiler — HIGH tier', () => {
 });
 
 describe('MochiPromptCompiler — MAX tier', () => {
-  it('produces a 5-phase architectural master specification', () => {
+  it('produces a 5-phase architectural master specification with full methodology sections', () => {
     const spec = compiler.compile('rebuild the entire agent harness and streaming pipeline', { reasoning: 'max' });
     expect(spec.reasoningLevel).toBe('max');
     expect(spec.phases).toHaveLength(5);
-    expect(spec.compiledMarkdownPrompt).toContain('MAX (DEEP ARCHITECTURAL SPEC)');
-    expect(spec.compiledMarkdownPrompt).toContain('## 1. Intent & Desired Outcome');
-    expect(spec.compiledMarkdownPrompt).toContain('## 3. Assumptions & Default Inferences');
-    expect(spec.compiledMarkdownPrompt).toContain('## 4. Priority Hierarchy');
-    expect(spec.compiledMarkdownPrompt).toContain('## 5. Multi-Phase Execution Blueprint');
-    expect(spec.compiledMarkdownPrompt).toContain('## 6. Verification & Acceptance Criteria');
-    expect(spec.compiledMarkdownPrompt).toContain('## 7. Anti-Loop & Safety Enforcement');
-    // Complexity auto-detected as SYSTEM_LEVEL for harness rebuild
+    // Output contract §32 — top-level sections
+    expect(spec.compiledMarkdownPrompt).toContain('# TASK');
+    expect(spec.compiledMarkdownPrompt).toContain('## OBJECTIVE');
+    expect(spec.compiledMarkdownPrompt).toContain('## CONTEXT');
+    expect(spec.compiledMarkdownPrompt).toContain('MAX (Exhaustive Architectural Decomposition)');
+    // Requirements §3/§7/§8
+    expect(spec.compiledMarkdownPrompt).toContain('## USER REQUIREMENTS');
+    expect(spec.compiledMarkdownPrompt).toContain('## INFERRED REQUIREMENTS');
+    // Assumptions engine §9 — table format
+    expect(spec.compiledMarkdownPrompt).toContain('## ASSUMPTIONS');
+    expect(spec.compiledMarkdownPrompt).toContain('| ID | Assumption | Confidence | Impact | Reason |');
+    // Priority system §12
+    expect(spec.compiledMarkdownPrompt).toContain('## PRIORITIES');
+    expect(spec.compiledMarkdownPrompt).toContain('P0 = MUST NOT FAIL');
+    // Existing-code preservation §36
+    expect(spec.compiledMarkdownPrompt).toContain('## ARCHITECTURE / APPROACH');
+    expect(spec.compiledMarkdownPrompt).toContain('DO NOT');
+    // Reasoning framework §21 — PROBLEM → OBSERVATIONS → OPTIONS → DECISION
+    expect(spec.compiledMarkdownPrompt).toContain('## REASONING STRATEGY §21');
+    expect(spec.compiledMarkdownPrompt).toContain('PROBLEM');
+    expect(spec.compiledMarkdownPrompt).toContain('OBSERVATIONS');
+    expect(spec.compiledMarkdownPrompt).toContain('TRADEOFFS');
+    // Evidence-driven execution §22 — CLAIM → EVIDENCE → VERIFICATION → STATUS
+    expect(spec.compiledMarkdownPrompt).toContain('## VERIFICATION STRATEGY §22');
+    expect(spec.compiledMarkdownPrompt).toContain('CLAIM');
+    expect(spec.compiledMarkdownPrompt).toContain('EVIDENCE');
+    // Anti-loop §26
+    expect(spec.compiledMarkdownPrompt).toContain('## ANTI-LOOP RULES §26');
+    expect(spec.compiledMarkdownPrompt).toContain('STOP  →  ANALYZE ROOT CAUSE  →  CHANGE STRATEGY');
+    // Completion definition §38
+    expect(spec.compiledMarkdownPrompt).toContain('## QUALITY REQUIREMENTS §38');
+    expect(spec.compiledMarkdownPrompt).toContain('IMPLEMENTED  |  VERIFIED');
+    // Acceptance criteria §24
+    expect(spec.compiledMarkdownPrompt).toContain('## ACCEPTANCE CRITERIA §24');
+    // Context management §27/28
+    expect(spec.compiledMarkdownPrompt).toContain('## CONTEXT MANAGEMENT §27–28');
+    // Cline-grade summary §39
+    expect(spec.compiledMarkdownPrompt).toContain('## FINAL OUTPUT FORMAT §39');
+    expect(spec.compiledMarkdownPrompt).toContain('WHAT CHANGED');
+    expect(spec.compiledMarkdownPrompt).toContain('VERIFICATION');
+    expect(spec.compiledMarkdownPrompt).toContain('UNRESOLVED');
+    // Complexity
     expect(spec.complexity).toBe('SYSTEM_LEVEL');
   });
 

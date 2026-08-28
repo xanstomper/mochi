@@ -704,65 +704,270 @@ export class MochiPromptCompiler {
     return lines.join('\n');
   }
 
+
   private renderMaxTierPrompt(spec: CompiledPromptSpecification): string {
     const lines: string[] = [];
+    const testCmd = spec.verificationPlanner.primaryCommand || 'npm test';
 
-    lines.push(`# MOCHI MASTER EXECUTION BLUEPRINT: ${spec.normalizedIntent.primaryGoal.toUpperCase()}`);
+    // Output Contract §32 — HEADER
+    lines.push('# TASK');
     lines.push('');
-    lines.push(`> **Reasoning Tier**: \`MAX (DEEP ARCHITECTURAL SPEC)\` | **Classifications**: \`${spec.classifications.join(', ')}\` | **Complexity**: \`${spec.complexity}\` | **Verification**: \`${spec.verificationPlanner.primaryCommand || 'npm test'}\``);
+    lines.push('## OBJECTIVE');
+    lines.push(spec.normalizedIntent.primaryGoal);
     lines.push('');
-    lines.push(`## 1. Intent & Desired Outcome`);
-    lines.push(`- **Goal**: ${spec.normalizedIntent.primaryGoal}`);
-    lines.push(`- **Target Outcome**: ${spec.normalizedIntent.desiredOutcome}`);
+    lines.push('## CONTEXT');
+    lines.push('- **Reasoning Tier**: MAX (Exhaustive Architectural Decomposition)');
+    lines.push(`- **Task Categories**: ${spec.classifications.join(', ')}`);
+    lines.push(`- **Complexity**: ${spec.complexity}`);
     lines.push(`- **Target Platform**: ${spec.normalizedIntent.targetPlatform}`);
+    lines.push(`- **Verification Command**: \`${testCmd}\``);
+    lines.push(`- **Desired Outcome**: ${spec.normalizedIntent.desiredOutcome}`);
     lines.push('');
 
-    lines.push(`## 2. Invariants & Strict Constraints`);
-    for (const c of spec.constraints) {
-      lines.push(`- [x] **${c}**`);
+    // §3 / §7 — USER REQUIREMENTS
+    lines.push('## USER REQUIREMENTS');
+    for (const r of spec.explicitRequirements) lines.push(`- ${r}`);
+    lines.push('');
+
+    // §8 — INFERRED REQUIREMENTS
+    lines.push('## INFERRED REQUIREMENTS');
+    lines.push('> Strongly implied by the task type. Treat as mandatory unless the user explicitly overrides.');
+    lines.push('');
+    for (const r of spec.inferredRequirements) {
+      const tag = r.isMandatory ? '**[MANDATORY]**' : '*[PREFERRED]*';
+      lines.push(`- ${tag} ${r.requirement}`);
+      lines.push(`  - *Rationale: ${r.rationale}*`);
     }
     lines.push('');
 
-    lines.push(`## 3. Assumptions & Default Inferences`);
+    // §9 — ASSUMPTIONS ENGINE (table format: id / assumption / confidence / impact / reason)
+    lines.push('## ASSUMPTIONS');
+    lines.push('> Transparently declared. LOW-confidence assumptions that materially change implementation will be flagged before proceeding.');
+    lines.push('');
+    lines.push('| ID | Assumption | Confidence | Impact | Reason |');
+    lines.push('| :-- | :-- | :-- | :-- | :-- |');
     for (const a of spec.assumptions) {
-      lines.push(`- **[${a.id}] ${a.assumption}** *(Confidence: ${a.confidence}, Reason: ${a.reason})*`);
+      lines.push(`| ${a.id} | ${a.assumption} | ${a.confidence} | ${a.impact} | ${a.reason} |`);
     }
     lines.push('');
 
-    lines.push(`## 4. Priority Hierarchy`);
-    for (const p of spec.priorities) {
-      lines.push(`- **${p.priority}**: ${p.description}`);
-    }
+    // §11 — CONSTRAINTS
+    lines.push('## CONSTRAINTS');
+    lines.push('> Explicit constraints outrank all inferred preferences. Violations are **P0 blockers**.');
+    lines.push('');
+    for (const c of spec.constraints) lines.push(`- [x] **${c}**`);
     lines.push('');
 
-    lines.push(`## 5. Multi-Phase Execution Blueprint`);
+    // §12 — PRIORITY SYSTEM (P0-P4)
+    lines.push('## PRIORITIES');
+    lines.push('');
+    lines.push('| Priority | Description |');
+    lines.push('| :-- | :-- |');
+    for (const p of spec.priorities) lines.push(`| **${p.priority}** | ${p.description} |`);
+    lines.push('');
+    lines.push('> **P0 = MUST NOT FAIL** | P1 = REQUIRED | P2 = IMPORTANT | P3 = PREFERRED | P4 = OPTIONAL');
+    lines.push('');
+
+    // SUCCESS CRITERIA
+    lines.push('## SUCCESS CRITERIA');
+    for (const s of spec.normalizedIntent.successConditions) lines.push(`- ${s}`);
+    lines.push('');
+
+    // §36 / §37 — EXISTING-CODE PRESERVATION + INCREMENTAL IMPLEMENTATION
+    lines.push('## ARCHITECTURE / APPROACH');
+    lines.push('');
+    lines.push('### Existing-Code Preservation Rules §36');
+    lines.push('- **DO NOT** rewrite working systems unnecessarily.');
+    lines.push('- **DO NOT** introduce a new framework without explicit justification.');
+    lines.push('- **DO NOT** duplicate existing infrastructure or utilities.');
+    lines.push('- **DO NOT** delete functionality without understanding all dependencies first.');
+    lines.push('- **DO NOT** replace working architecture merely because another approach is fashionable.');
+    lines.push('- **DO** inspect what already exists before writing a single line of new code.');
+    lines.push('');
+    lines.push('### Incremental Implementation Pattern §37');
+    lines.push('```');
+    lines.push('INSPECT  ->  PLAN  ->  IMPLEMENT SMALL INCREMENT  ->  BUILD  ->  TEST  ->  CONTINUE');
+    lines.push('```');
+    lines.push('Never make enormous unverified changes in a single step.');
+    lines.push('');
+
+    // §16 / §17 — MULTI-PHASE EXECUTION — full per-phase contract
     for (const phase of spec.phases) {
-      lines.push(`### ${phase.name}`);
-      lines.push(`*${phase.objective}*`);
+      lines.push(`## ${phase.name}`);
       lines.push('');
-      lines.push(`**Tasks:**`);
-      for (const t of phase.tasks) lines.push(`- ${t}`);
-      lines.push(`**Tools:** \`${phase.tools.join(', ')}\``);
-      lines.push(`**Exit Criteria:** ${phase.exitCriteria.join('; ')}`);
+      lines.push(`**OBJECTIVE**: ${phase.objective}`);
+      lines.push('');
+      if (phase.inputs.length) {
+        lines.push(`**INPUTS**: ${phase.inputs.join(', ')}`);
+        lines.push('');
+      }
+      lines.push('**TASKS**:');
+      for (const t of phase.tasks) lines.push(`1. ${t}`);
+      lines.push('');
+      lines.push(`**TOOLS**: \`${phase.tools.join('\`, \`')}\``);
+      lines.push('');
+      lines.push(`**EXPECTED OUTPUT**: ${phase.expectedOutput}`);
+      lines.push('');
+      lines.push('**VERIFICATION**:');
+      for (const v of phase.verification) lines.push(`- ${v}`);
+      lines.push('');
+      lines.push('**EXIT CRITERIA**:');
+      for (const e of phase.exitCriteria) lines.push(`- ${e}`);
+      lines.push('');
+      lines.push(`**FAILURE HANDLING**: ${phase.failureHandling}`);
       lines.push('');
     }
 
-    lines.push(`## 6. Verification & Acceptance Criteria`);
-    lines.push(`| Dimension | Acceptance Condition |`);
-    lines.push(`| :--- | :--- |`);
-    for (const f of spec.acceptanceCriteria.functional) {
-      lines.push(`| **Functional** | ${f} |`);
+    // §19–20 — TOOL STRATEGY + TOOL CALL POLICY
+    lines.push('## TOOL STRATEGY');
+    lines.push('');
+    lines.push(`**Required Tools**: \`${spec.toolStrategy.requiredTools.join('\`, \`')}\``);
+    lines.push(`**Optional Tools**: \`${spec.toolStrategy.optionalTools.join('\`, \`')}\``);
+    lines.push(`**Forbidden Tools**: \`${spec.toolStrategy.forbiddenTools.join('\`, \`')}\``);
+    lines.push('');
+    lines.push('### Tool Call Policy §20');
+    lines.push('Before calling any tool, determine:');
+    lines.push('1. **WHY** — What decision does this tool call enable?');
+    lines.push('2. **WHAT** — What specific information is needed?');
+    lines.push('3. **EXPECTED OUTPUT** — What will a successful result look like?');
+    lines.push('4. **NEXT ACTION** — How will the result change the execution plan?');
+    lines.push('');
+    lines.push(`> **${spec.toolStrategy.callPolicy}**`);
+    lines.push('');
+
+    // §21 — REASONING STRATEGY: PROBLEM -> OBSERVATIONS -> OPTIONS -> TRADEOFFS -> DECISION -> RATIONALE -> CONFIDENCE -> NEXT ACTION
+    lines.push('## REASONING STRATEGY §21');
+    lines.push('');
+    lines.push('For every major decision, apply this structured reasoning framework internally:');
+    lines.push('```');
+    lines.push('PROBLEM       -- What is the specific challenge?');
+    lines.push('OBSERVATIONS  -- What evidence is available from the codebase / environment?');
+    lines.push('OPTIONS       -- What are the realistic implementation paths?');
+    lines.push('TRADEOFFS     -- What are the costs and benefits of each option?');
+    lines.push('DECISION      -- Which option is selected?');
+    lines.push('RATIONALE     -- Why is this the best choice given the constraints?');
+    lines.push('CONFIDENCE    -- HIGH / MEDIUM / LOW');
+    lines.push('NEXT ACTION   -- What tool call or code edit follows immediately?');
+    lines.push('```');
+    lines.push('');
+    lines.push('> Do not expose private chain-of-thought. Provide concise decision summaries only when useful to the user.');
+    lines.push('');
+
+    // §22 — EVIDENCE-DRIVEN EXECUTION: CLAIM -> EVIDENCE -> VERIFICATION -> STATUS
+    lines.push('## VERIFICATION STRATEGY §22');
+    lines.push('');
+    lines.push('**Never claim something works without evidence.** Apply this contract for every assertion:');
+    lines.push('```');
+    lines.push('CLAIM         -- What is being asserted?');
+    lines.push('EVIDENCE      -- What concrete output (exit code, test output, build log) proves it?');
+    lines.push('VERIFICATION  -- What was the specific command / check run?');
+    lines.push('STATUS        -- VERIFIED | PARTIALLY VERIFIED | UNVERIFIED | FAILED');
+    lines.push('```');
+    lines.push('');
+    lines.push(`**Active Strategies**: ${spec.verificationPlanner.strategies.join(', ')}`);
+    lines.push(`**Primary Command**: \`${testCmd}\``);
+    lines.push('');
+
+    // §25 — FAILURE RECOVERY
+    lines.push('## FAILURE RECOVERY §25');
+    lines.push('');
+    for (const r of spec.failureRecovery) lines.push(`- ${r}`);
+    lines.push('');
+
+    // §26 — ANTI-LOOP POLICY
+    lines.push('## ANTI-LOOP RULES §26');
+    lines.push('');
+    lines.push('If the same operation fails twice:');
+    lines.push('```');
+    lines.push('STOP  →  ANALYZE ROOT CAUSE  →  CHANGE STRATEGY');
+    lines.push('```');
+    lines.push('Do not blindly repeat failing operations. Bounded retries only (max 2).');
+    lines.push('');
+    for (const rule of spec.antiLoopRules) lines.push(`- [x] ${rule}`);
+    lines.push('');
+
+    // §27–28 — CONTEXT MANAGEMENT + MEMORY MODEL
+    lines.push('## CONTEXT MANAGEMENT §27–28');
+    lines.push('');
+    lines.push('**Prioritize in context window:**');
+    lines.push('- User requirements and explicit constraints');
+    lines.push('- Active decisions and their rationale');
+    lines.push('- Current state of modified files and error messages');
+    lines.push('- Unresolved issues and verification results');
+    lines.push('');
+    lines.push('**Deprioritize / drop when context is full:**');
+    lines.push('- Repetitive tool output logs');
+    lines.push('- Duplicate shell command output');
+    lines.push('- Stale intermediate reasoning');
+    lines.push('- Irrelevant conversation history');
+    lines.push('');
+
+    // §38 — COMPLETION DEFINITION
+    lines.push('## QUALITY REQUIREMENTS §38');
+    lines.push('');
+    lines.push('> **"Done" means the acceptance criteria are satisfied -- not that code was written, files changed, or the model said it was done.**');
+    lines.push('');
+    lines.push('Track each deliverable as exactly one of:');
+    lines.push('```');
+    lines.push('IMPLEMENTED  |  VERIFIED  |  PARTIALLY VERIFIED  |  UNVERIFIED  |  FAILED  |  BLOCKED');
+    lines.push('```');
+    lines.push('');
+
+    // §24 — ACCEPTANCE CRITERIA (functional / quality / performance / security)
+    lines.push('## ACCEPTANCE CRITERIA §24');
+    lines.push('');
+    lines.push('### Functional');
+    for (const f of spec.acceptanceCriteria.functional) lines.push(`- [ ] ${f}`);
+    lines.push('');
+    lines.push('### Quality');
+    for (const q of spec.acceptanceCriteria.quality) lines.push(`- [ ] ${q}`);
+    if (spec.acceptanceCriteria.performance?.length) {
+      lines.push('');
+      lines.push('### Performance');
+      for (const p of spec.acceptanceCriteria.performance) lines.push(`- [ ] ${p}`);
     }
-    for (const q of spec.acceptanceCriteria.quality) {
-      lines.push(`| **Quality** | ${q} |`);
+    if (spec.acceptanceCriteria.security?.length) {
+      lines.push('');
+      lines.push('### Security');
+      for (const s of spec.acceptanceCriteria.security) lines.push(`- [ ] ${s}`);
     }
     lines.push('');
 
-    lines.push(`## 7. Anti-Loop & Safety Enforcement`);
-    for (const rule of spec.antiLoopRules) {
-      lines.push(`- 🛡️ ${rule}`);
-    }
+    // §39 — FINAL OUTPUT FORMAT (Cline-grade structured summary)
+    lines.push('## FINAL OUTPUT FORMAT §39');
     lines.push('');
+    lines.push('At task completion, produce a structured summary in this exact format. Never produce a wall of prose.');
+    lines.push('');
+    lines.push('```');
+    lines.push('SUMMARY');
+    lines.push('');
+    lines.push('STATUS');
+    lines.push('OK Complete  /  FAIL Failed  /  PARTIAL Partial');
+    lines.push('');
+    lines.push('WHAT CHANGED');
+    lines.push('<bullet list of every file modified, added, or deleted with a one-line description each>');
+    lines.push('');
+    lines.push('FILES');
+    lines.push('<table: path | op (MODIFIED / ADDED / DELETED) | description>');
+    lines.push('');
+    lines.push('TESTS');
+    lines.push('<pass/fail counts and the exact command run>');
+    lines.push('');
+    lines.push('VERIFICATION');
+    lines.push('<evidence: command + exit code + key assertion results>');
+    lines.push('');
+    lines.push('IMPORTANT');
+    lines.push('<assumptions that became decisions, warnings, or known limitations>');
+    lines.push('');
+    lines.push('UNRESOLVED');
+    lines.push('<anything blocked, deferred, or not yet verified>');
+    lines.push('');
+    lines.push('NEXT');
+    lines.push('<recommended next actions, if any>');
+    lines.push('```');
+    lines.push('');
+    lines.push('> Use tables/grids when they improve comprehension. Use code blocks for code.');
+    lines.push('> **Do not fabricate any metric, test count, or file change that did not actually happen.**');
 
     return lines.join('\n');
   }
