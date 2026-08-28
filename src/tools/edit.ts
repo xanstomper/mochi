@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import type { Tool } from './types.js';
 import { markMutation } from './fs-signal.js';
 import { fuzzyFindUniqueNative as fuzzyFindUnique } from './native-match.js';
+import { validateFileSyntax } from '../core/ast-guard.js';
 
 function trimIndent(text: string): string {
   const lines = text.split('\n');
@@ -64,6 +65,11 @@ export const editTool: Tool = {
     writeFileSync(fullPath, content);
     ctx.events.emit({ type: 'file:changed', path: fullPath, operation: 'edit', agentId: ctx.agentId });
     markMutation();
-    return usedFuzzy ? `Edited ${rawPath} (fuzzy match: whitespace differences were tolerated)` : `Edited ${rawPath}`;
+    const diag = validateFileSyntax(fullPath, content);
+    let out = usedFuzzy ? `Edited ${rawPath} (fuzzy match: whitespace differences were tolerated)` : `Edited ${rawPath}`;
+    if (!diag.valid && diag.summary) {
+      out += `\n⚠️ [AST Syntax Alert]: ${diag.summary}`;
+    }
+    return out;
   },
 };

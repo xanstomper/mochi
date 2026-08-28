@@ -12,6 +12,8 @@ const ALIASES: Record<string, { baseUrl: string; defaultModel: string }> = {
   'zen': { baseUrl: 'https://opencode.ai/zen/v1', defaultModel: 'opencode/deepseek-v4-flash-free' },
   'opencode-go': { baseUrl: 'https://opencode.ai/go/v1', defaultModel: 'opencode-go/deepseek-v4-flash-free' },
   'go': { baseUrl: 'https://opencode.ai/go/v1', defaultModel: 'opencode-go/deepseek-v4-flash-free' },
+  'freeinference': { baseUrl: 'https://freeinference.org/v1', defaultModel: 'deepseek-v4-flash' },
+  'freeinference-org': { baseUrl: 'https://freeinference.org/v1', defaultModel: 'deepseek-v4-flash' },
 };
 
 // OpenCode.ai's OpenAI-compatible endpoints list and accept BARE model ids

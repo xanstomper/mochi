@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import type { Tool } from './types.js';
 import { markMutation } from './fs-signal.js';
+import { validateFileSyntax } from '../core/ast-guard.js';
 
 export const writeTool: Tool = {
   def: {
@@ -28,6 +29,12 @@ export const writeTool: Tool = {
     }
     ctx.events.emit({ type: 'file:changed', path: fullPath, operation: 'write', agentId: ctx.agentId });
     markMutation();
-    return `Wrote ${content.length} chars to ${rawPath}`;
+    const finalContent = append ? readFileSync(fullPath, 'utf8') : content;
+    const diag = validateFileSyntax(fullPath, finalContent);
+    let out = `Wrote ${content.length} chars to ${rawPath}`;
+    if (!diag.valid && diag.summary) {
+      out += `\n⚠️ [AST Syntax Alert]: ${diag.summary}`;
+    }
+    return out;
   },
 };
