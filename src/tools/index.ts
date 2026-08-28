@@ -52,6 +52,17 @@ import { skillManageTool } from '../skill-manager.js';
 import { astSliceTool } from './ast-slice.js';
 import { compilePromptTool } from './compile-prompt.js';
 
+import { timerTool } from './timer.js';
+import { envTool } from './env.js';
+import { lintTool } from './lint.js';
+import { formatTool } from './format.js';
+import { benchmarkTool } from './benchmark.js';
+import { notesTool } from './notes.js';
+import { tuiBuilderTool } from './tui-builder.js';
+import { mcpManageTool } from './mcp-manage.js';
+import { markdownTool } from './markdown.js';
+import { colorTool } from './color.js';
+
 export const ALL_TOOLS: Tool[] = [
   readTool, writeTool, editTool, deleteTool, shellTool, searchTool, globTool, outlineTool, astSliceTool,
   compilePromptTool,
@@ -64,6 +75,9 @@ export const ALL_TOOLS: Tool[] = [
   blastRadiusTool, mergeConflictTool, codeSimilarityTool, securityAuditTool,
   ...symbolTools, replaceSymbolTool, chameleonTool,
   skillManageTool,
+  // New tools
+  timerTool, envTool, lintTool, formatTool, benchmarkTool,
+  notesTool, tuiBuilderTool, mcpManageTool, markdownTool, colorTool,
 ];
 
 /**

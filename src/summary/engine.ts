@@ -228,8 +228,9 @@ export function summarize(events: readonly MochiEvent[], opts: { goal?: string }
   else doc.status = 'partial';
 
   // ── Overview: one factual sentence ──
+  // (No "Goal: …" prefix — the user just typed that goal; echoing it back
+  // reads as noise. The overview states only what actually happened.)
   const parts: string[] = [];
-  if (opts.goal) parts.push(`Goal: ${opts.goal}.`);
   if (changedFiles.size) parts.push(`Modified ${changedFiles.size} file${changedFiles.size === 1 ? '' : 's'}.`);
   if (checksPassed || checksFailed) parts.push(`Verification: ${checksPassed} passed${checksFailed ? `, ${checksFailed} failed` : ''}.`);
   if (failureTexts.length) parts.push(`${failureTexts.length} failure${failureTexts.length === 1 ? '' : 's'} recorded.`);

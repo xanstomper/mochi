@@ -429,8 +429,12 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
       return true;
     case 'summary:rendered': {
       // Render the post-turn "what I did" summary as a Cline-style card.
-      // Skip when the turn was a no-op (zero tool calls) — a summary card
-      // for "the model said hi" is noise.
+      // Skip when the turn was a no-op (zero tool calls, zero files) — a
+      // summary card for "the model said hi" is noise. This guard runs
+      // BEFORE anything else so pure chat turns never push a card.
+      const filesEv = Array.isArray(event.filesModified) ? (event.filesModified as unknown[]).map((f) => String(f)) : [];
+      const tcEv = Number(event.toolCallsTotal ?? 0);
+      if (tcEv === 0 && filesEv.length === 0) return false;
       const doc = event.doc as SummaryDocument | undefined;
       if (doc && doc.populatedSections && doc.populatedSections.length > 0) {
         const width = process.stdout.columns || 80;
@@ -441,9 +445,8 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
         pushLine(state, 'summary', renderSummary(doc, width).join('\n'));
         return true;
       }
-      const files = Array.isArray(event.filesModified) ? (event.filesModified as unknown[]).map((f) => String(f)) : [];
-      const tcTotal = Number(event.toolCallsTotal ?? 0);
-      if (tcTotal === 0 && files.length === 0) return false;
+      const files = filesEv;
+      const tcTotal = tcEv;
       const summary = renderTurnSummaryCard({
         success: Boolean(event.success),
         stopReason: String(event.stopReason ?? ''),

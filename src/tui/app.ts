@@ -359,7 +359,9 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   }
 
   /** ANSI-aware wrap: split a colored line into rows <= max visible columns,
-   *  preserving the active SGR state across line breaks. */
+   *  preserving the active SGR state across line breaks. Escape sequences are
+   *  tokenized BEFORE the wrap decision so a sequence is never split in half
+   *  (a broken SGR prints its tail — e.g. "230;250m" — as literal text). */
   function wrapAnsi(line: string, max: number): string[] {
     if (visibleLen(line) <= max) return [line];
     const rows: string[] = [];
@@ -368,10 +370,13 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     let lastSpace = -1;
     let sgr = '';
     const parts = line.match(/(\x1b\[[0-9;]*m|[^\n])/g) ?? [];
-    for (const p of parts) {
+    let i = 0;
+    while (i < parts.length) {
+      const p = parts[i];
       if (p.startsWith('\x1b')) {
         cur += p;
         sgr = p === '\x1b[0m' ? '' : p;
+        i++;
         continue;
       }
       if (curLen >= max) {
@@ -379,19 +384,25 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
           const head = cur.slice(0, lastSpace);
           const tail = cur.slice(lastSpace + 1);
           rows.push(head);
-          cur = sgr + tail + p;
-          curLen = visibleLen(tail) + 1;
+          cur = sgr + tail;
+          curLen = visibleLen(tail);
           lastSpace = -1;
-        } else {
-          rows.push(cur);
-          cur = sgr + p;
-          curLen = 1;
+          // Re-process THIS character against the fresh row instead of
+          // blindly appending: if it starts an escape sequence, the whole
+          // sequence must land intact on the new row (the old code did
+          // `cur = sgr + tail + p`, splitting an SGR in half when `p`
+          // was the ESC that began one).
+          continue;
         }
-      } else {
-        if (p === ' ') lastSpace = curLen;
-        cur += p;
-        curLen++;
+        rows.push(cur);
+        cur = sgr;
+        curLen = 0;
+        continue;
       }
+      if (p === ' ') lastSpace = curLen;
+      cur += p;
+      curLen++;
+      i++;
     }
     if (cur) rows.push(cur);
     return rows;
