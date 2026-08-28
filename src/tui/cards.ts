@@ -207,7 +207,11 @@ export function renderToolCard(
     : effective === 'running' ? (T.cyan ?? T.fg)
     : (T.grayDark ?? T.fg);
 
-  const width = opts.width ?? (process.stdout.columns || 100);
+  // Match the transcript content width (terminal minus gutters) so tool
+  // cards never overflow into a terminal-side hard wrap in windowed mode.
+  const termW = process.stdout.columns || 100;
+  const tIndent = termW > 60 ? 2 : 0;
+  const width = opts.width ?? Math.max(24, Math.min(termW - tIndent * 2, termW - 4));
   const dur = outcome?.durationMs !== undefined ? formatDuration(outcome.durationMs) : '';
   const argsText = describeToolArgs(rawTool, rawArgs);
 
@@ -271,7 +275,11 @@ export interface TurnSummary {
 }
 
 export function renderTurnSummaryCard(s: TurnSummary): string {
-  const width = process.stdout.columns || 100;
+  // Match the transcript content width (terminal minus gutters), same rule
+  // as the rich summary path in state.ts, so windowed mode never overflows.
+  const raw = process.stdout.columns || 100;
+  const indent = raw > 60 ? 2 : 0;
+  const width = Math.max(24, Math.min(raw - indent * 2, raw - 4));
   const ok = s.success;
   const statusColor = ok ? (T.success ?? T.lime) : (T.error ?? '#f87171');
   const icon = ok ? '✓' : '×';

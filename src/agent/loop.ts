@@ -268,6 +268,9 @@ export class Agent {
   private proseRunwayNudges = 0;
   private specPreflighted = false;
   private skillNudged = false;
+  /** Master prompt compiler: runs once per task (guarded) so the compiled
+   *  blueprint is injected exactly once at the active reasoning tier. */
+  private compilerInjected = false;
   /** Diff-hygiene: one bounded cleanup nudge for debug logs / TODO /
    *  suppressed-check debris the model added before we accept "done". */
   private hygieneNudges = 0;
@@ -427,6 +430,38 @@ Continue from 'Next:', do not redo completed progress.`,
     });
     if (oneShot.suggests && !this.planMode && taskKind !== 'chat') {
       this.context.addMessage({ role: 'system', content: oneShot.suggests });
+    }
+
+    // Master prompt compiler wiring (multi-tier reasoning dispatch): for
+    // non-chat tasks, compile the raw user prompt through the 46-section
+    // blueprint engine at the ACTIVE reasoning level (low→off-tier micro-
+    // dispatch … max→full architectural spec) and inject the compiled spec
+    // as the primary user-turn directive. This is what makes the reasoning
+    // setting actually change execution behavior instead of just swapping a
+    // one-line "think harder" blurb. Bounded: runs once per task, and any
+    // compiler failure degrades silently to the plain prompt.
+    if (taskKind !== 'chat' && !this.planMode && !this.compilerInjected) {
+      this.compilerInjected = true;
+      try {
+        const { promptCompiler } = await import('../prompt/prompt-compiler.js');
+        const { detectRepo: detectRepoForCompiler } = await import('../repo.js');
+        const cRepo = detectRepoForCompiler(this.cwd);
+        const tier = (this.config.reasoning || 'max') as 'low' | 'medium' | 'high' | 'max';
+        const spec = promptCompiler.compile(
+          [task.title, task.description].filter(Boolean).join('\n\n'),
+          {
+            reasoning: tier,
+            testCommand: task.verificationCommand || cRepo.testCommand,
+            primaryLanguage: cRepo.language,
+          },
+        );
+        if (spec?.compiledMarkdownPrompt) {
+          this.context.addMessage({
+            role: 'system',
+            content: `# COMPILED EXECUTION BLUEPRINT (reasoning tier: ${tier.toUpperCase()})\nFollow this specification. It was derived from the user's request and calibrates depth, phases, and verification to the active reasoning level.\n\n${spec.compiledMarkdownPrompt}`,
+          });
+        }
+      } catch { /* compiler failure must never block the task */ }
     }
 
     // Speculative reasoning preflight (opt-in via model.speculative.preflight).

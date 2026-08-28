@@ -5,7 +5,7 @@ import { findProjectRoot } from '../repo.js';
 import type { Runtime } from '../runtime.js';
 import type { MochiEvent } from '../types.js';
 import { PROVIDERS, providerById } from '../providers.js';
-import { reduceEvent, trimTranscript } from './state.js';
+import { reduceEvent, trimTranscript, rewrapSummaries } from './state.js';
 import { wrap, visibleLen } from './wrap.js';
 import pkg from '../../package.json' with { type: 'json' };
 import { kvCache } from '../kv-cache.js';
@@ -2255,7 +2255,12 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     process.stdin.resume();
     const keyListener = (buf: Buffer) => onKey(buf);
     process.stdin.on('data', keyListener);
-    const resizeListener = () => scheduleRender();
+    const resizeListener = () => {
+      // Re-wrap the newest summary card at the new width so windowed↔fullscreen
+      // transitions never leave it overflowing or compressed.
+      rewrapSummaries(state, process.stdout.columns || 100);
+      scheduleRender();
+    };
     process.stdout.on('resize', resizeListener);
     const exitListener = () => {
       // Runs on EVERY exit path including hard crashes (uncaughtException →

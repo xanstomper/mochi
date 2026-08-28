@@ -52,6 +52,9 @@ export interface TuiState {
   tokenVelocity?: number;
   lastUsageAt?: number;
   lastTokens?: number;
+  /** Most recent SummaryDocument, kept so a terminal resize can re-render
+   *  summary cards at the new width (windowed↔fullscreen transitions). */
+  lastSummaryDoc?: SummaryDocument;
 }
 
 /**
@@ -92,6 +95,26 @@ export function trimTranscript(state: TuiState): void {
 /** Convert a current array index to its stable absolute id (trim-immune). */
 export function toAbsLine(state: TuiState, idx: number): number {
   return idx + state.trimmed;
+}
+
+/** Re-render the newest summary card at the CURRENT terminal width. Called
+ *  on terminal resize so the card always fits its window (windowed↔fullscreen).
+ *  Only the last summary is live-rewrapped — earlier cards are history and
+ *  re-wrapping them would rewrite the transcript out from under scrollback. */
+export function rewrapSummaries(state: TuiState, termWidth: number): boolean {
+  const doc = state.lastSummaryDoc;
+  if (!doc) return false;
+  const indent = termWidth > 60 ? 2 : 0;
+  const contentWidth = Math.max(24, Math.min(termWidth - indent * 2, termWidth - 4));
+  const rendered = renderSummary(doc, contentWidth).join('\n');
+  for (let i = state.lines.length - 1; i >= 0; i--) {
+    if (state.lines[i].kind === 'summary') {
+      if (state.lines[i].text === rendered) return false;
+      state.lines[i].text = rendered;
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Convert an absolute id back to the current index, or undefined if that
@@ -437,12 +460,21 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
       if (tcEv === 0 && filesEv.length === 0) return false;
       const doc = event.doc as SummaryDocument | undefined;
       if (doc && doc.populatedSections && doc.populatedSections.length > 0) {
-        const width = process.stdout.columns || 80;
+        // Wrap the card to the EXACT width the render frame will print it
+        // at: the transcript content width (terminal minus the 2-col gutter
+        // on both sides), NOT the raw terminal width. Wrapping at
+        // process.stdout.columns overflowed every row by the gutter, so the
+        // terminal itself hard-wrapped mid-ANSI — the compressed/broken
+        // look in windowed mode.
+        const w = process.stdout.columns || 80;
+        const indent = w > 60 ? 2 : 0;
+        const contentWidth = Math.max(24, Math.min(w - indent * 2, w - 4));
         // The whole card travels as ONE line (newline-joined); wrapLine
         // treats kind 'summary' as pre-rendered and passes rows through
         // verbatim. Per-line pushing double-wrapped and blank-spaced the
         // card into a compressed mess at windowed widths.
-        pushLine(state, 'summary', renderSummary(doc, width).join('\n'));
+        pushLine(state, 'summary', renderSummary(doc, contentWidth).join('\n'));
+        state.lastSummaryDoc = doc;
         return true;
       }
       const files = filesEv;
