@@ -145,7 +145,7 @@ export class ToolDispatcher {
       let diagNote = '';
       if (['write', 'edit', 'patch'].includes(call.name) && !res.error) {
         const targetPath = String(call.arguments.path ?? '');
-        if (targetPath && /\.(ts|tsx|js|jsx|mts|cts|py)$/.test(targetPath)) {
+        if (targetPath && /\.(ts|tsx|js|jsx|mts|cts|py|json|go)$/i.test(targetPath)) {
           try {
             const diags = await diagnoseFile(resolve(context.cwd, targetPath), context.cwd);
             if (!diags.ok && (diags.errors.length > 0 || diags.warnings.length > 0)) {

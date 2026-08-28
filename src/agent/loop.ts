@@ -1633,12 +1633,12 @@ Continue from 'Next:', do not redo completed progress.`,
       if (toolName === 'patch' && typeof output === 'string') {
         for (const line of output.split('\n')) {
           const m = line.match(/^- (?:added|updated|deleted) (.+?)(?: \(\d+ lines\))?$/);
-          if (m && /\.(ts|tsx|js|jsx|mts|cts|py)$/.test(m[1])) targets.push(m[1]);
+          if (m && /\.(ts|tsx|js|jsx|mts|cts|py|json|go)$/i.test(m[1])) targets.push(m[1]);
         }
       }
       if (targets.length > 0 && targets.length <= 4) {
         const diags = await Promise.all(
-          targets.filter((t) => /\.(ts|tsx|js|jsx|mts|cts|py)$/.test(t)).map((t) => diagnoseFile(resolve(this.cwd, t), this.cwd)),
+          targets.filter((t) => /\.(ts|tsx|js|jsx|mts|cts|py|json|go)$/i.test(t)).map((t) => diagnoseFile(resolve(this.cwd, t), this.cwd)),
         );
         diagNote = renderDiagnostics(diags);
       }
