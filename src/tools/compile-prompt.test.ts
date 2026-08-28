@@ -3,35 +3,52 @@ import { compilePromptTool } from './compile-prompt.js';
 import { EventBus } from '../events.js';
 import { Workspace } from '../workspace.js';
 
+function makeCtx() {
+  return {
+    cwd: process.cwd(),
+    workspace: new Workspace(process.cwd()),
+    config: { model: { provider: 'test', model: 'test' } } as any,
+    events: new EventBus(),
+    agentId: 'test-agent',
+  };
+}
+
 describe('compile_prompt tool', () => {
-  it('executes compile_prompt and returns full blueprint markdown', async () => {
-    const events = new EventBus();
-    const ctx = {
-      cwd: process.cwd(),
-      workspace: new Workspace(process.cwd()),
-      config: { model: { provider: 'test', model: 'test' } } as any,
-      events,
-      agentId: 'test-agent',
-    };
-
-    const result = await compilePromptTool.execute({ prompt: 'fix authentication jwt expiry bug' }, ctx);
-
+  it('defaults to max tier and returns 5-phase blueprint', async () => {
+    const result = await compilePromptTool.execute({ prompt: 'fix authentication jwt expiry bug' }, makeCtx());
     expect(result).toContain('# MOCHI MASTER EXECUTION BLUEPRINT');
-    expect(result).toContain('Phase 0');
-    expect(result).toContain('Phase 3');
+    expect(result).toContain('MAX (DEEP ARCHITECTURAL SPEC)');
+    expect(result).toContain('Phase 0 — Full System');
     expect(result).toContain('Anti-Loop');
   });
 
-  it('throws when prompt parameter is empty', async () => {
-    const events = new EventBus();
-    const ctx = {
-      cwd: process.cwd(),
-      workspace: new Workspace(process.cwd()),
-      config: { model: { provider: 'test', model: 'test' } } as any,
-      events,
-      agentId: 'test-agent',
-    };
+  it('produces low-tier compact directive when reasoning=low', async () => {
+    const result = await compilePromptTool.execute({ prompt: 'rename x to counter', reasoning: 'low' }, makeCtx());
+    expect(result).toContain('DIRECT TASK');
+    expect(result).toContain('LOW (FAST MICRO-DISPATCH)');
+    expect(result).not.toContain('## 3. Assumptions');
+  });
 
-    await expect(compilePromptTool.execute({ prompt: '' }, ctx)).rejects.toThrow('prompt parameter is required');
+  it('produces medium-tier streamlined contract when reasoning=medium', async () => {
+    const result = await compilePromptTool.execute({ prompt: 'add validation to the login form', reasoning: 'medium' }, makeCtx());
+    expect(result).toContain('MEDIUM (STREAMLINED INVARIANT CONTRACT)');
+    expect(result).toContain('Core Invariants');
+    expect(result).toContain('Action Sequence');
+  });
+
+  it('produces high-tier 3-phase blueprint when reasoning=high', async () => {
+    const result = await compilePromptTool.execute({ prompt: 'add rate limiting to the API', reasoning: 'high' }, makeCtx());
+    expect(result).toContain('HIGH (ACTION MULTI-PHASE)');
+    expect(result).toContain('Multi-Phase Plan');
+    expect(result).toContain('Phase 1 — Discovery');
+  });
+
+  it('throws when prompt parameter is empty', async () => {
+    await expect(compilePromptTool.execute({ prompt: '' }, makeCtx())).rejects.toThrow('prompt parameter is required');
+  });
+
+  it('accepts "med" as alias for medium tier', async () => {
+    const result = await compilePromptTool.execute({ prompt: 'fix null pointer', reasoning: 'med' }, makeCtx());
+    expect(result).toContain('MEDIUM (STREAMLINED INVARIANT CONTRACT)');
   });
 });

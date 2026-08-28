@@ -1,6 +1,6 @@
 // Mochi Prompt Compiler — Master System Engine
 // Converts low-information human intent into high-information, machine-executable specifications
-// using the 7-pass compilation pipeline, adaptive depth, assumption engine, and contract generation.
+// tailored across reasoning tiers: low (micro), medium (streamlined), high (action-multi-phase), and max (architectural).
 
 export type TaskCategory =
   | 'CODING'
@@ -39,6 +39,8 @@ export type ComplexityLevel =
   | 'ADVANCED'
   | 'SYSTEM_LEVEL';
 
+export type CompilerReasoningLevel = 'max' | 'high' | 'medium' | 'low' | 'off' | 'auto';
+
 export interface Assumption {
   id: string;
   assumption: string;
@@ -63,6 +65,7 @@ export interface PhaseContract {
 
 export interface CompiledPromptSpecification {
   rawUserPrompt: string;
+  reasoningLevel: CompilerReasoningLevel;
   normalizedIntent: {
     primaryGoal: string;
     secondaryGoals: string[];
@@ -102,18 +105,16 @@ export interface CompiledPromptSpecification {
 
 export class MochiPromptCompiler {
   /**
-   * Complete 7-Pass Compilation Pipeline:
-   * Pass 1: Understand
-   * Pass 2: Decompose
-   * Pass 3: Specify
-   * Pass 4: Critique
-   * Pass 5: Repair
-   * Pass 6: Optimize
-   * Pass 7: Finalize
+   * Compiles user intent according to the active reasoning tier:
+   * - 'max': Full 7-pass engineering specification with 5-phase contracts and formal verification.
+   * - 'high': Action-oriented multi-phase blueprint (3 focused phases, high speed & accuracy).
+   * - 'medium': Streamlined invariant-first contract (concise objective, safety invariants, targeted actions).
+   * - 'low': Ultra-compact micro-tier directive (zero fluff, immediate tool execution, maximum token economy).
    */
   compile(
     rawPrompt: string,
-    context?: {
+    options?: {
+      reasoning?: CompilerReasoningLevel;
       repoName?: string;
       primaryLanguage?: string;
       testCommand?: string;
@@ -121,26 +122,23 @@ export class MochiPromptCompiler {
     }
   ): CompiledPromptSpecification {
     const cleanPrompt = rawPrompt.trim();
+    const reasoning: CompilerReasoningLevel = options?.reasoning || 'max';
 
-    // ── PASS 1: UNDERSTAND ──
     const classifications = this.classifyTask(cleanPrompt);
     const complexity = this.estimateComplexity(cleanPrompt, classifications);
-    const normalizedIntent = this.extractIntent(cleanPrompt, classifications, context);
+    const normalizedIntent = this.extractIntent(cleanPrompt, classifications, options);
 
-    // ── PASS 2: DECOMPOSE ──
     const explicitReqs = this.extractExplicitRequirements(cleanPrompt);
-    const inferredReqs = this.inferRequirements(cleanPrompt, classifications, context);
-    const assumptions = this.buildAssumptions(cleanPrompt, classifications, context);
-    const constraints = this.extractConstraints(cleanPrompt, classifications, context);
+    const inferredReqs = this.inferRequirements(cleanPrompt, classifications, options);
+    const assumptions = this.buildAssumptions(cleanPrompt, classifications, options);
+    const constraints = this.extractConstraints(cleanPrompt, classifications, options);
     const priorities = this.assignPriorities(explicitReqs, inferredReqs, complexity);
 
-    // ── PASS 3: SPECIFY ──
-    const phases = this.generatePhases(cleanPrompt, classifications, complexity, context);
-    const toolStrategy = this.buildToolStrategy(classifications, complexity);
-    const verificationPlanner = this.buildVerificationPlanner(context);
+    const phases = this.generatePhasesForTier(cleanPrompt, classifications, complexity, reasoning, options);
+    const toolStrategy = this.buildToolStrategy(classifications, complexity, reasoning);
+    const verificationPlanner = this.buildVerificationPlanner(options);
     const acceptanceCriteria = this.buildAcceptanceCriteria(cleanPrompt, classifications, complexity);
 
-    // ── PASS 4, 5, 6: CRITIQUE, REPAIR, OPTIMIZE ──
     const failureRecovery = [
       'Bounded Retries: Max 2 attempts per failing operation before altering strategy',
       'Rollback Safety: Revert workspace to clean snapshot if candidate modification fails',
@@ -155,29 +153,66 @@ export class MochiPromptCompiler {
       'Single Execution Authority: All actions route through unified lock and event bus',
     ];
 
-    // ── PASS 7: FINALIZE ──
-    const compiledMarkdownPrompt = this.renderMarkdownPrompt({
-      rawUserPrompt: cleanPrompt,
-      normalizedIntent,
-      classifications,
-      complexity,
-      explicitRequirements: explicitReqs,
-      inferredRequirements: inferredReqs,
-      assumptions,
-      constraints,
-      priorities,
-      phases,
-      toolStrategy,
-      reasoningStrategy: 'Structured Step-Wise Reasoning: Goal → Observations → Options → Decision → Verification',
-      verificationPlanner,
-      failureRecovery,
-      antiLoopRules,
-      acceptanceCriteria,
-      compiledMarkdownPrompt: '',
-    });
+    let compiledMarkdownPrompt = '';
+    switch (reasoning) {
+      case 'low':
+      case 'off':
+        compiledMarkdownPrompt = this.renderLowTierPrompt(cleanPrompt, options?.testCommand || 'npm test');
+        break;
+      case 'medium':
+        compiledMarkdownPrompt = this.renderMediumTierPrompt(cleanPrompt, constraints, options?.testCommand || 'npm test');
+        break;
+      case 'high':
+        compiledMarkdownPrompt = this.renderHighTierPrompt({
+          rawUserPrompt: cleanPrompt,
+          reasoningLevel: reasoning,
+          normalizedIntent,
+          classifications,
+          complexity,
+          explicitRequirements: explicitReqs,
+          inferredRequirements: inferredReqs,
+          assumptions,
+          constraints,
+          priorities,
+          phases,
+          toolStrategy,
+          reasoningStrategy: 'Structured Action Plan: Audit → Implementation → Verification → Summary',
+          verificationPlanner,
+          failureRecovery,
+          antiLoopRules,
+          acceptanceCriteria,
+          compiledMarkdownPrompt: '',
+        });
+        break;
+      case 'max':
+      case 'auto':
+      default:
+        compiledMarkdownPrompt = this.renderMaxTierPrompt({
+          rawUserPrompt: cleanPrompt,
+          reasoningLevel: reasoning,
+          normalizedIntent,
+          classifications,
+          complexity,
+          explicitRequirements: explicitReqs,
+          inferredRequirements: inferredReqs,
+          assumptions,
+          constraints,
+          priorities,
+          phases,
+          toolStrategy,
+          reasoningStrategy: 'Structured Step-Wise Reasoning: Goal → Observations → Options → Decision → Verification',
+          verificationPlanner,
+          failureRecovery,
+          antiLoopRules,
+          acceptanceCriteria,
+          compiledMarkdownPrompt: '',
+        });
+        break;
+    }
 
     return {
       rawUserPrompt: cleanPrompt,
+      reasoningLevel: reasoning,
       normalizedIntent,
       classifications,
       complexity,
@@ -188,7 +223,7 @@ export class MochiPromptCompiler {
       priorities,
       phases,
       toolStrategy,
-      reasoningStrategy: 'Structured Step-Wise Reasoning: Goal → Observations → Options → Decision → Verification',
+      reasoningStrategy: reasoning === 'max' ? 'Exhaustive Invariant Decomposition' : 'Targeted Action Execution',
       verificationPlanner,
       failureRecovery,
       antiLoopRules,
@@ -370,14 +405,109 @@ export class MochiPromptCompiler {
     ];
   }
 
-  private generatePhases(
+  private generatePhasesForTier(
     prompt: string,
     classifications: TaskCategory[],
     complexity: ComplexityLevel,
+    tier: CompilerReasoningLevel,
     context?: { testCommand?: string }
   ): PhaseContract[] {
     const testCmd = context?.testCommand || 'npm test';
 
+    if (tier === 'low' || tier === 'off') {
+      return [
+        {
+          phaseIndex: 0,
+          name: 'Direct Execution',
+          objective: `Execute: "${prompt}" directly with minimal overhead.`,
+          inputs: ['Repository'],
+          tasks: ['Apply edits', `Verify with \`${testCmd}\``],
+          dependencies: [],
+          tools: ['read', 'edit', 'write', 'shell'],
+          expectedOutput: 'Target edits applied and verified',
+          verification: [`${testCmd} passes`],
+          exitCriteria: ['Action completed'],
+          failureHandling: 'Revert changes on failure',
+        },
+      ];
+    }
+
+    if (tier === 'medium') {
+      return [
+        {
+          phaseIndex: 0,
+          name: 'Implementation & AST Validation',
+          objective: 'Inspect relevant files and apply targeted edits with in-turn AST syntax verification.',
+          inputs: ['Target files'],
+          tasks: ['Inspect code context', 'Apply targeted edits and patches', 'Validate syntax in-memory'],
+          dependencies: [],
+          tools: ['read', 'edit', 'patch', 'write', 'ast_slice'],
+          expectedOutput: 'Code modifications applied with zero syntax errors',
+          verification: ['AST syntax validation'],
+          exitCriteria: ['Edits applied cleanly'],
+          failureHandling: 'Fuzzy match auto-healing or rollback',
+        },
+        {
+          phaseIndex: 1,
+          name: 'Verification & Summary',
+          objective: `Verify changes with \`${testCmd}\` and render structured summary.`,
+          inputs: ['Modified repository'],
+          tasks: [`Run \`${testCmd}\``, 'Assemble structured summary'],
+          dependencies: ['Implementation & AST Validation'],
+          tools: ['shell', 'verify'],
+          expectedOutput: 'Passing tests and clean summary',
+          verification: [`${testCmd} exit 0`],
+          exitCriteria: ['0 test regressions'],
+          failureHandling: 'Analyze failure log and correct edit',
+        },
+      ];
+    }
+
+    if (tier === 'high') {
+      return [
+        {
+          phaseIndex: 0,
+          name: 'Phase 1 — Discovery & Invariant Check',
+          objective: 'Inspect affected symbols, interfaces, and call sites without wholesale rewrites.',
+          inputs: ['Repository tree'],
+          tasks: ['Identify target symbols and dependencies', 'Establish baseline test state'],
+          dependencies: [],
+          tools: ['read', 'search', 'glob', 'ast_slice', 'blast_radius'],
+          expectedOutput: 'Targeted file map and verified call sites',
+          verification: ['Symbols mapped'],
+          exitCriteria: ['Scope established'],
+          failureHandling: 'Refine search terms',
+        },
+        {
+          phaseIndex: 1,
+          name: 'Phase 2 — Implementation & AST Guard',
+          objective: 'Apply targeted modifications with in-turn AST validation.',
+          inputs: ['Target files'],
+          tasks: ['Apply edits and patches', 'Run in-turn AST diagnostic check'],
+          dependencies: ['Phase 1'],
+          tools: ['edit', 'patch', 'write'],
+          expectedOutput: 'Syntax-clean code modifications applied',
+          verification: ['In-turn AST check passes'],
+          exitCriteria: ['0 syntax breaks'],
+          failureHandling: 'Auto-heal via AST fuzzy matcher',
+        },
+        {
+          phaseIndex: 2,
+          name: 'Phase 3 — Epistemic Verification & Summary',
+          objective: `Execute \`${testCmd}\` and produce Cline-grade summary.`,
+          inputs: ['Modified workspace'],
+          tasks: [`Run \`${testCmd}\``, 'Synthesize unit tests if needed', 'Render structured summary'],
+          dependencies: ['Phase 2'],
+          tools: ['shell', 'verify'],
+          expectedOutput: '100% passing tests and structured metrics card',
+          verification: [`\`${testCmd}\` exit 0`],
+          exitCriteria: ['0 failing tests, 0 type errors'],
+          failureHandling: 'Speculative branch racer fallback',
+        },
+      ];
+    }
+
+    // Default: 'max' (5 exhaustive phase contracts)
     return [
       {
         phaseIndex: 0,
@@ -466,7 +596,15 @@ export class MochiPromptCompiler {
     ];
   }
 
-  private buildToolStrategy(classifications: TaskCategory[], complexity: ComplexityLevel) {
+  private buildToolStrategy(classifications: TaskCategory[], complexity: ComplexityLevel, tier: CompilerReasoningLevel) {
+    if (tier === 'low' || tier === 'off') {
+      return {
+        requiredTools: ['read', 'edit', 'write', 'shell'],
+        optionalTools: ['ast_slice'],
+        forbiddenTools: ['destructive_reset_hard'],
+        callPolicy: 'Execute minimal direct tool invocations.',
+      };
+    }
     return {
       requiredTools: ['read', 'edit', 'patch', 'write', 'shell', 'ast_slice'],
       optionalTools: ['blast_radius', 'search', 'glob', 'todo', 'verify'],
@@ -503,12 +641,75 @@ export class MochiPromptCompiler {
     };
   }
 
-  private renderMarkdownPrompt(spec: CompiledPromptSpecification): string {
+  private renderLowTierPrompt(prompt: string, testCmd: string): string {
+    return [
+      `# DIRECT TASK: ${prompt.toUpperCase()}`,
+      `> **Reasoning Tier**: \`LOW (FAST MICRO-DISPATCH)\` | **Verify**: \`${testCmd}\``,
+      '',
+      `## Objective`,
+      prompt,
+      '',
+      `## Execution Rules`,
+      `- Apply targeted edits directly using \`edit\` or \`write\`.`,
+      `- Validate changes by executing: \`${testCmd}\`.`,
+      `- Return concise confirmation upon completion.`,
+    ].join('\n');
+  }
+
+  private renderMediumTierPrompt(prompt: string, constraints: string[], testCmd: string): string {
+    return [
+      `# TASK SPECIFICATION: ${prompt.toUpperCase()}`,
+      `> **Reasoning Tier**: \`MEDIUM (STREAMLINED INVARIANT CONTRACT)\` | **Verify**: \`${testCmd}\``,
+      '',
+      `## Objective`,
+      prompt,
+      '',
+      `## Core Invariants`,
+      ...constraints.map((c) => `- [x] ${c}`),
+      '',
+      `## Action Sequence`,
+      `1. **Inspect Target Files**: Read affected code and caller sites without wholesale rewrites.`,
+      `2. **Apply Targeted Edits**: Use \`edit\` or \`patch\` with in-turn AST validation.`,
+      `3. **Verify Execution**: Run \`${testCmd}\` and assert 0 test failures.`,
+      `4. **Emit Summary**: Provide structured overview of files modified and verification outcome.`,
+    ].join('\n');
+  }
+
+  private renderHighTierPrompt(spec: CompiledPromptSpecification): string {
+    const lines: string[] = [];
+
+    lines.push(`# MOCHI EXECUTION BLUEPRINT: ${spec.normalizedIntent.primaryGoal.toUpperCase()}`);
+    lines.push(`> **Reasoning Tier**: \`HIGH (ACTION MULTI-PHASE)\` | **Category**: \`${spec.classifications.join(', ')}\` | **Verify**: \`${spec.verificationPlanner.primaryCommand || 'npm test'}\``);
+    lines.push('');
+    lines.push(`## 1. Goal & Acceptance Criteria`);
+    lines.push(`- **Goal**: ${spec.normalizedIntent.primaryGoal}`);
+    lines.push(`- **Exit Gate**: All tests pass via \`${spec.verificationPlanner.primaryCommand || 'npm test'}\` with 0 regressions.`);
+    lines.push('');
+
+    lines.push(`## 2. Invariants & Safe Defaults`);
+    for (const c of spec.constraints) {
+      lines.push(`- [x] ${c}`);
+    }
+    lines.push('');
+
+    lines.push(`## 3. Multi-Phase Plan`);
+    for (const phase of spec.phases) {
+      lines.push(`### ${phase.name}`);
+      lines.push(`*${phase.objective}*`);
+      for (const t of phase.tasks) lines.push(`- ${t}`);
+      lines.push(`**Exit Criteria:** ${phase.exitCriteria.join('; ')}`);
+      lines.push('');
+    }
+
+    return lines.join('\n');
+  }
+
+  private renderMaxTierPrompt(spec: CompiledPromptSpecification): string {
     const lines: string[] = [];
 
     lines.push(`# MOCHI MASTER EXECUTION BLUEPRINT: ${spec.normalizedIntent.primaryGoal.toUpperCase()}`);
     lines.push('');
-    lines.push(`> **Classifications**: \`${spec.classifications.join(', ')}\` | **Complexity**: \`${spec.complexity}\` | **Verification**: \`${spec.verificationPlanner.primaryCommand || 'npm test'}\``);
+    lines.push(`> **Reasoning Tier**: \`MAX (DEEP ARCHITECTURAL SPEC)\` | **Classifications**: \`${spec.classifications.join(', ')}\` | **Complexity**: \`${spec.complexity}\` | **Verification**: \`${spec.verificationPlanner.primaryCommand || 'npm test'}\``);
     lines.push('');
     lines.push(`## 1. Intent & Desired Outcome`);
     lines.push(`- **Goal**: ${spec.normalizedIntent.primaryGoal}`);
