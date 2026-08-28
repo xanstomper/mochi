@@ -467,113 +467,157 @@ export function accentToolPrefix(text: string): string {
 }
 
 export function formatInlineMarkdown(text: string): string {
-  // Bold: **text**
-  let s = text.replace(/\*\*(.+?)\*\*/g, `${T.bold}${R.mdBold}$1${T.reset}${R.assistantText}`);
-  // Inline code: `code`
-  s = s.replace(/`([^`]+)`/g, `${R.codeType}${T.bold}$1${T.reset}${R.assistantText}`);
-  // Italic: *text* (when not preceded or followed by *)
-  s = s.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, `${T.italic}$1${T.reset}${R.assistantText}`);
-  return `${R.assistantText}${s}${T.reset}`;
+  // Inline markdown: bold, inline code, italic — emit ONE clean SGR per
+  // token so a downstream ANSI-aware wrap never breaks colors mid-line.
+  // Replacements work in priority order: code first (so `**foo**` inside
+  // backticks isn't re-bolded), then bold, then italic.
+  const BASE = R.assistantText;
+  // 1. Inline code: protect contents from later replacements by stashing
+  // them in a token map, then restore the colored token at the end.
+  const codeTokens: string[] = [];
+  const codePlaceholder = (raw: string) => {
+    const token = `${R.codeType}${T.bold}${raw}${T.reset}${BASE}`;
+    codeTokens.push(token);
+    return ` CODE${codeTokens.length - 1} `;
+  };
+  let s = text.replace(/`([^`\n]+)`/g, (_m, inner) => codePlaceholder(String(inner)));
+  // 2. Bold
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, `${T.bold}${R.mdBold}$1${T.reset}${BASE}`);
+  // 3. Italic (single *…*, not preceded/followed by *)
+  s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, (_m, pre, inner) => `${pre}${T.italic}${R.mdItalic}${inner}${T.reset}${BASE}`);
+  // 4. Restore code tokens
+  s = s.replace(/ CODE(\d+) /g, (_m, i) => codeTokens[Number(i)] ?? '');
+  // Wrap with assistant foreground + reset so a downstream wrap that
+  // splits the line lands back in the base color without bleeding.
+  return `${BASE}${s}${T.reset}`;
 }
 
 function highlightCodeLine(line: string): string {
+  // Syntax highlight using semantically-coordinated role colors. Each
+  // token emits a single SGR so a downstream wrap that splits the line
+  // resumes the base color cleanly at the next row.
+  const BASE = R.assistantText;
   let s = line;
-  // Keywords
-  s = s.replace(/\b(const|let|var|function|return|import|export|from|class|extends|interface|type|async|await|if|else|switch|case|break|for|while|try|catch|throw|finally|new|typeof|instanceof)\b/g, `${R.codeKeyword}$1${T.reset}${R.assistantText}`);
-  // Types & builtins
-  s = s.replace(/\b(string|number|boolean|void|any|unknown|never|null|undefined|Promise|Array|Record|Set|Map|Object|Function)\b/g, `${R.codeType}$1${T.reset}${R.assistantText}`);
-  // Function calls
-  s = s.replace(/\b([a-zA-Z_$][\w$]*)\s*\(/g, `${R.codeFn}$1${T.reset}${R.assistantText}(${T.reset}`);
-  // Strings
-  s = s.replace(/(['"`])(.*?)\1/g, `${R.codeString}$1$2$1${T.reset}${R.assistantText}`);
-  // Numbers
-  s = s.replace(/\b(\d+)\b/g, `${R.codeNumber}$1${T.reset}${R.assistantText}`);
-  // Punctuation
-  s = s.replace(/([{}();,<>[\]])/g, `${R.codePunct}$1${T.reset}${R.assistantText}`);
-  // Comments
-  s = s.replace(/(\/\/.*$)/g, `${R.codeComment}$1${T.reset}`);
-  return `${R.assistantText}${s}${T.reset}`;
+  // Order matters: comments first (so a // string isn't re-stringed),
+  // then strings (so a string containing "if" isn't re-keyworded).
+  s = s.replace(/(\/\/[^\n]*)/g, `${R.codeComment}$1${T.reset}`);
+  s = s.replace(/(['"`])(?:\\.|(?!\1)[^\\\n])*?\1/g, (m) => `${R.codeString}${m}${T.reset}`);
+  s = s.replace(/\b(const|let|var|function|return|import|export|from|class|extends|interface|type|async|await|if|else|switch|case|break|for|while|try|catch|throw|finally|new|typeof|instanceof|in|of|do|continue|delete)\b/g, (m) => `${R.codeKeyword}${m}${T.reset}`);
+  s = s.replace(/\b(string|number|boolean|void|any|unknown|never|null|undefined|Promise|Array|Record|Set|Map|Object|Function|true|false)\b/g, (m) => `${R.codeType}${m}${T.reset}`);
+  s = s.replace(/\b\d+(?:\.\d+)?\b/g, (m) => `${R.codeNumber}${m}${T.reset}`);
+  s = s.replace(/\b([a-zA-Z_$][\w$]*)(?=\s*\()/g, (m) => `${R.codeFn}${m}${T.reset}`);
+  s = s.replace(/([{}();,<>[\]=+\-*/%!&|?:])/g, `${R.codePunct}$1${T.reset}`);
+  return `${BASE}${s}${T.reset}`;
 }
 
 /**
- * Fast, ANSI-enhanced terminal markdown renderer.
- * Formats headers, code blocks with syntax highlighting, inline code,
- * bold, italic, bullet lists, blockquotes, and dividers.
+ * Compact terminal markdown renderer. Produces tight Cline/Claude-style
+ * output: paragraphs collapsed to one logical line each, no extra blank
+ * between sentences, headings stripped of the `##` sigil, bullets on a
+ * consistent 2-space indent, code fences without box borders, and a
+ * unified color baseline so wrap-and-resume keeps the right role color.
  */
 export function renderMarkdown(text: string): string[] {
   const rawLines = text.split('\n');
   const out: string[] = [];
   let inCodeBlock = false;
   let codeBlockLang = '';
+  let paragraph: string[] = [];
+
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    // Join soft-wrapped source lines into one paragraph, collapse runs
+    // of whitespace, then re-emit as a single colored line. The TUI's
+    // downstream wrapAnsi() handles viewport-width rewrap without any
+    // extra blank rows between sentences.
+    const joined = paragraph.join(' ').replace(/\s+/g, ' ').trim();
+    paragraph = [];
+    if (!joined) return;
+    out.push(formatInlineMarkdown(joined));
+  };
 
   for (let i = 0; i < rawLines.length; i++) {
     const raw = rawLines[i];
     const trimmed = raw.trim();
 
-    // Fenced code blocks (clean terminal-native, no boxes)
+    // Fenced code blocks: tight list of highlighted rows, no box border.
+    // The opening fence is the only "header" row; the closing fence is
+    // a single subtle hairline so the user can see the block end.
     if (trimmed.startsWith('```')) {
+      flushParagraph();
       if (!inCodeBlock) {
         inCodeBlock = true;
         codeBlockLang = trimmed.slice(3).trim();
         const tag = codeBlockLang ? `${R.codeType}${codeBlockLang}${T.reset}` : `${T.grayDark}code${T.reset}`;
-        out.push(`  ${T.grayDark}── ${tag}${T.reset}`);
+        out.push(`${T.grayDark}  ─ ${tag}${T.reset}`);
       } else {
         inCodeBlock = false;
         codeBlockLang = '';
-        out.push(`  ${T.grayDark}──${T.reset}`);
+        out.push(`${T.grayDark}  ─${T.reset}`);
       }
       continue;
     }
 
     if (inCodeBlock) {
-      out.push(`    ${highlightCodeLine(raw)}`);
+      // 2-space indent matches everything else on the transcript grid.
+      out.push(`  ${highlightCodeLine(raw)}`);
       continue;
     }
 
-    // Markdown Headers
-    if (trimmed.startsWith('### ')) {
-      out.push(`${R.mdHeading}${T.bold}### ${formatInlineMarkdown(trimmed.slice(4))}${T.reset}`);
-      continue;
-    }
-    if (trimmed.startsWith('## ')) {
-      out.push(`${R.mdHeading}${T.bold}## ${formatInlineMarkdown(trimmed.slice(3))}${T.reset}`);
-      continue;
-    }
-    if (trimmed.startsWith('# ')) {
-      out.push(`${R.mdHeading}${T.bold}# ${formatInlineMarkdown(trimmed.slice(2))}${T.reset}`);
+    // Blank line → paragraph boundary.
+    if (!trimmed) {
+      flushParagraph();
       continue;
     }
 
-    // Horizontal divider
+    // Markdown headers — strip the `##`/`#` sigil so the rendered output
+    // does NOT print it literally (the prior version prefixed the heading
+    // text with "## " again, producing "## ## Next steps" in the
+    // transcript). The visual hierarchy comes from color + bold, plus
+    // a tight hairline below the heading.
+    const hMatch = /^(#{1,3})\s+(.*)$/.exec(trimmed);
+    if (hMatch) {
+      flushParagraph();
+      const headingText = hMatch[2];
+      out.push(`${R.mdHeading}${T.bold}${headingText}${T.reset}`);
+      out.push(`${R.mdHeading}  ${'─'.repeat(Math.max(8, Math.min(40, headingText.length * 2)))}${T.reset}`);
+      continue;
+    }
+
+    // Horizontal divider.
     if (/^(\-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
-      out.push(`${T.rule}${'─'.repeat(40)}${T.reset}`);
+      flushParagraph();
+      out.push(`${T.grayDark}${'─'.repeat(40)}${T.reset}`);
       continue;
     }
 
-    // Blockquote
+    // Blockquote.
     if (trimmed.startsWith('> ') || trimmed === '>') {
-      out.push(`  ${T.grayDark}│${T.reset} ${T.gray}${formatInlineMarkdown(trimmed.slice(2))}${T.reset}`);
+      flushParagraph();
+      out.push(`${T.grayDark}│ ${T.reset}${formatInlineMarkdown(trimmed.replace(/^>\s?/, ''))}`);
       continue;
     }
 
-    // Unordered bullet lists
+    // Unordered bullet — consistent 2-space grid: "  • text".
     if (/^[\*\-\+]\s+/.test(trimmed)) {
+      flushParagraph();
       const content = trimmed.replace(/^[\*\-\+]\s+/, '');
-      out.push(`  ${R.mdLink}•${T.reset} ${formatInlineMarkdown(content)}`);
+      out.push(`${R.mdLink}  •${T.reset} ${formatInlineMarkdown(content)}`);
       continue;
     }
 
-    // Numbered lists
+    // Numbered list — same 2-space grid as bullets.
     const numMatch = trimmed.match(/^(\d+)\.\s+(.*)$/);
     if (numMatch) {
-      out.push(`  ${R.codeNumber}${numMatch[1]}.${T.reset} ${formatInlineMarkdown(numMatch[2])}`);
+      flushParagraph();
+      out.push(`${R.codeNumber}  ${numMatch[1]}.${T.reset} ${formatInlineMarkdown(numMatch[2])}`);
       continue;
     }
 
-    // Standard paragraph line with inline formatting
-    out.push(formatInlineMarkdown(raw));
+    // Standard paragraph: accumulate and emit on next blank / EOF.
+    paragraph.push(raw);
   }
-
+  flushParagraph();
   return out;
 }
 

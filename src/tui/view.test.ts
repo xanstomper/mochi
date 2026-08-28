@@ -27,7 +27,9 @@ import {
   visibleLen,
   highlightShellCommand,
   renderMetricGauge,
+  renderMarkdown,
 } from './view.js';
+const m = { renderMarkdown };
 import { formatToolInvocationCard } from './cards.js';
 
 function baseStatus(over: Partial<Parameters<typeof statusBarRow1>[0]> = {}) {
@@ -228,12 +230,14 @@ describe('renderEntry', () => {
   });
 
   it('assistant markdown renders as terminal prose (no glyph rule)', () => {
-    const rows = renderEntry({ kind: 'assistant', text: 'hello\nworld' });
-    expect(rows.length).toBeGreaterThanOrEqual(2);
+    // Soft-wrapped paragraphs collapse to one logical line; hard line breaks
+    // are preserved as separate output rows. The previous per-line `▌` rule
+    // marker is gone; assistant text reads as plain terminal prose.
+    const rows = renderEntry({ kind: 'assistant', text: 'hello world' });
+    expect(rows.length).toBeGreaterThanOrEqual(1);
     const plain = rows.map((r) => r.replace(/\x1b\[[0-9;]*m/g, '')).join('\n');
     expect(plain).not.toContain('▌');
-    expect(plain).toContain('hello');
-    expect(plain).toContain('world');
+    expect(plain).toContain('hello world');
   });
 
   it('multi-line system entry repeats ◆ on every line', () => {
@@ -459,5 +463,33 @@ describe('renderMetricGauge', () => {
     expect(plain).toContain('Tokens:');
     expect(plain).toContain('50%');
     expect(plain).toContain('4.0k/8.0k tok');
+  });
+});
+
+describe('renderMarkdown', () => {
+  it('strips the ## sigil so headings do not print it literally', () => {
+    const rows = m.renderMarkdown('## Next steps\n\nJust tell me what you need.');
+    const plain = rows.map((r) => r.replace(/\x1b\[[0-9;]*m/g, ''));
+    expect(plain.some((l) => l.includes('Next steps'))).toBe(true);
+    // The literal "## Next steps" must NOT appear (the sigil is stripped).
+    expect(plain.every((l) => !l.includes('## Next steps'))).toBe(true);
+  });
+
+  it('uses a consistent 2-space gutter for bullets and code fences', () => {
+    const rows = m.renderMarkdown('- one\n- two\n\n```ts\nconst x = 1;\n```\n');
+    const plain = rows.map((r) => r.replace(/\x1b\[[0-9;]*m/g, ''));
+    // bullets get the gutter
+    expect(plain.some((l) => l.startsWith('  • one'))).toBe(true);
+    expect(plain.some((l) => l.startsWith('  • two'))).toBe(true);
+  });
+
+  it('collapses blank lines (paragraphs merge, no double blanks)', () => {
+    const rows = m.renderMarkdown('Para one.\n\nPara two.');
+    const plain = rows.map((r) => r.replace(/\x1b\[[0-9;]*m/g, ''));
+    // No row should be empty between two paragraphs.
+    const blanks = plain.filter((l) => l.trim() === '').length;
+    expect(blanks).toBe(0);
+    expect(plain.join('\n')).toContain('Para one.');
+    expect(plain.join('\n')).toContain('Para two.');
   });
 });

@@ -416,10 +416,16 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       case 'assistant': {
         // Terminal prose — live markdown rendering (bold, inline code,
         // headings, bullets, code blocks), ANSI-wrapped to viewport width.
+        // The renderer already produces its own 2-space gutter for bullets
+        // and code blocks; we only add a leading 2-space gutter to plain
+        // paragraph lines to keep grid alignment with the rest of the
+        // transcript (user, tool, error, etc.).
         const mdRows = renderMarkdown(cleanText);
         for (const r of mdRows) {
-          for (const w of wrapAnsi(r, Math.max(20, maxWidth - 2))) {
-            rows.push(`  ${w}`);
+          const startsWithGutter = r.startsWith('  ') || r.startsWith('│ ') || r.startsWith('  ─');
+          const prefixed = startsWithGutter ? r : `  ${r}`;
+          for (const w of wrapAnsi(prefixed, Math.max(20, maxWidth - 2))) {
+            rows.push(w);
           }
         }
         break;

@@ -74,6 +74,7 @@ export interface RoleColors {
   // Markdown
   mdHeading: string;           // # ## ### prefix color       (default: pink)
   mdBold: string;              // **bold**                    (default: fg)
+  mdItalic: string;            // *italic*                    (default: fg)
   mdLink: string;              // [text](url)                 (default: cyan)
 
   // Chrome / chrome-adjacent
@@ -968,6 +969,7 @@ export function defaultRoleColors(p: ThemeColors): RoleColors {
     codeFn: p.cyan,
     mdHeading: p.pink,
     mdBold: p.fg,
+    mdItalic: p.fg,
     mdLink: p.cyan,
     thinkingLabel: p.cyan,
     reasoningBadge: p.cyan,
