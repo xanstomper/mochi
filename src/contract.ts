@@ -9,7 +9,7 @@
 import { existsSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
 import { resolve, basename } from 'node:path';
 
-const RULE_CANDIDATES = ['MOCHI.md', 'mochi.md', 'AGENTS.md', 'CLAUDE.md'];
+const RULE_CANDIDATES = ['MOCHI.md', 'mochi.md', 'AGENTS.md', 'CLAUDE.md', '.cursorrules', '.github/copilot-instructions.md'];
 
 /** Find the first existing rules file in cwd, otherwise return null. */
 export function findRulesFile(cwd: string): string | null {

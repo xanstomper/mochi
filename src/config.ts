@@ -76,6 +76,19 @@ export function loadConfig(overrides: Partial<MochiConfig> = {}, configPath?: st
   const user = readJsonFile(configPath ?? process.env.MOCHI_CONFIG_PATH ?? resolve(cfg.configDir, 'config.json'));
   if (user) merge(cfg as unknown as Record<string, unknown>, user);
 
+  // Project-level configurations (mochi.json, .mochi/config.json, .mcp.json)
+  const cwd = process.cwd();
+  const projectMochi = readJsonFile(resolve(cwd, 'mochi.json')) ?? readJsonFile(resolve(cwd, '.mochi', 'config.json'));
+  if (projectMochi) merge(cfg as unknown as Record<string, unknown>, projectMochi);
+
+  const mcpJson = readJsonFile(resolve(cwd, '.mcp.json'));
+  if (mcpJson && typeof mcpJson === 'object') {
+    const servers = (mcpJson as any).mcpServers ?? (mcpJson as any).servers;
+    if (servers && typeof servers === 'object') {
+      cfg.mcpServers = { ...(cfg.mcpServers ?? {}), ...servers };
+    }
+  }
+
   function isPlaceholderKey(key: string | undefined): boolean {
     if (!key) return true;
     const k = key.trim().toLowerCase();

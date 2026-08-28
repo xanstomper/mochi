@@ -16,7 +16,8 @@ export function parseRuleFile(filePath: string): ProjectRule | null {
   if (!existsSync(filePath)) return null;
   try {
     const raw = readFileSync(filePath, 'utf8');
-    const id = filePath.split('/').pop()?.replace(/\.md$/, '') ?? 'rule';
+    const filename = filePath.split('/').pop() ?? 'rule';
+    const id = filename.replace(/^\./, '').replace(/\.(md|mdc)$/, '') || filename;
     let content = raw;
     let title = id;
     let globs: string[] | undefined;
@@ -33,7 +34,7 @@ export function parseRuleFile(filePath: string): ProjectRule | null {
         if (!k || vParts.length === 0) continue;
         const v = vParts.join(':').trim();
         const key = k.trim();
-        if (key === 'title') title = v.replace(/^['"]|['"]$/g, '');
+        if (key === 'title' || key === 'description') title = v.replace(/^['"]|['"]$/g, '');
         if (key === 'globs') {
           try {
             globs = JSON.parse(v);
@@ -61,21 +62,44 @@ export function parseRuleFile(filePath: string): ProjectRule | null {
   }
 }
 
-/** Load all modular rules from .mochi/rules/ in cwd */
+/** Load all modular rules from .mochi/rules/, .cursor/rules/, .claude/rules/, .cursorrules in cwd */
 export function loadRules(projectRoot: string): ProjectRule[] {
-  const rulesDir = resolve(projectRoot, '.mochi', 'rules');
-  if (!existsSync(rulesDir)) return [];
-  try {
-    const files = readdirSync(rulesDir).filter((f) => f.endsWith('.md'));
-    const rules: ProjectRule[] = [];
-    for (const f of files) {
-      const parsed = parseRuleFile(join(rulesDir, f));
+  const rules: ProjectRule[] = [];
+  const seenSources = new Set<string>();
+
+  const scanDir = (dirPath: string) => {
+    if (!existsSync(dirPath)) return;
+    try {
+      const files = readdirSync(dirPath).filter((f) => f.endsWith('.md') || f.endsWith('.mdc'));
+      for (const f of files) {
+        const fullPath = join(dirPath, f);
+        if (seenSources.has(fullPath)) continue;
+        seenSources.add(fullPath);
+        const parsed = parseRuleFile(fullPath);
+        if (parsed) rules.push(parsed);
+      }
+    } catch {
+      /* ignore read error */
+    }
+  };
+
+  scanDir(resolve(projectRoot, '.mochi', 'rules'));
+  scanDir(resolve(projectRoot, '.cursor', 'rules'));
+  scanDir(resolve(projectRoot, '.claude', 'rules'));
+
+  const singleFiles = [
+    resolve(projectRoot, '.cursorrules'),
+    resolve(projectRoot, '.github', 'copilot-instructions.md'),
+  ];
+  for (const sf of singleFiles) {
+    if (existsSync(sf) && !seenSources.has(sf)) {
+      seenSources.add(sf);
+      const parsed = parseRuleFile(sf);
       if (parsed) rules.push(parsed);
     }
-    return rules;
-  } catch {
-    return [];
   }
+
+  return rules;
 }
 
 /** Filter rules relevant to active file paths or prompt text */

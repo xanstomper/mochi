@@ -97,4 +97,32 @@ Always use .js extension in relative imports.
     const activeForDb = selectActiveRules(rules, [], 'Write a SQL migration for users');
     expect(activeForDb.map((r) => r.id)).toEqual(['r3', 'r4']);
   });
+
+  it('auto-discovers rules from .cursor/rules, .claude/rules, .cursorrules, and .github/copilot-instructions.md', () => {
+    // 1. .cursor/rules/
+    const cursorRulesDir = resolve(TEST_DIR, '.cursor', 'rules');
+    mkdirSync(cursorRulesDir, { recursive: true });
+    writeFileSync(resolve(cursorRulesDir, 'react.mdc'), '---\ndescription: React best practices\nglobs: ["*.tsx"]\n---\nUse functional components.');
+
+    // 2. .claude/rules/
+    const claudeRulesDir = resolve(TEST_DIR, '.claude', 'rules');
+    mkdirSync(claudeRulesDir, { recursive: true });
+    writeFileSync(resolve(claudeRulesDir, 'testing.md'), '# Testing Guidelines\nAlways write unit tests.');
+
+    // 3. .cursorrules
+    writeFileSync(resolve(TEST_DIR, '.cursorrules'), '# Project Rule\nKeep dependencies minimal.');
+
+    // 4. .github/copilot-instructions.md
+    const githubDir = resolve(TEST_DIR, '.github');
+    mkdirSync(githubDir, { recursive: true });
+    writeFileSync(resolve(githubDir, 'copilot-instructions.md'), '# Copilot Rule\nFollow style guide.');
+
+    const rules = loadRules(TEST_DIR);
+    expect(rules.length).toBe(4);
+    const titles = rules.map((r) => r.title);
+    expect(titles).toContain('React best practices');
+    expect(titles).toContain('Testing Guidelines');
+    expect(titles).toContain('Project Rule');
+    expect(titles).toContain('Copilot Rule');
+  });
 });

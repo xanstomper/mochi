@@ -19,6 +19,7 @@ try {
 
 const BOOLEAN_FLAGS = new Set([
   'p', 'print', 'auto', 'quiet', 'q', 'verbose', 'v', 'debug', 'h', 'help', 'version', 'offline', 'enhance', 'install', 'plan',
+  'w', 'worktree',
   'y', 'yolo', 'dangerously-skip-permissions', 'force', 'user',
   'strict', 'json', 'diff-only', 'auto-commit', 'repair',
 ]);
@@ -150,6 +151,7 @@ Options:
   --max-model-calls <n>   Model call limit
   --max-tool-calls <n>    Tool call limit
   --workspace <name>      Use workspace
+  -w, --worktree          Run session in an isolated ephemeral Git worktree
   --plan                  Plan mode (no edits)
   -y, --yolo              Bypass all permission prompts (alias: --dangerously-skip-permissions)
   --dangerously-skip-permissions  Same as --yolo
@@ -230,7 +232,23 @@ async function main() {
   // synchronously on first use.
   try { await (await import('./sqlite.js')).sqliteDriverAsync(); } catch {}
 
-  const cwd = process.cwd();
+  let effectiveCwd = process.cwd();
+  let worktreeInfo;
+  if (flags.worktree || flags.w) {
+    const { WorktreeManager } = await import('./worktree.js');
+    const { join: pJoin } = await import('node:path');
+    const mochiDir = pJoin(effectiveCwd, '.mochi');
+    const wtManager = new WorktreeManager(effectiveCwd, mochiDir);
+    try {
+      worktreeInfo = await wtManager.create('session');
+      effectiveCwd = worktreeInfo.path;
+      console.error(`\x1b[38;2;163;230;53m[worktree]\x1b[0m Isolated git worktree created at: ${worktreeInfo.path} (branch: ${worktreeInfo.branch})`);
+    } catch (err: any) {
+      console.error(`\x1b[31m[worktree]\x1b[0m Failed to create worktree: ${err?.message ?? err}. Falling back to cwd.`);
+    }
+  }
+
+  const cwd = effectiveCwd;
   const configOverrides = configFromFlags(flags);
   const { Runtime } = await import('./runtime.js');
   const { randomSlug } = await import('./util.js');

@@ -18,18 +18,24 @@ export interface ProviderConfig {
 }
 
 function toOpenAITools(tools: ToolDefinition[]) {
-  return tools.map((t) => ({
-    type: 'function' as const,
-    function: {
-      name: t.name,
-      description: t.description,
-      parameters: {
-        type: 'object',
-        properties: Object.fromEntries(t.parameters.map((p: ToolDefinition['parameters'][number]) => [p.name, { type: p.type, description: p.description }])),
-        required: t.parameters.filter((p: ToolDefinition['parameters'][number]) => p.required).map((p: ToolDefinition['parameters'][number]) => p.name),
+  return tools.map((t, idx) => {
+    const fn: any = {
+      type: 'function' as const,
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: {
+          type: 'object',
+          properties: Object.fromEntries(t.parameters.map((p: ToolDefinition['parameters'][number]) => [p.name, { type: p.type, description: p.description }])),
+          required: t.parameters.filter((p: ToolDefinition['parameters'][number]) => p.required).map((p: ToolDefinition['parameters'][number]) => p.name),
+        },
       },
-    },
-  }));
+    };
+    if (idx === tools.length - 1) {
+      fn.cache_control = { type: 'ephemeral' };
+    }
+    return fn;
+  });
 }
 
 // The tool schema list is stable for a given tools array across an agent run.

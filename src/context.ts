@@ -20,7 +20,7 @@ import { feedbackDigest } from './feedback.js';
 import { detectCircle } from './circle.js';
 import { evaluateOwl } from './cognitive/owl.js';
 
-const CANDIDATE_RULES = ['MOCHI.md', 'mochi.md', 'AGENTS.md', 'CLAUDE.md'];
+const CANDIDATE_RULES = ['MOCHI.md', 'mochi.md', 'AGENTS.md', 'CLAUDE.md', '.cursorrules', '.github/copilot-instructions.md'];
 
 /**
  * Cheap, synchronous environment snapshot (node:os only — never spawns

@@ -98,4 +98,30 @@ describe('validateConfig', () => {
     const problems = validateConfig(invalidCfg);
     expect(problems.some(p => p.includes('reasoning'))).toBe(true);
   });
+
+  it('auto-loads mcpServers from .mcp.json if present in cwd', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { resolve } = await import('node:path');
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-mcp-'));
+    const mcpPath = resolve(dir, '.mcp.json');
+    writeFileSync(mcpPath, JSON.stringify({
+      mcpServers: {
+        github: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'] },
+        postgres: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-postgres', 'postgresql://localhost/db'] },
+      },
+    }));
+    const origCwd = process.cwd();
+    process.chdir(dir);
+    try {
+      const cfg = loadConfig();
+      expect(cfg.mcpServers).toBeDefined();
+      expect(cfg.mcpServers?.github?.command).toBe('npx');
+      expect(cfg.mcpServers?.postgres?.command).toBe('npx');
+      expect(cfg.mcpServers?.postgres?.args).toContain('postgresql://localhost/db');
+    } finally {
+      process.chdir(origCwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
