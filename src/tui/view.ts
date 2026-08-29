@@ -712,10 +712,11 @@ export interface DropdownItem {
   hint: string;
 }
 
-/** Render the slash-command dropdown as a scrolling opencode-style palette:
- *  filled accent selection bar, windowed viewport, scroll indicators. The
- *  CALLER owns the scroll window (dropOffset/dropSelected) so ↑/↓ can walk
- *  the full command list, not just the first 6 entries. */
+/** Render the slash-command dropdown in the opencode/mimo dialog language:
+ *  solid full-width selection bar (NO arrow glyph — the bar IS the cursor),
+ *  command name bold + hint dim right-of-name, scroll state in the footer.
+ *  The CALLER owns the scroll window (dropOffset/dropSelected) so ↑/↓ can
+ *  walk the full command list. */
 export function renderDropdown(
   items: DropdownItem[],
   selected: number,
@@ -724,7 +725,7 @@ export function renderDropdown(
   scrollOffset = 0,
 ): { rows: string[]; indexMap: number[] } {
   if (!items.length) return { rows: [], indexMap: [] };
-  const w = Math.min(Math.max(width, 40), 78);
+  const w = Math.min(Math.max(width, 40), 72);
   const out: string[] = [];
   const indexMap: number[] = [];
   const maxVisible = Math.min(items.length, Math.max(3, viewport));
@@ -736,32 +737,30 @@ export function renderDropdown(
   const hasAbove = offset > 0;
   const hasBelow = offset + maxVisible < items.length;
 
-  out.push(`${T.rule}╭${'─'.repeat(w - 2)}╮${T.reset}`);
+  const innerW = w - 4;
   for (let i = 0; i < maxVisible; i++) {
     const itemIdx = offset + i;
     const it = items[itemIdx];
     if (!it) break;
     indexMap.push(itemIdx);
     const sel = itemIdx === selected;
-    const name = padEnd(it.name, 14);
-    const hint = ellipsize(it.hint, Math.max(0, w - 6 - 14 - 2));
-    const pad = Math.max(0, w - 4 - 14 - visibleLen(hint));
-    // opencode look: the selected row is a full accent bar. The hint MUST stay
-    // readable on that bar — bold-off (\x1b[22m) keeps the bar's light
-    // bgText color instead of the old dark-gray-on-dark (invisible) combo.
+    const name = padEnd(it.name, 12);
+    const hint = ellipsize(it.hint, Math.max(0, innerW - 12 - 2));
+    const pad = Math.max(0, innerW - 12 - visibleLen(hint));
+    // Selected = solid accent bar, NO arrow glyph. Name bold light; hint
+    // stays on the bar via bold-off + bgText (never dark-on-dark).
     const body = sel
-      ? `${T.actBg}${T.bgText}${T.bold} ❯ ${name}\x1b[22m${T.bgText}${hint}${' '.repeat(pad)} ${T.reset}`
-      : `   ${T.act}${name}${T.reset}${T.grayDark}${hint}${T.reset}${' '.repeat(pad)} `;
+      ? `${T.actBg}${T.bgText}${T.bold}  ${name}\x1b[22m${T.bgText}  ${hint}${' '.repeat(pad)} ${T.reset}`
+      : `  ${T.act}${name}${T.reset}  ${T.grayDark}${hint}${T.reset}${' '.repeat(pad)} `;
     out.push(`${T.rule}│${T.reset}${body}${T.rule}│${T.reset}`);
   }
 
-  // Footer with scroll indicators — always shows when the list overflows.
-  const scrollHint = hasAbove && hasBelow ? ' ↑↓ more ' : hasAbove ? ' ↑ more ' : hasBelow ? ' ↓ more ' : '';
-  const footerHint = ` ↑/↓ · ⏎ · ${items.length} commands${scrollHint} `;
-  const footerRule = Math.max(0, w - 2 - visibleLen(footerHint));
-  const rLeft = Math.floor(footerRule / 2);
-  const rRight = Math.max(0, footerRule - rLeft);
-  out.push(`${T.rule}╰${'─'.repeat(rLeft)}${T.reset}${T.grayDark}${footerHint}${T.reset}${T.rule}${'─'.repeat(rRight)}╯${T.reset}`);
+  // Footer INSIDE the dialog: left scroll state, right count.
+  const scrollState = hasAbove && hasBelow ? '↑↓ more' : hasAbove ? '↑ more' : hasBelow ? '↓ more' : '';
+  const count = `${items.length} commands`;
+  const gap = Math.max(1, w - 4 - visibleLen(scrollState) - visibleLen(count) - 2);
+  out.push(`${T.rule}│${T.reset}  ${T.grayDark}${scrollState}${T.reset}${' '.repeat(gap)}${T.grayDark}${count}${T.reset}  ` + T.rule + '│' + T.reset);
+  out.push(`${T.rule}╰${'─'.repeat(w - 2)}╯${T.reset}`);
   return { rows: out, indexMap };
 }
 

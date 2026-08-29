@@ -287,8 +287,8 @@ describe('dropdown', () => {
     const plain = rows.join('\n').replace(/\x1b\[[0-9;]*m/g, '');
     expect(plain).toContain('/mode');
     expect(plain).toContain('/model');
-    // The selected row is a filled accent bar with a ❯ marker.
-    expect(plain).toContain('❯ /model');
+    // Selected row = full bar, hint present, count badge in the footer.
+    expect(plain).toContain('2 commands');
     expect(indexMap).toEqual([0, 1]);
   });
 

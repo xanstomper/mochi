@@ -908,15 +908,23 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     }
     rows[cTop + visibleTextRows + 1] = composerBottomRule(w);
     
-    // ---- opencode/mimocode-style modal menu overlay ------------------------
-    // Full-width accent selection bar (filled background), scroll indicators,
-    // and a scrolling viewport — a real rendered TUI menu, not text rows.
+    // ---- opencode/mimo dialog-style modal menu ------------------------------
+    // Design language (matching opencode's select dialogs):
+    //   ╭──────────────────────────────────────────────╮
+    //   │                                              │
+    //   │  TITLE (bold, own line)              2/15    │
+    //   │                                              │
+    //   │  ██████████████ Selected item ██████████████ │  ← solid full bar,
+    //   │    Unselected item                           │    NO arrow glyph
+    //   │                                              │
+    //   │  ↑↓ more              ↑↓ navigate · ⏎ · esc │
+    //   ╰──────────────────────────────────────────────╯
     if (state.menuActive) {
       const totalItems = state.menuItems.length;
-      const maxVisibleItems = Math.min(totalItems, Math.max(5, h - 8));
-      const menuH = maxVisibleItems + 3;
+      const maxVisibleItems = Math.min(totalItems, Math.max(5, h - 9));
+      const menuH = maxVisibleItems + 6;
       const menuTop = Math.max(1, Math.floor((h - menuH) / 2));
-      const menuW = Math.min(Math.max(64, Math.floor(w * 0.8)), w - 4);
+      const menuW = Math.min(Math.max(56, Math.floor(w * 0.66)), w - 6);
       const mLeft = Math.max(0, Math.floor((w - menuW) / 2));
       const pad = ' '.repeat(mLeft);
 
@@ -928,23 +936,27 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       const hasAbove = scrollOffset > 0;
       const hasBelow = scrollOffset + maxVisibleItems < totalItems;
 
-      // Title bar with position badge.
-      const titleText = ` ${state.menuTitle} `;
-      const countBadge = totalItems > 1 ? ` ${state.menuSelected + 1}/${totalItems} ` : ' ';
-      const ruleWidth = Math.max(0, menuW - 2 - visibleLen(titleText) - visibleLen(countBadge));
-      rows[menuTop] = pad + T.rule + '╭─' + T.reset + T.bold + titleText + T.reset + T.grayDark + countBadge + T.reset + T.rule + '─'.repeat(ruleWidth) + '╮' + T.reset;
-
       const innerW = menuW - 4;
+      let r = menuTop;
+      rows[r] = pad + T.rule + '╭' + '─'.repeat(innerW + 2) + '╮' + T.reset; r++;
+      rows[r] = pad + T.rule + '│' + T.reset + ' '.repeat(innerW + 2) + T.rule + '│' + T.reset; r++;   // top padding row
+      // Title line: bold left title, dim right-aligned position badge.
+      const titleText = state.menuTitle;
+      const countBadge = totalItems > 1 ? `${state.menuSelected + 1}/${totalItems}` : '';
+      const titleAvail = Math.max(8, innerW - visibleLen(titleText) - visibleLen(countBadge) - 4);
+      const titleGap = Math.max(1, innerW - visibleLen(titleText) - visibleLen(countBadge) - 2);
+      rows[r] = pad + T.rule + '│' + T.reset + `  ${T.bold}${ellipsize(titleText, Math.max(8, innerW - 4))}${T.reset}${' '.repeat(titleGap)}${T.grayDark}${countBadge}${T.reset}  ` + T.rule + '│' + T.reset; r++;
+      rows[r] = pad + T.rule + '│' + T.reset + ' '.repeat(innerW + 2) + T.rule + '│' + T.reset; r++;   // gap under title
+
       for (let i = 0; i < maxVisibleItems; i++) {
         const itemIdx = scrollOffset + i;
-        const r = menuTop + 1 + i;
         if (r >= h) break;
         const sel = itemIdx === state.menuSelected;
         const rawItem = state.menuItems[itemIdx] ?? '';
         const mark = state.menuMark.has(itemIdx);
 
-        // opencode-style: the selected row is a FULL accent bar spanning the
-        // whole menu width (❯ + filled background), unselected rows stay flat.
+        // Selected = solid accent bar spanning the full row, NO arrow glyph —
+        // the bar itself is the cursor (opencode/mimo dialog language).
         // The ● active-dot is recolored without an embedded reset so it never
         // punches a hole in the bar's background fill.
         const activeDot = mark && !rawItem.includes('[ACTIVE]') ? `${T.lime}●${T.bgText} ` : '';
@@ -953,28 +965,27 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         if (visibleLen(rawItem) > availForItem) formattedItem = ellipsize(rawItem, availForItem);
         const trail = Math.max(0, availForItem - visibleLen(formattedItem));
 
-        // Menu items themselves carry ANSI (colored labels) and many end with
-        // T.reset — a bare reset ERASES the bar's background mid-row and
-        // leaves the rest of the item dark-on-dark (the "turns invisible"
-        // bug). On the selected bar we rewrite every reset into "reset
-        // colors only, keep the bar background + light text" so the whole
-        // row stays one solid filled bar with readable content.
+        // Menu items carry their own ANSI and often end with T.reset — a bare
+        // reset erases the bar mid-row (dark-on-dark invisibility). Rewrite
+        // resets to "keep bar background + light text" so the row stays solid.
         const barSafe = (s: string) => s
-          .replace(/\x1b\[0m/g, T.actBg + T.bgText)   // keep bar, restore light text
-          .replace(/\x1b\[22m/g, T.bgText);           // unbold, keep light text
+          .replace(/\x1b\[0m/g, T.actBg + T.bgText)
+          .replace(/\x1b\[22m/g, T.bgText);
         const content = sel
-          ? `${T.actBg}${T.bgText}${T.bold} ❯ ${barSafe(activeDot)}${barSafe(formattedItem)}${' '.repeat(trail)} ${T.reset}`
-          : `   ${activeDot}${T.fg}${formattedItem}${T.reset}${' '.repeat(trail)} `;
-        rows[r] = pad + T.rule + '│' + T.reset + content + T.rule + '│' + T.reset;
+          ? `${T.actBg}${T.bgText}${T.bold}  ${barSafe(activeDot)}${barSafe(formattedItem)}${' '.repeat(trail)} ${T.reset}`
+          : `  ${activeDot}${T.fg}${formattedItem}${T.reset}${' '.repeat(trail)} `;
+        rows[r] = pad + T.rule + '│' + T.reset + content + T.rule + '│' + T.reset; r++;
       }
 
-      // Scroll indicators on the footer, so overflow is always visible.
-      const scrollHint = hasAbove && hasBelow ? ' ↑↓ more ' : hasAbove ? ' ↑ more ' : hasBelow ? ' ↓ more ' : '';
-      const footerHint = ` ↑/↓ or wheel scroll · ⏎ select · esc cancel${scrollHint} `;
-      const footerRule = Math.max(0, menuW - 2 - visibleLen(footerHint));
-      const rLeft = Math.floor(footerRule / 2);
-      const rRight = Math.max(0, footerRule - rLeft);
-      rows[menuTop + 1 + maxVisibleItems] = pad + T.rule + '╰' + '─'.repeat(rLeft) + T.reset + T.grayDark + footerHint + T.reset + T.rule + '─'.repeat(rRight) + '╯' + T.reset;
+      rows[r] = pad + T.rule + '│' + T.reset + ' '.repeat(innerW + 2) + T.rule + '│' + T.reset; r++;   // bottom padding row
+      // Hint line inside the border: left scroll state, right key hints.
+      const scrollState = hasAbove && hasBelow ? '↑↓ more' : hasAbove ? '↑ more' : hasBelow ? '↓ more' : '';
+      const keyHints = '↑↓ · ⏎ · esc';
+      const hintsGap = Math.max(1, innerW + 2 - 4 - visibleLen(scrollState) - visibleLen(keyHints) - 2);
+      rows[r] = pad + T.rule + '╰' + '─'.repeat(innerW + 2) + '╯' + T.reset;
+      // Put the hint line INSIDE the dialog (before the bottom border):
+      const hintRow = menuTop + menuH - 2;
+      rows[hintRow] = pad + T.rule + '│' + T.reset + `  ${T.grayDark}${scrollState}${T.reset}${' '.repeat(hintsGap)}${T.grayDark}${keyHints}${T.reset}  ` + T.rule + '│' + T.reset;
     }
 
     let out = HIDE;
