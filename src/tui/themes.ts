@@ -21,6 +21,10 @@ import { homedir } from 'node:os';
 
 export interface ThemeColors {
   act: string;
+  /** Selection-bar background for menus/dropdowns (opencode-style filled row). */
+  actBg: string;
+  /** Foreground to pair with actBg (readable on the accent background). */
+  bgText: string;
   plan: string;
   success: string;
   error: string;
@@ -160,6 +164,8 @@ export const THEMES: MochiTheme[] = [
     description: 'Deep neon void — electric cyan, hot pink, lime; the default mochi look',
     colors: {
       act: '\x1b[38;2;0;255;255m',
+      actBg: '\x1b[48;2;0;64;64m',
+      bgText: '\x1b[38;2;245;245;250m',
       plan: '\x1b[38;2;255;255;0m',
       success: '\x1b[38;2;57;255;20m',
       error: '\x1b[38;2;255;0;127m',
@@ -194,6 +200,8 @@ export const THEMES: MochiTheme[] = [
     description: '80s sunset — teal, magenta, peach, lavender, soft cream',
     colors: {
       act: '\x1b[38;2;0;255;204m',
+      actBg: '\x1b[48;2;0;64;51m',
+      bgText: '\x1b[38;2;245;245;250m',
       plan: '\x1b[38;2;255;182;193m',
       success: '\x1b[38;2;152;251;152m',
       error: '\x1b[38;2;255;105;180m',
@@ -229,6 +237,8 @@ export const THEMES: MochiTheme[] = [
     description: 'Burning sun on black — intense orange, sunburst yellow, crimson',
     colors: {
       act: '\x1b[38;2;255;215;0m',
+      actBg: '\x1b[48;2;64;54;0m',
+      bgText: '\x1b[38;2;245;245;250m',
       plan: '\x1b[38;2;255;140;0m',
       success: '\x1b[38;2;255;255;0m',
       error: '\x1b[38;2;255;69;0m',
@@ -265,6 +275,8 @@ export const THEMES: MochiTheme[] = [
     description: 'Bioluminescent coral — aqua, sea green, salmon glow on midnight blue',
     colors: {
       act: '\x1b[38;2;0;255;255m',
+      actBg: '\x1b[48;2;0;64;64m',
+      bgText: '\x1b[38;2;245;245;250m',
       plan: '\x1b[38;2;64;224;208m',
       success: '\x1b[38;2;46;139;87m',
       error: '\x1b[38;2;255;127;80m',
@@ -301,6 +313,8 @@ export const THEMES: MochiTheme[] = [
     description: 'Falling maple — burnt sienna, goldenrod, olive, plum, warm cream',
     colors: {
       act: '\x1b[38;2;218;165;32m',
+      actBg: '\x1b[48;2;55;41;8m',
+      bgText: '\x1b[38;2;245;245;250m',
       plan: '\x1b[38;2;205;133;63m',
       success: '\x1b[38;2;107;142;35m',
       error: '\x1b[38;2;178;34;34m',
@@ -337,6 +351,8 @@ export const THEMES: MochiTheme[] = [
     description: 'Pacman fever — true black with primary yellow, red, cyan, lime',
     colors: {
       act: '\x1b[38;2;255;255;0m',
+      actBg: '\x1b[48;2;64;64;0m',
+      bgText: '\x1b[38;2;245;245;250m',
       plan: '\x1b[38;2;0;255;255m',
       success: '\x1b[38;2;57;255;20m',
       error: '\x1b[38;2;255;0;0m',
@@ -373,6 +389,8 @@ export const THEMES: MochiTheme[] = [
     description: 'Pastel dreams — sky blue, blush pink, mint, lavender on warm cream',
     colors: {
       act: '\x1b[38;2;135;206;235m',
+      actBg: '\x1b[48;2;34;52;59m',
+      bgText: '\x1b[38;2;245;245;250m',
       plan: '\x1b[38;2;255;182;193m',
       success: '\x1b[38;2;152;251;152m',
       error: '\x1b[38;2;255;99;71m',
@@ -413,6 +431,8 @@ export const THEMES: MochiTheme[] = [
     description: 'Phosphor screen — varied shades of green on black, amber warnings',
     colors: {
       act: '\x1b[38;2;0;255;0m',
+      actBg: '\x1b[48;2;0;64;0m',
+      bgText: '\x1b[38;2;245;245;250m',
       plan: '\x1b[38;2;173;255;47m',
       success: '\x1b[38;2;50;205;50m',
       error: '\x1b[38;2;255;69;0m',
@@ -451,6 +471,8 @@ export const THEMES: MochiTheme[] = [
     description: 'Smooth indigo lounge — gold, silver, plum on midnight blue, warm cream',
     colors: {
       act: '\x1b[38;2;218;165;32m',
+      actBg: '\x1b[48;2;55;41;8m',
+      bgText: '\x1b[38;2;245;245;250m',
       plan: '\x1b[38;2;192;192;192m',
       success: '\x1b[38;2;102;205;170m',
       error: '\x1b[38;2;220;20;60m',
@@ -487,6 +509,8 @@ export const THEMES: MochiTheme[] = [
     description: 'Sun-bleached earth — terracotta, sage, twilight blue, sandy beige',
     colors: {
       act: '\x1b[38;2;70;130;180m',
+      actBg: '\x1b[48;2;18;33;45m',
+      bgText: '\x1b[38;2;245;245;250m',
       plan: '\x1b[38;2;222;184;135m',
       success: '\x1b[38;2;143;188;143m',
       error: '\x1b[38;2;205;92;92m',
@@ -523,6 +547,8 @@ export const THEMES: MochiTheme[] = [
     description: 'Ice-blue dawn — vivid aurora greens, royal purples, cyan, gold',
     colors: {
       act: '\x1b[38;2;0;255;255m',
+      actBg: '\x1b[48;2;0;64;64m',
+      bgText: '\x1b[38;2;245;245;250m',
       plan: '\x1b[38;2;138;43;226m',
       success: '\x1b[38;2;0;250;154m',
       error: '\x1b[38;2;220;20;60m',
@@ -559,6 +585,8 @@ export const THEMES: MochiTheme[] = [
     description: 'Velvet burgundy — crimson, blush pink, gold, ivory on wine',
     colors: {
       act: '\x1b[38;2;255;182;193m',
+      actBg: '\x1b[48;2;64;46;48m',
+      bgText: '\x1b[38;2;245;245;250m',
       plan: '\x1b[38;2;255;215;0m',
       success: '\x1b[38;2;152;251;152m',
       error: '\x1b[38;2;255;0;0m',
@@ -596,6 +624,8 @@ export const THEMES: MochiTheme[] = [
     description: 'Cyberpunk rain-slick street — electric blue, toxic lime, blood red, hot pink',
     colors: {
       act: '\x1b[38;2;0;191;255m',
+      actBg: '\x1b[48;2;0;48;64m',
+      bgText: '\x1b[38;2;245;245;250m',
       plan: '\x1b[38;2;173;255;47m',
       success: '\x1b[38;2;0;250;154m',
       error: '\x1b[38;2;220;20;60m',
@@ -632,6 +662,8 @@ export const THEMES: MochiTheme[] = [
     description: 'Charcoal with pastel pink, mint, lavender, sky — sweet meets dark',
     colors: {
       act: '\x1b[38;2;221;160;221m',
+      actBg: '\x1b[48;2;55;40;55m',
+      bgText: '\x1b[38;2;245;245;250m',
       plan: '\x1b[38;2;152;251;152m',
       success: '\x1b[38;2;175;238;238m',
       error: '\x1b[38;2;250;128;114m',
@@ -668,6 +700,8 @@ export const THEMES: MochiTheme[] = [
     description: 'Black mirror with gold accents — precious metals on volcanic glass',
     colors: {
       act: '\x1b[38;2;218;165;32m',
+      actBg: '\x1b[48;2;55;41;8m',
+      bgText: '\x1b[38;2;245;245;250m',
       plan: '\x1b[38;2;192;192;192m',
       success: '\x1b[38;2;184;134;11m',
       error: '\x1b[38;2;178;34;34m',
@@ -705,6 +739,8 @@ export const THEMES: MochiTheme[] = [
     description: 'Classic Dracula — soft purple bg, pink/cyan/green/yellow accents',
     colors: {
       act: '\x1b[38;2;80;250;123m',
+      actBg: '\x1b[48;2;20;63;31m',
+      bgText: '\x1b[38;2;245;245;250m',
       plan: '\x1b[38;2;255;184;108m',
       success: '\x1b[38;2;80;250;123m',
       error: '\x1b[38;2;255;85;85m',
@@ -752,6 +788,8 @@ export const THEMES: MochiTheme[] = [
     description: 'Tokyo Night — soft blue-purple night, yellow tool names, cyan accents',
     colors: {
       act: '\x1b[38;2;122;162;247m',
+      actBg: '\x1b[48;2;31;41;62m',
+      bgText: '\x1b[38;2;245;245;250m',
       plan: '\x1b[38;2;224;175;104m',
       success: '\x1b[38;2;158;206;106m',
       error: '\x1b[38;2;247;118;142m',
@@ -801,6 +839,8 @@ export const THEMES: MochiTheme[] = [
     description: 'Catppuccin Mocha — warm latte palette, mauve/peach/sky/green',
     colors: {
       act: '\x1b[38;2;166;218;149m',
+      actBg: '\x1b[48;2;42;55;37m',
+      bgText: '\x1b[38;2;245;245;250m',
       plan: '\x1b[38;2;250;179;135m',
       success: '\x1b[38;2;166;218;149m',
       error: '\x1b[38;2;237;135;150m',
@@ -848,6 +888,8 @@ export const THEMES: MochiTheme[] = [
     description: 'Gruvbox — warm retro earth tones: orange/green/purple/yellow on dark',
     colors: {
       act: '\x1b[38;2;184;187;38m',
+      actBg: '\x1b[48;2;46;47;10m',
+      bgText: '\x1b[38;2;245;245;250m',
       plan: '\x1b[38;2;250;189;47m',
       success: '\x1b[38;2;184;187;38m',
       error: '\x1b[38;2;251;73;52m',
@@ -895,6 +937,8 @@ export const THEMES: MochiTheme[] = [
     description: 'One Dark — classic editor: blue, purple, cyan, green on charcoal',
     colors: {
       act: '\x1b[38;2;97;175;239m',
+      actBg: '\x1b[48;2;24;44;60m',
+      bgText: '\x1b[38;2;245;245;250m',
       plan: '\x1b[38;2;229;192;123m',
       success: '\x1b[38;2;152;195;121m',
       error: '\x1b[38;2;224;108;117m',

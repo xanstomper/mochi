@@ -166,6 +166,10 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     /** slash autocomplete */
     dropActive: false,
     dropSelected: 0,
+    /** Scroll window offset for the dropdown palette (full-list scrolling). */
+    dropOffset: 0,
+    /** Absolute item index each rendered dropdown row maps to (set per frame). */
+    dropIndexMap: [] as number[],
     /** live git diff stats for the status bar */
     gitDiff: null as { files: number; additions: number; deletions: number } | null,
     totalTokens: 0,
@@ -818,10 +822,18 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       rows[r] = '  ' + thinkingLine(state.spinner, state.currentTool || state.currentTask || '');
     }
 
-    // autocomplete dropdown floats above the status bar
+    // autocomplete dropdown floats above the status bar — scrolling palette
+    // over the FULL command list (viewport window, not a 6-item slice).
     const dropItems = currentDropItems();
     if (dropItems.length && !state.menuActive) {
-      const dd = renderDropdown(dropItems.slice(0, 6).map((c) => ({ name: c.name, hint: c.hint })), state.dropSelected, w - indent);
+      const { rows: dd, indexMap } = renderDropdown(
+        dropItems.map((c) => ({ name: c.name, hint: c.hint })),
+        state.dropSelected,
+        w - indent,
+        Math.min(10, Math.max(4, h - bottomRows - 4)),
+        state.dropOffset,
+      );
+      state.dropIndexMap = indexMap;
       const top = h - bottomRows - dd.length - 1;
       for (let i = 0; i < dd.length; i++) {
         const r = top + i;
@@ -896,25 +908,29 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     }
     rows[cTop + visibleTextRows + 1] = composerBottomRule(w);
     
-    // ---- Sleek centered modal menu overlay with scrolling window ----
+    // ---- opencode/mimocode-style modal menu overlay ------------------------
+    // Full-width accent selection bar (filled background), scroll indicators,
+    // and a scrolling viewport — a real rendered TUI menu, not text rows.
     if (state.menuActive) {
       const totalItems = state.menuItems.length;
       const maxVisibleItems = Math.min(totalItems, Math.max(5, h - 8));
       const menuH = maxVisibleItems + 3;
       const menuTop = Math.max(1, Math.floor((h - menuH) / 2));
-      const menuW = Math.min(Math.max(68, Math.floor(w * 0.76)), w - 4);
+      const menuW = Math.min(Math.max(64, Math.floor(w * 0.8)), w - 4);
       const mLeft = Math.max(0, Math.floor((w - menuW) / 2));
       const pad = ' '.repeat(mLeft);
 
-      // Windowed scrolling offset
+      // Scrolling viewport: keep the selection inside the visible window.
       let scrollOffset = 0;
       if (totalItems > maxVisibleItems) {
         scrollOffset = Math.max(0, Math.min(totalItems - maxVisibleItems, state.menuSelected - Math.floor(maxVisibleItems / 2)));
       }
+      const hasAbove = scrollOffset > 0;
+      const hasBelow = scrollOffset + maxVisibleItems < totalItems;
 
-      // Title bar: ╭── Title [count] ──────────────────────────╮
+      // Title bar with position badge.
       const titleText = ` ${state.menuTitle} `;
-      const countBadge = totalItems > 1 ? ` [${state.menuSelected + 1}/${totalItems}] ` : ' ';
+      const countBadge = totalItems > 1 ? ` ${state.menuSelected + 1}/${totalItems} ` : ' ';
       const ruleWidth = Math.max(0, menuW - 2 - visibleLen(titleText) - visibleLen(countBadge));
       rows[menuTop] = pad + T.rule + '╭─' + T.reset + T.bold + titleText + T.reset + T.grayDark + countBadge + T.reset + T.rule + '─'.repeat(ruleWidth) + '╮' + T.reset;
 
@@ -927,25 +943,23 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         const rawItem = state.menuItems[itemIdx] ?? '';
         const mark = state.menuMark.has(itemIdx);
 
-        const pointer = sel ? `${T.act}${T.bold}❯${T.reset} ` : '  ';
+        // opencode-style: the selected row is a FULL accent bar spanning the
+        // whole menu width (❯ + filled background), unselected rows stay flat.
         const activeDot = mark && !rawItem.includes('[ACTIVE]') ? `${T.lime}● ${T.reset}` : '';
-        const prefix = pointer + activeDot;
-        const availForItem = Math.max(10, innerW - visibleLen(prefix));
-
+        const availForItem = Math.max(10, innerW - 2 - visibleLen(activeDot));
         let formattedItem = rawItem;
-        if (visibleLen(rawItem) > availForItem) {
-          formattedItem = ellipsize(rawItem, availForItem);
-        }
+        if (visibleLen(rawItem) > availForItem) formattedItem = ellipsize(rawItem, availForItem);
+        const trail = Math.max(0, availForItem - visibleLen(formattedItem));
 
-        const itemVis = visibleLen(formattedItem);
-        const trail = Math.max(0, availForItem - itemVis);
-        const content = prefix + (sel ? `${T.bold}${T.fg}` : '') + formattedItem + T.reset + ' '.repeat(trail);
-
-        rows[r] = pad + T.rule + '│' + T.reset + ' ' + content + ' ' + T.rule + '│' + T.reset;
+        const content = sel
+          ? `${T.actBg}${T.bgText}${T.bold} ❯ ${activeDot}${formattedItem}${' '.repeat(trail)} ${T.reset}`
+          : `   ${activeDot}${T.fg}${formattedItem}${T.reset}${' '.repeat(trail)} `;
+        rows[r] = pad + T.rule + '│' + T.reset + content + T.rule + '│' + T.reset;
       }
 
-      // Footer bar: ╰── ↑/↓ scroll · ⏎ select · esc cancel ─────╯
-      const footerHint = ' ↑/↓ scroll · ⏎ select · esc cancel ';
+      // Scroll indicators on the footer, so overflow is always visible.
+      const scrollHint = hasAbove && hasBelow ? ' ↑↓ more ' : hasAbove ? ' ↑ more ' : hasBelow ? ' ↓ more ' : '';
+      const footerHint = ` ↑/↓ or wheel scroll · ⏎ select · esc cancel${scrollHint} `;
       const footerRule = Math.max(0, menuW - 2 - visibleLen(footerHint));
       const rLeft = Math.floor(footerRule / 2);
       const rRight = Math.max(0, footerRule - rLeft);
@@ -1841,7 +1855,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         state.input = state.input.slice(0, state.cursor) + text + state.input.slice(state.cursor);
         state.cursor += text.length;
         state.dropActive = currentDropItems().length > 0;
-        state.dropSelected = 0;
+        state.dropSelected = 0; state.dropOffset = 0;
         clearSelection();
         scheduleRender();
       }
@@ -1953,16 +1967,33 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         if (state.dropActive) {
           const items = currentDropItems();
           const pick = items[Math.min(state.dropSelected, items.length - 1)];
-          const exactMatch = items.length === 1 && state.input.trim() === items[0].name;
           const takesArg = pick && ['/goal', '/plan', '/team', '/model', '/reasoning', '/theme', '/inspect', '/run', '/shell', '/login', '/import', '/rename'].includes(pick.name);
-          if (pick && state.input.startsWith('/') && (!exactMatch || (takesArg && state.input === pick.name))) {
+          // Only hijack Enter when the composer holds the BARE command name
+          // (no arguments typed yet) — then expand to "/cmd " for the user to
+          // type args. Once arguments exist, Enter must SEND the command
+          // (the old condition re-expanded "/goal fix the login bug" back to
+          // bare "/goal " and swallowed the send forever).
+          const bareCommand = pick && state.input.trim() === pick.name;
+          if (bareCommand && takesArg) {
             state.input = pick.name + ' ';
             state.cursor = state.input.length;
             state.dropActive = false;
-            state.dropSelected = 0;
+            state.dropSelected = 0; state.dropOffset = 0;
             scheduleRender();
             i++;
             continue;
+          }
+          if (bareCommand && !takesArg) {
+            // Bare no-arg command: complete to the exact name and send immediately.
+            state.input = pick.name;
+            state.cursor = state.input.length;
+            state.dropActive = false;
+            state.dropSelected = 0; state.dropOffset = 0;
+            // fall through to the send path below with the completed name
+          } else {
+            // Args typed: send as-is. Close the dropdown, don't touch the text.
+            state.dropActive = false;
+            state.dropSelected = 0; state.dropOffset = 0;
           }
         }
         const text = state.input;
@@ -2086,7 +2117,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
           state.input = items[0].name + ' ';
           state.cursor = state.input.length;
           state.dropActive = false;
-          state.dropSelected = 0;
+          state.dropSelected = 0; state.dropOffset = 0;
         } else {
           state.uiMode = state.uiMode === 'plan' ? 'act' : 'plan';
           runtime.config.planMode = state.uiMode === 'plan';
@@ -2134,7 +2165,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         state.input = state.input.slice(0, state.cursor) + text + state.input.slice(state.cursor);
         state.cursor += text.length;
         state.dropActive = currentDropItems().length > 0;
-        state.dropSelected = 0;
+        state.dropSelected = 0; state.dropOffset = 0;
         clearSelection();
         scheduleRender();
         i = j;
@@ -2151,10 +2182,23 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       case '\x1b[H': state.cursor = 0; break;
       case '\x1b[F': state.cursor = state.input.length; break;
       case '\x1b[A':
-        if (state.dropActive) { state.dropSelected = Math.max(0, state.dropSelected - 1); break; }
+        if (state.dropActive) {
+          // Full-list navigation: move selection; scroll window follows when
+          // the selection exits the viewport (↑ past the top of the window).
+          state.dropSelected = Math.max(0, state.dropSelected - 1);
+          if (state.dropSelected < state.dropOffset) state.dropOffset = state.dropSelected;
+          break;
+        }
         historyPrev(); break;
       case '\x1b[B':
-        if (state.dropActive) { state.dropSelected = Math.min(currentDropItems().length - 1, state.dropSelected + 1); break; }
+        if (state.dropActive) {
+          const count = currentDropItems().length;
+          state.dropSelected = Math.min(count - 1, state.dropSelected + 1);
+          // Scroll the window down when the selection passes the viewport.
+          const viewport = Math.min(10, Math.max(4, height() - 10));
+          if (state.dropSelected >= state.dropOffset + viewport) state.dropOffset = state.dropSelected - viewport + 1;
+          break;
+        }
         historyNext(); break;
       case '\x1b[5~': scrollTranscript(scrollPageSize()); clearSelection(); return;
       case '\x1b[6~': scrollTranscript(-scrollPageSize()); clearSelection(); return;

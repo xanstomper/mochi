@@ -706,30 +706,60 @@ export function composerHintRow(hint: string, width: number): string {
   return `${T.grayDark}${hint}${T.reset}`;
 }
 
-// ---- Autocomplete dropdown (Cline autocomplete-dropdown.tsx) ---------------
+// ---- Autocomplete dropdown (opencode-style scrolling command palette) -------
 export interface DropdownItem {
   name: string;
   hint: string;
 }
 
-export function renderDropdown(items: DropdownItem[], selected: number, width: number): string[] {
-  if (!items.length) return [];
-  const w = Math.min(width, 64);
+/** Render the slash-command dropdown as a scrolling opencode-style palette:
+ *  filled accent selection bar, windowed viewport, scroll indicators. The
+ *  CALLER owns the scroll window (dropOffset/dropSelected) so ↑/↓ can walk
+ *  the full command list, not just the first 6 entries. */
+export function renderDropdown(
+  items: DropdownItem[],
+  selected: number,
+  width: number,
+  viewport = 8,
+  scrollOffset = 0,
+): { rows: string[]; indexMap: number[] } {
+  if (!items.length) return { rows: [], indexMap: [] };
+  const w = Math.min(Math.max(width, 40), 78);
   const out: string[] = [];
-  out.push(`${T.rule}╭${'─'.repeat(Math.max(0, w - 2))}╮${T.reset}`);
-  for (let i = 0; i < items.length; i++) {
-    const it = items[i];
-    const sel = i === selected;
-    const name = padEnd(it.name, 16);
-    const hint = ellipsize(it.hint, Math.max(0, w - 4 - 16 - 3));
-    const rowBody = sel
-      ? `${T.act}❯ ${T.bold}${name}${T.reset}${T.gray}${hint}${T.reset}`
-      : `  ${T.fg}${name}${T.reset}${T.grayDark}${hint}${T.reset}`;
-    const pad = Math.max(0, w - 2 - 2 - 16 - visibleLen(hint));
-    out.push(`${T.rule}│${T.reset}${rowBody}${' '.repeat(pad)}${T.rule}│${T.reset}`);
+  const indexMap: number[] = [];
+  const maxVisible = Math.min(items.length, Math.max(3, viewport));
+
+  // Clamp the window around the selection (caller passes its offset; we
+  // still clamp defensively so the selection is always visible).
+  const maxOffset = Math.max(0, items.length - maxVisible);
+  const offset = Math.max(0, Math.min(maxOffset, Math.min(scrollOffset, selected - Math.floor(maxVisible / 2) < 0 ? 0 : selected - Math.floor(maxVisible / 2) > maxOffset ? maxOffset : selected - Math.floor(maxVisible / 2))));
+  const hasAbove = offset > 0;
+  const hasBelow = offset + maxVisible < items.length;
+
+  out.push(`${T.rule}╭${'─'.repeat(w - 2)}╮${T.reset}`);
+  for (let i = 0; i < maxVisible; i++) {
+    const itemIdx = offset + i;
+    const it = items[itemIdx];
+    if (!it) break;
+    indexMap.push(itemIdx);
+    const sel = itemIdx === selected;
+    const name = padEnd(it.name, 14);
+    const hint = ellipsize(it.hint, Math.max(0, w - 6 - 14 - 2));
+    const pad = Math.max(0, w - 4 - 14 - visibleLen(hint));
+    const body = sel
+      ? `${T.actBg}${T.bgText}${T.bold} ❯ ${name}${' '.repeat(pad)}${T.grayDark}${hint}${' '.repeat(Math.max(0, 2 - visibleLen(hint) > 0 ? 0 : 0))} ${T.reset}`
+      : `   ${T.fg}${name}${T.reset}${T.grayDark}${hint}${T.reset}${' '.repeat(pad)} `;
+    out.push(`${T.rule}│${T.reset}${body}${T.rule}│${T.reset}`);
   }
-  out.push(`${T.rule}╰${'─'.repeat(Math.max(0, w - 2))}╯${T.reset}`);
-  return out;
+
+  // Footer with scroll indicators — always shows when the list overflows.
+  const scrollHint = hasAbove && hasBelow ? ' ↑↓ more ' : hasAbove ? ' ↑ more ' : hasBelow ? ' ↓ more ' : '';
+  const footerHint = ` ↑/↓ · ⏎ · ${items.length} commands${scrollHint} `;
+  const footerRule = Math.max(0, w - 2 - visibleLen(footerHint));
+  const rLeft = Math.floor(footerRule / 2);
+  const rRight = Math.max(0, footerRule - rLeft);
+  out.push(`${T.rule}╰${'─'.repeat(rLeft)}${T.reset}${T.grayDark}${footerHint}${T.reset}${T.rule}${'─'.repeat(rRight)}╯${T.reset}`);
+  return { rows: out, indexMap };
 }
 
 // ---- Layout glue -----------------------------------------------------------
