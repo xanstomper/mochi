@@ -703,7 +703,11 @@ export function composerBottomRule(width: number): string {
  *  auto-approve row (user request). Previously lived inside the bottom
  *  border, where it clipped when the input wrapped to the last row. */
 export function composerHintRow(hint: string, width: number): string {
-  return `${T.grayDark}${hint}${T.reset}`;
+  // Clamp to terminal width: the fixed hint text hard-wrapped in windowed
+  // mode (50 visible cols vs a 26-46 col pane), smearing the status area.
+  const vis = visibleLen(hint);
+  const shown = vis > width ? ellipsize(hint, width) : hint;
+  return `${T.grayDark}${shown}${T.reset}`;
 }
 
 // ---- Autocomplete dropdown (Cline autocomplete-dropdown.tsx) ---------------

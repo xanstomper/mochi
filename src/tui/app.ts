@@ -868,7 +868,9 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       const cache = gradientCacheBar(cacheRate, 10, state.busy ? state.spinner + 1 : 0);
       const fmt = (n: number) => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
       const cachePctText = cacheRate > 0 ? ` ${T.gray}(${Math.round(cacheRate * 100)}%)${T.reset}` : '';
-      const barsRow = ` ${T.gray}in${T.reset} ${T.cyan}${fmt(state.inTokens)}${T.reset} ${T.gray}out${T.reset} ${T.orange}${fmt(state.outTokens)}${T.reset}  ${ctx.text} ${T.gray}${Math.round(ctx.pct * 100)}%${T.reset}  ${T.gray}cache${T.reset} ${cache.text} ${T.lime}${fmt(state.cacheTokens)}${T.reset}${cachePctText}`;
+      const barsRowFull = ` ${T.gray}in${T.reset} ${T.cyan}${fmt(state.inTokens)}${T.reset} ${T.gray}out${T.reset} ${T.orange}${fmt(state.outTokens)}${T.reset}  ${ctx.text} ${T.gray}${Math.round(ctx.pct * 100)}%${T.reset}  ${T.gray}cache${T.reset} ${cache.text} ${T.lime}${fmt(state.cacheTokens)}${T.reset}${cachePctText}`;
+      // Clamp: this row had no width budget and hard-wrapped in windowed mode.
+      const barsRow = visibleLen(barsRowFull) > w ? ellipsize(barsRowFull, w) : barsRowFull;
       
       rows[s1 + 1] = barsRow;
       rows[s1 + 2] = statusBarRow2(statusModel, w);
