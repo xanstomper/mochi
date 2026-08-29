@@ -299,7 +299,8 @@ describe('dropdown', () => {
     const plain = rows.join('\n').replace(/\x1b\[[0-9;]*m/g, '');
     expect(plain).toContain('/cmd40');
     expect(plain).not.toContain('/cmd0 ');
-    expect(plain).toContain('↓ more');
+    expect(plain).toContain('↓');
+    expect(plain).toContain('50 commands');
     expect(indexMap).toContain(40);
     expect(Math.max(...indexMap)).toBeLessThanOrEqual(49);
   });

@@ -712,11 +712,10 @@ export interface DropdownItem {
   hint: string;
 }
 
-/** Render the slash-command dropdown in the opencode/mimo dialog language:
- *  solid full-width selection bar (NO arrow glyph — the bar IS the cursor),
- *  command name bold + hint dim right-of-name, scroll state in the footer.
- *  The CALLER owns the scroll window (dropOffset/dropSelected) so ↑/↓ can
- *  walk the full command list. */
+/** Render the slash-command dropdown as an opencode floating panel:
+ *  no border glyphs — a solid panelBg block on the backdrop, peach selection
+ *  bar (text near-black on it), white command names, gray hints, bold title
+ *  with `esc` right-aligned. The CALLER owns the scroll window. */
 export function renderDropdown(
   items: DropdownItem[],
   selected: number,
@@ -730,14 +729,22 @@ export function renderDropdown(
   const indexMap: number[] = [];
   const maxVisible = Math.min(items.length, Math.max(3, viewport));
 
-  // Clamp the window around the selection (caller passes its offset; we
-  // still clamp defensively so the selection is always visible).
   const maxOffset = Math.max(0, items.length - maxVisible);
   const offset = Math.max(0, Math.min(maxOffset, Math.min(scrollOffset, selected - Math.floor(maxVisible / 2) < 0 ? 0 : selected - Math.floor(maxVisible / 2) > maxOffset ? maxOffset : selected - Math.floor(maxVisible / 2))));
-  const hasAbove = offset > 0;
-  const hasBelow = offset + maxVisible < items.length;
+  const P = T.panelBg;   // panel background
+  const B = T.backdropBg; // terminal backdrop
+  const bar = T.actBg;    // selection bar
+  const onBar = T.bgText; // text on the bar (dark)
+  const white = '\x1b[38;2;238;238;238m';
+  const dim = '\x1b[38;2;128;128;128m';
+  const closePanel = T.backdropBg; // repaint backdrop after the panel row
 
-  const innerW = w - 4;
+  // Header row: bold "Commands" title, dim "esc" right-aligned — on panel bg.
+  const headTitle = 'Commands';
+  const headEsc = 'esc';
+  const headGap = Math.max(1, w - 4 - headTitle.length - headEsc.length - 2);
+  out.push(`${closePanel}${' '.repeat(1)}${P}  ${T.bold}${white}${headTitle}${T.reset}${P}${' '.repeat(headGap)}${dim}${headEsc}${T.reset}${P}  ${closePanel} `);
+
   for (let i = 0; i < maxVisible; i++) {
     const itemIdx = offset + i;
     const it = items[itemIdx];
@@ -745,24 +752,24 @@ export function renderDropdown(
     indexMap.push(itemIdx);
     const sel = itemIdx === selected;
     const name = padEnd(it.name, 12);
-    const hint = ellipsize(it.hint, Math.max(0, innerW - 12 - 2));
-    const pad = Math.max(0, innerW - 12 - visibleLen(hint));
-    // Selected = solid accent bar that bleeds OVER the border cells (the row
-    // is emitted WITHOUT side borders — bg fills edge-to-edge, then dim
-    // border-glyphs are drawn on top of the bar in bgText). NO arrow glyph:
-    // the bar itself is the cursor (opencode/mimo).
-    const body = sel
-      ? `${T.actBg}${T.bgText}${T.bold}│  ${name}\x1b[22m${T.bgText}  ${hint}${' '.repeat(pad)} ${T.actBg}│${T.reset}`
-      : `${T.rule}│${T.reset}  ${T.act}${name}${T.reset}  ${T.grayDark}${hint}${T.reset}${' '.repeat(pad)} ${T.rule}│${T.reset}`;
-    out.push(body);
+    const hint = ellipsize(it.hint, Math.max(0, w - 8 - 12 - 2));
+    const pad = Math.max(0, w - 6 - 12 - visibleLen(hint));
+    if (sel) {
+      // Full-width peach bar, near-black text — bleeds over the panel edges
+      // by 1 cell on each side (opencode's bar is wider than the text rows).
+      out.push(`${B} ${bar}${onBar} ${name}  ${hint}${' '.repeat(pad)} ${bar}${B} `);
+    } else {
+      out.push(`${P}  ${white}${name}${T.reset}${P}  ${dim}${hint}${T.reset}${P}${' '.repeat(pad)}  ${closePanel} `);
+    }
   }
 
-  // Footer INSIDE the dialog: left scroll state, right count.
-  const scrollState = hasAbove && hasBelow ? '↑↓ more' : hasAbove ? '↑ more' : hasBelow ? '↓ more' : '';
+  // Footer row: dim scroll state left, dim count right — on panel bg.
+  const hasAbove = offset > 0;
+  const hasBelow = offset + maxVisible < items.length;
+  const scrollState = hasAbove && hasBelow ? '↑↓' : hasAbove ? '↑' : hasBelow ? '↓' : '';
   const count = `${items.length} commands`;
-  const gap = Math.max(1, w - 4 - visibleLen(scrollState) - visibleLen(count) - 2);
-  out.push(`${T.rule}│${T.reset}  ${T.grayDark}${scrollState}${T.reset}${' '.repeat(gap)}${T.grayDark}${count}${T.reset}  ` + T.rule + '│' + T.reset);
-  out.push(`${T.rule}╰${'─'.repeat(w - 2)}╯${T.reset}`);
+  const footGap = Math.max(1, w - 4 - scrollState.length - count.length - 2);
+  out.push(`${P}  ${dim}${scrollState}${T.reset}${P}${' '.repeat(footGap)}${dim}${count}${T.reset}${P}  ${closePanel} `);
   return { rows: out, indexMap };
 }
 
