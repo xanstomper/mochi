@@ -737,10 +737,11 @@ export function renderDropdown(
   const white = '\x1b[38;2;238;238;238m';
   const dim = '\x1b[38;2;128;128;128m';
 
-  // Header row: bold "Commands" title, dim "esc" right-aligned — on panel bg.
+  // Every row is emitted as: P + content padded to EXACTLY w visible cells +
+  // reset — one width, always flush right edge (no ragged frames).
   const headTitle = 'Commands';
   const headEsc = 'esc';
-  const headGap = Math.max(1, w - 4 - headTitle.length - headEsc.length - 2);
+  const headGap = Math.max(1, w - 4 - headTitle.length - headEsc.length);
   out.push(`${P}  ${T.bold}${white}${headTitle}${T.reset}${P}${' '.repeat(headGap)}${dim}${headEsc}${T.reset}${P}  ${T.reset}`);
 
   for (let i = 0; i < maxVisible; i++) {
@@ -751,13 +752,17 @@ export function renderDropdown(
     const sel = itemIdx === selected;
     const name = padEnd(it.name, 12);
     const hint = ellipsize(it.hint, Math.max(0, w - 8 - 12 - 2));
-    const pad = Math.max(0, w - 6 - 12 - visibleLen(hint));
     if (sel) {
-      // Full-width accent bar, near-black text — bleeds 1 cell over the
-      // panel edge on each side (opencode's bar is wider than text rows).
-      out.push(` ${bar}${onBar} ${name}  ${hint}${' '.repeat(pad)} ${bar}${T.reset}`);
+      // Full-width accent bar, dark text — bleeds 1 cell over the panel edge
+      // on each side (opencode's bar is wider than text rows).
+      const content = ` ${name}  ${hint}`;
+      const vis = 1 + visibleLen(content) + 1;
+      const trail = Math.max(0, w - vis);
+      out.push(` ${bar}${onBar}${content}${' '.repeat(trail)} ${bar}${T.reset}`);
     } else {
-      out.push(`${P}  ${white}${name}${T.reset}${P}  ${dim}${hint}${T.reset}${P}${' '.repeat(pad)}  ${T.reset}`);
+      const content = `  ${name}  ${hint}`;
+      const trail = Math.max(0, w - 2 - visibleLen(content));
+      out.push(`${P}${content}${' '.repeat(trail)}  ${T.reset}`);
     }
   }
 
@@ -766,7 +771,7 @@ export function renderDropdown(
   const hasBelow = offset + maxVisible < items.length;
   const scrollState = hasAbove && hasBelow ? '↑↓' : hasAbove ? '↑' : hasBelow ? '↓' : '';
   const count = `${items.length} commands`;
-  const footGap = Math.max(1, w - 4 - scrollState.length - count.length - 2);
+  const footGap = Math.max(1, w - 4 - scrollState.length - count.length);
   out.push(`${P}  ${dim}${scrollState}${T.reset}${P}${' '.repeat(footGap)}${dim}${count}${T.reset}${P}  ${T.reset}`);
   return { rows: out, indexMap };
 }

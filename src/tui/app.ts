@@ -909,11 +909,12 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     rows[cTop + visibleTextRows + 1] = composerBottomRule(w);
     
     // ---- opencode/mimo floating-panel modal --------------------------------
-    // Pixel-matched to the screenshots: NO border glyphs. A solid panelBg
-    // block floats on the backdrop. Title bold + dim "esc" right-aligned on
-    // the header row. Selected row = full-width accent bar with near-black
-    // text (bar is 1 cell wider than the text rows, like opencode). Unselected
-    // rows: white label, gray description. Footer: dim scroll arrows + hint.
+    // NO border glyphs. A solid theme-tinted panel floats on the terminal's
+    // own background. Every panel row is EXACTLY menuW visible cells: one
+    // builder pads by visible length so the right edge is always flush (the
+    // "some frames are off" ragged-edge bug). Header: bold title + dim esc.
+    // Selected row: full-width accent bar with dark text. Rows: white label,
+    // gray description. Footer: dim scroll arrows + key hints.
     if (state.menuActive) {
       const totalItems = state.menuItems.length;
       const maxVisibleItems = Math.min(totalItems, Math.max(5, h - 9));
@@ -921,14 +922,30 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       const menuTop = Math.max(1, Math.floor((h - menuH) / 2));
       const menuW = Math.min(Math.max(56, Math.floor(w * 0.62)), w - 8);
       const mLeft = Math.max(0, Math.floor((w - menuW) / 2));
-      // NO backdrop repaint: panel floats directly on the terminal's own bg.
       const pad = ' '.repeat(mLeft);
 
       const P = T.panelBg;
       const white = '\x1b[38;2;238;238;238m';
       const dim = '\x1b[38;2;128;128;128m';
-      const panelPad = 2;
-      const textW = menuW - panelPad * 2; // usable text width inside the panel
+      const barBg = T.actBg;
+      const barFg = T.bgText;
+
+      // THE single row builder: emits pad + P + segments + padding to EXACTLY
+      // menuW visible cells + reset. Segments: [ansiPaint, text, ansiFg].
+      // Every row in the panel goes through this — same width, always flush.
+      const row = (segments: Array<[string, string, string?]>) => {
+        let vis = 0;
+        let body = '';
+        for (const [ansi, text, fgAfter] of segments) {
+          body += ansi + text;
+          vis += visibleLen(text);
+          if (fgAfter) { body += fgAfter; }
+        }
+        const padR = Math.max(0, menuW - 2 - vis); // -2 for the 1-cell side pads
+        return `${pad}${P} ${body}${P}${' '.repeat(padR)} ${T.reset}`;
+      };
+      const seg = (text: string, color = white, ansiPrefix = ''): [string, string, string?] =>
+        [`${ansiPrefix}${color}`, text, `${ansiPrefix ? T.reset + P : ''}`];
 
       let scrollOffset = 0;
       if (totalItems > maxVisibleItems) {
@@ -937,16 +954,13 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       const hasAbove = scrollOffset > 0;
       const hasBelow = scrollOffset + maxVisibleItems < totalItems;
 
-      const solidRow = (content: string, contentVis: number) =>
-        `${pad}${P}${content}${P}${' '.repeat(Math.max(0, menuW - contentVis))}${T.reset}`;
-
       let r = menuTop;
-      // Panel top edge (solid bg row) + header: bold title, dim esc right.
+      r++; // solid padding row above header
+      // Header: bold white title, dim esc right-aligned.
       const escTxt = 'esc';
-      const titleTxt = ellipsize(state.menuTitle, Math.max(8, textW - escTxt.length - 4));
-      const headGap = Math.max(1, textW - visibleLen(titleTxt) - escTxt.length - 2);
-      r++; // solid bg row above header
-      rows[r] = solidRow(`  ${T.bold}${white}${titleTxt}${T.reset}${P}${' '.repeat(headGap)}${dim}${escTxt}${T.reset}${P}`, textW + 2 + headGap + escTxt.length); r++;
+      const titleTxt = ellipsize(state.menuTitle, Math.max(8, menuW - 8 - escTxt.length));
+      const headGap = Math.max(1, menuW - 4 - visibleLen(titleTxt) - escTxt.length);
+      rows[r] = `${pad}${P}  ${T.bold}${white}${titleTxt}${T.reset}${P}${' '.repeat(headGap)}${dim}${escTxt}${T.reset}${P}${' '.repeat(2)}${T.reset}`; r++;
       r++; // gap row under header
 
       for (let i = 0; i < maxVisibleItems; i++) {
@@ -955,32 +969,32 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         const sel = itemIdx === state.menuSelected;
         const rawItem = state.menuItems[itemIdx] ?? '';
         const mark = state.menuMark.has(itemIdx);
-        const activeDot = mark && !rawItem.includes('[ACTIVE]') ? `\x1b[38;2;57;255;20m●${T.bgText} ` : '';
-        const availForItem = Math.max(10, textW - 1 - visibleLen(activeDot));
-        let formattedItem = rawItem;
-        if (visibleLen(rawItem) > availForItem) formattedItem = ellipsize(rawItem, availForItem);
-        // Items carry their own ANSI (colored labels) ending in resets —
-        // rewrite them to keep whichever background this row uses.
-        const bgSafe = (s: string, bg: string) => s
-          .replace(/\x1b\[0m/g, bg + T.bgText)
-          .replace(/\x1b\[22m/g, T.bgText);
+        const activeDot = mark && !rawItem.includes('[ACTIVE]') ? '\x1b[38;2;57;255;20m●\x1b[39m ' : '';
+        const maxItem = Math.max(10, menuW - 8 - visibleLen(activeDot));
+        let text = rawItem;
+        if (visibleLen(rawItem) > maxItem) text = ellipsize(rawItem, maxItem);
         if (sel) {
-          // Bar is 2 cells wider than text rows (1 cell overhang each side).
-          const trail = Math.max(0, availForItem - visibleLen(formattedItem));
-          rows[r] = `${pad} ${T.actBg}${T.bgText} ${bgSafe(activeDot, T.actBg)}${bgSafe(formattedItem, T.actBg)}${' '.repeat(trail)} ${T.actBg}${T.reset} `;
+          // Accent bar row: dark text on barSafe'd content (items may carry
+          // their own ANSI + resets — rewrite resets to keep the bar).
+          const safe = text
+            .replace(/\x1b\[0m/g, barBg + barFg)
+            .replace(/\x1b\[22m/g, barFg);
+          const vis = visibleLen(activeDot) + visibleLen(safe);
+          const trail = Math.max(0, menuW - 4 - vis);
+          rows[r] = `${pad} ${barBg}${barFg} ${activeDot}${safe}${' '.repeat(trail)} ${barBg}${T.reset}`;
         } else {
-          const trail = Math.max(0, textW - 2 - visibleLen(activeDot) - visibleLen(formattedItem));
-          rows[r] = solidRow(`  ${activeDot}${white}${formattedItem}${T.reset}${P}${' '.repeat(trail)}`, textW + visibleLen(activeDot) - 2);
+          const vis = visibleLen(activeDot) + visibleLen(text);
+          const trail = Math.max(0, menuW - 4 - vis);
+          rows[r] = `${pad}${P}  ${activeDot}${white}${text}${T.reset}${P}${' '.repeat(trail)} ${T.reset}`;
         }
         r++;
       }
 
       r++; // gap row above footer
-      // Footer: dim scroll arrows left, dim key hints right.
       const scrollState = hasAbove && hasBelow ? '↑↓' : hasAbove ? '↑' : hasBelow ? '↓' : '';
       const keyHints = '↑↓ navigate · ⏎ select · esc close';
-      const footGap = Math.max(1, textW - visibleLen(scrollState) - keyHints.length - 2);
-      rows[r] = solidRow(`  ${dim}${scrollState}${T.reset}${P}${' '.repeat(footGap)}${dim}${keyHints}${T.reset}${P}`, textW + scrollState.length + 2);
+      const footGap = Math.max(1, menuW - 4 - scrollState.length - keyHints.length);
+      rows[r] = `${pad}${P}  ${dim}${scrollState}${T.reset}${P}${' '.repeat(footGap)}${dim}${keyHints}${T.reset}${P}  ${T.reset}`;
     }
 
     let out = HIDE;
