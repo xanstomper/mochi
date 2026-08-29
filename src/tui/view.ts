@@ -746,9 +746,12 @@ export function renderDropdown(
     const name = padEnd(it.name, 14);
     const hint = ellipsize(it.hint, Math.max(0, w - 6 - 14 - 2));
     const pad = Math.max(0, w - 4 - 14 - visibleLen(hint));
+    // opencode look: the selected row is a full accent bar. The hint MUST stay
+    // readable on that bar — bold-off (\x1b[22m) keeps the bar's light
+    // bgText color instead of the old dark-gray-on-dark (invisible) combo.
     const body = sel
-      ? `${T.actBg}${T.bgText}${T.bold} ❯ ${name}${' '.repeat(pad)}${T.grayDark}${hint}${' '.repeat(Math.max(0, 2 - visibleLen(hint) > 0 ? 0 : 0))} ${T.reset}`
-      : `   ${T.fg}${name}${T.reset}${T.grayDark}${hint}${T.reset}${' '.repeat(pad)} `;
+      ? `${T.actBg}${T.bgText}${T.bold} ❯ ${name}\x1b[22m${T.bgText}${hint}${' '.repeat(pad)} ${T.reset}`
+      : `   ${T.act}${name}${T.reset}${T.grayDark}${hint}${T.reset}${' '.repeat(pad)} `;
     out.push(`${T.rule}│${T.reset}${body}${T.rule}│${T.reset}`);
   }
 

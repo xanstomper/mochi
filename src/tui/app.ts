@@ -945,14 +945,25 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
 
         // opencode-style: the selected row is a FULL accent bar spanning the
         // whole menu width (❯ + filled background), unselected rows stay flat.
-        const activeDot = mark && !rawItem.includes('[ACTIVE]') ? `${T.lime}● ${T.reset}` : '';
+        // The ● active-dot is recolored without an embedded reset so it never
+        // punches a hole in the bar's background fill.
+        const activeDot = mark && !rawItem.includes('[ACTIVE]') ? `${T.lime}●${T.bgText} ` : '';
         const availForItem = Math.max(10, innerW - 2 - visibleLen(activeDot));
         let formattedItem = rawItem;
         if (visibleLen(rawItem) > availForItem) formattedItem = ellipsize(rawItem, availForItem);
         const trail = Math.max(0, availForItem - visibleLen(formattedItem));
 
+        // Menu items themselves carry ANSI (colored labels) and many end with
+        // T.reset — a bare reset ERASES the bar's background mid-row and
+        // leaves the rest of the item dark-on-dark (the "turns invisible"
+        // bug). On the selected bar we rewrite every reset into "reset
+        // colors only, keep the bar background + light text" so the whole
+        // row stays one solid filled bar with readable content.
+        const barSafe = (s: string) => s
+          .replace(/\x1b\[0m/g, T.actBg + T.bgText)   // keep bar, restore light text
+          .replace(/\x1b\[22m/g, T.bgText);           // unbold, keep light text
         const content = sel
-          ? `${T.actBg}${T.bgText}${T.bold} ❯ ${activeDot}${formattedItem}${' '.repeat(trail)} ${T.reset}`
+          ? `${T.actBg}${T.bgText}${T.bold} ❯ ${barSafe(activeDot)}${barSafe(formattedItem)}${' '.repeat(trail)} ${T.reset}`
           : `   ${activeDot}${T.fg}${formattedItem}${T.reset}${' '.repeat(trail)} `;
         rows[r] = pad + T.rule + '│' + T.reset + content + T.rule + '│' + T.reset;
       }
