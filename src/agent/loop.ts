@@ -9,6 +9,7 @@ import { createProvider } from '../model/router.js';
 import { isMode, modeInstruction } from '../modes.js';
 import { kvCache } from '../kv-cache.js';
 import { executeTool, buildTools, TOOL_ALIASES, normalizeToolArgs } from '../tools/index.js';
+import { refreshAuthoredTools, RESERVED_TOOL_NAMES } from '../tools/tool-factory.js';
 import type { ToolContext, ReadCache } from '../tools/types.js';
 import { detectRepo, languageHint } from '../repo.js';
 import { classifyTaskKind } from '../taskkind.js';
@@ -497,6 +498,15 @@ Continue from 'Next:', do not redo completed progress.`,
     // so each completion is injected exactly once.
     const bgDelivered = new Set<string>();
     for (let i = 0; i < maxIterations; i++) {
+      // Hot-reload agent-authored tools (tool_factory): if the agent created,
+      // patched, or removed one last iteration, merge it into the live toolset
+      // and re-advertise defs to the model (same pattern as MCP hot-load).
+      try {
+        if (refreshAuthoredTools(this.tools, this.workspace.dir || this.cwd, (n) => RESERVED_TOOL_NAMES.has(n) || TOOL_ALIASES[n] !== undefined)) {
+          this.toolDefs = [...this.tools.values()].map((t) => t.def);
+          this.events.emit({ type: 'agent:log', agentId: this.id, message: '[tool_factory] authored toolset changed — defs re-advertised' });
+        }
+      } catch { /* never block the loop over tool refresh */ }
       sm.beginIteration(i);
       // Deliver completed background tasks as events into the transcript.
       try {

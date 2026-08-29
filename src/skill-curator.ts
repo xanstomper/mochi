@@ -84,7 +84,10 @@ export function opportunitiesToPrompt(opps: SkillOpportunity[]): string | null {
   return 'SKILL OPPORTUNITY DETECTED — consider persisting a reusable procedure:\n' +
     lines.join('\n') +
     '\nIf this task type will recur, use `skill_manage` action="create" to save a concise ' +
-    'SKILL.md (frontmatter + body) capturing the approach. Only do this for genuinely reusable patterns.';
+    'SKILL.md (frontmatter + body) capturing the approach — and if the reusable part is an EXECUTABLE ' +
+    'workflow (a command pipeline, script invocation, multi-command recipe), capture it as a callable tool ' +
+    'with `tool_factory` action="create" instead (hot-loaded, callable by name forever after). ' +
+    'Only do this for genuinely reusable patterns.';
 }
 
 // ─── Lifecycle scan (the curator's core pass) ────────────────────────────

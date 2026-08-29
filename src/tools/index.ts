@@ -51,6 +51,7 @@ import { securityAuditTool } from './security-audit.js';
 import { skillManageTool } from '../skill-manager.js';
 import { astSliceTool } from './ast-slice.js';
 import { compilePromptTool } from './compile-prompt.js';
+import { toolFactoryTool, refreshAuthoredTools, RESERVED_TOOL_NAMES, loadAuthoredTools } from './tool-factory.js';
 
 import { timerTool } from './timer.js';
 import { envTool } from './env.js';
@@ -78,6 +79,7 @@ export const ALL_TOOLS: Tool[] = [
   // New tools
   timerTool, envTool, lintTool, formatTool, benchmarkTool,
   notesTool, tuiBuilderTool, mcpManageTool, markdownTool, colorTool,
+  toolFactoryTool,
 ];
 
 /**
@@ -112,6 +114,13 @@ export function isWeakModel(config: MochiConfig): boolean {
 export function buildTools(config: MochiConfig, allowed?: string[]): Map<string, Tool> {
   const map = new Map<string, Tool>();
   const weak = isWeakModel(config);
+  const projectDir = config?.projectDir || process.cwd();
+  // Agent-authored tools (tool_factory) merge in alongside built-ins first so
+  // built-ins always win name collisions. They bypass tier/role gates on purpose:
+  // anything the agent authored is by definition useful to the agent.
+  for (const [name, tool] of loadAuthoredToolsSafe(projectDir)) {
+    if (!RESERVED_TOOL_NAMES.has(name)) map.set(name, tool);
+  }
   for (const tool of ALL_TOOLS) {
     const name = tool.def.name;
     // Always-include tools bypass filtering so all agents have memory, execution, and reasoning tools.
@@ -124,13 +133,23 @@ export function buildTools(config: MochiConfig, allowed?: string[]): Map<string,
       name === 'think' ||
       name === 'session_recall' ||
       name === 'memory' ||
-      name === 'skill_manage';
+      name === 'skill_manage' ||
+      name === 'tool_factory';
     if (allowed && !allowed.includes(name) && !alwaysInclude) continue;
     // For weak models, only include core tools to keep tool schema lean.
     if (weak && !CORE_TOOL_NAMES.has(name) && !alwaysInclude) continue;
     map.set(name, tool);
   }
   return map;
+}
+
+/** Load authored tools without ever failing toolset construction. */
+function loadAuthoredToolsSafe(projectDir: string): Map<string, Tool> {
+  try {
+    return loadAuthoredTools(projectDir);
+  } catch {
+    return new Map<string, Tool>();
+  }
 }
 
 export const TOOL_ALIASES: Record<string, string> = {
