@@ -140,6 +140,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     menuActive: false,
     menuTitle: '',
     menuItems: [] as string[],
+    menuParsed: [] as Array<{ label: string; hint: string; active: boolean }>,
     menuSelected: 0,
     menuMark: new Set<number>(),
     currentTool: '' as string,
@@ -927,25 +928,6 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       const P = T.panelBg;
       const white = '\x1b[38;2;238;238;238m';
       const dim = '\x1b[38;2;128;128;128m';
-      const barBg = T.actBg;
-      const barFg = T.bgText;
-
-      // THE single row builder: emits pad + P + segments + padding to EXACTLY
-      // menuW visible cells + reset. Segments: [ansiPaint, text, ansiFg].
-      // Every row in the panel goes through this — same width, always flush.
-      const row = (segments: Array<[string, string, string?]>) => {
-        let vis = 0;
-        let body = '';
-        for (const [ansi, text, fgAfter] of segments) {
-          body += ansi + text;
-          vis += visibleLen(text);
-          if (fgAfter) { body += fgAfter; }
-        }
-        const padR = Math.max(0, menuW - 2 - vis); // -2 for the 1-cell side pads
-        return `${pad}${P} ${body}${P}${' '.repeat(padR)} ${T.reset}`;
-      };
-      const seg = (text: string, color = white, ansiPrefix = ''): [string, string, string?] =>
-        [`${ansiPrefix}${color}`, text, `${ansiPrefix ? T.reset + P : ''}`];
 
       let scrollOffset = 0;
       if (totalItems > maxVisibleItems) {
@@ -967,25 +949,22 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         const itemIdx = scrollOffset + i;
         if (r >= h) break;
         const sel = itemIdx === state.menuSelected;
-        const rawItem = state.menuItems[itemIdx] ?? '';
-        const mark = state.menuMark.has(itemIdx);
-        const activeDot = mark && !rawItem.includes('[ACTIVE]') ? '\x1b[38;2;57;255;20m●\x1b[39m ' : '';
+        const parsed = state.menuParsed[itemIdx] ?? { label: state.menuItems[itemIdx] ?? '', hint: '', active: false };
+        const activeDot = parsed.active || state.menuMark.has(itemIdx) ? '\x1b[38;2;57;255;20m●\x1b[39m ' : '';
         const maxItem = Math.max(10, menuW - 8 - visibleLen(activeDot));
-        let text = rawItem;
-        if (visibleLen(rawItem) > maxItem) text = ellipsize(rawItem, maxItem);
+        let label = ellipsize(parsed.label, maxItem);
+        let hint = parsed.hint ? ellipsize(parsed.hint, Math.max(0, menuW - 10 - visibleLen(label))) : '';
         if (sel) {
-          // Accent bar row: dark text on barSafe'd content (items may carry
-          // their own ANSI + resets — rewrite resets to keep the bar).
-          const safe = text
-            .replace(/\x1b\[0m/g, barBg + barFg)
-            .replace(/\x1b\[22m/g, barFg);
-          const vis = visibleLen(activeDot) + visibleLen(safe);
-          const trail = Math.max(0, menuW - 4 - vis);
-          rows[r] = `${pad} ${barBg}${barFg} ${activeDot}${safe}${' '.repeat(trail)} ${barBg}${T.reset}`;
+          // Accent bar row: dark text on the bar. Hint dimmed via a dim-foreground
+          // over the bar (never a bg-breaking reset).
+          const hintVis = hint ? visibleLen(hint) + 2 : 0;
+          const trail = Math.max(0, menuW - 4 - visibleLen(activeDot) - visibleLen(label) - hintVis);
+          const hintPart = hint ? `\x1b[2m${hint}${T.bgText} ` : '';
+          rows[r] = `${pad} ${T.actBg}${T.bgText} ${activeDot}${label}${hintPart}${' '.repeat(trail)} ${T.actBg}${T.reset}`;
         } else {
-          const vis = visibleLen(activeDot) + visibleLen(text);
-          const trail = Math.max(0, menuW - 4 - vis);
-          rows[r] = `${pad}${P}  ${activeDot}${white}${text}${T.reset}${P}${' '.repeat(trail)} ${T.reset}`;
+          const trail = Math.max(0, menuW - 4 - visibleLen(activeDot) - visibleLen(label) - (hint ? visibleLen(hint) + 2 : 0));
+          const hintPart = hint ? `${dim}${hint}${T.reset}${P}  ` : '';
+          rows[r] = `${pad}${P}  ${activeDot}${white}${label}${T.reset}${P}  ${hintPart}${' '.repeat(trail)} ${T.reset}`;
         }
         r++;
       }
@@ -1504,13 +1483,46 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     });
   }
 
+  /** Structured form of a menu item, parsed from the legacy pre-styled
+   *  string at openMenu time so the PANEL does all the styling (opencode:
+   *  white label + gray hint, no per-item colors). */
+  interface ParsedMenuItem { label: string; hint: string; active: boolean }
+
+  /** Strip ANSI, then split the legacy item formats into label/hint/active. */
+  function parseMenuItem(raw: string): ParsedMenuItem {
+    const plain = raw.replace(/\x1b\[[0-9;]*m/g, '');
+    const active = /\[ACTIVE\]/.test(plain);
+    // Sub-action rows keep their glyph prefix as the label (▶ / [DOC] / [DEL]).
+    if (/^(▶|\[DOC\]|\[DEL\])/.test(plain.trim()) || plain.trim().startsWith('+')) {
+      const label = plain.replace(/\s+/g, ' ').trim();
+      return { label, hint: '', active };
+    }
+    // Theme rows may lead with a swatch (block glyphs) — drop it.
+    const cleaned = plain.replace(/^[▁▂▃▄▅▆▇█ ]+/, '').trim();
+    // Split at the FIRST '·' — label before it, hint/description after.
+    // (Sessions use two dots: "title  N msgs · timeAgo" — first-· keeps the
+    // full "N msgs · timeAgo" as the hint. Provider rows: "name · 12 models
+    // · url" → hint keeps "12 models · url".)
+    const dot = cleaned.indexOf('·');
+    if (dot > 0) {
+      let label = cleaned.slice(0, dot).replace(/\[ACTIVE\]/g, '').replace(/\s+/g, ' ').trim();
+      const hint = cleaned.slice(dot + 1).trim();
+      return { label, hint, active };
+    }
+    // No hint (e.g. plain sub-actions).
+    return { label: cleaned.replace(/\[ACTIVE\]/g, '').replace(/\s+/g, ' ').trim(), hint: '', active };
+  }
+
   function openMenu(title: string, items: string[], mark?: Set<number>): Promise<number> {
     return new Promise((res) => {
       state.menuActive = true;
       state.menuTitle = title;
       state.menuItems = items;
+      state.menuParsed = items.map(parseMenuItem);
+      // Items already carry [ACTIVE] badges — auto-mark them so the panel
+      // shows the ● dot without every call site maintaining a Set.
+      state.menuMark = mark ?? new Set(items.map((it, i) => (/\[ACTIVE\]/.test(it) ? i : -1)).filter((i) => i >= 0));
       state.menuSelected = Math.min(state.menuSelected, items.length - 1);
-      state.menuMark = mark ?? new Set();
       menuResolver = res;
       scheduleRender();
     });
