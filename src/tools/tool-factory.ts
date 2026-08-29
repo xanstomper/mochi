@@ -153,13 +153,28 @@ export function listAuthoredTools(projectDir: string): AuthoredToolManifest[] {
 export function runAuthoredCommand(m: AuthoredToolManifest, args: Record<string, unknown>, projectDir: string): Promise<{ output: string; error?: string; durationMs: number }> {
   const started = Date.now();
   const timeoutMs = Math.min(Math.max(1_000, m.timeoutMs ?? DEFAULT_TIMEOUT_MS), MAX_TIMEOUT_MS);
+  // Ergonomics: declared parameters (in order) are ALSO exposed as positional
+  // args ($1, $2, ...) and MOCHI_TOOL_PARAM_<NAME> env vars, so commands can be
+  // written the way models naturally write them (`grep -r TODO "$1"`) instead
+  // of forcing every author to parse MOCHI_TOOL_ARGS JSON.
+  const argMap = (args ?? {}) as Record<string, unknown>;
+  const positional: string[] = [];
+  const paramEnv: Record<string, string> = {};
+  for (const p of m.parameters ?? []) {
+    const v = argMap[p.name];
+    if (v !== undefined && v !== null) {
+      positional.push(String(v));
+      paramEnv[`MOCHI_TOOL_PARAM_${p.name.toUpperCase()}`] = String(v);
+    }
+  }
   return new Promise((resolve) => {
-    const child = execFile('sh', ['-c', m.command], {
+    const child = execFile('sh', ['-c', m.command, 'sh', ...positional], {
       cwd: projectDir,
       timeout: timeoutMs,
       maxBuffer: 4 * 1024 * 1024,
       env: {
         ...process.env,
+        ...paramEnv,
         MOCHI_TOOL_NAME: m.name,
         MOCHI_TOOL_ARGS: JSON.stringify(args ?? {}),
         MOCHI_TOOL_DIR: join(toolsRoot(projectDir), safeSlug(m.name)),

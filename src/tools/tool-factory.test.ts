@@ -125,6 +125,21 @@ describe('tool-factory execution', () => {
     expect(out).toContain('partial');
   });
 
+  it('declared params reach the command as $1..$n and per-param env', async () => {
+    writeAuthoredTool(proj, {
+      name: 'greet_at',
+      description: 'Greet a named target with punctuation',
+      command: `echo "hello $1$MOCHI_TOOL_PARAM_PUNCT"`,
+      parameters: [
+        { name: 'target', type: 'string', description: 'who to greet', required: true },
+        { name: 'punct', type: 'string', description: 'trailing punctuation', required: false },
+      ],
+    });
+    const tool = loadAuthoredTools(proj).get('greet_at')!;
+    const out = await tool.execute({ target: 'mochi', punct: '!' }, ctx());
+    expect(out.trim()).toBe('hello mochi!');
+  });
+
   it('times out at the manifest cap', async () => {
     writeAuthoredTool(proj, { name: 'slow_tool', description: 'sleeps forever on purpose', command: 'sleep 30', timeoutMs: 1500 });
     const r = await runAuthoredCommand(readAuthoredManifest(proj, 'slow_tool')!, {}, proj);
