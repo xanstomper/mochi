@@ -819,14 +819,14 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       rows[r] = '  ' + thinkingLine(state.spinner, state.currentTool || state.currentTask || '');
     }
 
-    // autocomplete dropdown floats above the status bar
+    // autocomplete dropdown floats above the status bar, centered on screen
     const dropItems = currentDropItems();
     if (dropItems.length && !state.menuActive) {
       const dd = renderDropdown(dropItems.slice(0, 6).map((c) => ({ name: c.name, hint: c.hint })), state.dropSelected, w - indent);
       const top = h - bottomRows - dd.length - 1;
       for (let i = 0; i < dd.length; i++) {
         const r = top + i;
-        if (r >= 0 && r < h) rows[r] = lead + dd[i];
+        if (r >= 0 && r < h) rows[r] = ' '.repeat(Math.max(0, Math.floor((w - visibleLen(dd[i])) / 2))) + dd[i];
       }
     }
 
@@ -914,9 +914,13 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       }
 
       // Title bar: ╭── Title [count] ──────────────────────────╮
+      // Width accounting: 1('╭') + 1(rule) + title + badge + ruleWidth + 1('╮')
+      // must equal menuW exactly — the original `menuW - 2` double-counted the
+      // leading '─' that follows '╭', making the top border 1 cell longer than
+      // the body/footer (ragged top-right corner).
       const titleText = ` ${state.menuTitle} `;
       const countBadge = totalItems > 1 ? ` [${state.menuSelected + 1}/${totalItems}] ` : ' ';
-      const ruleWidth = Math.max(0, menuW - 2 - visibleLen(titleText) - visibleLen(countBadge));
+      const ruleWidth = Math.max(0, menuW - 3 - visibleLen(titleText) - visibleLen(countBadge));
       rows[menuTop] = pad + T.rule + '╭─' + T.reset + T.bold + titleText + T.reset + T.grayDark + countBadge + T.reset + T.rule + '─'.repeat(ruleWidth) + '╮' + T.reset;
 
       const innerW = menuW - 4;
