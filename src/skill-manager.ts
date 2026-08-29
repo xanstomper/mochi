@@ -233,9 +233,13 @@ export const skillManageTool: Tool = {
     name: 'skill_manage',
     description:
       'Create, edit, patch, or delete your own reusable procedural-memory skills (SKILL.md files). ' +
-      'Skills are markdown guides capturing a repeatable approach for a recurring task type. ' +
-      'Agent-created skills are stored in <project>/.mochi/skills/ and the background curator ' +
-      'maintains them (patch counts, lifecycle). Actions: create (name+description+body, optional category); ' +
+      'Skills are how you get smarter over time: capture every non-obvious fix, repeated workflow, or hard-won ' +
+      'convention as a structured guide (trigger conditions → numbered steps with reasons → pitfalls → verification) ' +
+      'so future sessions start with the answer instead of re-deriving it. Load the `skill-authoring` skill once for ' +
+      'the quality bar before your first create. Skills are advertised to every future session and the user can list ' +
+      'and read them with `mochi skills`. Author-created skills persist across projects when saved via category ' +
+      '"global" (stored under ~/.mochi/skills/); default is per-project .mochi/skills/. The background curator keeps ' +
+      'the tree healthy. Actions: create (name+description+body, optional category); ' +
       'edit (name + new description/body); patch (name + old_string/new_string, replace_all optional); ' +
       'delete (name) — archives, never hard-deletes.',
     parameters: [
@@ -256,13 +260,19 @@ export const skillManageTool: Tool = {
     const projectDir = ctx.workspace.dir || ctx.cwd;
     if (!name) return `${JSON.stringify({ ok: false, error: 'name is required' })}`;
     if (action === 'create') {
-      const r = writeSkill(projectDir, {
+      const category = args.category ? String(args.category) : undefined;
+      // category "global" (or "user") => ~/.mochi/skills — cross-project memory.
+      const targetDir = category === 'global' || category === 'user'
+        ? (process.env.HOME ? join(process.env.HOME, '.mochi', 'skills') : projectDir)
+        : projectDir;
+      const r = writeSkill(targetDir, {
         name,
         description: String(args.description ?? ''),
         body: String(args.body ?? ''),
-        category: args.category ? String(args.category) : undefined,
+        category: category === 'global' || category === 'user' ? undefined : category,
       });
-      return r.ok ? `Created skill '${name}' at ${r.path}.` : JSON.stringify(r);
+      if (!r.ok) return JSON.stringify(r);
+      return `Created skill '${name}' at ${r.path}. It is advertised to every future session in this scope; the user can read it with 'mochi skills ${name}'.`;
     }
     if (action === 'edit') {
       const found = findSkillFile(projectDir, name);

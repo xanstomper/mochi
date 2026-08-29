@@ -19,7 +19,8 @@ import type { AgentProfile } from '../types.js';
 import { AgentProfileService } from '../agents/profile.js';
 import { BudgetEngine, estimateCostUsd } from '../budget.js';
 import { SpeculativeEngine } from '../speculative.js';
-import { detectSkillOpportunities, opportunitiesToPrompt } from '../skill-curator.js';
+import { retrieveSpeculationMemory, recordSpeculationOutcome, speculationMemoryToPrompt } from '../speculative.js';
+import { detectSkillOpportunities, opportunitiesToPrompt, shouldRunCurator, runCurator, recordCuratorRun, defaultCuratorConfig } from '../skill-curator.js';
 import { LearningStore } from '../learning.js';
 import { classifyFailure as classifyErrorPattern } from '../learning.js';
 import {
@@ -228,6 +229,10 @@ export class Agent {
   private errors: string[] = [];
   private lastStrategy?: string;
   private strategyRepeats = 0;
+  /** Strategy class chosen by the speculative preflight (for outcome memory). */
+  private speculatedStrategy?: string;
+  /** Raw question the preflight speculated on (matched against at outcome time). */
+  private speculatedQuestion?: string;
   private learning: LearningStore;
   private seenPatterns = new Set<string>();
   private hooks: HookManager;
@@ -1914,22 +1919,35 @@ Continue from 'Next:', do not redo completed progress.`,
       const shared = this.budget;
       const budget = shared ?? new BudgetEngine(this.config.safety);
       budget.start();
-      const engine = new SpeculativeEngine(this.config, budget, 2 /* candidateCount */);
+      const engine = new SpeculativeEngine(this.config, budget, 3 /* candidateCount */);
       const question = task.title + (task.description ? `\n\nContext: ${task.description}` : '');
-      const result = await engine.speculate(question);
+      // Learning loop: past strategy→outcome records on similar tasks bias
+      // generation toward what actually resolved before (experience curve).
+      const past = retrieveSpeculationMemory(this.workspace.dir, task.title);
+      const result = await engine.speculate(question, { pastOutcomes: speculationMemoryToPrompt(past) });
       if (this.abortSignal?.aborted) return;
       const best = result.best ?? result.candidates[0];
       if (!best) return;
+      this.speculatedStrategy = best.strategy.slice(0, 200);
+      this.speculatedQuestion = task.title.slice(0, 200);
       const note = best.response?.trim() || best.strategy;
       if (!note) return;
-      const lines = result.candidates.slice(0, 2).map((c, i) => `[candidate ${i + 1}] ${c.strategy}`).join('\n');
+      const scored = result.candidates
+        .map((c, i) => `[candidate ${i + 1}] (score ${c.score ?? '-'}) ${c.strategy}`)
+        .join('\n');
+      const rejected = result.candidates
+        .filter((c) => c !== best && (c.score ?? 0) >= 1)
+        .slice(0, 2)
+        .map((c) => `- ${c.strategy.slice(0, 120)}`)
+        .join('\n');
       this.context.addMessage({
         role: 'system',
         content:
-          'SPECULATIVE PREFLIGHT (cheap reasoning pass before committing):\n' +
-          `Chosen approach: ${best.strategy}\n` +
-          `Notes: ${note}\n` +
-          `Alternatives considered:\n${lines}\n` +
+          'SPECULATIVE PREFLIGHT (multi-candidate reasoning pass before committing):\n' +
+          `Chosen approach (verifier score ${best.score ?? '-'}/10): ${best.strategy}\n` +
+          (best.verdictReason ? `Why it won: ${best.verdictReason}\n` : '') +
+          `Execution plan:\n${note}\n` +
+          (rejected ? `Rejected alternatives (do NOT re-derive these):\n${rejected}\n` : '') +
           'Use this as a starting hypothesis. If it is wrong once you gather real' +
           ' evidence from the repo, discard it and re-plan — do not force it.',
       });
@@ -2072,6 +2090,33 @@ Continue from 'Next:', do not redo completed progress.`,
     // A lesson was just surfaced; if this task class recurs, nudge the model to
     // persist a reusable SKILL.md via skill_manage (auto skill creation).
     this.maybeSuggestSkill();
+    // DeepSeek-style structured self-critique on the FIRST verify failure of a
+    // hard task: forces a deliberate repair plan instead of a blind retry.
+    this.maybeSelfCritique(failureText);
+  }
+
+  /** model.speculative.selfCritique: inject a structured self-critique directive
+   *  after the first verification failure so the next attempt is a conscious
+   *  repair with an explicit causal theory. Once per task, never blocks. */
+  private selfCritiqued = false;
+  private maybeSelfCritique(failureText: string): void {
+    if (this.selfCritiqued || this.planMode) return;
+    if (!this.config.model?.speculative?.selfCritique) return;
+    this.selfCritiqued = true;
+    try {
+      this.context.addMessage({
+        role: 'system',
+        content:
+          'STRUCTURED SELF-CRITIQUE (before your next action, reason through ALL five steps):\n' +
+          '1. CLAIM: state the exact belief your last change was built on.\n' +
+          '2. EVIDENCE: which observed output confirms or refutes that claim — quote it.\n' +
+          '3. CONTRADICTION: where does the failure evidence contradict the claim?\n' +
+          '4. REVISED THEORY: the corrected causal explanation (mechanism, not symptom).\n' +
+          '5. REPAIR PLAN: the ONE smallest change that tests the revised theory, and the command whose output will prove it.\n' +
+          `Failure evidence to critique against: ${failureText.slice(0, 400)}`,
+      });
+      this.events.emit({ type: 'agent:log', agentId: this.id, message: '[self-critique] directive injected' });
+    } catch { /* never block the failure path */ }
   }
 
   /** Fire a small read-only probe and capture its output. Now properly awaited
@@ -2108,6 +2153,16 @@ Continue from 'Next:', do not redo completed progress.`,
    *  resolved outcome and write a procedural lesson from the top hypothesis. */
   private recordSuccess(task: Task, repo: ReturnType<typeof detectRepo>): void {
     this.anchor.recordClaim(task.title, 'Verified', 'Verification passed');
+    // Speculation memory: the preflight's strategy class just RESOLVED a task —
+    // record it so future preflights on similar tasks prefer this class.
+    if (this.speculatedStrategy) {
+      recordSpeculationOutcome(this.workspace.dir, {
+        strategyClass: this.speculatedStrategy,
+        taskTitle: this.speculatedQuestion ?? task.title,
+        outcome: 'resolved',
+        atMs: Date.now(),
+      });
+    }
     if (this.autopsy) {
       const confirmed = this.hypotheses.find((h) => h.status === 'confirmed');
       const fixApplied = (this.context['state']?.filesModified ?? []).slice(-1)[0];
@@ -2139,6 +2194,16 @@ Continue from 'Next:', do not redo completed progress.`,
   private recordFailure(task: Task, summary: string): void {
     if (this.autopsy) {
       this.autopsy = finalizeAutopsy(this.workspace.dir, this.autopsy, { outcome: 'unresolved' });
+    }
+    // Speculation memory: mark the preflight's strategy class as stalled so
+    // future preflights de-prioritize it for this task family.
+    if (this.speculatedStrategy) {
+      recordSpeculationOutcome(this.workspace.dir, {
+        strategyClass: this.speculatedStrategy,
+        taskTitle: this.speculatedQuestion ?? task.title,
+        outcome: 'unresolved',
+        atMs: Date.now(),
+      });
     }
     if (this.diagnosis && this.diagnosis.hypotheses.length) {
       const top = this.diagnosis.hypotheses[0];
@@ -2270,6 +2335,16 @@ Continue from 'Next:', do not redo completed progress.`,
     this.mcpClose?.();
     this.mcpClose = undefined;
     this.budget?.recordAgentEnd();
+    // Skill curator pass (on by default): archives stale agent-created skills,
+    // writes a report, keeps the skill tree healthy as experience accumulates.
+    // Idle-gated by its own interval; any failure is silently ignored.
+    try {
+      const ccfg = defaultCuratorConfig();
+      if (shouldRunCurator(this.workspace.dir, ccfg)) {
+        const out = runCurator(this.workspace.dir, ccfg);
+        recordCuratorRun(this.workspace.dir, `scanned ${out.scanned}, archived ${out.archived.length}`);
+      }
+    } catch { /* curator must never affect task completion */ }
     if (success) {
       for (const pattern of this.seenPatterns) {
         this.learning.record(pattern, this.lastStrategy ?? 'unclassified', true);

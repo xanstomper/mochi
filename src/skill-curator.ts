@@ -1,8 +1,8 @@
 // Skill curator — Hermes-style background self-improvement orchestrator for
 // Mochi (ported from hermes_cli/agent/curator.py + tools/skills_hub.py).
 //
-// The curator is an OPT-IN background maintenance pass that runs after a task
-// finishes (or on idle). It is deliberately conservative:
+// The curator is a background maintenance pass that runs after a task
+// finishes (or on idle), enabled by default. It is deliberately conservative:
 //   - Only touches agent-created skills (usage registry marks them).
 //   - Never hard-deletes; archives stale skills (recoverable).
 //   - Pinned skills bypass auto-transitions.
@@ -26,7 +26,7 @@ export interface CuratorConfig {
 
 export function defaultCuratorConfig(): CuratorConfig {
   return {
-    enabled: false,
+    enabled: true, // on by default: the curator is what makes skills improve over time
     staleAfterDays: 30,
     archiveAfterDays: 90,
     intervalMs: 24 * 3600 * 1000,

@@ -174,8 +174,9 @@ export function loadProjectSkills(projectDir: string, userDir?: string, extraDir
       map.set(s.name, s);
     }
   }
-  if (userDir) {
-    const u = discoverSkills(userDir);
+  const effectiveUser = userDir || defaultUserSkillsDir();
+  if (effectiveUser) {
+    const u = discoverSkills(effectiveUser);
     add(u.skills, u.diagnostics);
   }
   const proj = discoverSkills(join(projectDir, '.mochi', 'skills'));
@@ -249,6 +250,15 @@ export function bundledSkillsDir(): string | null {
   return null;
 }
 
+/** Default user/global skills dir: ~/.mochi/skills. Skills here persist across
+ *  projects AND sessions — agent-authored procedural memory that is always
+ *  discoverable. The walk is bounded (discoverSkills budget + depth), and this
+ *  is a curated .mochi subdirectory, never the raw home tree. */
+export function defaultUserSkillsDir(): string {
+  const home = process.env.HOME || process.env.USERPROFILE;
+  return home ? join(home, '.mochi', 'skills') : '';
+}
+
 /** loadProjectSkills plus the bundled catalog appended last (so project and
  *  user skills shadow bundled ones by name). */
 export function loadAllSkills(projectDir: string, userDir?: string): { skills: Skill[]; diagnostics: string[] } {
@@ -268,6 +278,7 @@ export function loadAllSkills(projectDir: string, userDir?: string): { skills: S
   const bundled = bundledSkillsDir();
   if (bundled) add(bundled);      // lowest precedence
   add(join(projectDir, '.mochi', 'skills'));
-  if (userDir) add(userDir);      // highest precedence
+  const effectiveUser = userDir || defaultUserSkillsDir();
+  if (effectiveUser) add(effectiveUser); // highest precedence — global memory
   return { skills: [...map.values()], diagnostics };
 }

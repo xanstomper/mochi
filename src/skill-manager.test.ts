@@ -116,8 +116,10 @@ describe('skill-curator', () => {
 
   it('shouldRunCurator respects enabled + interval + pause', () => {
     const cfg = defaultCuratorConfig();
-    expect(shouldRunCurator(proj, cfg)).toBe(false); // disabled by default
-    const on = { ...cfg, enabled: true, intervalMs: 60_000 };
+    expect(cfg.enabled).toBe(true); // on by default: skills improve over time
+    const off = { ...cfg, enabled: false };
+    expect(shouldRunCurator(proj, off)).toBe(false); // explicit off respected
+    const on = { ...cfg, intervalMs: 60_000 };
     expect(shouldRunCurator(proj, on)).toBe(true); // never ran -> run
     recordCuratorRun(proj, 'ran');
     expect(loadCuratorState(proj).runCount).toBe(1);
