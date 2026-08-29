@@ -921,10 +921,10 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       const menuTop = Math.max(1, Math.floor((h - menuH) / 2));
       const menuW = Math.min(Math.max(56, Math.floor(w * 0.62)), w - 8);
       const mLeft = Math.max(0, Math.floor((w - menuW) / 2));
-      const pad = `${T.backdropBg}${' '.repeat(mLeft)}${T.reset}`;
+      // NO backdrop repaint: panel floats directly on the terminal's own bg.
+      const pad = ' '.repeat(mLeft);
 
       const P = T.panelBg;
-      const BK = T.backdropBg;
       const white = '\x1b[38;2;238;238;238m';
       const dim = '\x1b[38;2;128;128;128m';
       const panelPad = 2;
@@ -937,8 +937,8 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       const hasAbove = scrollOffset > 0;
       const hasBelow = scrollOffset + maxVisibleItems < totalItems;
 
-      const solidRow = (bg: string, content: string, contentVis: number) =>
-        `${pad}${bg}${content}${bg}${' '.repeat(Math.max(0, menuW - contentVis))}${BK} `;
+      const solidRow = (content: string, contentVis: number) =>
+        `${pad}${P}${content}${P}${' '.repeat(Math.max(0, menuW - contentVis))}${T.reset}`;
 
       let r = menuTop;
       // Panel top edge (solid bg row) + header: bold title, dim esc right.
@@ -946,7 +946,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       const titleTxt = ellipsize(state.menuTitle, Math.max(8, textW - escTxt.length - 4));
       const headGap = Math.max(1, textW - visibleLen(titleTxt) - escTxt.length - 2);
       r++; // solid bg row above header
-      rows[r] = solidRow(P, `  ${T.bold}${white}${titleTxt}${T.reset}${P}${' '.repeat(headGap)}${dim}${escTxt}${T.reset}${P}`, textW + 2 + headGap + escTxt.length); r++;
+      rows[r] = solidRow(`  ${T.bold}${white}${titleTxt}${T.reset}${P}${' '.repeat(headGap)}${dim}${escTxt}${T.reset}${P}`, textW + 2 + headGap + escTxt.length); r++;
       r++; // gap row under header
 
       for (let i = 0; i < maxVisibleItems; i++) {
@@ -967,10 +967,10 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         if (sel) {
           // Bar is 2 cells wider than text rows (1 cell overhang each side).
           const trail = Math.max(0, availForItem - visibleLen(formattedItem));
-          rows[r] = `${pad}${BK} ${T.actBg}${T.bgText} ${bgSafe(activeDot, T.actBg)}${bgSafe(formattedItem, T.actBg)}${' '.repeat(trail)} ${T.actBg}${BK} `;
+          rows[r] = `${pad} ${T.actBg}${T.bgText} ${bgSafe(activeDot, T.actBg)}${bgSafe(formattedItem, T.actBg)}${' '.repeat(trail)} ${T.actBg}${T.reset} `;
         } else {
           const trail = Math.max(0, textW - 2 - visibleLen(activeDot) - visibleLen(formattedItem));
-          rows[r] = solidRow(P, `  ${activeDot}${white}${formattedItem}${T.reset}${P}${' '.repeat(trail)}`, textW + visibleLen(activeDot) - 2);
+          rows[r] = solidRow(`  ${activeDot}${white}${formattedItem}${T.reset}${P}${' '.repeat(trail)}`, textW + visibleLen(activeDot) - 2);
         }
         r++;
       }
@@ -980,7 +980,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       const scrollState = hasAbove && hasBelow ? '↑↓' : hasAbove ? '↑' : hasBelow ? '↓' : '';
       const keyHints = '↑↓ navigate · ⏎ select · esc close';
       const footGap = Math.max(1, textW - visibleLen(scrollState) - keyHints.length - 2);
-      rows[r] = solidRow(P, `  ${dim}${scrollState}${T.reset}${P}${' '.repeat(footGap)}${dim}${keyHints}${T.reset}${P}`, textW + scrollState.length + 2);
+      rows[r] = solidRow(`  ${dim}${scrollState}${T.reset}${P}${' '.repeat(footGap)}${dim}${keyHints}${T.reset}${P}`, textW + scrollState.length + 2);
     }
 
     let out = HIDE;
