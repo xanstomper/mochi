@@ -262,8 +262,10 @@ export const skillManageTool: Tool = {
     if (action === 'create') {
       const category = args.category ? String(args.category) : undefined;
       // category "global" (or "user") => ~/.mochi/skills — cross-project memory.
+      // writeSkill() appends .mochi/skills itself — pass HOME, NOT the skills
+      // path, or the dir doubles to .mochi/skills/.mochi/skills (undiscoverable).
       const targetDir = category === 'global' || category === 'user'
-        ? (process.env.HOME ? join(process.env.HOME, '.mochi', 'skills') : projectDir)
+        ? (process.env.HOME || projectDir)
         : projectDir;
       const r = writeSkill(targetDir, {
         name,
