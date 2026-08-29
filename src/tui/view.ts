@@ -747,12 +747,14 @@ export function renderDropdown(
     const name = padEnd(it.name, 12);
     const hint = ellipsize(it.hint, Math.max(0, innerW - 12 - 2));
     const pad = Math.max(0, innerW - 12 - visibleLen(hint));
-    // Selected = solid accent bar, NO arrow glyph. Name bold light; hint
-    // stays on the bar via bold-off + bgText (never dark-on-dark).
+    // Selected = solid accent bar that bleeds OVER the border cells (the row
+    // is emitted WITHOUT side borders — bg fills edge-to-edge, then dim
+    // border-glyphs are drawn on top of the bar in bgText). NO arrow glyph:
+    // the bar itself is the cursor (opencode/mimo).
     const body = sel
-      ? `${T.actBg}${T.bgText}${T.bold}  ${name}\x1b[22m${T.bgText}  ${hint}${' '.repeat(pad)} ${T.reset}`
-      : `  ${T.act}${name}${T.reset}  ${T.grayDark}${hint}${T.reset}${' '.repeat(pad)} `;
-    out.push(`${T.rule}│${T.reset}${body}${T.rule}│${T.reset}`);
+      ? `${T.actBg}${T.bgText}${T.bold}│  ${name}\x1b[22m${T.bgText}  ${hint}${' '.repeat(pad)} ${T.actBg}│${T.reset}`
+      : `${T.rule}│${T.reset}  ${T.act}${name}${T.reset}  ${T.grayDark}${hint}${T.reset}${' '.repeat(pad)} ${T.rule}│${T.reset}`;
+    out.push(body);
   }
 
   // Footer INSIDE the dialog: left scroll state, right count.

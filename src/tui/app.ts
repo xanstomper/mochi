@@ -968,13 +968,18 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         // Menu items carry their own ANSI and often end with T.reset — a bare
         // reset erases the bar mid-row (dark-on-dark invisibility). Rewrite
         // resets to "keep bar background + light text" so the row stays solid.
+        // Selected = solid accent bar that bleeds over the border cells: the
+        // row emits the bar from col 0 through col menuW-1 with dim border
+        // glyphs drawn ON the bar (in bgText) — no black gaps at the edges.
+        // NO arrow glyph: the bar itself is the cursor (opencode/mimo).
         const barSafe = (s: string) => s
           .replace(/\x1b\[0m/g, T.actBg + T.bgText)
           .replace(/\x1b\[22m/g, T.bgText);
+        const barTrail = ' '.repeat(Math.max(0, trail + 2));
         const content = sel
-          ? `${T.actBg}${T.bgText}${T.bold}  ${barSafe(activeDot)}${barSafe(formattedItem)}${' '.repeat(trail)} ${T.reset}`
-          : `  ${activeDot}${T.fg}${formattedItem}${T.reset}${' '.repeat(trail)} `;
-        rows[r] = pad + T.rule + '│' + T.reset + content + T.rule + '│' + T.reset; r++;
+          ? `${T.actBg}${T.bgText}${T.bold}│  ${barSafe(activeDot)}${barSafe(formattedItem)}${barTrail}${T.actBg}│${T.reset}`
+          : `${T.rule}│${T.reset}  ${activeDot}${T.fg}${formattedItem}${T.reset}${' '.repeat(trail)} ${T.rule}│${T.reset}`;
+        rows[r] = pad + content; r++;
       }
 
       rows[r] = pad + T.rule + '│' + T.reset + ' '.repeat(innerW + 2) + T.rule + '│' + T.reset; r++;   // bottom padding row
