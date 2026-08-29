@@ -140,7 +140,6 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     menuActive: false,
     menuTitle: '',
     menuItems: [] as string[],
-    menuParsed: [] as Array<{ label: string; hint: string; active: boolean }>,
     menuSelected: 0,
     menuMark: new Set<number>(),
     currentTool: '' as string,
@@ -167,10 +166,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     /** slash autocomplete */
     dropActive: false,
     dropSelected: 0,
-    /** Scroll window offset for the dropdown palette (full-list scrolling). */
-    dropOffset: 0,
-    /** Absolute item index each rendered dropdown row maps to (set per frame). */
-    dropIndexMap: [] as number[],
+
     /** live git diff stats for the status bar */
     gitDiff: null as { files: number; additions: number; deletions: number } | null,
     totalTokens: 0,
@@ -823,18 +819,10 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       rows[r] = '  ' + thinkingLine(state.spinner, state.currentTool || state.currentTask || '');
     }
 
-    // autocomplete dropdown floats above the status bar — scrolling palette
-    // over the FULL command list (viewport window, not a 6-item slice).
+    // autocomplete dropdown floats above the status bar
     const dropItems = currentDropItems();
     if (dropItems.length && !state.menuActive) {
-      const { rows: dd, indexMap } = renderDropdown(
-        dropItems.map((c) => ({ name: c.name, hint: c.hint })),
-        state.dropSelected,
-        w - indent,
-        Math.min(10, Math.max(4, h - bottomRows - 4)),
-        state.dropOffset,
-      );
-      state.dropIndexMap = indexMap;
+      const dd = renderDropdown(dropItems.slice(0, 6).map((c) => ({ name: c.name, hint: c.hint })), state.dropSelected, w - indent);
       const top = h - bottomRows - dd.length - 1;
       for (let i = 0; i < dd.length; i++) {
         const r = top + i;
@@ -909,91 +897,60 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     }
     rows[cTop + visibleTextRows + 1] = composerBottomRule(w);
     
-    // ---- opencode/mimo floating-panel modal --------------------------------
-    // Kept deliberately simple: ONE row builder. Every row (header, items,
-    // bar, footer) is composed of visible-text segments, then padded to
-    // exactly menuW cells of panel background. No overhangs, no special
-    // cases — the right edge is always flush and the panel always blends.
+    // ---- Sleek centered modal menu overlay with scrolling window ----
     if (state.menuActive) {
       const totalItems = state.menuItems.length;
-      const maxVisibleItems = Math.min(totalItems, Math.max(5, h - 9));
-      const menuH = maxVisibleItems + 5;
+      const maxVisibleItems = Math.min(totalItems, Math.max(5, h - 8));
+      const menuH = maxVisibleItems + 3;
       const menuTop = Math.max(1, Math.floor((h - menuH) / 2));
-      const menuW = Math.min(Math.max(56, Math.floor(w * 0.62)), w - 8);
+      const menuW = Math.min(Math.max(68, Math.floor(w * 0.76)), w - 4);
       const mLeft = Math.max(0, Math.floor((w - menuW) / 2));
       const pad = ' '.repeat(mLeft);
 
-      const P = T.panelBg;
-      const white = '\x1b[38;2;238;238;238m';
-      const dim = '\x1b[38;2;128;128;128m';
-
-      // Build one panel row. cells: array of [fgColor, visibleText].
-      // Padding fills the remainder with panel bg to exactly menuW.
-      const panelRow = (cells: Array<[string, string]>) => {
-        let body = '';
-        let vis = 0;
-        for (const [fg, text] of cells) {
-          body += `${fg}${text}`;
-          vis += visibleLen(text);
-        }
-        const fill = Math.max(0, menuW - vis);
-        return `${pad}${P}${body}${P}${' '.repeat(fill)}${T.reset}`;
-      };
-      // Simple text segment helpers.
-      const cell = (fg: string, text: string): [string, string] => [fg, text];
-
+      // Windowed scrolling offset
       let scrollOffset = 0;
       if (totalItems > maxVisibleItems) {
         scrollOffset = Math.max(0, Math.min(totalItems - maxVisibleItems, state.menuSelected - Math.floor(maxVisibleItems / 2)));
       }
-      const hasAbove = scrollOffset > 0;
-      const hasBelow = scrollOffset + maxVisibleItems < totalItems;
 
-      const blank = () => panelRow([]);
+      // Title bar: ╭── Title [count] ──────────────────────────╮
+      const titleText = ` ${state.menuTitle} `;
+      const countBadge = totalItems > 1 ? ` [${state.menuSelected + 1}/${totalItems}] ` : ' ';
+      const ruleWidth = Math.max(0, menuW - 2 - visibleLen(titleText) - visibleLen(countBadge));
+      rows[menuTop] = pad + T.rule + '╭─' + T.reset + T.bold + titleText + T.reset + T.grayDark + countBadge + T.reset + T.rule + '─'.repeat(ruleWidth) + '╮' + T.reset;
 
-      let r = menuTop;
-      rows[r] = blank(); r++;
-      // Header: bold title left, dim esc right.
-      const escTxt = 'esc';
-      const titleTxt = ellipsize(state.menuTitle, Math.max(8, menuW - 8 - escTxt.length));
-      const headGap = Math.max(1, menuW - 4 - visibleLen(titleTxt) - escTxt.length);
-      rows[r] = panelRow([cell(`\x1b[1m${white}`, titleTxt), cell(P, ' '.repeat(headGap)), cell(dim, escTxt)]); r++;
-      rows[r] = blank(); r++;
-
-      const maxItem = Math.max(10, menuW - 10);
+      const innerW = menuW - 4;
       for (let i = 0; i < maxVisibleItems; i++) {
         const itemIdx = scrollOffset + i;
+        const r = menuTop + 1 + i;
         if (r >= h) break;
         const sel = itemIdx === state.menuSelected;
-        const parsed = state.menuParsed[itemIdx] ?? { label: state.menuItems[itemIdx] ?? '', hint: '', active: false };
-        const dotCell = parsed.active || state.menuMark.has(itemIdx) ? cell('\x1b[38;2;57;255;20m', '● ') : null;
-        const label = ellipsize(parsed.label, maxItem);
-        const hint = parsed.hint ? ellipsize(parsed.hint, Math.max(0, maxItem - visibleLen(label))) : '';
-        if (sel) {
-          // Selection bar: same width as every other row, dark text on accent.
-          const barFg = T.bgText;
-          const cells: Array<[string, string]> = [];
-          if (dotCell) cells.push([barFg, '● ']);
-          cells.push([`\x1b[1m${barFg}`, label]);
-          if (hint) cells.push([barFg, `  ${hint}`]);
-          const vis = cells.reduce((n, [, t]) => n + visibleLen(t), 0);
-          const fill = Math.max(0, menuW - vis);
-          rows[r] = `${pad}${T.actBg}${cells.map(([fg, t]) => `${fg}${t}`).join('')}${T.actBg}${' '.repeat(fill)}${T.reset}`;
-        } else {
-          const cells: Array<[string, string]> = [];
-          if (dotCell) cells.push(dotCell);
-          cells.push(cell(white, label));
-          if (hint) cells.push([dim, `  ${hint}`]);
-          rows[r] = panelRow(cells);
+        const rawItem = state.menuItems[itemIdx] ?? '';
+        const mark = state.menuMark.has(itemIdx);
+
+        const pointer = sel ? `${T.act}${T.bold}❯${T.reset} ` : '  ';
+        const activeDot = mark && !rawItem.includes('[ACTIVE]') ? `${T.lime}● ${T.reset}` : '';
+        const prefix = pointer + activeDot;
+        const availForItem = Math.max(10, innerW - visibleLen(prefix));
+
+        let formattedItem = rawItem;
+        if (visibleLen(rawItem) > availForItem) {
+          formattedItem = ellipsize(rawItem, availForItem);
         }
-        r++;
+
+        const itemVis = visibleLen(formattedItem);
+        const trail = Math.max(0, availForItem - itemVis);
+        const content = prefix + (sel ? `${T.bold}${T.fg}` : '') + formattedItem + T.reset + ' '.repeat(trail);
+
+        rows[r] = pad + T.rule + '│' + T.reset + ' ' + content + ' ' + T.rule + '│' + T.reset;
       }
 
-      rows[r] = blank(); r++;
-      const scrollState = hasAbove && hasBelow ? '↑↓' : hasAbove ? '↑' : hasBelow ? '↓' : '';
-      const keyHints = '↑↓ navigate · ⏎ select · esc close';
-      const footGap = Math.max(1, menuW - 4 - scrollState.length - keyHints.length);
-      rows[r] = panelRow([cell(dim, scrollState), cell(P, ' '.repeat(footGap)), cell(dim, keyHints)]);
+      // Footer bar: ╰── ↑/↓ scroll · ⏎ select · esc cancel ─────╯
+      const footerHint = ' ↑/↓ scroll · ⏎ select · esc cancel ';
+      const footerRule = Math.max(0, menuW - 2 - visibleLen(footerHint));
+      const rLeft = Math.floor(footerRule / 2);
+      const rRight = Math.max(0, footerRule - rLeft);
+      rows[menuTop + 1 + maxVisibleItems] = pad + T.rule + '╰' + '─'.repeat(rLeft) + T.reset + T.grayDark + footerHint + T.reset + T.rule + '─'.repeat(rRight) + '╯' + T.reset;
     }
 
     let out = HIDE;
@@ -1503,42 +1460,11 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     });
   }
 
-  /** Structured form of a menu item, parsed from the legacy pre-styled
-   *  string at openMenu time so the PANEL does all the styling (opencode:
-   *  white label + gray hint, no per-item colors). */
-  interface ParsedMenuItem { label: string; hint: string; active: boolean }
-
-  /** Strip ANSI, then split the legacy item formats into label/hint/active. */
-  function parseMenuItem(raw: string): ParsedMenuItem {
-    const plain = raw.replace(/\x1b\[[0-9;]*m/g, '');
-    const active = /\[ACTIVE\]/.test(plain);
-    // Sub-action rows keep their glyph prefix as the label (▶ / [DOC] / [DEL]).
-    if (/^(▶|\[DOC\]|\[DEL\])/.test(plain.trim()) || plain.trim().startsWith('+')) {
-      const label = plain.replace(/\s+/g, ' ').trim();
-      return { label, hint: '', active };
-    }
-    // Theme rows may lead with a swatch (block glyphs) — drop it.
-    const cleaned = plain.replace(/^[▁▂▃▄▅▆▇█ ]+/, '').trim();
-    // Split at the FIRST '·' — label before it, hint/description after.
-    // (Sessions use two dots: "title  N msgs · timeAgo" — first-· keeps the
-    // full "N msgs · timeAgo" as the hint. Provider rows: "name · 12 models
-    // · url" → hint keeps "12 models · url".)
-    const dot = cleaned.indexOf('·');
-    if (dot > 0) {
-      let label = cleaned.slice(0, dot).replace(/\[ACTIVE\]/g, '').replace(/\s+/g, ' ').trim();
-      const hint = cleaned.slice(dot + 1).trim();
-      return { label, hint, active };
-    }
-    // No hint (e.g. plain sub-actions).
-    return { label: cleaned.replace(/\[ACTIVE\]/g, '').replace(/\s+/g, ' ').trim(), hint: '', active };
-  }
-
   function openMenu(title: string, items: string[], mark?: Set<number>): Promise<number> {
     return new Promise((res) => {
       state.menuActive = true;
       state.menuTitle = title;
       state.menuItems = items;
-      state.menuParsed = items.map(parseMenuItem);
       // Items already carry [ACTIVE] badges — auto-mark them so the panel
       // shows the ● dot without every call site maintaining a Set.
       state.menuMark = mark ?? new Set(items.map((it, i) => (/\[ACTIVE\]/.test(it) ? i : -1)).filter((i) => i >= 0));
@@ -1918,7 +1844,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         state.input = state.input.slice(0, state.cursor) + text + state.input.slice(state.cursor);
         state.cursor += text.length;
         state.dropActive = currentDropItems().length > 0;
-        state.dropSelected = 0; state.dropOffset = 0;
+        state.dropSelected = 0;
         clearSelection();
         scheduleRender();
       }
@@ -2041,7 +1967,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
             state.input = pick.name + ' ';
             state.cursor = state.input.length;
             state.dropActive = false;
-            state.dropSelected = 0; state.dropOffset = 0;
+            state.dropSelected = 0;
             scheduleRender();
             i++;
             continue;
@@ -2051,12 +1977,12 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
             state.input = pick.name;
             state.cursor = state.input.length;
             state.dropActive = false;
-            state.dropSelected = 0; state.dropOffset = 0;
+            state.dropSelected = 0;
             // fall through to the send path below with the completed name
           } else {
             // Args typed: send as-is. Close the dropdown, don't touch the text.
             state.dropActive = false;
-            state.dropSelected = 0; state.dropOffset = 0;
+            state.dropSelected = 0;
           }
         }
         const text = state.input;
@@ -2180,7 +2106,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
           state.input = items[0].name + ' ';
           state.cursor = state.input.length;
           state.dropActive = false;
-          state.dropSelected = 0; state.dropOffset = 0;
+          state.dropSelected = 0;
         } else {
           state.uiMode = state.uiMode === 'plan' ? 'act' : 'plan';
           runtime.config.planMode = state.uiMode === 'plan';
@@ -2228,7 +2154,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         state.input = state.input.slice(0, state.cursor) + text + state.input.slice(state.cursor);
         state.cursor += text.length;
         state.dropActive = currentDropItems().length > 0;
-        state.dropSelected = 0; state.dropOffset = 0;
+        state.dropSelected = 0;
         clearSelection();
         scheduleRender();
         i = j;
@@ -2245,23 +2171,10 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       case '\x1b[H': state.cursor = 0; break;
       case '\x1b[F': state.cursor = state.input.length; break;
       case '\x1b[A':
-        if (state.dropActive) {
-          // Full-list navigation: move selection; scroll window follows when
-          // the selection exits the viewport (↑ past the top of the window).
-          state.dropSelected = Math.max(0, state.dropSelected - 1);
-          if (state.dropSelected < state.dropOffset) state.dropOffset = state.dropSelected;
-          break;
-        }
+        if (state.dropActive) { state.dropSelected = Math.max(0, state.dropSelected - 1); break; }
         historyPrev(); break;
       case '\x1b[B':
-        if (state.dropActive) {
-          const count = currentDropItems().length;
-          state.dropSelected = Math.min(count - 1, state.dropSelected + 1);
-          // Scroll the window down when the selection passes the viewport.
-          const viewport = Math.min(10, Math.max(4, height() - 10));
-          if (state.dropSelected >= state.dropOffset + viewport) state.dropOffset = state.dropSelected - viewport + 1;
-          break;
-        }
+        if (state.dropActive) { state.dropSelected = Math.min(currentDropItems().length - 1, state.dropSelected + 1); break; }
         historyNext(); break;
       case '\x1b[5~': scrollTranscript(scrollPageSize()); clearSelection(); return;
       case '\x1b[6~': scrollTranscript(-scrollPageSize()); clearSelection(); return;

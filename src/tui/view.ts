@@ -706,74 +706,30 @@ export function composerHintRow(hint: string, width: number): string {
   return `${T.grayDark}${hint}${T.reset}`;
 }
 
-// ---- Autocomplete dropdown (opencode-style scrolling command palette) -------
+// ---- Autocomplete dropdown (Cline autocomplete-dropdown.tsx) ---------------
 export interface DropdownItem {
   name: string;
   hint: string;
 }
 
-/** Render the slash-command dropdown as an opencode floating panel:
- *  no border glyphs — a solid panelBg block on the backdrop, peach selection
- *  bar (text near-black on it), white command names, gray hints, bold title
- *  with `esc` right-aligned. The CALLER owns the scroll window. */
-export function renderDropdown(
-  items: DropdownItem[],
-  selected: number,
-  width: number,
-  viewport = 8,
-  scrollOffset = 0,
-): { rows: string[]; indexMap: number[] } {
-  if (!items.length) return { rows: [], indexMap: [] };
-  const w = Math.min(Math.max(width, 40), 72);
+export function renderDropdown(items: DropdownItem[], selected: number, width: number): string[] {
+  if (!items.length) return [];
+  const w = Math.min(width, 64);
   const out: string[] = [];
-  const indexMap: number[] = [];
-  const maxVisible = Math.min(items.length, Math.max(3, viewport));
-
-  const maxOffset = Math.max(0, items.length - maxVisible);
-  const offset = Math.max(0, Math.min(maxOffset, Math.min(scrollOffset, selected - Math.floor(maxVisible / 2) < 0 ? 0 : selected - Math.floor(maxVisible / 2) > maxOffset ? maxOffset : selected - Math.floor(maxVisible / 2))));
-  const P = T.panelBg;    // panel background (theme-derived, blends with bg)
-  const bar = T.actBg;    // selection bar
-  const onBar = T.bgText; // text on the bar (dark)
-  const white = '\x1b[38;2;238;238;238m';
-  const dim = '\x1b[38;2;128;128;128m';
-
-  // Every row is emitted as: P + content padded to EXACTLY w visible cells +
-  // reset — one width, always flush right edge (no ragged frames).
-  const headTitle = 'Commands';
-  const headEsc = 'esc';
-  const headGap = Math.max(1, w - 4 - headTitle.length - headEsc.length);
-  out.push(`${P}  ${T.bold}${white}${headTitle}${T.reset}${P}${' '.repeat(headGap)}${dim}${headEsc}${T.reset}${P}  ${T.reset}`);
-
-  for (let i = 0; i < maxVisible; i++) {
-    const itemIdx = offset + i;
-    const it = items[itemIdx];
-    if (!it) break;
-    indexMap.push(itemIdx);
-    const sel = itemIdx === selected;
-    const name = padEnd(it.name, 12);
-    const hint = ellipsize(it.hint, Math.max(0, w - 8 - 12 - 2));
-    if (sel) {
-      // Full-width accent bar, dark text — bleeds 1 cell over the panel edge
-      // on each side (opencode's bar is wider than text rows).
-      const content = ` ${name}  ${hint}`;
-      const vis = 1 + visibleLen(content) + 1;
-      const trail = Math.max(0, w - vis);
-      out.push(` ${bar}${onBar}${content}${' '.repeat(trail)} ${bar}${T.reset}`);
-    } else {
-      const content = `  ${name}  ${hint}`;
-      const trail = Math.max(0, w - 2 - visibleLen(content));
-      out.push(`${P}${content}${' '.repeat(trail)}  ${T.reset}`);
-    }
+  out.push(`${T.rule}╭${'─'.repeat(Math.max(0, w - 2))}╮${T.reset}`);
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    const sel = i === selected;
+    const name = padEnd(it.name, 16);
+    const hint = ellipsize(it.hint, Math.max(0, w - 4 - 16 - 3));
+    const rowBody = sel
+      ? `${T.act}❯ ${T.bold}${name}${T.reset}${T.gray}${hint}${T.reset}`
+      : `  ${T.fg}${name}${T.reset}${T.grayDark}${hint}${T.reset}`;
+    const pad = Math.max(0, w - 2 - 2 - 16 - visibleLen(hint));
+    out.push(`${T.rule}│${T.reset}${rowBody}${' '.repeat(pad)}${T.rule}│${T.reset}`);
   }
-
-  // Footer row: dim scroll state left, dim count right — on panel bg.
-  const hasAbove = offset > 0;
-  const hasBelow = offset + maxVisible < items.length;
-  const scrollState = hasAbove && hasBelow ? '↑↓' : hasAbove ? '↑' : hasBelow ? '↓' : '';
-  const count = `${items.length} commands`;
-  const footGap = Math.max(1, w - 4 - scrollState.length - count.length);
-  out.push(`${P}  ${dim}${scrollState}${T.reset}${P}${' '.repeat(footGap)}${dim}${count}${T.reset}${P}  ${T.reset}`);
-  return { rows: out, indexMap };
+  out.push(`${T.rule}╰${'─'.repeat(Math.max(0, w - 2))}╯${T.reset}`);
+  return out;
 }
 
 // ---- Layout glue -----------------------------------------------------------

@@ -275,8 +275,8 @@ describe('composer', () => {
 });
 
 describe('dropdown', () => {
-  it('renders items with filled selection bar and scroll window', () => {
-    const { rows, indexMap } = renderDropdown(
+  it('renders items with selection marker', () => {
+    const rows = renderDropdown(
       [
         { name: '/mode', hint: 'set mode' },
         { name: '/model', hint: 'pick model' },
@@ -287,22 +287,8 @@ describe('dropdown', () => {
     const plain = rows.join('\n').replace(/\x1b\[[0-9;]*m/g, '');
     expect(plain).toContain('/mode');
     expect(plain).toContain('/model');
-    // Selected row = full bar, hint present, count badge in the footer.
-    expect(plain).toContain('2 commands');
-    expect(indexMap).toEqual([0, 1]);
-  });
-
-  it('scrolls a long list through a viewport window', () => {
-    const items = Array.from({ length: 50 }, (_, i) => ({ name: `/cmd${i}`, hint: `command ${i}` }));
-    // Viewport of 8, selection at 40 → window must show item 40, not 0..7.
-    const { rows, indexMap } = renderDropdown(items, 40, 60, 8, 33);
-    const plain = rows.join('\n').replace(/\x1b\[[0-9;]*m/g, '');
-    expect(plain).toContain('/cmd40');
-    expect(plain).not.toContain('/cmd0 ');
-    expect(plain).toContain('↓');
-    expect(plain).toContain('50 commands');
-    expect(indexMap).toContain(40);
-    expect(Math.max(...indexMap)).toBeLessThanOrEqual(49);
+    expect(plain).toContain('❯ /model');
+    expect(plain).not.toContain('❯ /mode ');
   });
 });
 
