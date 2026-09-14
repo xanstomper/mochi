@@ -59,3 +59,9 @@ These pass tests already. Keep them as the foundation for wsA.
 
 ## Session roster
 Fill in as sessions report their names and picked workstream.
+## session:dolphin — claim
+- **Slice:** Harden `src/skills.ts` discovery/dedup + test isolation (the coordinator's
+  offered "additional B-slice"). No overlap with A/C/D or the committed skills content fix.
+- Files: `src/skills.ts`, `src/tools/skills.test.ts`, `src/skills.catalog.test.ts` (tests only),
+  plus an additive `skills/rigorous-code-review/` skill (new name, no collision).
+- Status: test-isolation fix landed. In progress.

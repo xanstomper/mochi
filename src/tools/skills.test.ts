@@ -63,12 +63,44 @@ describe('skills discovery', () => {
     expect(names).toEqual(['fix-tests', 'release']);
   });
 
+  it('bounds the walk by the entry budget (hard safety valve against pathological trees)', () => {
+    // A huge, flat, low-value tree (many stub .md files) must not be walked
+    // unbounded: a small budget cuts the walk short so the event loop never
+    // blocks on a giant home directory during prompt build.
+    const huge = join(dir, 'huge');
+    mkdirSync(huge, { recursive: true });
+    for (let i = 0; i < 60; i++) {
+      writeFileSync(join(huge, `stub-${i}.md`), `---\nname: stub-${i}\ndescription: "stub"\n---\n`);
+    }
+    const worried = discoverSkills(huge, 0, 20);
+    expect(worried.skills.length).toBeLessThan(60);
+    expect(worried.skills.length).toBeGreaterThan(0);
+  });
+
+  it('a skill root directory short-circuits recursion (budget not spent on children)', () => {
+    // Even under a tight budget, a directory with its own SKILL.md is a skill
+    // root that must be returned whole without recursing into its subtree.
+    const root = join(dir, 'release-root');
+    mkdirSync(join(root, 'deep'), { recursive: true });
+    writeFileSync(join(root, 'SKILL.md'), `---\nname: release\ndescription: "ship a release"\n---\n`);
+    writeFileSync(join(root, 'deep', 'noise.md'), `---\nname: noise\ndescription: "should not be seen"\n---\n`);
+    const { skills } = discoverSkills(root, 0, 4);
+    const names = skills.map((s) => s.name);
+    expect(names).toContain('release');
+    expect(names).not.toContain('noise');
+  });
+
   it('dedups by name and returns diagnostics for invalid names', () => {
     const proj = join(dir, 'proj');
     const sdir = join(proj, '.mochi', 'skills');
     mkdirSync(sdir, { recursive: true });
     writeFileSync(join(sdir, 'SKILL.md'), `---\nname: bad_name\ndescription: "an invalid skill"\n---\nx`);
-    const { skills, diagnostics } = loadProjectSkills(proj);
+    // Isolate the user/global skills dir: a dev machine may have real skills
+    // installed under ~/.mochi/skills which would otherwise bleed into the
+    // returned set and break the count assertion.
+    const userDir = join(dir, 'empty-user-skills');
+    mkdirSync(userDir, { recursive: true });
+    const { skills, diagnostics } = loadProjectSkills(proj, userDir);
     expect(skills.length).toBe(1);
     expect(diagnostics.some((d) => d.includes('lowercase'))).toBe(true);
   });

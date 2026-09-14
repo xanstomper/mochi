@@ -131,7 +131,6 @@ export function discoverSkills(dir: string, depth = 0, maxEntries = 4096): { ski
     return { skills, diagnostics };
   }
   if (maxEntries <= 0) return { skills, diagnostics };
-  const budget = maxEntries - entries.length;
   const hasSkillMd = entries.some((e) => e.name === 'SKILL.md' && !e.isDir);
   if (hasSkillMd) {
     const p = join(dir, 'SKILL.md');
@@ -140,17 +139,26 @@ export function discoverSkills(dir: string, depth = 0, maxEntries = 4096): { ski
     diagnostics.push(...r.diagnostics);
     return { skills, diagnostics }; // skill root: do not recurse further
   }
+  // The entry budget bounds the number of directory entries processed across
+  // the WHOLE walk (not per directory). Each processed entry decrements a
+  // running remainder handed down to subdirectories, so a pathological tree
+  // with thousands of files is cut short instead of blocking the event loop
+  // with unbounded readdirSync calls; an over-budget flat dir still yields its
+  // first maxEntries files rather than nothing.
+  let rem = maxEntries;
   for (const e of entries) {
+    if (rem <= 0) break; // entry budget exhausted: stop walking
     if (e.name.startsWith('.') || e.name === 'node_modules') continue;
     const full = join(dir, e.name);
     if (e.isDir) {
-      if (budget <= 0) break; // entry budget exhausted: stop walking
-      const sub = discoverSkills(full, depth + 1, budget);
+      const sub = discoverSkills(full, depth + 1, rem);
+      rem -= 1;
       skills.push(...sub.skills);
       diagnostics.push(...sub.diagnostics);
       continue;
     }
     if (e.name.endsWith('.md')) {
+      rem -= 1;
       const r = loadSkillFile(full);
       if (r.skill) skills.push(r.skill);
       diagnostics.push(...r.diagnostics);
