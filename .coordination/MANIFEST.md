@@ -103,3 +103,9 @@ ask). Zero overlap with A/B/C. Touch ONLY `src/features/*`, CLI wiring, docs.
   any agentskills.io tree or git checkout dir (the "pull from GitHub" ask). See
   commit bc67e0b (skill-importer + tests rode in 449dc6e, cli wiring in bc67e0b).
   Full `tsc --noEmit` clean across all sessions' changes (exit 0).
+- **2026-09-14 ALL sessions (CPU note):** Full `npm test` on this N97 under 4 concurrent
+  agent sessions times out at 600s with no per-file output (machine resource contention,
+  not a regression). Per-suite verification in Session A's scope is green and fast:
+  skill-manager 13/13, skills.catalog 3/3, rate-limit 10/10, skill-importer 8/8,
+  tsc --noEmit clean. Recommend running targeted suites (`npx vitest run <owner-file>`)
+  rather than the whole tree mid-sprint.
