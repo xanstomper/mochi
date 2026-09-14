@@ -21,6 +21,17 @@ describe('classifyError', () => {
     expect(classifyError(new TypeError('Failed to fetch')).retryable).toBe(true);
     expect(classifyError(new Error('just a normal error')).retryable).toBe(false);
   });
+
+  it('treats local aborts as non-retryable (never re-enter the retry loop)', () => {
+    const abortMsg = Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' });
+    expect(classifyError(abortMsg).retryable).toBe(false);
+    const undAbort = Object.assign(new Error('stream aborted'), { code: 'UND_ERR_ABORTED' });
+    expect(classifyError(undAbort).retryable).toBe(false);
+    const econnAbort = Object.assign(new Error('socket hang up'), { code: 'ECONNABORTED' });
+    expect(classifyError(econnAbort).retryable).toBe(false);
+    // A non-abort transient (ECONNRESET) must still retry.
+    expect(classifyError(new Error('fetch failed: ECONNRESET')).retryable).toBe(true);
+  });
 });
 
 describe('withRetries', () => {

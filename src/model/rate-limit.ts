@@ -179,6 +179,12 @@ const RATE_LIMIT_WORDS = /rate.?limit|too many|throttl|quota|overloaded|exhauste
 const RETRYABLE_CODES = new Set(['ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN']);
 // Codes that mean a permanent misconfiguration, not a transient overload.
 const NONRETRYABLE_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'ENETUNREACH', 'EHOSTUNREACH']);
+// Local abort codes from the DOM/fetch layer (signal.abort() by the stall-guard
+// watchdog or the caller). These are NOT provider overloads: the request was torn
+// down locally, so re-entering the retry loop would restart it and then wait
+// another full stall window before aborting again (a multi-minute freeze).
+const ABORT_CODES = new Set(['ABORT_ERR', 'UND_ERR_ABORTED', 'ECONNABORTED']);
+const ABORT_RE = /abort/i;
 
 function causeCodes(err: unknown): string[] {
   const codes: string[] = [];
@@ -193,6 +199,15 @@ function causeCodes(err: unknown): string[] {
   return codes;
 }
 
+/** True when the error is a LOCAL abort (our signal was aborted by the stall-guard
+ *  watchdog or the caller) rather than a real provider/transport overload. */
+export function isAbort(err: unknown): boolean {
+  if ((err as { name?: unknown })?.name === 'AbortError') return true;
+  const msg = err instanceof Error ? err.message : String(err);
+  if (ABORT_RE.test(msg)) return true;
+  return causeCodes(err).some((c) => ABORT_CODES.has(c));
+}
+
 /** Decide whether an error is transient (retry) or permanent (surface now). */
 export function classifyError(err: unknown): RateLimitInfo {
   if (err instanceof ProviderError) {
@@ -201,6 +216,12 @@ export function classifyError(err: unknown): RateLimitInfo {
     }
     return { retryable: err.retryable };
   }
+  // A local abort is never a provider overload: surface it immediately so a
+  // stall-guard / caller abort cannot be dragged back into a retry loop that
+  // would freeze for another full stall window on each attempt. This check runs
+  // before the generic transport regex so an abort message can't incidentally
+  // match a transient term.
+  if (isAbort(err)) return { retryable: false };
   // Inspect the Node fetch cause chain for a transport code.
   const codes = causeCodes(err);
   if (codes.some((c) => NONRETRYABLE_CODES.has(c))) return { retryable: false };
