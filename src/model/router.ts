@@ -4,6 +4,10 @@ import { createOpenAIProvider, type ProviderConfig } from './openai.js';
 import { createAnthropicProvider } from './anthropic.js';
 import { createGeminiProvider } from './gemini.js';
 import { CapabilityRegistry, providerKey } from './capability.js';
+// isAbort (local abort classification) lives in rate-limit.ts alongside the
+// retry/backoff logic it complements; router reuses that single canonical
+// implementation rather than redefining it.
+import { isAbort } from './rate-limit.js';
 export type { ProviderConfig } from './openai.js';
 
 const ALIASES: Record<string, { baseUrl: string; defaultModel: string }> = {
@@ -203,30 +207,6 @@ function withCapabilityGate(provider: RawProvider, config: ModelConfig, resolved
 
   return { streamChat, chat };
 }
-
-/**
- * True when the error is a LOCAL abort (our signal was aborted by the stall-guard
- * watchdog or the caller), vs. a genuine provider/transport failure. Detection:
- * the DOM AbortError name, a Node fetch abort wrapping it, or a transport abort
- * code. These are transient-by-nature and must not poison provider cooldowns.
- */
-function isAbort(err: unknown): boolean {
-  const name = (err as { name?: string })?.name;
-  if (name === 'AbortError') return true;
-  if (err instanceof Error && err.message && /abort/id.test(err.message)) return true;
-  // Walk the cause chain for an abort wrapping a code like 'ABORT_ERR' / 'UND_ERR_ABORTED'.
-  let cur: unknown = err;
-  let depth = 0;
-  while (cur && depth < 6) {
-    const code = (cur as { code?: unknown })?.code;
-    if (code === 'ABORT_ERR' || code === 'UND_ERR_ABORTED' || code === 'ECONNABORTED') return true;
-    cur = (cur as { cause?: unknown })?.cause;
-    depth++;
-  }
-  return false;
-}
-/** Test seam: keeps the abort classifier re-usable and unit-testable. */
-export { isAbort };
 
 function isPermanent(err: unknown): boolean {
   if (err && typeof err === 'object' && 'cause' in err) {

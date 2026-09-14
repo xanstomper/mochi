@@ -50,7 +50,8 @@ describe('router capability gate', () => {
   });
 
   it('isAbort classifies stall-guard aborts as abort (transient, not provider failure)', async () => {
-    const { isAbort } = await import('./router.js');
+    // isAbort is canonical in rate-limit.ts (router reuses it); test it there.
+    const { isAbort } = await import('./rate-limit.js');
     // Our openai stall-guard aborts via signal.abort() -> DOMException 'AbortError'.
     expect(isAbort(new DOMException('The operation was aborted.', 'AbortError'))).toBe(true);
     // Node fetch wraps aborts similarly.
