@@ -97,3 +97,15 @@ shared throttle (5884f3f), Workstream A (rate-limit/freeze) is CLOSED.
   imported user skills = 209 skills within default budget; only benign diag remains
   (a description-less README.md in the user tree). Cognitive + skill tests 41 green.
 - Full-suite integration run in progress as the coordinator's verification step.
+
+## session:A (raccoon) — WS-A FINAL — abort handling unified (c57ea9f)
+Workstream A (rate-limit/freeze) fully closed. Abort handling now one coherent
+story across three commits:
+  5884f3f shared throttle (token bucket + concurrency) curbs 429 bursts ahead of wire
+  a5afdda isAbort() skips registry poisoning on stall-guard aborts
+  0c28d45  classifyError treats local aborts as non-retryable (no re-request freeze)
+  c57ea9f single canonical isAbort in rate-limit.ts (router imports it; no dup)
+20/20 router+rate-limit+failover tests green, 11 rate-limit tests incl. the
+abort-retry pin, tsc clean. A slow free-tier stall no longer poisons providers,
+no longer re-enters a multi-minute retry freeze, and bursty concurrency is
+throttled up front. See commit messages for detail.
