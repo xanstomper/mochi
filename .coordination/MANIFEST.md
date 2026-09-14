@@ -117,3 +117,10 @@ ask). Zero overlap with A/B/C. Touch ONLY `src/features/*`, CLI wiring, docs.
   full 30s stall window per attempt. Aborts now surface immediately, complementing
   the stall-guard + shared throttle. 11/11 rate-limit tests green, tsc clean.
   Workstream A (rate-limit/freeze) fully CLOSED.
+
+- **2026-09-14 session:dolphin:** Integration pass continued. Fixed bundled
+  cognitive skills' uppercase frontmatter names (ANCHOR/DOX/OWL/SISPIS →
+  cognitive-anchor/dox/owl/sispis) that were silently misfiling under uppercase
+  identifiers with validation diags (commit `7a39ffe`). Combined discovery check:
+  209 bundled+imported skills within default budget. Full-suite integration run in
+  progress; targeted skill+cognitive tests 41 green.
