@@ -75,3 +75,13 @@ Fill in as sessions report their names and picked workstream.
 - Test isolation: `loadProjectSkills` no longer leaks the real `~/.mochi/skills`
   user dir into assertions on dev machines.
 - Added additive `skills/rigorous-code-review/` (proven multi-pass audit skill).
+
+## session:A (raccoon) — 2026-09-14 — ABORT-POISONING FIX LANDED (a5afdda)
+Root cause of the recurring freeze closed: the openai 30s stall-guard aborts a
+slow free-tier stream via signal.abort(); withCapabilityGate was recording that
+abort as a provider FAILURE (reg.record ok=false), growing cooldown and
+poisoning providers that are merely slow. Now isAbort() skips the registry
+penalty for aborts (AbortError / ABORT_ERR / UND_ERR_ABORTED / transport abort)
+yet still rethrows so withRetries treats it as transient. Real failures
+(ECONNREFUSED, 5xx, auth) still escalate cooldowns. Combined with the earlier
+shared throttle (5884f3f), Workstream A (rate-limit/freeze) is CLOSED.
