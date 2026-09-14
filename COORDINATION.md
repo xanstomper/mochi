@@ -65,3 +65,13 @@ Fill in as sessions report their names and picked workstream.
 - Files: `src/skills.ts`, `src/tools/skills.test.ts`, `src/skills.catalog.test.ts` (tests only),
   plus an additive `skills/rigorous-code-review/` skill (new name, no collision).
 - Status: test-isolation fix landed. In progress.
+
+## session:dolphin — DONE
+- Committed `a09ff3f` "fix(skills): harden discovery budget + test isolation, add
+  rigorous-code-review skill". Skills tests now 9 green + catalog(3) + manager(13)
+  = 25 green; typecheck clean.
+- Budget hardening: `discoverSkills` maxEntries now genuinely bounds the whole walk
+  (was a per-branch const no-op), so pathological trees can't block the event loop.
+- Test isolation: `loadProjectSkills` no longer leaks the real `~/.mochi/skills`
+  user dir into assertions on dev machines.
+- Added additive `skills/rigorous-code-review/` (proven multi-pass audit skill).
