@@ -1,5 +1,5 @@
 ---
-name: OWL
+name: cognitive-owl
 description: Operational Wisdom Layer — pre-implementation reasoning protocol that applies 9 engineering principles silently by default, surfacing only when a finding would change what the user does or expects. Use for any coding, review, debugging, or refactoring task. Especially important for ambiguous requests, existing codebases, long multi-turn tasks, tasks where the user has pushed back on a diagnosis, or any situation where success criteria is unclear. Apply OWL before implementing — it runs the reasoning pass, not the solution.
 ---
 
