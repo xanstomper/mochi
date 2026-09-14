@@ -26,6 +26,7 @@
 
 import { existsSync, readdirSync, statSync, mkdirSync, cpSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, basename, resolve, isAbsolute } from 'node:path';
+import { execFile } from 'node:child_process';
 import { parseFrontmatter, safeSlug } from '../skill-manager.js';
 
 export interface ImportedSkillInfo {
@@ -73,6 +74,68 @@ export function originForSource(resolvedPath: string, sourceSpec?: string): stri
   }
   if (KNOWN_ROOTS[trimmed]) return trimmed;
   return basename(resolvedPath).replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '') || 'imported';
+}
+
+/** True if `spec` looks like a remote git source we should clone (github:owner/repo,
+ *  git+<url>, <url>.git, or an scp-style git URL). */
+export function isGitSourceSpec(spec: string): boolean {
+  const s = spec.trim();
+  if (!s) return false;
+  if (/^github:[\w.-]+\/[\w.-]+$/i.test(s)) return true;
+  if (s.startsWith('git+') && s.includes('://')) return true; // git+https://…
+  if (/\.git$/i.test(s)) return true;
+  return /^[a-z0-9+._-]+@[a-z0-9.-]+:.+$/i.test(s);
+}
+
+/** Where shallow-cloned skill repos are cached (persisted across imports). */
+export function repoCacheDir(): string {
+  const base = process.env.MOCHI_SKILL_CACHE || join(process.env.HOME || '', '.mochi', 'skill-repo-cache');
+  return base;
+}
+
+function repoNameFromSpec(spec: string): string {
+  const s = spec.trim().replace(/^git\+/, '');
+  const match = s.match(/([^/:]+)\/([^/]+?)\.git$/);
+  if (match) return `${match[1]}-${match[2]}`;
+  const split = s.match(/^github:([\w.-]+)\/([\w.-]+)/i);
+  if (split) return `${split[1]}-${split[2]}`;
+  return safeSlug(s) || 'repo';
+}
+
+/**
+ * Resolve a source spec to a local directory. If it is a remote git source,
+ * shallow-clone it (or reuse a cached clone) into the skill-repo cache and
+ * return that dir. Returns null if unresolvable / clone fails.
+ */
+export async function resolveSourceDir(spec: string, { update = false } = {}): Promise<{ dir: string | null; error?: string }> {
+  const trimmed = spec.trim();
+  // Local / known-root paths first.
+  const resolved = resolveSkillSource(trimmed);
+  if (resolved) return { dir: resolved };
+  if (!isGitSourceSpec(trimmed)) return { dir: null, error: `no such source path: ${spec}` };
+
+  const cache = repoCacheDir();
+  const dest = join(cache, repoNameFromSpec(trimmed));
+  const url = trimmed.replace(/^git\+/, '').replace(/^github:/, 'https://github.com/');
+  const git = (args: string[], cwd = cache) =>
+    new Promise<void>((res, rej) => execFile('git', args, { cwd }, (e) => (e ? rej(e) : res())));
+
+  if (existsSync(join(dest, '.git'))) {
+    // Cached clone present; optionally refresh it.
+    if (update) {
+      try {
+        await git(['pull', '--ff-only'], dest);
+      } catch { /* stale cache is fine — the existing clone is still usable */ }
+    }
+    return { dir: dest };
+  }
+  try {
+    mkdirSync(cache, { recursive: true });
+    await git(['clone', '--depth', '1', url, dest]);
+  } catch (e) {
+    return { dir: null, error: `git clone of ${url} failed: ${(e as Error).message}` };
+  }
+  return existsSync(join(dest, '.git')) ? { dir: dest } : { dir: null, error: `clone produced no usable repo at ${dest}` };
 }
 
 export interface DiscoveredSkill {
@@ -175,19 +238,26 @@ function findSkillNames(dir: string, out: Set<string>, depth: number): void {
  * installed skill unless `force`. Also copies a sibling `references/` dir so the
  * imported skill's supporting docs travel with it.
  */
-export function importSkills(opts: {
-  source: string;                 // source spec (dir path or "hermes:" alias)
+export async function importSkills(opts: {
+  source: string;                 // source spec (dir path, "hermes:" alias, or github:owner/repo)
   targetRoot?: string;            // default ~/.mochi/skills
   origin?: string;                // namespace override; else derived from source
   force?: boolean;
-}): SkillImportReport {
+}): Promise<SkillImportReport> {
   const report: SkillImportReport = { imported: [], skipped: [], errors: [], origin: opts.origin || '' };
-  const resolvedSource = resolveSkillSource(opts.source);
-  if (!resolvedSource || !existsSync(resolvedSource) || !statSync(resolvedSource).isDirectory()) {
+  const srcRes = await resolveSourceDir(opts.source);
+  if (!srcRes.dir) {
+    report.errors.push(srcRes.error || `source not found: ${opts.source}`);
+    return report;
+  }
+  const resolvedSource = srcRes.dir;
+  if (!statSync(resolvedSource).isDirectory()) {
     report.errors.push(`source not found: ${opts.source}`);
     return report;
   }
-  const origin = report.origin || originForSource(resolvedSource, opts.source);
+  const origin =
+    report.origin ||
+    (isGitSourceSpec(opts.source) ? repoNameFromSpec(opts.source) : originForSource(resolvedSource, opts.source));
   report.origin = origin;
 
   const targetRoot = opts.targetRoot || (process.env.HOME ? join(process.env.HOME, '.mochi', 'skills') : '');

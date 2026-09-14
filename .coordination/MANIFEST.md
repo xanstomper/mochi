@@ -109,3 +109,11 @@ ask). Zero overlap with A/B/C. Touch ONLY `src/features/*`, CLI wiring, docs.
   skill-manager 13/13, skills.catalog 3/3, rate-limit 10/10, skill-importer 8/8,
   tsc --noEmit clean. Recommend running targeted suites (`npx vitest run <owner-file>`)
   rather than the whole tree mid-sprint.
+- **2026-09-14 Session A added hardening (commit 0c28d45):** `classifyError` now
+  treats local aborts (AbortError / ABORT_ERR / UND_ERR_ABORTED / ECONNABORTED /
+  abort message) as NON-retryable in `withRetries`. This removes a latent freeze:
+  before, an abort only escaped retry by not matching the transient regex, so a
+  provider abort containing a transient term would re-request then wait another
+  full 30s stall window per attempt. Aborts now surface immediately, complementing
+  the stall-guard + shared throttle. 11/11 rate-limit tests green, tsc clean.
+  Workstream A (rate-limit/freeze) fully CLOSED.

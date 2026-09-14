@@ -38,8 +38,19 @@ mochi acp                            # Launch Agent Client Protocol v1 stdio ser
 # Diagnostics & Skills
 mochi doctor                         # Run health check on workspace, tools, and compilers
 mochi skills                         # List all bundled and project skills
+mochi skills import <src> [opts]     # Import an external skills tree (alias of below)
+mochi import-skills <src> [opts]     # Adopt an external SKILL.md tree into ~/.mochi/skills
+mochi import-skills <src> --list     # Dry-run: list discoverable skills without importing
+mochi import-skills <src> --force    # Overwrite any destination that already exists
+mochi import-skills <src> --update   # Refresh a cached git clone before importing
 mochi trace <goalId>                 # Replay and inspect execution trace of a goal
 ```
+
+`import-skills` sources may be a local/absolute skills path, a known-agent alias
+(`hermes:` maps to `~/.hermes/skills`), or a remote git source (`github:owner/repo`,
+`git+<url>`, or any URL ending in `.git` — shallow-cloned into a cache). Imports are
+origin-namespaced and non-destructive: existing skill names are skipped unless
+`--force`, and each imported skill carries a `.origin` provenance marker.
 
 ---
 

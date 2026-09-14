@@ -660,18 +660,19 @@ async function main() {
     if (sub === 'import' || sub === 'import-skills') {
       // mochi skills import <source> [--force] — alias handled inline so the
       // dedicated `skills` branch doesn't swallow it.
-      const { importSkills, resolveSkillSource, discoverSourceSkills } = await import('./features/skill-importer.js');
+      const { importSkills, resolveSourceDir, discoverSourceSkills } = await import('./features/skill-importer.js');
       const sourceName = positional[2];
-      if (!sourceName) { console.log('Usage: mochi skills import <source> [--force]'); return; }
-      const src = resolveSkillSource(sourceName);
-      if (!src) { console.error(`Source not found: ${sourceName}`); return; }
+      if (!sourceName) { console.log('Usage: mochi skills import <source> [--force] [--update]'); return; }
+      const srcRes = await resolveSourceDir(sourceName, { update: !!flags.update });
+      if (!srcRes.dir) { console.error(`Source not found or clone failed: ${sourceName}${srcRes.error ? ` (${srcRes.error})` : ''}`); return; }
+      const src = srcRes.dir;
       if (flags.list) {
         const { skills } = discoverSourceSkills(src);
         console.log(`Discoverable skills in ${src} (${skills.length}):`);
         for (const s of skills) console.log(`  - ${s.name}  ${(s.description || '').slice(0, 72)}`);
         return;
       }
-      const rep = importSkills({ source: sourceName, force: !!flags.force });
+      const rep = await importSkills({ source: sourceName, force: !!flags.force });
       for (const it of rep.imported) console.log(`imported  ${it.name}  -> ${it.to}`);
       for (const sk of rep.skipped) console.log(`skipped   ${sk.name}  (${sk.reason})`);
       for (const e of rep.errors) console.error(`error     ${e}`);
@@ -702,21 +703,22 @@ async function main() {
     // gains the mature skill library without re-authoring. Cross-agent memory.
     const sourceName = positional[1] === 'import' ? positional[2] : positional[1];
     if (!sourceName) {
-      console.log('Usage: mochi import-skills <source> [--force]');
-      console.log('  source = "hermes:", an absolute/relative skills path, or a git checkout dir.');
-      console.log('  --force overwrites any dest that already exists.');
+      console.log('Usage: mochi import-skills <source> [--force] [--update] [--list]');
+      console.log('  source = "hermes:", an absolute/relative skills path, github:owner/repo, or a git URL.');
+      console.log('  --force overwrites any dest that already exists. --update refreshes a cached git clone.');
       return;
     }
-    const { importSkills, resolveSkillSource, discoverSourceSkills } = await import('./features/skill-importer.js');
-    const src = resolveSkillSource(sourceName);
-    if (!src) { console.error(`Source not found: ${sourceName}`); return; }
+    const { importSkills, resolveSourceDir, discoverSourceSkills } = await import('./features/skill-importer.js');
+    const srcRes = await resolveSourceDir(sourceName, { update: !!flags.update });
+    if (!srcRes.dir) { console.error(`Source not found or clone failed: ${sourceName}${srcRes.error ? ` (${srcRes.error})` : ''}`); return; }
+    const src = srcRes.dir;
     if (flags.list) {
       const { skills } = discoverSourceSkills(src);
       console.log(`Discoverable skills in ${src} (${skills.length}):`);
       for (const s of skills) console.log(`  - ${s.name}  ${(s.description || '').slice(0, 72)}`);
       return;
     }
-    const rep = importSkills({ source: sourceName, force: !!flags.force });
+    const rep = await importSkills({ source: sourceName, force: !!flags.force });
     for (const it of rep.imported) console.log(`imported  ${it.name}  -> ${it.to}`);
     for (const sk of rep.skipped) console.log(`skipped   ${sk.name}  (${sk.reason})`);
     for (const e of rep.errors) console.error(`error     ${e}`);
