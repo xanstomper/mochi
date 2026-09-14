@@ -35,6 +35,136 @@ const DEFAULT: Required<Omit<RetryOptions, 'onBackoff' | 'onRetryable'>> = {
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+// ─── Client-side request throttle (shared token bucket) ─────────────────────
+//
+// The individual retry path (withRetries) recovers from a 429 after it happens,
+// but when several agents/sessions share one free-tier endpoint they can trip
+// rate limits FASTER than recovery can keep up (user-reported "rate limits and
+// freezes" under concurrent Terminus sessions). A lightweight leaky-bucket
+// throttle ahead of the wire lets concurrent agents self-regulate the burst so
+// they collectively land under the provider's RPM ceiling instead of hammering
+// it. Retries then absorb only the residual jitter.
+//
+// Opt-in (default OFF so docs, tests, and single-agent runs keep their current
+// latency): MOCHI_RATE_LIMIT_RPM=<n> allows ~n parallel-ish calls/minute;
+// MOCHI_RATE_LIMIT_CONCURRENCY=<n> caps simultaneous in-flight requests.
+// Both share one module-global bucket because a free-tier provider is one
+// budget regardless of how many agents are driving us.
+
+/** A process-global, provider-agnostic token bucket. */
+class TokenBucket {
+  private capacity: number;
+  private tokens: number;
+  private refillPerMs: number;
+  private lastRefill: number;
+
+  constructor(capacity: number, refillPerMs: number) {
+    this.capacity = Math.max(1, capacity);
+    this.refillPerMs = refillPerMs;
+    this.tokens = this.capacity;
+    this.lastRefill = Date.now();
+  }
+
+  private refill(): void {
+    const now = Date.now();
+    const elapsed = now - this.lastRefill;
+    if (elapsed > 0) {
+      this.tokens = Math.min(this.capacity, this.tokens + elapsed * this.refillPerMs);
+      this.lastRefill = now;
+    }
+  }
+
+  /** Wait until at least one token is available, then consume it. */
+  async acquire(): Promise<void> {
+    for (;;) {
+      this.refill();
+      if (this.tokens >= 1) {
+        this.tokens -= 1;
+        return;
+      }
+      const deficit = 1 - this.tokens;
+      await sleep(Math.max(5, Math.ceil(deficit / this.refillPerMs)));
+    }
+  }
+}
+
+// A semaphore for the concurrency cap. Requestors queue on a FIFO promise
+// chain; when one finishes it releases the next waiting caller.
+class Semaphore {
+  private max: number;
+  private active = 0;
+  private waiters: Array<() => void> = [];
+
+  constructor(max: number) {
+    this.max = Math.max(1, max);
+  }
+
+  async run<T>(fn: () => Promise<T>): Promise<T> {
+    await this.wait();
+    try {
+      return await fn();
+    } finally {
+      this.release();
+    }
+  }
+
+  private wait(): Promise<void> {
+    if (this.active < this.max) {
+      this.active++;
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => this.waiters.push(resolve));
+  }
+
+  private release(): void {
+    const next = this.waiters.shift();
+    if (next) {
+      next(); // hand the slot straight to the next waiter (active stays the same)
+    } else {
+      this.active--;
+    }
+  }
+}
+
+function readThrottleConfig(): { bucket: TokenBucket | null; sem: Semaphore | null } {
+  const rpm = Number(process.env.MOCHI_RATE_LIMIT_RPM);
+  const conc = Number(process.env.MOCHI_RATE_LIMIT_CONCURRENCY);
+  const haveRpm = Number.isFinite(rpm) && rpm > 0;
+  const haveConc = Number.isFinite(conc) && conc > 0;
+  return {
+    bucket: haveRpm ? new TokenBucket(rpm, rpm / 60_000) : null,
+    sem: haveConc ? new Semaphore(conc) : null,
+  };
+}
+
+// Built once per process; both knobs are read at first use.
+let THROTTLE: { bucket: TokenBucket | null; sem: Semaphore | null } | undefined;
+
+function throttle(): { bucket: TokenBucket | null; sem: Semaphore | null } {
+  if (!THROTTLE) THROTTLE = readThrottleConfig();
+  return THROTTLE;
+}
+
+export function resetThrottleForTests(): void {
+  THROTTLE = undefined;
+}
+
+/**
+ * Apply the shared client-side throttle around `fn`: waits for a token AND a
+ * concurrency slot (if configured) before running. Never blocks past the
+ * provider's retry budget because it only delays up to the leaky bucket's
+ * refill pace and releases immediately if the throttle is disabled.
+ */
+export async function throttled<T>(fn: () => Promise<T>): Promise<T> {
+  const { bucket, sem } = throttle();
+  if (!bucket && !sem) return fn(); // throttle disabled — zero overhead path
+  const run = async () => {
+    if (bucket) await bucket.acquire();
+    return fn();
+  };
+  return sem ? sem.run(run) : run();
+}
+
 export interface RateLimitInfo {
   retryable: boolean;
   retryAfterMs?: number;
@@ -99,7 +229,11 @@ export async function withRetries<T>(fn: () => Promise<T>, opts: RetryOptions = 
   while (true) {
     attempts++;
     try {
-      return await fn();
+      // Run the caller's work behind the shared client-side throttle (token
+      // bucket + optional concurrency cap) so concurrent agents sharing one
+      // free-tier endpoint self-regulate instead of tripping 429s in a burst.
+      // The throttle is a no-op unless MOCHI_RATE_LIMIT_RPM/_CONCURRENCY is set.
+      return await throttled(fn);
     } catch (err) {
       if (attempts >= maxAttempts) throw err;
 

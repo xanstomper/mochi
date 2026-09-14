@@ -78,6 +78,7 @@ Implemented:
 - Full-text session history in SQLite+FTS5 (`mochi session list` / `mochi session search`)
 - Recurring agent jobs on a schedule (`mochi daemon cron add|list|remove`)
 - Credential pools: multi-key rotation on 401/429/403
+- Shared client-side rate throttle: leaky-bucket RPM + concurrency cap so concurrent agents/sessions self-regulate a free-tier endpoint instead of tripping 429s in a burst (`MOCHI_RATE_LIMIT_RPM`, `MOCHI_RATE_LIMIT_CONCURRENCY`)
 - Instant per-file diagnostics (TS LanguageService + Python) after every edit
 - Background tasks: async shell (`shell` with `background:true`) + result delivery
 - Name-addressed whole-symbol edit (`replace_symbol` via the code symbol index)
@@ -204,6 +205,35 @@ The `subagent` tool lets the model delegate a self-contained subtask to a fresh
 child agent that shares the run's budget, read cache, and workspace, returning a
 summary. Delegation is one level deep (children cannot spawn grandchildren) to
 bound runaway fan-out.
+
+### Client-side rate throttling (concurrent agents)
+
+Every model call already retries transient failures (429/5xx/timeout) with
+exponential backoff honoring `Retry-After` and rotating pooled keys. But when
+several processes, sessions, or sub-agents share **one free-tier endpoint**, they
+can trip rate limits *faster* than retry recovery can keep up. A lightweight
+leaky-bucket throttle placed ahead of the wire lets concurrent agents
+self-regulate the burst so they collectively land under the provider's RPM
+ceiling instead of hammering it. Retries then absorb only the residual jitter.
+
+The throttle is a single process-global token bucket that `withRetries` consults
+before each request. It is **opt-in** (a no-op by default, so single-agent runs
+keep their current latency):
+
+```bash
+# Cap request rate at ~10 calls/minute
+MOCHI_RATE_LIMIT_RPM=10 mochi "..."
+
+# Also cap simultaneous in-flight requests to 2 (e.g. multiple Terminus sessions)
+MOCHI_RATE_LIMIT_CONCURRENCY=2 mochi "..."
+
+# Typical free-tier hardening when driving several agents at once:
+MOCHI_RATE_LIMIT_RPM=20 MOCHI_RATE_LIMIT_CONCURRENCY=3 mochi daemon start
+```
+
+The bucket never blocks past the provider's own retry budget: it only delays up
+to the configured refill pace, and the whole throttle is bypassed when neither
+env var is set.
 
 ## Agent profiles
 

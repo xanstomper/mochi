@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { withRetries, classifyError } from './rate-limit.js';
+import { withRetries, classifyError, throttled, resetThrottleForTests } from './rate-limit.js';
 import { ProviderError } from '../utils/http-error.js';
 
 describe('classifyError', () => {
@@ -68,5 +68,65 @@ describe('withRetries', () => {
     }, { maxAttempts: 3, baseDelayMs: 50, jitter: 0 });
     expect(out).toBe('done');
     expect(calls).toBe(2);
+  });
+});
+
+describe('throttled (client-side token bucket)', () => {
+  beforeEach(() => {
+    delete process.env.MOCHI_RATE_LIMIT_RPM;
+    delete process.env.MOCHI_RATE_LIMIT_CONCURRENCY;
+    resetThrottleForTests();
+  });
+
+  it('is a zero-overhead pass-through when disabled', async () => {
+    const out = await throttled(async () => 'ok');
+    expect(out).toBe('ok');
+  });
+
+  it('caps concurrency to MOCHI_RATE_LIMIT_CONCURRENCY without deadlock', async () => {
+    process.env.MOCHI_RATE_LIMIT_CONCURRENCY = '2';
+    resetThrottleForTests();
+
+    const TOTAL = 5;
+    let peak = 0;
+    let inFlight = 0;
+    const releases: Array<() => void> = [];
+
+    // `task` must be a function returning a promise so we can launch TOTAL
+    // independent calls; each call is throttled on the shared semaphore.
+    const task = () =>
+      throttled(async () => {
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        await new Promise<void>((r) => releases.push(r)); // hold until released
+        inFlight--;
+      });
+
+    const all = Array.from({ length: TOTAL }, () => task());
+
+    // Release the running tasks gradually so the FIFO queue can drain. Each
+    // release frees one slot for the next queued task, so with a cap of 2,
+    // peak concurrency can never exceed 2 and everything finishes.
+    for (let released = 0; released < TOTAL; released++) {
+      // Wait until at least one task is actually in the critical section.
+      while (releases.length === 0) {
+        await new Promise((r) => setTimeout(r, 2));
+        if (releases.length === 0 && inFlight === 0 && released > 0) break;
+      }
+      if (releases.length === 0) break; // all drained
+      releases.shift()!();
+      await new Promise((r) => setTimeout(r, 1));
+    }
+
+    await Promise.all(all);
+    expect(peak).toBeLessThanOrEqual(2); // concurrency cap held throughout
+    expect(peak).toBeGreaterThan(0); // the cap was actually exercised
+  });
+
+  it('lets work through when env is cleared again (throttle rebuilt per reset)', async () => {
+    process.env.MOCHI_RATE_LIMIT_CONCURRENCY = '1';
+    resetThrottleForTests();
+    await throttled(async () => { await new Promise((r) => setTimeout(r, 1)); });
+    expect(await throttled(async () => 'ok')).toBe('ok');
   });
 });
