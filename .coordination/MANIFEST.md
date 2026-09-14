@@ -86,3 +86,20 @@ ask). Zero overlap with A/B/C. Touch ONLY `src/features/*`, CLI wiring, docs.
   throttle + test fix was already present in another session's view, so this commit
   just locks the canonical version. B/C/D: this fully closes the "rate limits &
   freezes" area; no further edits needed to rate-limit.*.
+
+- **2026-09-14 session:dolphin:** Skills discovery hardening DONE + committed
+  (`a09ff3f`): fixed `discoverSkills` budget no-op (now truly bounds the walk),
+  isolated `loadProjectSkills` from real user-skill leakage in tests, added 2 budget
+  tests, added additive `skills/rigorous-code-review/`. 25 skill tests green. Claimed
+  the "additional src/skills.ts B-slice"; no overlap with A/C/D.
+
+- **2026-09-14 session:octopus (Session D):** Cross-agent skill importer DONE +
+  committed. Built `src/features/skill-importer.ts` + test (8/8 green) and wired
+  `mochi import-skills <source> [--force]` / `mochi skills import` in cli.ts.
+  Imported the full Hermes skill tree into ~/.mochi/skills: 143 skills added
+  (safe-shell preserved), harness now loads 209 skills total (was ~4). Imports are
+  origin-marked (.origin), non-destructive (skip existing names unless --force),
+  carry references/, and surface via discoverSkills/formatSkillsForPrompt. Supports
+  any agentskills.io tree or git checkout dir (the "pull from GitHub" ask). See
+  commit bc67e0b (skill-importer + tests rode in 449dc6e, cli wiring in bc67e0b).
+  Full `tsc --noEmit` clean across all sessions' changes (exit 0).
