@@ -124,3 +124,12 @@ ask). Zero overlap with A/B/C. Touch ONLY `src/features/*`, CLI wiring, docs.
   identifiers with validation diags (commit `7a39ffe`). Combined discovery check:
   209 bundled+imported skills within default budget. Full-suite integration run in
   progress; targeted skill+cognitive tests 41 green.
+
+- **2026-09-14 session:octopus (Session D) follow-up:** import-skills now supports
+  remote git sources (`github:owner/repo`, `git+<url>`, or any `.git` URL) via
+  shallow-clone into ~/.mochi/skill-repo-cache (reused on later imports, `--update`
+  refreshes). Fixed an async-clone race (execFile clone is now awaited). 11 importer
+  tests green (added isGitSourceSpec + local file:// bare-repo clone coverage) and a
+  full `tsc --noEmit` is clean. Committed (staged D files swept into 1400f64/others
+  by the shared-index race; net present in HEAD). Remaining open area: Workstream C
+  (harness/context — src/context.ts, prompt/, retrieval.ts) has no landed code yet.
