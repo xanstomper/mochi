@@ -156,7 +156,9 @@ function withCapabilityGate(provider: RawProvider, config: ModelConfig, resolved
       throw new Error(`Provider ${config.provider} is marked dead (${st.record?.lastError ?? 'previous terminal failure'}). Skipping; re-probe after cooldown.`);
     }
     if (st.status === 'cooldown') {
-      throw new Error(`Provider ${config.provider} is cooling down after failures. Try again shortly. (${st.record?.lastError ?? ''})`);
+      const waitMs = st.record?.cooldownUntil ? Math.max(0, st.record.cooldownUntil - Date.now()) : undefined;
+      const wait = waitMs !== undefined ? ` Try again in ~${(Math.round(waitMs / 100) / 10)}s.` : ' Try again shortly.';
+      throw new Error(`Provider ${config.provider} is cooling down after failures.${wait} (${st.record?.lastError ?? ''})`);
     }
     return reg;
   };
@@ -169,8 +171,17 @@ function withCapabilityGate(provider: RawProvider, config: ModelConfig, resolved
       }
       reg.record(key, { ok: true, check: 'chat' });
     } catch (err) {
-      reg.record(key, { ok: false, error: err instanceof Error ? err.message : String(err), check: 'chat' });
-      if (isPermanent(err)) reg.markDead(key, err instanceof Error ? err.message : String(err));
+      // A local abort (our own stall-guard watchdog tearing down a slow
+      // free-tier stream, or the operator cancelling) is NOT a provider health
+      // signal. Recording it as a failure (reg.record ok=false) escalates the
+      // capability cooldown and can poison a provider that is merely SLOW right
+      // now — the root cause of Mochi's recurring "Operation was aborted" +
+      // growing-cooldown freezes. Skip the registry penalty for aborts; still
+      // rethrow so the caller/withRetries can treat it as transient.
+      if (!isAbort(err)) {
+        reg.record(key, { ok: false, error: err instanceof Error ? err.message : String(err), check: 'chat' });
+        if (isPermanent(err)) reg.markDead(key, err instanceof Error ? err.message : String(err));
+      }
       throw err;
     }
   }
@@ -182,14 +193,40 @@ function withCapabilityGate(provider: RawProvider, config: ModelConfig, resolved
       reg.record(key, { ok: true, check: 'chat' });
       return result;
     } catch (err) {
-      reg.record(key, { ok: false, error: err instanceof Error ? err.message : String(err), check: 'chat' });
-      if (isPermanent(err)) reg.markDead(key, err instanceof Error ? err.message : String(err));
+      if (!isAbort(err)) {
+        reg.record(key, { ok: false, error: err instanceof Error ? err.message : String(err), check: 'chat' });
+        if (isPermanent(err)) reg.markDead(key, err instanceof Error ? err.message : String(err));
+      }
       throw err;
     }
   }
 
   return { streamChat, chat };
 }
+
+/**
+ * True when the error is a LOCAL abort (our signal was aborted by the stall-guard
+ * watchdog or the caller), vs. a genuine provider/transport failure. Detection:
+ * the DOM AbortError name, a Node fetch abort wrapping it, or a transport abort
+ * code. These are transient-by-nature and must not poison provider cooldowns.
+ */
+function isAbort(err: unknown): boolean {
+  const name = (err as { name?: string })?.name;
+  if (name === 'AbortError') return true;
+  if (err instanceof Error && err.message && /abort/id.test(err.message)) return true;
+  // Walk the cause chain for an abort wrapping a code like 'ABORT_ERR' / 'UND_ERR_ABORTED'.
+  let cur: unknown = err;
+  let depth = 0;
+  while (cur && depth < 6) {
+    const code = (cur as { code?: unknown })?.code;
+    if (code === 'ABORT_ERR' || code === 'UND_ERR_ABORTED' || code === 'ECONNABORTED') return true;
+    cur = (cur as { cause?: unknown })?.cause;
+    depth++;
+  }
+  return false;
+}
+/** Test seam: keeps the abort classifier re-usable and unit-testable. */
+export { isAbort };
 
 function isPermanent(err: unknown): boolean {
   if (err && typeof err === 'object' && 'cause' in err) {

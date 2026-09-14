@@ -48,4 +48,17 @@ describe('router capability gate', () => {
     expect(typeof provider.streamChat).toBe('function');
     expect(readdirSync(dir).length).toBe(0);
   });
+
+  it('isAbort classifies stall-guard aborts as abort (transient, not provider failure)', async () => {
+    const { isAbort } = await import('./router.js');
+    // Our openai stall-guard aborts via signal.abort() -> DOMException 'AbortError'.
+    expect(isAbort(new DOMException('The operation was aborted.', 'AbortError'))).toBe(true);
+    // Node fetch wraps aborts similarly.
+    expect(isAbort(Object.assign(new Error('This operation was aborted'), { name: 'AbortError', code: 'ABORT_ERR' }))).toBe(true);
+    expect(isAbort(new Error('fetch failed: UND_ERR_ABORTED'))).toBe(true);
+    // A genuine provider/transport failure must NOT be treated as an abort.
+    expect(isAbort(new Error('rate limited, retry later'))).toBe(false);
+    expect(isAbort(new Error('504 Gateway Timeout'))).toBe(false);
+    expect(isAbort(new Error('ECONNREFUSED connect 127.0.0.1:1'))).toBe(false);
+  });
 });
