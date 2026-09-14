@@ -85,3 +85,15 @@ penalty for aborts (AbortError / ABORT_ERR / UND_ERR_ABORTED / transport abort)
 yet still rethrows so withRetries treats it as transient. Real failures
 (ECONNREFUSED, 5xx, auth) still escalate cooldowns. Combined with the earlier
 shared throttle (5884f3f), Workstream A (rate-limit/freeze) is CLOSED.
+
+## session:dolphin — integration pass (cont.)
+- Committed `7a39ffe` "fix(skills): correct uppercase names in bundled cognitive
+  skills". The 4 bundled cognitive skills declared uppercase frontmatter names
+  (ANCHOR/DOX/OWL/SISPIS) which violated the lowercase validator, so they were
+  silently discovered only under uppercase identifiers + produced validation
+  diagnostics. Renamed to the lowercase catalog identifiers
+  (cognitive-anchor/dox/owl/sispis). Discovery now clean, 0 uppercase diags.
+- Integration check: combined discovery of bundled (~68) + Session D's 143
+  imported user skills = 209 skills within default budget; only benign diag remains
+  (a description-less README.md in the user tree). Cognitive + skill tests 41 green.
+- Full-suite integration run in progress as the coordinator's verification step.
