@@ -46,6 +46,11 @@ export interface FakeScriptResponse {
    *  transport error ("terminated" / ECONNRESET) mid-generation — the shape
    *  that production surfaces as "The operation was aborted". */
   dropConn?: boolean;
+  /** Custom responder: return a full response computed FROM THE REQUEST BODY.
+   *  When set on a scripted entry it wins over content/toolCalls and is only
+   *  consumed when the router picks this entry (lets benches route by shape,
+   *  not call order). */
+    respondFn?: (body: any) => Omit<FakeScriptResponse, 'respondFn'>;
 }
 
 /** Convert the scripted tool call into the shared encoder's shape. */
@@ -86,7 +91,8 @@ export async function startFakeOpenAI(script?: FakeScriptResponse[]): Promise<Fa
         return;
       }
       requests.push({ body: JSON.parse(body || '{}') });
-      const resp = queue.length ? queue.shift()! : { ...defaultResp };
+      let resp = queue.length ? queue.shift()! : { ...defaultResp };
+      if (resp.respondFn) resp = { ...resp.respondFn(JSON.parse(body || '{}')) };
 
       if (resp.error) {
         res.statusCode = resp.error.status;

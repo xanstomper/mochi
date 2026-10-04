@@ -1,0 +1,19 @@
+{
+  "date": "2026-10-04T10:48:52.577Z",
+  "tasks": 5,
+  "off": {
+    "modelCalls": 5,
+    "tokens": 6000,
+    "wallMs": 68,
+    "avgScore": 10
+  },
+  "on": {
+    "modelCalls": 25,
+    "tokens": 30000,
+    "wallMs": 87,
+    "avgScore": 10
+  },
+  "qualityDelta": 0,
+  "callOverhead": 20,
+  "verdict": "PARITY at 20 extra calls (+0 rubric): on an identical-quality provider, the engine's 3-candidate + verifier structure adds COST, not quality — diversity only pays when candidate responses actually differ (real models, not a scripted constant). Honest verdict: planning-quality gain UNPROVEN; the branch-racer execution half (killing bad branches before they touch the tree) is the remaining unmeasured source of value."
+}

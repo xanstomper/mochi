@@ -390,6 +390,14 @@ export class Runtime {
   }
 
   async runPrompt(prompt: string, opts?: { sessionId?: string }): Promise<string> {
+    const r = await this.runPromptDetailed(prompt, opts);
+    return r.summary;
+  }
+
+  /** Structured one-shot run: like runPrompt but returns the goal status,
+   *  stop reason, and stats so headless consumers (`--json`, CI exit codes)
+   *  can branch on real outcomes instead of parsing prose. */
+  async runPromptDetailed(prompt: string, opts?: { sessionId?: string }): Promise<{ summary: string; status: string; stopReason?: string; success: boolean; tokensUsed: number; costUsd: number; durationMs: number; goalId: string; filesModified: string[] }> {
     if (this.abortController.signal.aborted) this.resetAbort();
     if (opts?.sessionId) {
       this.activeSessionId = opts.sessionId;
@@ -413,11 +421,22 @@ export class Runtime {
       const result = await this.goals.runGoal(goal, [task], [], this.abortSignal, sessionId);
       this.recordUsage(prompt, result);
       recorder.log({ t: Date.now(), kind: 'goal:summary', status: goal.status, tokensUsed: result.tokensUsed, costUsd: result.costUsd, durationMs: result.durationMs });
+      let summary = result.summary;
       if (this.config.planMode) {
         const plan = result.completedTasks.map((t) => t.output).filter((o) => o && o.trim()).join('\n\n');
-        if (plan) return `Goal ${goal.status}.\n\n${plan}`;
+        if (plan) summary = `Goal ${goal.status}.\n\n${plan}`;
       }
-      return result.summary;
+      return {
+        summary,
+        status: goal.status,
+        stopReason: result.failedTasks[0]?.attempts?.at(-1)?.failureReason,
+        success: result.success,
+        tokensUsed: result.tokensUsed,
+        costUsd: result.costUsd,
+        durationMs: result.durationMs,
+        goalId: goal.id,
+        filesModified: [...new Set(result.completedTasks.flatMap((t) => (t as any).filesModified ?? []))],
+      };
     } finally {
       recorder.close();
     }

@@ -110,6 +110,15 @@ export function createOpenAIProvider(config: ProviderConfig) {
         : {}),
       ...(() => {
         const rawEffort = String((options as any)?.reasoningEffort || process.env.MOCHI_REASONING || '').toLowerCase().trim();
+        if (rawEffort === 'off') {
+          // Provider-level minimal reasoning: omit reasoning_effort AND ask the
+          // endpoint to skip reasoning where supported (OpenRouter-style
+          // reasoning.exclude / reasoning: { enabled: false } tolerant shape).
+          return { reasoning_effort: 'low', reasoning: { enabled: false } } as any;
+        }
+        if (rawEffort === 'auto') {
+          return {}; // model-default — send nothing
+        }
         if (rawEffort === 'max' || rawEffort === 'extreme' || rawEffort === 'deep' || rawEffort === 'high' || rawEffort === 'hard') {
           return { reasoning_effort: 'high' };
         }

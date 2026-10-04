@@ -229,8 +229,8 @@ export function validateConfig(config: MochiConfig): string[] {
     problems.push('model.model is empty — set a default model');
   }
 
-  if (config.reasoning && !['low', 'medium', 'high', 'max'].includes(config.reasoning)) {
-    problems.push(`reasoning "${config.reasoning}" is invalid — must be "low", "medium", "high", or "max"`);
+  if (config.reasoning && !['low', 'medium', 'high', 'max', 'off', 'auto'].includes(config.reasoning)) {
+    problems.push(`reasoning "${config.reasoning}" is invalid — must be "off", "auto", "low", "medium", "high", or "max"`);
   }
 
   // Safety config ranges

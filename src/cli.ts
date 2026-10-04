@@ -1255,13 +1255,21 @@ async function main() {
     // the prompt and print the result instead of spewing escape codes.
     const isTTY = Boolean(process.stdin.isTTY && process.stdout.isTTY);
     if (flags.p || flags.print || !isTTY) {
-      const result = await runtime.runPrompt(prompt);
-      console.log(result);
+      const detailed = await runtime.runPromptDetailed(prompt);
+      if (flags.json) {
+        // Machine-readable output for scripts/CI: the full structured result.
+        console.log(JSON.stringify(detailed, null, 2));
+      } else {
+        console.log(detailed.summary);
+      }
+      // Exit code reflects the real outcome (CI can branch on it):
+      // 0 = task completed, 1 = task failed/aborted.
+      const code = detailed.success ? 0 : 1;
       // Non-interactive one-shot: exit explicitly once stdout has flushed.
       // runPrompt can leave handles alive (event bus, recorder, model keep-alive)
       // that would keep the process running forever even after work is done,
       // so don't rely on the event loop draining on its own.
-      process.stdout.write('\n', () => process.exit(0));
+      process.stdout.write('\n', () => process.exit(code));
     } else {
       await interactive(runtime, prompt);
     }
