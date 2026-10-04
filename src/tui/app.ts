@@ -1205,7 +1205,24 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         push('user', `/goal ${obj}`);
         push('goal', `Goal: ${obj}`);
         scheduleRender();
-        await run(async () => runtime.goal(obj), true);
+        await run(async () => {
+          // Structured run: task DAG + real stats, not just the flat summary.
+          // (`runtime.goal()` discards everything except the final text.)
+          const r = await runtime.runGoal(obj);
+          const lines: string[] = [`Goal ${r.goalId.slice(0, 8)} — ${r.status.toUpperCase()}`];
+          if (r.tasks.length > 1) {
+            lines.push('Tasks:');
+            r.tasks.forEach((t, i) => {
+              const done = t.status === 'done';
+              const failed = t.status === 'failed';
+              const glyph = done ? `${T.lime}✓${T.reset}` : failed ? `${T.error}✗${T.reset}` : `${T.grayDark}·${T.reset}`;
+              lines.push(`  ${glyph} ${i + 1}. ${t.title}${t.status ? ` ${T.grayDark}[${t.status}]${T.reset}` : ''}`);
+            });
+          }
+          lines.push(`${r.summary}`);
+          lines.push(`${T.grayDark}tokens ${r.tokensUsed} · $${r.costUsd.toFixed(4)} · ${Math.round(r.durationMs / 1000)}s${T.reset}`);
+          return lines.join('\n');
+        }, true);
       }
       return;
     }
@@ -1290,6 +1307,32 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     }
     if (line === '/skills' || line.startsWith('/skills ') || line === '/skill' || line.startsWith('/skill ')) {
       const specific = (line.startsWith('/skills ') ? line.slice(8) : line.startsWith('/skill ') ? line.slice(7) : '').trim();
+      if (specific === 'audit') {
+        // /skills audit — health view: counts, agent-created vs bundled,
+        // usage counters, last curator report. Proves the skill tree is
+        // ALIVE instead of just listing it.
+        await run(async () => {
+          const { loadAllSkills } = await import('../skills.js');
+          const { skills } = loadAllSkills(projectRoot);
+          const { scanSkills, defaultCuratorConfig, loadCuratorState } = await import('../skill-curator.js');
+          const cfg = defaultCuratorConfig();
+          const snap = scanSkills(runtime.cwd, cfg);
+          const st = loadCuratorState(runtime.cwd);
+          const agentCreated = snap.snapshots.filter((s) => s.agentCreated);
+          const archivedNote = snap.archive.length ? `${snap.archive.length} due for archive` : 'none due';
+          const lines = [
+            `Skills: ${skills.length} loaded (${agentCreated.length} agent-created, ${skills.length - agentCreated.length} bundled)`,
+            `Stale: ${snap.stale.length ? snap.stale.map((s) => s.name).join(', ') : 'none'} · Archive queue: ${archivedNote}`,
+            `Curator: ${st.paused ? 'paused' : 'active'} · ${st.runCount} runs${st.lastSummary ? ` · last: ${st.lastSummary}` : ''}`,
+            ``,
+            'Recently active agent-created skills:',
+            ...(agentCreated.sort((a, b) => b.lastUsedAt - a.lastUsedAt).slice(0, 8).map((s) =>
+              `  ${s.name}${s.category ? ` [${s.category}]` : ''} — ${s.patches} patches`)),
+          ];
+          return lines.join('\n');
+        });
+        return;
+      }
       if (specific) {
         const { loadAllSkills, readSkillBody } = await import('../skills.js');
         const { skills } = loadAllSkills(projectRoot);

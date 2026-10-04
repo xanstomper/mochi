@@ -73,10 +73,23 @@ export function renderSummary(doc: SummaryDocument, width = 80): string[] {
  *  `width` visible columns (chunks only at metric boundaries, never mid-ANSI). */
 export function renderMetricStrip(metrics: Array<{ label: string; value: string }>, width = 100): string[] {
   const sep = `${T.grayDark} · ${T.reset}`;
-  const cells = metrics.slice(0, 6).map((m) => ({
-    text: `${T.grayDark}${m.label}${T.reset} ${metricColor(m.label)}${m.value}${T.reset}`,
-    vis: m.label.length + 1 + m.value.length,
-  }));
+  const maxW = Math.max(12, width);
+  const cells = metrics.slice(0, 6).map((m) => {
+    let vis = m.label.length + 1 + m.value.length;
+    let value = m.value;
+    // A single cell must NEVER exceed the width (it would hard-wrap mid-ANSI
+    // in windowed panes). Clamp the value portion, keeping the label intact.
+    const cellMax = Math.max(8, maxW - m.label.length - 1);
+    if (m.label.length + 1 + value.length > cellMax) {
+      const keep = Math.max(1, cellMax - m.label.length - 1 - 1);
+      value = value.slice(0, keep) + '…';
+      vis = m.label.length + 1 + value.length;
+    }
+    return {
+      text: `${T.grayDark}${m.label}${T.reset} ${metricColor(m.label)}${value}${T.reset}`,
+      vis,
+    };
+  });
   const out: string[] = [];
   let cur: typeof cells = [];
   let curVis = 0;
@@ -88,7 +101,7 @@ export function renderMetricStrip(metrics: Array<{ label: string; value: string 
   };
   for (const c of cells) {
     const add = cur.length ? 3 + c.vis : c.vis; // " · ".length = 3
-    if (curVis + add > Math.max(12, width)) flush();
+    if (curVis + add > maxW) flush();
     cur.push(c);
     curVis += cur.length === 1 ? c.vis : 3 + c.vis;
   }

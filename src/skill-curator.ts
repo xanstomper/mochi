@@ -12,9 +12,9 @@
 // lessons / repeated failure patterns that look like a reusable procedure, it
 // flags them so the main loop can prompt the model to author a skill via the
 // skill_manage tool (auto skill creation, Hermes-faithful).
-import { readdirSync, existsSync, readFileSync, statSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
+import { readdirSync, existsSync, readFileSync, statSync, mkdirSync, writeFileSync, renameSync, rmdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { skillsRoot, archiveRoot, loadUsage, safeSlug, parseFrontmatter } from './skill-manager.js';
+import { skillsRoot, archiveRoot, loadUsage, saveUsage, safeSlug, parseFrontmatter } from './skill-manager.js';
 
 export interface CuratorConfig {
   enabled: boolean;
@@ -146,7 +146,72 @@ export interface CuratorOutput {
   agentCreated: number;
   stale: string[];
   archived: string[];
+  /** Near-duplicate merges performed when cfg.consolidate is on:
+   *  {kept, merged} skill name pairs (loser body appended to winner, loser
+   *  archived). Previously the `consolidate` config flag existed but was
+   *  never consumed — vaporware. */
+  consolidated: Array<{ kept: string; merged: string }>;
   reportPath: string;
+}
+
+/** Token-overlap similarity between two skill bodies (keywords ≥5 chars,
+ *  Jaccard over the keyword sets). Deliberately embeddings-free: cheap,
+ *  deterministic, good enough to catch same-procedure-different-title dupes. */
+export function skillSimilarity(a: string, b: string): number {
+  const kw = (s: string): Set<string> => {
+    const words = s.toLowerCase().replace(/[\x00-\x1f]/g, ' ').match(/[a-z][a-z0-9_-]{4,}/g) ?? [];
+    return new Set(words);
+  };
+  const ka = kw(a);
+  const kb = kw(b);
+  if (!ka.size || !kb.size) return 0;
+  let inter = 0;
+  for (const w of ka) if (kb.has(w)) inter++;
+  return inter / (ka.size + kb.size - inter);
+}
+
+/** Merge near-duplicate agent-created skills. The OLDER skill is kept (it has
+ *  the usage history); the newer body is appended under an "## Absorbed from"
+ *  heading, and the newer SKILL.md is archived. Only fires on ≥70% keyword
+ *  overlap, and never on pinned skills (the caller pre-filters those). */
+export function consolidateSkills(
+  snapshots: SkillSnapshot[],
+  cfg: CuratorConfig,
+): Array<{ kept: string; merged: string }> {
+  if (!cfg.consolidate) return [];
+  const out: Array<{ kept: string; merged: string }> = [];
+  // Oldest first so the kept skill is always the earlier one.
+  const sorted = [...snapshots].sort((a, b) => a.lastUsedAt - b.lastUsedAt);
+  const dead = new Set<string>();
+  for (let i = 0; i < sorted.length; i++) {
+    if (dead.has(sorted[i].name)) continue;
+    const bodyA = readFileSync(sorted[i].path, 'utf8');
+    for (let j = i + 1; j < sorted.length; j++) {
+      if (dead.has(sorted[j].name)) continue;
+      const bodyB = readFileSync(sorted[j].path, 'utf8');
+      if (skillSimilarity(bodyA, bodyB) < 0.7) continue;
+      // Absorb j into i: append its body, then archive j's directory.
+      try {
+        const absorbed = `\n\n## Absorbed from \`${sorted[j].name}\`\n\n${bodyB.trim()}\n`;
+        writeFileSync(sorted[i].path, bodyA.trimEnd() + absorbed, 'utf8');
+        const arc = join(archiveRoot(projectDirFor(sorted[i].path)), safeSlug(sorted[j].name), 'SKILL.md');
+        mkdirSync(dirname(arc), { recursive: true });
+        renameSync(sorted[j].path, arc);
+        // Leave no empty husk directory in the live tree.
+        try { rmdirSync(dirname(sorted[j].path)); } catch { /* non-empty or gone */ }
+        out.push({ kept: sorted[i].name, merged: sorted[j].name });
+        dead.add(sorted[j].name);
+      } catch { /* a failed merge must not kill the curator pass */ }
+    }
+  }
+  return out;
+}
+
+/** Recover the project dir from a skill path (…/.mochi/skills/... or …/skills/...). */
+function projectDirFor(skillPath: string): string {
+  const s = skillPath.split('/');
+  const idx = s.lastIndexOf('skills');
+  return idx > 0 ? s.slice(0, idx).join('/') : dirname(dirname(skillPath));
 }
 
 export function runCurator(projectDir: string, cfg: CuratorConfig): CuratorOutput {
@@ -162,11 +227,23 @@ export function runCurator(projectDir: string, cfg: CuratorConfig): CuratorOutpu
       archived.push(s.name);
     } catch { /* keep going */ }
   }
+  // Dedup pass runs on the survivors (post-archive). Skills the agent has
+  // USED (usage record) or CREATED this session are eligible; human/bundled
+  // skills are never auto-merged, and pinned skills are never merged away.
+  // Fresh-but-never-used agent skills still merge: near-duplicates usually
+  // come from re-authoring the same procedure in one session.
+  const pinned = new Set(loadCuratorState(projectDir).pinned ?? []);
+  const usage = loadUsage(projectDir);
+  const consolidateable = scanSkills(projectDir, cfg).snapshots.filter((s) =>
+    (s.agentCreated || usage.byName[s.name]?.agentCreated) && !archived.includes(s.name) && !pinned.has(s.name));
+  const consolidated = consolidateSkills(consolidateable, cfg);
+  for (const c of consolidated) archived.push(c.merged);
   const report = [
     `# Skill curator report (${new Date(now).toISOString()})`,
     `Scanned: ${snapshots.length} skills (${agentCreated.length} agent-created).`,
     `Stale: ${stale.map((s) => s.name).join(', ') || '(none)'}.`,
     `Archived: ${archived.join(', ') || '(none)'}.`,
+    consolidated.length ? `Consolidated: ${consolidated.map((c) => `${c.merged} → ${c.kept}`).join(', ')}.` : '',
     ``,
     'Agent-created skills (maintainable):',
     ...agentCreated.map((s) => `- ${s.name}${s.category ? ` [${s.category}]` : ''} — ${s.patches} patches, active`),
@@ -175,7 +252,7 @@ export function runCurator(projectDir: string, cfg: CuratorConfig): CuratorOutpu
   mkdirSync(reportDir, { recursive: true });
   const reportPath = join(reportDir, `skill-curator-${now}.md`);
   writeFileSync(reportPath, report, 'utf8');
-  return { scanned: snapshots.length, agentCreated: agentCreated.length, stale: stale.map((s) => s.name), archived, reportPath };
+  return { scanned: snapshots.length, agentCreated: agentCreated.length, stale: stale.map((s) => s.name), archived, consolidated, reportPath };
 }
 
 // ─── State (last-run time, pause, pin) — Hermes curator_state ────────────
