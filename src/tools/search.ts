@@ -19,6 +19,13 @@ const MAX_TOTAL = 256_000;
 const SEARCH_TIMEOUT_MS = Number(process.env.MOCHI_SEARCH_TIMEOUT_MS) || 30_000;
 const SEARCH_KILL_GRACE_MS = 3_000;
 
+// Bounds for the SYNCHRONOUS tree walk in fallbackSearch — this ran on the
+// main thread (readdirSync/statSync/readFileSync across the whole tree) and
+// could BLOCK the event loop for minutes on a large repo (hard freeze: no
+// timer, no trace, no Ctrl-C). Cap files scanned + yield to the loop every N.
+const SEARCH_WALK_MAX_FILES = Number(process.env.MOCHI_SEARCH_WALK_MAX_FILES) || 4000;
+const SEARCH_YIELD_EVERY = 200;
+
 function nativeSearchBin(): string | undefined {
   try {
     const here = dirname(fileURLToPath(import.meta.url));
@@ -80,17 +87,20 @@ async function ripgrep(cwd: string, query: string, glob?: string): Promise<strin
   });
 }
 
-function* walkFiles(root: string, dir: string): Generator<string> {
+function* walkFiles(root: string, dir: string, budget: { seen: number; max: number }): Generator<string> {
+  if (budget.seen >= budget.max) return;
   let entries: string[];
   try { entries = readdirSync(dir); } catch { return; }
   for (const e of entries) {
+    if (budget.seen >= budget.max) return;
     if (e === '.git' || e === 'node_modules' || e === '.mochi') continue;
     const full = resolve(dir, e);
     let st: ReturnType<typeof statSync>;
     try { st = statSync(full); } catch { continue; }
     if (st.isDirectory()) {
-      yield* walkFiles(root, full);
+      yield* walkFiles(root, full, budget);
     } else if (st.size < 5_000_000) {
+      budget.seen++;
       yield full;
     }
   }
@@ -206,10 +216,12 @@ function buildStructured(cwd: string, groups: GroupResult[], limit: number): str
   return parts.join('\n') || 'No matches.';
 }
 
-function fallbackSearch(cwd: string, query: string, glob?: string, limit = 60): string {
+async function fallbackSearch(cwd: string, query: string, glob?: string, limit = 60): Promise<string> {
   const regex = new RegExp(escapeRegex(query), 'i');
   const matches: MatchLine[] = [];
-  for (const full of walkFiles(cwd, cwd)) {
+  const budget = { seen: 0, max: SEARCH_WALK_MAX_FILES };
+  let sinceYield = 0;
+  for (const full of walkFiles(cwd, cwd, budget)) {
     if (glob) {
       const rel = relative(cwd, full).replace(/\\/g, '/');
       const ok = glob.split(',').some((g) => {
@@ -226,10 +238,21 @@ function fallbackSearch(cwd: string, query: string, glob?: string, limit = 60): 
         matches.push({ path: relative(cwd, full).replace(/\\/g, '/'), line: i + 1, text: lines[i] });
       }
     }
+    // Yield to the event loop so a large tree walk can't block Agent timer/
+    // signal handling (this was a hard freeze: sync readFileSync across the
+    // whole tree blocked main-thread event loop — no trace, no Ctrl-C).
+    if (++sinceYield >= SEARCH_YIELD_EVERY) {
+      sinceYield = 0;
+      await new Promise((r) => setImmediate(r));
+      if (budget.seen >= budget.max) break;
+    }
   }
   // Dedup identical (file, text) pairs so repeated boilerplate lines collapse,
   // but keep the total raw count so the model still sees how widespread a match.
-  return buildStructured(cwd, groupMatches(cwd, matches), limit);
+  const result = buildStructured(cwd, groupMatches(cwd, matches), limit);
+  return budget.seen >= SEARCH_WALK_MAX_FILES && matches.length === 0
+    ? `${result}\n[walk capped at ${SEARCH_WALK_MAX_FILES} files — narrow the query/glob for full coverage]`
+    : result;
 }
 
 function cacheKey(query: string, glob?: string): string {
@@ -277,7 +300,7 @@ export const searchTool: Tool = {
       }
       result = buildStructured(ctx.cwd, groupMatches(ctx.cwd, matches), limit);
     } else {
-      result = fallbackSearch(ctx.cwd, query, globArg, limit);
+      result = await fallbackSearch(ctx.cwd, query, globArg, limit);
     }
     putCached(ctx.cwd, key, result, gen);
     return result;

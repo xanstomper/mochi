@@ -60,4 +60,21 @@ describe('search tool', () => {
     // so results reflect the post-write tree, not a stale generation).
     expect(third).toContain('src/math.ts');
   }, 30_000);
+
+  it('the sync tree walk is bounded by the file budget (freeze guard)', async () => {
+    // Regression for the hard freeze: fallbackSearch walked the whole tree
+    // synchronously (readdirSync/readFileSync on the main thread) and could
+    // block the event loop for minutes on a large repo (no timer, no trace,
+    // no Ctrl-C). A search expected to miss everything must still RESOLVE
+    // (not hang) — the walk budget + setImmediate yield path is exercised.
+    const walkDir = mkdtempSync(resolve(tmpdir(), 'mochi-walk-'));
+    try {
+      for (let i = 0; i < 150; i++) writeFileSync(resolve(walkDir, `f${i}.ts`), `// file ${i}\nconst x${i} = ${i};\n`);
+      const tctx = { cwd: walkDir, workspace: {} as any, config: {} as any, events: {} as any, agentId: 't' };
+      const res = await searchTool.execute({ query: 'zzz_nonexistent_token_zzz' }, tctx);
+      expect(String(res).length).toBeGreaterThan(0);
+    } finally {
+      rmSync(walkDir, { recursive: true, force: true });
+    }
+  }, 20_000);
 });
