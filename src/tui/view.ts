@@ -643,8 +643,10 @@ export function renderEntry(entry: RenderEntry, expandTools = false): string[] {
       // Terminal prose — no per-line gutters, markdown only.
       return renderMarkdown(text);
     case 'thought':
-      // Internal reasoning rendered as plain dim italic prose, no glyph spam.
-      return text.split('\n').filter((l) => l.trim()).map((l) => `  ${T.dim}${T.italic}${T.gray}${l}${T.reset}`);
+      // Internal reasoning rendered as dim italic prose, no glyph spam.
+      // Gray alone (no T.dim stacking) — dim+gray on dark themes was
+      // literally unreadable (the "can't see the text" report).
+      return text.split('\n').filter((l) => l.trim()).map((l) => `  ${T.italic}${T.gray}${l}${T.reset}`);
     case 'tool':
       // Compact tool rows already include their own semantic glyph from cards.ts
       return text.split('\n').map((l) => `  ${l}`);

@@ -87,3 +87,66 @@ describe('GoalEngine', () => {
     expect(tasks[0].title).toContain('Say hello');
   });
 });
+
+describe('GoalEngine auto-resume', () => {
+  it('re-sends the prompt and completes after a mid-task model_error', async () => {
+    const resumeFake = await startFakeOpenAI([
+      {
+        // Route by request shape: pre-resume requests fail like a dead
+        // provider; the resume prompt (marker below) gets a clean answer.
+        respondFn: (body: any) => {
+          const msgs = JSON.stringify(body?.messages ?? []);
+          if (msgs.includes('Continue the task EXACTLY where you left off')) {
+            return { content: 'Resumed and finished the task.', finishReason: 'stop', completionTokens: 8 };
+          }
+          return { error: { status: 503, message: 'provider exploded mid-run' } };
+        },
+      } as any,
+    ]);
+    try {
+      const cfg = { ...config, model: { ...config.model, baseUrl: resumeFake.url } } as unknown as MochiConfig;
+      const dir = mkdtempSync(resolve(tmpdir(), 'mochi-resume-'));
+      const workspace = new Workspace(dir, '.mochi');
+      workspace.ensure();
+      const engine = new GoalEngine(cfg, workspace, new EventBus(), dir);
+      const goal = await engine.createGoal('answer only, no tools');
+      const task = createTask('Answer task', 'Say OK', { acceptanceCriteria: [] });
+      const result = await engine.runGoal(goal, [task]);
+      // The first run died model_error; the auto-resume re-sent the prompt
+      // with progress and the SAME task finished successfully.
+      expect(result.success).toBe(true);
+      expect(result.summary).toContain('1 done');
+      expect(result.summary).not.toContain('auto-resume');
+    } finally {
+      await resumeFake.close();
+    }
+  }, 30_000);
+
+  it('does NOT resume when the caller aborts mid-task', async () => {
+    // Stall the first response, abort from the caller mid-flight, and prove
+    // the run surfaces as aborted with NO auto-resume attempt afterwards.
+    const abortFake = await startFakeOpenAI([{ stall: true }]);
+    try {
+      const cfg = { ...config, model: { ...config.model, baseUrl: abortFake.url } } as unknown as MochiConfig;
+      const dir = mkdtempSync(resolve(tmpdir(), 'mochi-abort-'));
+      const workspace = new Workspace(dir, '.mochi');
+      workspace.ensure();
+      const probeEngine = new GoalEngine(cfg, workspace, new EventBus(), dir);
+      const goal = await probeEngine.createGoal('answer only, no tools');
+      const task = createTask('Answer task', 'Say OK', { acceptanceCriteria: [] });
+      const ac = new AbortController();
+      setTimeout(() => ac.abort(new Error('user cancel')), 400);
+      const logs: string[] = [];
+      const events = new EventBus();
+      events.on('agent:log', (e) => { logs.push(e.message); });
+      const engine2 = new GoalEngine(cfg, workspace, events, dir);
+      const result = await engine2.runGoal(goal, [task], [], ac.signal);
+      // Aborted runs surface as failure — cancelling stays cancelling.
+      expect(result.success).toBe(false);
+      // No resume attempt was made for an abort.
+      expect(logs.join('\n')).not.toContain('[auto-resume');
+    } finally {
+      await abortFake.close();
+    }
+  }, 30_000);
+});

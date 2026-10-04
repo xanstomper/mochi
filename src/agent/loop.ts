@@ -55,6 +55,7 @@ import { classifyContentOnly } from '../one-shot.js';
 import { buildMcpTools } from '../mcp/tools.js';
 import { preEditSnapshot as gitPreEditSnapshot, rollbackToSnapshot as gitRollback, type CheckpointResult } from '../git.js';
 import { applyToolOutputPolicy } from '../core/tool-output.js';
+import { scrubAnsiFragments } from '../tui/ansi-hygiene.js';
 import { nativeStripThinkTags } from '../native/core.js';
 import { LoopStateMachine } from './loop-state.js';
 import { scanDiffForHygiene, renderHygieneFindings, type HygieneFinding } from '../core/diff-hygiene.js';
@@ -775,18 +776,18 @@ Continue from 'Next:', do not redo completed progress.`,
                   if (partialMatch) {
                     const safeChunk = streamBuf.slice(0, streamBuf.length - partialMatch[0].length);
                     if (safeChunk) {
-                      this.events.emit({ type: 'message:chunk', content: safeChunk, agentId: this.id } as any);
+                      this.events.emit({ type: 'message:chunk', content: scrubAnsiFragments(safeChunk), agentId: this.id } as any);
                     }
                     streamBuf = partialMatch[0];
                     break;
                   } else {
-                    this.events.emit({ type: 'message:chunk', content: streamBuf, agentId: this.id } as any);
+                    this.events.emit({ type: 'message:chunk', content: scrubAnsiFragments(streamBuf), agentId: this.id } as any);
                     streamBuf = '';
                   }
                 } else {
                   const pre = streamBuf.slice(0, openIdx);
                   if (pre) {
-                    this.events.emit({ type: 'message:chunk', content: pre, agentId: this.id } as any);
+                    this.events.emit({ type: 'message:chunk', content: scrubAnsiFragments(pre), agentId: this.id } as any);
                   }
                   const isThought = openIdx === thoughtOpenIdx;
                   streamBuf = streamBuf.slice(openIdx + (isThought ? 9 : 7));
@@ -1092,7 +1093,9 @@ Continue from 'Next:', do not redo completed progress.`,
       if (response.toolCalls && response.toolCalls.length > 0) {
         sm.enter('tool-exec');
         sm.recordToolCalls(response.toolCalls.length);
-        this.context.addMessage({ role: 'assistant', content: response.content ?? '', tool_calls: response.toolCalls });
+        // Model-echoed ANSI junk (the model copying its own colored tool
+        // output) must not be enshrined in the context either.
+        this.context.addMessage({ role: 'assistant', content: scrubAnsiFragments(response.content ?? ''), tool_calls: response.toolCalls });
         // Plan mode: allow read-only research, but veto any mutating tool and
         // steer the model back to producing a plan. Every vetoed call still
         // gets a tool response (providers reject dangling tool_call_ids), and
@@ -1920,7 +1923,9 @@ Continue from 'Next:', do not redo completed progress.`,
     // head+tail whole lines, with the FULL output spilled to a temp file the
     // model can re-read. Replaces the old 6k-char fold that could lose the
     // one line the model needed with no recovery path.
-    const pol = applyToolOutputPolicy(result.output, { toolName: tc.function.name });
+    // ANSI hygiene FIRST: colored tool output (npm/git --color=always) in the
+    // context is what makes the model parrot "138;43,226m"-style junk back.
+    const pol = applyToolOutputPolicy(scrubAnsiFragments(result.output), { toolName: tc.function.name });
     const foldedOutput = pol.content;
     this.context.addMessage({ role: 'tool', tool_call_id: tc.id, content: foldedOutput, name: tc.function.name });
     this.events.emit({ type: 'tool:completed', tool: tc.function.name, result, agentId: this.id });

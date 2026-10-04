@@ -439,6 +439,53 @@ Return ONLY the JSON array, no markdown.`;
     await this.hooks.runAfter('after_task', { task: task.id });
   }
 
+  /** Auto-resume wrapper: when a run dies from a TRANSIENT stop (model_error,
+   *  max_iterations), re-send the original prompt with the agent's own last
+   *  summary ("continue where you left off") instead of failing the task.
+   *  User aborts ('aborted') and true loop-guards ('tool_loop') are NOT
+   *  retried — cancelling must stay cancelling. Bounded (default 2 resume
+   *  attempts, MOCHI_AUTO_RESUME_ATTEMPTS tunes it, 0 disables). */
+  private async runAgentWithAutoResume(
+    agent: InstanceType<typeof Agent>,
+    goal: Goal,
+    task: Task,
+    context: import('../context.js').ContextEngine,
+    abortSignal: AbortSignal,
+  ) {
+    const raw = Number(process.env.MOCHI_AUTO_RESUME_ATTEMPTS);
+    const maxResumes = Number.isFinite(raw) && raw >= 0 ? raw : 2;
+    let result = await agent.run(task);
+    let resumes = 0;
+    while (
+      !result.success &&
+      resumes < maxResumes &&
+      !abortSignal.aborted &&
+      (result.stopReason === 'model_error' || result.stopReason === 'max_iterations')
+    ) {
+      resumes++;
+      const reason = result.stopReason === 'model_error'
+        ? 'the model request failed mid-task (transient provider error)'
+        : 'the iteration/runtime budget ran out mid-task';
+      this.events.emit({
+        type: 'agent:log',
+        agentId: this.agentId(task),
+        message: `[auto-resume ${resumes}/${maxResumes}] task stopped mid-work (${reason}); re-sending prompt with progress so far.`,
+      });
+      const partial = (result.summary ?? '').trim().slice(0, 6_000);
+      const resumePrompt =
+        `Your previous run on this task was interrupted (${reason}), but your work so far is preserved.\n\n` +
+        (partial ? `Your last status summary was:\n<last_summary>\n${partial}\n</last_summary>\n\n` : '') +
+        `Continue the task EXACTLY where you left off. Do NOT redo work already on disk — inspect current file state first if unsure, then finish and verify the remaining work.\n\nORIGINAL TASK:\n${task.title}\n${task.description}`;
+      context.addMessage({ role: 'user', content: resumePrompt });
+      result = await agent.run(task);
+    }
+    if (resumes > 0 && result.stopReason !== 'completed') {
+      // Annotate the final summary so TUI/headless consumers can see the rescue.
+      result = { ...result, summary: `${result.summary}\n\n[auto-resume: ${resumes} resume attempt(s) after mid-task stop (${result.stopReason}).]` };
+    }
+    return result;
+  }
+
   private async runTask(goal: Goal, task: Task, abortSignal: AbortSignal, budget: BudgetEngine, extraContext: string[] = [], readCache?: ReadCache, sessionId?: string) {
     const profile = this.profiles.get(task.role) ?? this.profiles.get('coder')!;
     const modelProfile = profile.defaultModel ?? 'coding';
@@ -508,7 +555,7 @@ Return ONLY the JSON array, no markdown.`;
       verifyBaseline: this.runBaseline,
     });
 
-    const result = await agent.run(task);
+    const result = await this.runAgentWithAutoResume(agent, goal, task, context, abortSignal);
     // Persist the conversation to the searchable session store so
     // `mochi session search` finds past work and a resume can reconstruct
     // the exact prior conversation (Hermes insight).
