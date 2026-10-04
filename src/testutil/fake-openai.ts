@@ -28,10 +28,24 @@ export interface FakeScriptToolCall {
 
 export interface FakeScriptResponse {
   content?: string;
+  /** deepseek-style reasoning deltas streamed before/with content. */
+  reasoningContent?: string;
   toolCalls?: FakeScriptToolCall[];
   finishReason?: string;
   promptTokens?: number;
   completionTokens?: number;
+  /** Hold the response open without writing chunks or [DONE] — simulates a
+   *  provider that silently stalls (no data, no error). */
+  stall?: boolean;
+  /** Return an HTTP error instead of a completion (status code + message),
+   *  e.g. to trigger the failover/retry path. */
+  error?: { status: number; message: string };
+  /** Start the SSE response (status 200), write one content chunk, then
+   *  DESTROY the socket mid-stream. This is what a real provider outage
+   *  looks like on the wire: the client's reader.read() rejects with a
+   *  transport error ("terminated" / ECONNRESET) mid-generation — the shape
+   *  that production surfaces as "The operation was aborted". */
+  dropConn?: boolean;
 }
 
 /** Convert the scripted tool call into the shared encoder's shape. */
@@ -73,6 +87,39 @@ export async function startFakeOpenAI(script?: FakeScriptResponse[]): Promise<Fa
       }
       requests.push({ body: JSON.parse(body || '{}') });
       const resp = queue.length ? queue.shift()! : { ...defaultResp };
+
+      if (resp.error) {
+        res.statusCode = resp.error.status;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ error: { message: resp.error.message } }));
+        return;
+      }
+
+      if (resp.stall) {
+        // Simulate a silent provider hold: open a 200 SSE response, write
+        // nothing, and leave it open. The client must recover via its own
+        // stall guard — an unprotected caller hangs here forever.
+        res.statusCode = 200;
+        res.setHeader('content-type', 'text/event-stream');
+        return; // never write chunks, never call [DONE], never end
+      }
+
+      if (resp.dropConn) {
+        // Simulate a provider that dies MID-STREAM: one legit chunk, then
+        // socket destruction. The reader sees a truncated SSE body; Node's
+        // http client surfaces premature close as a transport error.
+        res.statusCode = 200;
+        res.setHeader('content-type', 'text/event-stream');
+        res.write(buildChatCompletion({
+          id: 'chatcmpl_dropconn',
+          content: 'partial',
+          finishReason: undefined,
+          usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+        }));
+        setTimeout(() => res.destroy(), 5);
+        return;
+      }
+
       const content = resp.content ?? '';
 
       // Delegate ALL wire encoding to the shared SSE encoder (the real outbound
@@ -82,6 +129,7 @@ export async function startFakeOpenAI(script?: FakeScriptResponse[]): Promise<Fa
       const sseBody = buildChatCompletion({
         id: `chatcmpl_${Math.random().toString(36).slice(2, 10)}`,
         content,
+        reasoningContent: resp.reasoningContent,
         toolCalls: resp.toolCalls?.map(toSSEToolCall),
         finishReason: resp.finishReason,
         usage: {

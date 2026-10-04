@@ -6,6 +6,7 @@ import type { Runtime } from '../runtime.js';
 import type { MochiEvent } from '../types.js';
 import { PROVIDERS, providerById } from '../providers.js';
 import { reduceEvent, trimTranscript, rewrapSummaries } from './state.js';
+import { describeProviderFailure } from '../model/provider-failure.js';
 import { wrap, visibleLen } from './wrap.js';
 import pkg from '../../package.json' with { type: 'json' };
 import { kvCache } from '../kv-cache.js';
@@ -771,6 +772,27 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     }
   }
 
+  /** stdout.write that survives a dead/resized TTY. crash.log shows
+   *  uncaughtException EIO (read/write) escaping renderFrame — the one crash
+   *  class the render-error try/catch can't reach. EIO/EBADF happen when the
+   *  pane closes or resizes mid-write; they are transient. Drop the frame,
+   *  back off briefly, and let the next scheduleRender() retry on the live
+   *  fd. Never let a frame write kill the session. */
+  let writeBackoffUntil = 0;
+  function safeWrite(payload: string): void {
+    if (Date.now() < writeBackoffUntil) return;
+    try {
+      process.stdout.write(payload);
+    } catch (e: unknown) {
+      const code = (e as NodeJS.ErrnoException)?.code ?? '';
+      if (code === 'EIO' || code === 'EBADF' || code === 'EPIPE') {
+        writeBackoffUntil = Date.now() + 250;
+        return; // frame lost, not fatal
+      }
+      throw e;
+    }
+  }
+
   function renderFrame() {
     const w = width();
     const h = height();
@@ -822,7 +844,17 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     // autocomplete dropdown floats above the status bar, centered on screen
     const dropItems = currentDropItems();
     if (dropItems.length && !state.menuActive) {
-      const dd = renderDropdown(dropItems.slice(0, 6).map((c) => ({ name: c.name, hint: c.hint })), state.dropSelected, w - indent);
+      const pageSize = 6;
+      const start = Math.max(0, Math.min(
+        state.dropSelected - pageSize + 1,
+        dropItems.length - pageSize,
+      ));
+      const visibleDropItems = dropItems.slice(start, start + pageSize);
+      const dd = renderDropdown(
+        visibleDropItems.map((c) => ({ name: c.name, hint: c.hint })),
+        state.dropSelected - start,
+        w - indent,
+      );
       const top = h - bottomRows - dd.length - 1;
       for (let i = 0; i < dd.length; i++) {
         const r = top + i;
@@ -981,7 +1013,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     const cursorRow = cTop + 1 + Math.max(0, cursorVisualRow - firstVisibleRow);
     const cursorCol = 4 + (beforeLines.length ? visibleLen(beforeLines[beforeLines.length - 1]) : 0);
     out += '\x1b[' + (cursorRow + 1) + ';' + (cursorCol + 1) + 'H' + SHOW;
-    process.stdout.write(out);
+    safeWrite(out);
     lastFrame = rows.slice();
     lastW = w;
     lastRenderAt = Date.now();
@@ -1446,7 +1478,27 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       const result = await fn();
       if (echo) push('assistant', result);
     } catch (e) {
-      push('error', e instanceof Error ? e.message : String(e));
+      // Provider failures get a clean one-liner instead of a raw error dump,
+      // and transient ones (cooldown/network/rate-limit) auto-retry ONCE after
+      // the suggested backoff before surfacing. Fatal errors surface as-is.
+      const raw = e instanceof Error ? e.message : String(e);
+      const pf = describeProviderFailure(e);
+      if (pf.kind === 'transient') {
+        push('system', `◌ ${pf.headline}`);
+        scheduleRender();
+        await new Promise((res) => setTimeout(res, Math.min(pf.retryAfterMs ?? 2_000, 15_000)));
+        try {
+          const result = await fn();
+          if (echo) push('assistant', result);
+          push('system', '✓ recovered');
+        } catch (e2) {
+          const raw2 = e2 instanceof Error ? e2.message : String(e2);
+          const pf2 = describeProviderFailure(e2);
+          push('error', pf2.kind === 'transient' ? `${pf2.headline} (still degraded — raw: ${raw2.slice(0, 160)})` : raw2.slice(0, 400));
+        }
+      } else {
+        push('error', raw.length > 200 ? `${pf.headline} (raw: ${raw.slice(0, 160)})` : raw);
+      }
     } finally {
       state.busy = false;
       stopSpinner();
@@ -1613,6 +1665,8 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   async function reasoningMenu() {
     const cur = runtime.getReasoning();
     const options: Array<{ level: import('../types.js').ReasoningLevel; label: string; desc: string }> = [
+      { level: 'off', label: 'Off', desc: 'Request disabled reasoning overhead where supported by the provider.' },
+      { level: 'auto', label: 'Auto', desc: 'Use model-default reasoning effort.' },
       { level: 'low', label: 'Low', desc: 'Fast & agile: minimal reasoning overhead, speedy tool executions.' },
       { level: 'medium', label: 'Medium', desc: 'Balanced: thoughtful analysis, careful edits, reliable verification.' },
       { level: 'high', label: 'High', desc: 'Deep cognitive analysis: edge cases, AST blast radius checking, multi-step verification.' },
@@ -1824,10 +1878,15 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     // Restore the tty BEFORE anything else: raw mode (no echo, no canonical
     // line processing) is a termios attribute that outlives the process, so
     // skipping this leaves the user's terminal looking frozen after exit.
-    process.stdin.setRawMode?.(false);
-    process.stdout.write(`${RESET}${SHOW}${ALT_EXIT}`);
-    for (const fn of cleanupFns) fn();
-    process.exit(0);
+    // Every restore step is individually guarded: crash.log shows
+    // "setRawMode failed with errno: 5" thrown FROM exit() on a dead tty —
+    // an unguarded throw here aborts the restore midway and the terminal is
+    // left raw + cursor-hidden + alt-screen = permanently frozen. A failing
+    // restore must never win over finishing the restore.
+    try { process.stdin.setRawMode?.(false); } catch { /* dead tty */ }
+    try { process.stdout.write(`${RESET}${SHOW}${ALT_EXIT}`); } catch { /* EPIPE */ }
+    try { for (const fn of cleanupFns) fn(); } catch { /* cleanup must not block exit */ }
+    try { process.exit(0); } catch { process.exitCode = 0; }
   }
 
   function onKey(buf: Buffer) {
@@ -1896,6 +1955,45 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
             }
           }
           continue;
+        }
+
+        if (state.dropActive) {
+          const items = currentDropItems();
+          if (items.length > 0 && (btn === 64 || btn === 65) && isPress) {
+            const delta = btn === 64 ? -1 : 1;
+            state.dropSelected = Math.max(0, Math.min(items.length - 1, state.dropSelected + delta));
+            lastFrame = [];
+            scheduleRender();
+            continue;
+          }
+          if (items.length > 0 && btn === 0 && isPress) {
+            const pageSize = 6;
+            const start = Math.max(0, Math.min(state.dropSelected - pageSize + 1, items.length - pageSize));
+            const visibleCount = Math.min(pageSize, items.length - start);
+            const h = height();
+            const statusRows = h >= 20 ? 3 : 2;
+            const innerW = Math.max(1, width() - 6);
+            const inputRows = state.input ? wrap(state.input, innerW).length : 1;
+            const composerRows = Math.min(Math.max(4, Math.floor(h / 3)), inputRows + 2);
+            const bottomRows = composerRows + statusRows + 1;
+            const dropTop = h - bottomRows - (visibleCount + 2) - 1;
+            const dropWidth = Math.min(width() - transcriptIndent(width()), 64);
+            const dropLeft = Math.max(0, Math.floor((width() - dropWidth) / 2));
+            const clickedCol = Number(sgrMouse[2]) - 1;
+            const itemOffset = row - 1 - (dropTop + 1);
+            const insideColumns = clickedCol > dropLeft && clickedCol < dropLeft + dropWidth - 1;
+            if (insideColumns && itemOffset >= 0 && itemOffset < visibleCount) {
+              state.dropSelected = start + itemOffset;
+              lastFrame = [];
+              scheduleRender();
+            }
+            continue;
+          }
+          // Never let any left-button press/release/drag leak into transcript
+          // selection while the palette overlay is open. SGR motion sets bit 32.
+          const baseButton = btn & 3;
+          const isMotion = (btn & 32) !== 0;
+          if (baseButton === 0 || isMotion) continue;
         }
 
         if (btn === 64 || btn === 65) {
@@ -2107,7 +2205,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       if (c === '\t') {
         const items = currentDropItems();
         if (items.length > 1 && state.input.startsWith('/')) {
-          state.dropSelected = (state.dropSelected + 1) % Math.min(items.length, 6);
+          state.dropSelected = (state.dropSelected + 1) % items.length;
         } else if (items.length === 1 && state.input.startsWith('/') && state.input.trim() !== items[0].name) {
           state.input = items[0].name + ' ';
           state.cursor = state.input.length;
@@ -2292,8 +2390,12 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       // Runs on EVERY exit path including hard crashes (uncaughtException →
       // process.exit). Raw mode and mouse/paste modes must be undone here or
       // the user's terminal is left broken ("frozen") after any crash.
-      process.stdin.setRawMode?.(false);
-      process.stdout.write(`${RESET}${SHOW}${ALT_EXIT}\x1b[?1000l\x1b[?1002l\x1b[?1006l` + BRACKET_PASTE_OFF);
+      // Individually guarded: on a dead tty (errno 5 / EPIPE) a throw here
+      // skips the remaining resets and the terminal stays frozen.
+      try { process.stdin.setRawMode?.(false); } catch { /* dead tty */ }
+      try {
+        process.stdout.write(`${RESET}${SHOW}${ALT_EXIT}\x1b[?1000l\x1b[?1002l\x1b[?1006l` + BRACKET_PASTE_OFF);
+      } catch { /* EPIPE on a dead pane */ }
     };
     process.on('exit', exitListener);
     // External signals (kill, terminal close) bypass the 'exit'-only restore:

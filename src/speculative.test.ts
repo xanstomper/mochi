@@ -51,6 +51,8 @@ describe('SpeculativeEngine', () => {
     expect(result.candidates).toHaveLength(3);
     expect(result.best?.strategy).toBe('inspect types');
     expect(result.best?.response).toContain('inferred types');
+    // Selection is not a measured score. Missing verifier scores stay absent.
+    expect(result.best?.score).toBeUndefined();
   });
 
   it('disables speculation when the budget is exhausted', async () => {

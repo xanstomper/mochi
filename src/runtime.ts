@@ -155,6 +155,8 @@ export class Runtime {
       raw === 'max' || raw === 'extreme' || raw === 'deep' ? 'max'
       : raw === 'high' || raw === 'hard' ? 'high'
       : raw === 'low' || raw === 'easy' ? 'low'
+      : raw === 'off' ? 'off'
+      : raw === 'auto' ? 'auto'
       : 'medium';
     this.config.reasoning = normalized;
     process.env.MOCHI_REASONING = normalized;

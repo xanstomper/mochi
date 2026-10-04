@@ -81,6 +81,7 @@ export function withFailover(chain: RawProvider[], primaryName: string): RawProv
   async function* streamChat(messages: ChatMessage[], tools: ToolDefinition[], options?: { temperature?: number; maxTokens?: number; signal?: AbortSignal }): AsyncGenerator<StreamChunk> {
     let lastErr: unknown;
     for (let i = 0; i < chain.length; i++) {
+      options?.signal?.throwIfAborted();
       let began = false;
       try {
         for await (const chunk of chain[i].streamChat(messages, tools, options)) {
@@ -89,6 +90,7 @@ export function withFailover(chain: RawProvider[], primaryName: string): RawProv
         }
         return;
       } catch (err) {
+        options?.signal?.throwIfAborted();
         lastErr = err;
         if (began) throw err; // mid-stream: never replay
       }
@@ -99,9 +101,11 @@ export function withFailover(chain: RawProvider[], primaryName: string): RawProv
   async function chat(messages: ChatMessage[], tools: ToolDefinition[], options?: { temperature?: number; maxTokens?: number; signal?: AbortSignal }): Promise<ModelResponse> {
     let lastErr: unknown;
     for (let i = 0; i < chain.length; i++) {
+      options?.signal?.throwIfAborted();
       try {
         return await chain[i].chat(messages, tools, options);
       } catch (err) {
+        options?.signal?.throwIfAborted();
         lastErr = err;
       }
     }

@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:net';
@@ -6,9 +6,15 @@ import { resolve } from 'node:path';
 import { createProvider, withFailover, resetCapabilityRegistry } from './router.js';
 import { loadConfig } from '../config.js';
 import { startFakeOpenAI } from '../testutil/fake-openai.js';
+import { createServer as createHttpServer } from 'node:http';
+import { once } from 'node:events';
+import type { AddressInfo } from 'node:net';
 import type { ModelConfig, StreamChunk, ModelResponse } from '../types.js';
 
-afterEach(() => resetCapabilityRegistry());
+afterEach(() => {
+  resetCapabilityRegistry();
+  vi.unstubAllEnvs();
+});
 
 /** Bind a server, note the port, close it. Later connects get a real
  *  ECONNREFUSED (not the special "bad port" error). */
@@ -39,6 +45,91 @@ function baseConfig(over: Partial<ModelConfig> = {}): ModelConfig {
 }
 
 describe('multi-provider failover', () => {
+  it.each(['stream', 'chat'] as const)('does not call any provider with an already cancelled signal (%s)', async (mode) => {
+    const controller = new AbortController();
+    const cancelled = new Error('cancelled before dispatch');
+    controller.abort(cancelled);
+    let calls = 0;
+    const raw = {
+      async *streamChat(): AsyncGenerator<StreamChunk> {
+        calls++;
+        yield { content: 'must not run' };
+      },
+      async chat(): Promise<ModelResponse> {
+        calls++;
+        return { content: 'must not run' } as ModelResponse;
+      },
+    };
+    const provider = withFailover([raw], 'test');
+    const options = { signal: controller.signal };
+    const result = mode === 'stream'
+      ? collect(provider.streamChat([], [], options))
+      : provider.chat([], [], options);
+    await expect(result).rejects.toBe(cancelled);
+    expect(calls).toBe(0);
+  });
+
+  it.each(['stream', 'chat'] as const)('does not start a fallback after caller cancellation (%s)', async (mode) => {
+    const controller = new AbortController();
+    const cancelled = new Error('operator stopped this request');
+    let fallbackCalls = 0;
+    const primary = {
+      async *streamChat(): AsyncGenerator<StreamChunk> {
+        controller.abort(cancelled);
+        throw cancelled;
+      },
+      async chat(): Promise<ModelResponse> {
+        controller.abort(cancelled);
+        throw cancelled;
+      },
+    };
+    const fallback = {
+      async *streamChat(): AsyncGenerator<StreamChunk> {
+        fallbackCalls++;
+        yield { content: 'must not run' };
+      },
+      async chat(): Promise<ModelResponse> {
+        fallbackCalls++;
+        return { content: 'must not run' } as ModelResponse;
+      },
+    };
+    const provider = withFailover([primary, fallback], 'test');
+    const options = { signal: controller.signal };
+    const result = mode === 'stream'
+      ? collect(provider.streamChat([], [], options))
+      : provider.chat([], [], options);
+    await expect(result).rejects.toBe(cancelled);
+    expect(fallbackCalls).toBe(0);
+  });
+
+  it('falls through when the primary stalls before yielding a chunk', async () => {
+    // Exercise a short configured header deadline, not an unrealistically
+    // short production timeout for reasoning models.
+    vi.stubEnv('MOCHI_MODEL_HEADERS_TIMEOUT_MS', '250');
+    const stalled = createHttpServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      // Keep the connection open without yielding model data.
+    });
+    stalled.listen(0, '127.0.0.1');
+    await once(stalled, 'listening');
+    const port = (stalled.address() as AddressInfo).port;
+    const fake = await startFakeOpenAI([{ content: 'recovered from stall', finishReason: 'stop' }]);
+    try {
+      const provider = createProvider(baseConfig({
+        baseUrl: `http://127.0.0.1:${port}/v1`,
+        failover: [{ provider: 'openai', baseUrl: fake.url, apiKey: 'local-test-key', model: 'fake-model' }],
+      }));
+      const started = Date.now();
+      const text = await collect(provider.streamChat([{ role: 'user', content: 'hi' }], []));
+      expect(text).toContain('recovered from stall');
+      expect(Date.now() - started).toBeLessThan(5_000);
+    } finally {
+      stalled.closeAllConnections();
+      stalled.close();
+      await fake.close();
+    }
+  }, 10_000);
+
   it('falls through to the fallback when the primary refuses connections', async () => {
     const dead = await deadUrl();
     const fake = await startFakeOpenAI([{ content: 'hello from fallback', finishReason: 'stop' }]);

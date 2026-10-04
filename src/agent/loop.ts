@@ -266,6 +266,9 @@ export class Agent {
   private selfReviewCount = 0;
   private lastCompletionAnswer = '';
   private sameAnswerStreak = 0;
+  /** Bounded retry budget for transient transport aborts when no fallback
+   *  model remains (reset on any successful model output). */
+  private transientAbortRetries = 0;
   /** Phase 5 (VNext): stuck-signal counters surfaced in the volatile state
    *  prompt so the model can see its own loop pattern and break it. */
   private nudgeInjections = 0;
@@ -569,6 +572,20 @@ Continue from 'Next:', do not redo completed progress.`,
       sm.enter('model-call');
       const activeProvider = this.pickProvider();
       let response;
+      // Per-invocation abort: every gather (primary AND retry) gets a fresh
+      // controller so a stall guard firing on ONE invocation can tear down
+      // only that network stream without killing the whole agent or the next
+      // retry. The controller is ALSO wired to the run's abort signal so a
+      // user Ctrl-C still aborts it.
+      let activeCallSignal = new AbortController();
+      const newCallController = () => {
+        const c = new AbortController();
+        const innerAbort = () => c.abort(this.abortSignal?.reason);
+        if (this.abortSignal?.aborted) c.abort(this.abortSignal.reason);
+        else this.abortSignal?.addEventListener('abort', innerAbort, { once: true });
+        activeCallSignal = c;
+        return c;
+      };
       const gatherStream = async (messages: any) => {
         const chunks: import('../types.js').StreamChunk[] = [];
         let inThinkTag = false;
@@ -585,6 +602,23 @@ Continue from 'Next:', do not redo completed progress.`,
         let maxRep = 0;
         let phraseBuf = '';
         const recentPhrases: string[] = []; // sliding window of last 20 phrases
+        // Cross-phrase cycle detection: the sliding window alone CANNOT catch
+        // a repeating loop of K>2 distinct phrases (e.g. an 8-phrase reasoning
+        // loop observed live at ~50 copies each — every phrase's in-window
+        // count stays ~2, far below maxRep >= 8). Track phrase->recency over a
+        // larger horizon instead: once a phrase re-occurs close behind ITS OWN
+        // previous occurrence (cyclePeriod small), the stream is cycling.
+        // The absolute per-phrase cap bounds long-window token burn even when
+        // the cycle period is large.
+        const lastSeenAt = new Map<string, number>(); // phrase -> phrase index
+        let phraseIdx = 0;
+        let minCyclePeriod = Number.POSITIVE_INFINITY;
+        const CYCLE_PERIOD_MAX = 12;  // loop of up to 12 distinct phrases detected
+        const CYCLE_REPS_REQUIRED = 4; // consecutive short-period recurrences
+        let cycleStreak = 0;
+        const PHRASE_ABS_CAP = 40;     // absolute repeats of any one phrase
+        const phraseTotal = new Map<string, number>();
+        const suppressReasoning = () => maxRep >= 3 || cycleStreak >= 2;
         // A single model generation can also degenerate WITHOUT repeating an
         // identical line: e.g. a weak model streams hundreds of tiny fragments
         // of "let me explore the repo…" (lots of entropy, no progress) and
@@ -604,19 +638,36 @@ Continue from 'Next:', do not redo completed progress.`,
 
         const activeReasoning = (this.config.reasoning || process.env.MOCHI_REASONING || 'max').trim().toLowerCase();
         sm.enter('stream-guard');
-        for await (const chunk of activeProvider.streamChat(messages, this.toolDefs, { temperature: 0.2, signal: this.abortSignal, reasoningEffort: activeReasoning as any })) {
+        for await (const chunk of activeProvider.streamChat(messages, this.toolDefs, { temperature: 0.2, signal: activeCallSignal.signal, reasoningEffort: activeReasoning as any })) {
           chunks.push(chunk);
           if (chunk.reasoningContent) {
-            this.events.emit({ type: 'agent:reasoning', content: chunk.reasoningContent, agentId: this.id });
-            // Reasoning loops (same block emitted hundreds of times) must feed
-            // the repetition guard too; they don't enter streamBuf otherwise.
             const rChunk = chunk.reasoningContent || '';
+            // Phrase tracking FIRST: reasoning loops must feed the repetition
+            // guard too, and when a loop is detected we must STOP emitting the
+            // flood to the TUI (the Oct-2 trace: 2030 reasoning events in 36s
+            // at ~56 events/sec from a model cycling the same 8 sentences).
+            let reasoningLooped = false;
             for (let i = 0; i < rChunk.length; i++) {
               const char = rChunk[i];
               phraseBuf += char;
               if (char === '\n' || char === ',' || char === '.') {
                 const phrase = phraseBuf.trim();
                 if (phrase.length >= 12) {
+                  phraseIdx++;
+                  const prevAt = lastSeenAt.get(phrase);
+                  if (prevAt !== undefined) {
+                    const period = phraseIdx - prevAt;
+                    if (period <= CYCLE_PERIOD_MAX) {
+                      cycleStreak++;
+                      if (period < minCyclePeriod) minCyclePeriod = period;
+                    } else {
+                      cycleStreak = 0;
+                    }
+                  }
+                  lastSeenAt.set(phrase, phraseIdx);
+                  const total = (phraseTotal.get(phrase) ?? 0) + 1;
+                  phraseTotal.set(phrase, total);
+                  if (total >= PHRASE_ABS_CAP) reasoningLooped = true;
                   recentPhrases.push(phrase);
                   if (recentPhrases.length > 20) {
                     const dropped = recentPhrases.shift()!;
@@ -628,6 +679,13 @@ Continue from 'Next:', do not redo completed progress.`,
                 }
                 phraseBuf = '';
               }
+            }
+            if (cycleStreak >= CYCLE_REPS_REQUIRED || reasoningLooped) {
+              looped = true;
+              break;
+            }
+            if (!suppressReasoning()) {
+              this.events.emit({ type: 'agent:reasoning', content: rChunk, agentId: this.id });
             }
           }
           if (chunk.content) {
@@ -660,6 +718,20 @@ Continue from 'Next:', do not redo completed progress.`,
               if (char === '\n' || char === ',' || char === '.') {
                 const phrase = phraseBuf.trim();
                 if (phrase.length >= 12) {
+                  phraseIdx++;
+                  const prevAt = lastSeenAt.get(phrase);
+                  if (prevAt !== undefined) {
+                    const period = phraseIdx - prevAt;
+                    if (period <= CYCLE_PERIOD_MAX) {
+                      cycleStreak++;
+                      if (period < minCyclePeriod) minCyclePeriod = period;
+                    } else {
+                      cycleStreak = 0;
+                    }
+                  }
+                  lastSeenAt.set(phrase, phraseIdx);
+                  const total = (phraseTotal.get(phrase) ?? 0) + 1;
+                  phraseTotal.set(phrase, total);
                   recentPhrases.push(phrase);
                   if (recentPhrases.length > 20) {
                     const dropped = recentPhrases.shift()!;
@@ -673,18 +745,19 @@ Continue from 'Next:', do not redo completed progress.`,
               }
             }
 
-            if (maxRep >= 8 || streamBytes >= MAX_STREAM_BYTES || chunks.length >= MAX_STREAM_CHUNKS || runawayFlagged) {
+            if (maxRep >= 8 || cycleStreak >= CYCLE_REPS_REQUIRED || streamBytes >= MAX_STREAM_BYTES || chunks.length >= MAX_STREAM_CHUNKS || runawayFlagged) {
               // High-confidence loop / runaway generation: stop streaming
-              // before it floods output.
+              // before it floods output. cycleStreak catches K>2-phrase cycles
+              // the sliding-window maxRep can never reach.
               looped = true;
               break;
             }
 
-            // Early-warning suppression: once a phrase has repeated 3+ times,
-            // the model is likely degenerating. Stop emitting chunks to the
-            // TUI so the user doesn't see identical lines, but
-            // keep collecting so the loop detector (maxRep >= 8) can trigger.
-            if (maxRep >= 3) {
+            // Early-warning suppression: once a phrase has repeated 3+ times
+            // (or a cycle is forming), the model is likely degenerating. Stop
+            // emitting chunks to the TUI so the user doesn't see identical
+            // lines, but keep collecting so the loop detector can trigger.
+            if (maxRep >= 3 || cycleStreak >= 2) {
               streamBuf = '';
               continue;
             }
@@ -792,10 +865,34 @@ Continue from 'Next:', do not redo completed progress.`,
       // hold (no chunks, no error) would otherwise freeze the agent mid-task
       // forever. Race the gather against a wall-clock timer so a silent stall
       // is surfaced as a normal retryable error instead of an infinite hang.
-      const MODEL_RESPONSE_TIMEOUT_MS = 180_000; // 3 min per model reply
+      //
+      // On timeout we abort the active stream's controller FIRST so the
+      // abandoned streamChat's
+      // network request is actually torn down (not left holding a socket while
+      // the loop moves on). This same bounded race is applied to the failover
+      // retry below — the retry previously ran UNBOUNDED, so a silent hold on
+      // the retry hung the agent forever, exactly the "freezes mid-task, never
+      // recovers" symptom.
+      const RAW_MODEL_TIMEOUT = Number(process.env.MOCHI_MODEL_RESPONSE_TIMEOUT_MS);
+      const MODEL_RESPONSE_TIMEOUT_MS = Number.isFinite(RAW_MODEL_TIMEOUT) && RAW_MODEL_TIMEOUT > 0
+        ? Math.max(1_000, RAW_MODEL_TIMEOUT)
+        : 180_000; // 3 min per model reply
+      // Race a gather against a wall clock; on timeout, abort the stream that
+      // invocation is reading from so the abandoned network request is torn
+      // down (not left holding a socket while the loop moves on) and surface
+      // a clean `__timedOut` marker instead of an infinite hang.
+      const boundedGather = async (messages: any) => {
+        newCallController(); // fresh controller per invocation
+        const stall = new Promise<{ __timedOut: true }>((r) => setTimeout(() => {
+          activeCallSignal.abort(new Error(`model_response_timeout_${MODEL_RESPONSE_TIMEOUT_MS}`));
+          r({ __timedOut: true });
+        }, MODEL_RESPONSE_TIMEOUT_MS));
+        const raced = await Promise.race([gatherStream(messages), stall]);
+        clearTimeout((stall as any)._t as any);
+        return raced;
+      };
       try {
-        const stall = new Promise<{ __timedOut: true }>((r) => setTimeout(() => r({ __timedOut: true }), MODEL_RESPONSE_TIMEOUT_MS));
-        const raced = await Promise.race([gatherStream(packet.messages), stall]);
+        const raced = await boundedGather(packet.messages);
         if ('__timedOut' in raced) {
           this.events.emit({ type: 'agent:log', agentId: this.id, message: `[model] no data for ${MODEL_RESPONSE_TIMEOUT_MS / 1000}s; aborting this response to avoid a mid-task stall.` });
           return this.finish(task, false, 'Model stream stalled (no response) — will not hang the task.', 'model_error');
@@ -804,7 +901,7 @@ Continue from 'Next:', do not redo completed progress.`,
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        
+
         // Smart backoff for rate limits (429) to avoid immediately burning the retry
         if (message.toLowerCase().includes('429') || message.toLowerCase().includes('rate limit')) {
           this.events.emit({ type: 'agent:log', agentId: this.id, message: `[rate-limit] API busy. Applying 10s backoff...` });
@@ -813,12 +910,29 @@ Continue from 'Next:', do not redo completed progress.`,
 
         await this.checkpointAndCompact('error');
         const retryPacket = this.context.buildPacket(this.toolDefs, task, repo);
-        
+
         try {
-          response = await gatherStream(retryPacket.messages);
+          // The retry gets the SAME bounded stall guard as the primary call.
+          // It previously ran UNBOUNDED, so a silent hold on the failover /
+          // retry hung the agent forever — exactly "freezes mid-task, never
+          // recovers".
+          const retryRaced = await boundedGather(retryPacket.messages);
+          if ('__timedOut' in retryRaced) {
+            this.events.emit({ type: 'agent:log', agentId: this.id, message: `[model] retry stalled ${MODEL_RESPONSE_TIMEOUT_MS / 1000}s; giving up on this response.` });
+            return this.finish(task, false, 'Model stream stalled on retry — will not hang the task. Try again or switch models.', 'model_error');
+          }
+          response = retryRaced;
         } catch (retryErr) {
           const rMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-          
+
+          // Caller cancellation (Ctrl-C / runtime shutdown) is never retried
+          // and never failed over: respect the reason and stop. Previously a
+          // user abort here surfaced as "Model request failed: The operation
+          // was aborted." with stop reason model_error.
+          if (this.abortSignal?.aborted) {
+            return this.finish(task, false, 'Run aborted by caller.', 'aborted');
+          }
+
           // Failover strategy for repeated rate limits: switch to an alternate model instead of dying
           if (rMsg.toLowerCase().includes('429') || rMsg.toLowerCase().includes('rate limit')) {
             const alt = this.pickAlternateModel();
@@ -828,7 +942,31 @@ Continue from 'Next:', do not redo completed progress.`,
               continue; // Restart the loop iteration with the new model
             }
           }
-          
+
+          // Transient transport aborts ("The operation was aborted",
+          // ECONNRESET, ETIMEDOUT, socket hang up, ...) used to die right
+          // here as model_error — 5 of 12 recent user traces ended this way
+          // minutes into real work. These are recoverable provider-side
+          // stream drops, NOT local stalls (those carry the
+          // model_response_timeout marker and are handled above): fail over
+          // to an alternate model, or retry the same model with backoff when
+          // every fallback has been tried. Both paths are bounded — the
+          // outer iteration cap plus the explicit 3-retry budget below.
+          if (!rMsg.includes('model_response_timeout') && /operation was aborted|terminated|premature close|econnreset|econnrefused|etimedout|fetch failed|socket hang up|network error/i.test(rMsg)) {
+            const alt = this.pickAlternateModel();
+            if (alt) {
+              this.events.emit({ type: 'agent:log', agentId: this.id, message: `[transient] transport abort ("${rMsg.slice(0, 60)}"). Failing over to ${alt}` });
+              this.setActiveModel(alt);
+              continue;
+            }
+            this.transientAbortRetries++;
+            if (this.transientAbortRetries <= 3) {
+              this.events.emit({ type: 'agent:log', agentId: this.id, message: `[transient] transport abort; retrying after backoff (${this.transientAbortRetries}/3)` });
+              await new Promise(r => setTimeout(r, 2500 * this.transientAbortRetries));
+              continue;
+            }
+          }
+
           return this.finish(task, false, `Model request failed: ${message}`, 'model_error');
         }
       }
@@ -855,6 +993,7 @@ Continue from 'Next:', do not redo completed progress.`,
       // Reset empty-response counter on any successful model output.
       if ((response.content && response.content.trim()) || response.toolCalls?.length) {
         this.emptyResponseCount = 0;
+        this.transientAbortRetries = 0;
       }
       
       // Reset stream-loop counter if the model successfully used a tool,
@@ -905,18 +1044,49 @@ Continue from 'Next:', do not redo completed progress.`,
       this.lastStrategy = response.toolCalls?.[0]?.function.name ?? response.content?.slice(0, 60) ?? '';
 
       // Anti-"same message" guard: if the model returns the exact same
-      // no-tool-call answer again without making file changes, finish immediately rather than looping.
-      if (!this.planMode && (!response.toolCalls || response.toolCalls.length === 0) && !this.fileChanged) {
+      // no-tool-call answer again, treat it as stagnation — NEVER as success.
+      // The old `!this.fileChanged` gate disabled this guard for the whole
+      // rest of the run once ANY file was edited — so a model that repeats
+      // the same two prose lines after its first edit burned every remaining
+      // iteration (~40s each on free providers ≈ "five minutes in, spitting
+      // the same two lines"). Semantics:
+      //   • first repeat  → inject a stop-repeating nudge, keep looping
+      //   • second repeat → finish as tool_loop (a repeated answer is failed
+      //     recovery, not a deliverable; a verification failure keeps
+      //     ownership of its own bounded loop with rollback)
+      //   • any tool call resets the streak (progress happened)
+      if (!this.planMode
+          && (!response.toolCalls || response.toolCalls.length === 0)
+          && (this.verifyCount === 0 || this.lastVerifyPassed)) {
         const text = (response.content ?? '').trim();
         if (text && text === this.lastCompletionAnswer) {
           this.sameAnswerStreak++;
-          if (this.sameAnswerStreak >= 1) {
-            return this.finish(task, true, text, 'completed');
+          if (this.planNudges > 0) {
+            return this.finish(task, false, 'No execution progress after a recovery nudge. Last reply:\n' + text, 'tool_loop');
           }
-        } else {
-          if (text) this.lastCompletionAnswer = text;
-          this.sameAnswerStreak = 0;
+          if (this.sameAnswerStreak >= 2) {
+            return this.finish(task, false, 'Stopped: the model repeated the same no-tool answer instead of working. Last reply:\n' + text, 'tool_loop');
+          }
+          this.context.addMessage({
+            role: 'system',
+            content: 'You just repeated your previous answer verbatim. Do NOT repeat it. Either call a tool to make real progress, or give a NEW final answer.',
+          });
+          this.events.emit({ type: 'agent:log', agentId: this.id, message: '[same-answer] verbatim repeat; nudging for real progress' });
+          continue;
         }
+        if (text) this.lastCompletionAnswer = text;
+        this.sameAnswerStreak = 0;
+      }
+
+      // Reset the same-answer streak on ANY tool execution round: tools are
+      // real progress, so "prose A -> tools -> prose A" (a legitimate interim
+      // summary repeated between tool batches) must NOT complete the task.
+      // The comment above previously promised this reset but the code never
+      // had it — a repeated post-tool recap finished the task as 'completed'
+      // with zero verification.
+      if (response.toolCalls?.length) {
+        this.sameAnswerStreak = 0;
+        this.lastCompletionAnswer = '';
       }
 
       if (response.toolCalls && response.toolCalls.length > 0) {
@@ -1081,7 +1251,13 @@ Continue from 'Next:', do not redo completed progress.`,
           // and no files were modified yet, nudge the model to execute the tool rather than
           // completing prematurely on conversational preamble.
           const expectsFiles = Boolean(task.fileScope && task.fileScope.length > 0);
-          if (expectsFiles && !this.planMode && taskKind !== 'chat' && this.planNudges < 1) {
+          // An execution preamble is not a deliverable, even when the planner
+          // omitted fileScope. Keep this narrow: substantive explanations and
+          // read-only findings must still be allowed to finish without edits.
+          const executionPreamble = ['implement', 'fix', 'refactor', 'test', 'document'].includes(taskKind)
+            && response.content.trim().length < 500
+            && /^(?:I(?:['’]ll| will| am going to)|Let me)\s+(?:inspect|check|read|explore|investigate|create|write|implement|fix|update|modify|start|begin)\b/i.test(response.content.trim());
+          if ((expectsFiles || executionPreamble) && !this.planMode && taskKind !== 'chat' && this.planNudges < 1) {
             this.planNudges++;
             this.context.addMessage({
               role: 'system',
@@ -1091,6 +1267,12 @@ Continue from 'Next:', do not redo completed progress.`,
             continue;
           }
 
+          // A differently worded completion cannot bypass a rejected execution
+          // preamble when no tools have run. Read-only evidence gathering remains
+          // eligible for legitimate no-change outcomes.
+          if (!this.planMode && this.planNudges > 0 && this.toolCallsTotal === 0) {
+            return this.finish(task, false, 'No execution evidence after a recovery nudge. Last reply:\n' + response.content, 'tool_loop');
+          }
           return this.finish(task, true, response.content, 'completed');
         }
         // Empty response: the model returned nothing (common with overloaded

@@ -98,6 +98,66 @@ describe('Phase 4: real-usage context accounting', () => {
 });
 
 describe('Phase 6: skill result caching', () => {
+  it('never substitutes a cached reminder when agent identity is unavailable', async () => {
+    resetSkillCache();
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-skill-anonymous-'));
+    const { mkdirSync, writeFileSync } = await import('node:fs');
+    const root = resolve(dir, '.mochi', 'skills', 'anonymous-test');
+    mkdirSync(root, { recursive: true });
+    writeFileSync(resolve(root, 'SKILL.md'), '---\nname: anonymous-test\ndescription: Missing identity regression\n---\n' + 'Instructions.\n'.repeat(150) + 'CRITICAL TAIL');
+    const ctx = { cwd: dir, config: {} } as any;
+    try {
+      const first = await skillTool.execute({ name: 'anonymous-test' }, ctx);
+      const second = await skillTool.execute({ name: 'anonymous-test' }, ctx);
+      expect(second).toBe(first);
+      expect(second).toContain('CRITICAL TAIL');
+    } finally {
+      resetSkillCache();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('gives a different agent the full skill rather than another agents reminder', async () => {
+    resetSkillCache();
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-skill-isolation-'));
+    const { mkdirSync, writeFileSync } = await import('node:fs');
+    const root = resolve(dir, '.mochi', 'skills', 'isolation-test');
+    mkdirSync(root, { recursive: true });
+    writeFileSync(resolve(root, 'SKILL.md'), '---\nname: isolation-test\ndescription: Agent isolation regression\n---\n' + 'Detailed instructions.\n'.repeat(150) + 'IMPORTANT FINAL STEP');
+    try {
+      const firstContext = { cwd: dir, config: {}, agentId: 'parent' } as any;
+      const childContext = { cwd: dir, config: {}, agentId: 'child' } as any;
+      const first = await skillTool.execute({ name: 'isolation-test' }, firstContext);
+      const child = await skillTool.execute({ name: 'isolation-test' }, childContext);
+      expect(child).toBe(first);
+      expect(child).toContain('IMPORTANT FINAL STEP');
+    } finally {
+      resetSkillCache();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  it('reloads edited skill instructions instead of returning a stale reminder', async () => {
+    resetSkillCache();
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-skill-refresh-'));
+    const { mkdirSync, writeFileSync } = await import('node:fs');
+    const root = resolve(dir, '.mochi', 'skills', 'refresh-test');
+    const path = resolve(root, 'SKILL.md');
+    mkdirSync(root, { recursive: true });
+    const header = '---\nname: refresh-test\ndescription: Cache refresh regression\n---\n';
+    const ctx = { cwd: dir, config: {} } as any;
+    try {
+      writeFileSync(path, header + 'OLD PROCEDURE\n'.repeat(200));
+      expect(await skillTool.execute({ name: 'refresh-test' }, ctx)).toContain('OLD PROCEDURE');
+      writeFileSync(path, header + 'UPDATED PROCEDURE\n'.repeat(200));
+      const updated = await skillTool.execute({ name: 'refresh-test' }, ctx);
+      expect(updated).toContain('UPDATED PROCEDURE');
+      expect(updated).not.toContain('OLD PROCEDURE');
+      expect(updated).not.toContain('loaded earlier this session');
+    } finally {
+      resetSkillCache();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
   it('counts loads and re-serves large skills from a shorter cache reminder', async () => {
     resetSkillCache();
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-skillcache-'));
@@ -109,7 +169,7 @@ describe('Phase 6: skill result caching', () => {
       '---', 'name: big-skill', 'description: test skill', '---',
       '# Big Skill', longBody,
     ].join('\n'));
-    const ctx = { cwd: dir, config: {} } as any;
+    const ctx = { cwd: dir, config: {}, agentId: 'skill-cache-test' } as any;
     const first = await skillTool.execute({ name: 'big-skill' }, ctx);
     const second = await skillTool.execute({ name: 'big-skill' }, ctx);
     expect(first).toContain('Step 0:');

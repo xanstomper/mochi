@@ -10,8 +10,9 @@
 //     are agent-created and tracks patch counts / last used, so a background
 //     curator can maintain ONLY those and never touch bundled/user skills.
 //   - Never auto-deletes: delete() archives into `.mochi/skills/.archive/`.
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, renameSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, renameSync, rmSync } from 'node:fs';
 import { dirname, join, basename } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { Tool } from './tools/types.js';
 
 /** Where agent-created + returned skills live, relative to the project dir. */
@@ -142,11 +143,67 @@ export interface CreateInput {
   body: string;
   category?: string;
 }
+export interface SkillQuality {
+  score: number;
+  passed: boolean;
+  strengths: string[];
+  missing: string[];
+}
+
+/** Deterministic production gate for generated procedural memory. */
+export function assessSkillQuality(description: string, body: string): SkillQuality {
+  // A heading only counts as substantive if it has at least one non-header
+  // content line before the next heading (or the end). A required section
+  // whose heading is immediately followed by another heading is EMPTY and must
+  // not satisfy the gate, even when the header text itself is present.
+  const sectionHasContent = (heading: RegExp): boolean => {
+    const lines = body.split(/\r?\n/);
+    let inSection = false;
+    for (const line of lines) {
+      if (/^#{1,3}\s/.test(line)) {
+        if (inSection) return false; // hit the NEXT heading with no content
+        inSection = heading.test(line);
+        continue;
+      }
+      if (inSection && line.trim()) return true; // substantive content line
+    }
+    return false; // reached end with no content after the heading
+  };
+
+  const checks = [
+    { label: 'When to use section with trigger conditions', points: 20, ok: sectionHasContent(/#{1,3}\s+(when to use|triggers?|use when)\b/i) },
+    { label: 'numbered procedure with at least 3 concrete steps', points: 25, ok: (body.match(/^\s*\d+[.)]\s+\S+/gm) ?? []).length >= 3 },
+    { label: 'Pitfalls or failure recovery section', points: 15, ok: sectionHasContent(/#{1,3}\s+(pitfalls?|failure|recovery|troubleshooting)\b/i) },
+    { label: 'Verification section with executable evidence', points: 25, ok: sectionHasContent(/#{1,3}\s+(verification|validate|testing)\b/i) && /(run|test|check|verify|exit|pass)/i.test(body) },
+    { label: 'specific description and substantial body', points: 15, ok: description.trim().length >= 24 && body.trim().length >= 240 },
+  ];
+  const strengths = checks.filter((c) => c.ok).map((c) => c.label);
+  const missing = checks.filter((c) => !c.ok).map((c) => c.label);
+  const score = checks.reduce((sum, c) => sum + (c.ok ? c.points : 0), 0);
+  return { score, passed: score >= 80 && missing.length <= 1, strengths, missing };
+}
+
+
 export interface WriteResult {
   ok: boolean;
   path?: string;
   error?: string;
   archived?: boolean;
+  quality?: SkillQuality;
+}
+
+function atomicWrite(path: string, content: string): void {
+  const staging = `${path}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(staging, content, { encoding: 'utf8', flag: 'wx' });
+    renameSync(staging, path);
+  } catch (error) {
+    // An exclusive-create collision belongs to another writer: leave it alone.
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+      try { rmSync(staging, { force: true }); } catch { /* preserve original error */ }
+    }
+    throw error;
+  }
 }
 
 /** Write (or overwrite across create/edit). Validated; returns errors rather
@@ -157,15 +214,19 @@ export function writeSkill(projectDir: string, input: CreateInput): WriteResult 
     if (!name) return { ok: false, error: 'name is required' };
     if (!input.description) return { ok: false, error: 'description is required' };
     if (!input.body || !input.body.trim()) return { ok: false, error: 'body is required' };
+    const quality = assessSkillQuality(input.description, input.body);
+    if (!quality.passed) {
+      return { ok: false, quality, error: `Skill quality gate failed (${quality.score}/100): ${quality.missing.join('; ')}` };
+    }
     const slug = safeSlug(name);
     const root = input.category
       ? join(skillsRoot(projectDir), safeSlug(input.category), slug)
       : join(skillsRoot(projectDir), slug);
     mkdirSync(root, { recursive: true });
     const target = join(root, 'SKILL.md');
-    writeFileSync(target, renderSkill({ name, description: input.description, category: input.category, body: input.body }), 'utf8');
+    atomicWrite(target, renderSkill({ name, description: input.description, category: input.category, body: input.body }));
     markUsed(projectDir, name, { category: input.category });
-    return { ok: true, path: target };
+    return { ok: true, path: target, quality };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
@@ -194,19 +255,31 @@ function findSkillFile(projectDir: string, name: string): ResolvedSkill | null {
 /** Patch a SKILL.md by replacing a substring — the curator's "improve the
  *  skill" path. Mirrors Hermes `patch` action. */
 export function patchSkill(projectDir: string, name: string, target: ResolvedSkill, oldString: string, newString: string, replaceAll = false): WriteResult {
+  if (oldString.length === 0) return { ok: false, error: 'old_string must be non-empty' };
   try {
     const text = readFileSync(target.path, 'utf8');
+    let next: string;
     if (replaceAll) {
       const split = text.split(oldString);
       if (split.length === 1) return { ok: false, error: 'old_string not found' };
-      writeFileSync(target.path, split.join(newString), 'utf8');
+      next = split.join(newString);
     } else {
       const idx = text.indexOf(oldString);
       if (idx === -1) return { ok: false, error: 'old_string not found' };
-      writeFileSync(target.path, text.slice(0, idx) + newString + text.slice(idx + oldString.length), 'utf8');
+      if (text.indexOf(oldString, idx + 1) !== -1) {
+        return { ok: false, error: 'Ambiguous patch: old_string must be unique; include more context or use replace_all.' };
+      }
+      next = text.slice(0, idx) + newString + text.slice(idx + oldString.length);
     }
+    const parsed = parseFrontmatter(next);
+    if (!parsed) return { ok: false, error: 'Patched skill has invalid frontmatter' };
+    const quality = assessSkillQuality(String(parsed.meta.description ?? ''), parsed.body);
+    if (!quality.passed) {
+      return { ok: false, quality, error: `Skill quality gate failed (${quality.score}/100): ${quality.missing.join('; ')}` };
+    }
+    atomicWrite(target.path, next);
     bumpPatch(projectDir, name);
-    return { ok: true, path: target.path };
+    return { ok: true, path: target.path, quality };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
@@ -284,14 +357,15 @@ export const skillManageTool: Tool = {
       if (!pf) return JSON.stringify({ ok: false, error: 'Existing skill has no frontmatter to edit' });
       const newDesc = args.description !== undefined ? String(args.description) : String(pf.meta.description ?? '');
       const newBody = args.body !== undefined ? String(args.body) : (pf.body || '');
-      writeSkill(projectDir, {
+      const r = writeSkill(projectDir, {
         name,
         description: newDesc,
         body: newBody,
         category: typeof pf.meta.category === 'string' ? pf.meta.category : undefined,
       });
+      if (!r.ok) return JSON.stringify(r);
       bumpPatch(projectDir, name);
-      return `Updated skill '${name}'.`;
+      return `Updated skill '${name}' (quality ${r.quality?.score ?? 0}/100).`;
     }
     if (action === 'patch') {
       if (args.old_string === undefined) return JSON.stringify({ ok: false, error: 'old_string is required for patch' });

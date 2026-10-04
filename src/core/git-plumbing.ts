@@ -1,6 +1,6 @@
-// Microsecond Git Plumbing Snapshots
+// Git plumbing snapshots
 // Uses low-level git tree objects (git write-tree / git read-tree)
-// for <5ms in-memory atomic state captures and instant zero-copy rollbacks.
+// for atomic state captures and rollback without moving HEAD.
 
 import { spawnSync } from 'node:child_process';
 
@@ -28,7 +28,7 @@ function runGit(cwd: string, args: string[]): { ok: boolean; stdout: string; std
   }
 }
 
-/** Stage current working tree in index and write tree object without moving HEAD (<5ms) */
+/** Stage the current working tree and write a tree object without moving HEAD. */
 export function writeTreeSnapshot(cwd: string, label = 'ephemeral'): TreeSnapshot | null {
   // 1. Stage tracked/untracked changes temporarily into index
   const addRes = runGit(cwd, ['add', '-A']);
@@ -45,7 +45,7 @@ export function writeTreeSnapshot(cwd: string, label = 'ephemeral'): TreeSnapsho
   };
 }
 
-/** Fast-restore working tree to a recorded tree snapshot in <5ms */
+/** Restore the working tree to a recorded tree snapshot. */
 export function restoreTreeSnapshot(cwd: string, treeSha: string): boolean {
   if (!treeSha || treeSha.length !== 40) return false;
 

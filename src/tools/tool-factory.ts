@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rename
 import { join, dirname, basename } from 'node:path';
 import { safeSlug } from '../skill-manager.js';
 import type { Tool, ToolContext } from './types.js';
+import { recordToolUsage, toolUsageLine } from './tool-usage.js';
 import type { ToolDefinition } from '../types.js';
 
 // ─── Paths ───────────────────────────────────────────────────────────────
@@ -216,6 +217,7 @@ function manifestToTool(m: AuthoredToolManifest, projectDir: string): Tool {
     def,
     async execute(args, _ctx: ToolContext) {
       const r = await runAuthoredCommand(m, args, projectDir);
+      recordToolUsage(projectDir, m.name, { error: !!r.error, durationMs: r.durationMs });
       if (r.error) return `ERROR: ${r.error}\n${r.output}`.trim();
       return r.output;
     },
@@ -321,7 +323,7 @@ export const toolFactoryTool: Tool = {
     if (action === 'list') {
       const tools = listAuthoredTools(projectDir);
       if (!tools.length) return '(no authored tools yet — create one with action="create")';
-      return tools.map((m) => `${m.name}: ${m.description} [params: ${(m.parameters ?? []).map((p) => p.name).join(', ') || 'none'}]`).join('\n');
+      return tools.map((m) => `${m.name}: ${m.description} [params: ${(m.parameters ?? []).map((p) => p.name).join(', ') || 'none'}] (usage: ${toolUsageLine(projectDir, m.name)})`).join('\n');
     }
 
     if (!name) return JSON.stringify({ ok: false, error: 'name is required for this action' });

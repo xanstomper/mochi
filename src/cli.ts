@@ -39,6 +39,18 @@ process.on('unhandledRejection', (reason) => {
   // session with a broken terminal.
   logCrash('unhandledRejection', reason);
 });
+// EPIPE on stdout (the terminal pane was closed under us — Tmux kill-pane,
+// tab close, SSH drop) must never crash the CLI. crash.log is full of
+// "Error: write EPIPE at console.log" → uncaughtException → exit. Drop the
+// dead write and keep running; every other stream error stays fatal.
+process.stdout?.on?.('error', (err: NodeJS.ErrnoException) => {
+  if (err?.code === 'EPIPE') return;
+  throw err;
+});
+process.stderr?.on?.('error', (err: NodeJS.ErrnoException) => {
+  if (err?.code === 'EPIPE') return;
+  throw err;
+});
 process.on('uncaughtException', (err: unknown) => {
   // Synchronous state is undefined after this; log, restore, and bail.
   // The TUI's process.on('exit') listener still runs and restores the tty.

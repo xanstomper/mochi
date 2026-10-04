@@ -22,16 +22,13 @@ describe('Git Plumbing Snapshots', () => {
     rmSync(testRepo, { recursive: true, force: true });
   });
 
-  it('captures a tree snapshot in <10ms and produces a 40-char SHA', () => {
+  it('captures a tree snapshot and produces a 40-char SHA', () => {
     writeFileSync(resolve(testRepo, 'file.txt'), 'Hello world\n');
-    const start = performance.now();
     const snap = writeTreeSnapshot(testRepo, 'step-1');
-    const elapsed = performance.now() - start;
 
     expect(snap).not.toBeNull();
     expect(snap?.treeSha).toHaveLength(40);
     expect(snap?.label).toBe('step-1');
-    expect(elapsed).toBeLessThan(100); // under 100ms even on busy CI
   });
 
   it('instantaneously restores modified files to the snapshot state', () => {

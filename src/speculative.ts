@@ -194,7 +194,7 @@ export class SpeculativeEngine {
         }
       }
       const best = candidates[index - 1];
-      best.score = best.score ?? 10;
+      // A selected candidate has no numeric score unless the verifier supplied one.
       if (typeof parsed.reason === 'string' && parsed.reason.trim()) best.verdictReason = parsed.reason.trim();
       return best;
     } catch {

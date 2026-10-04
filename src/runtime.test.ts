@@ -144,6 +144,14 @@ describe('Runtime abort + interrupt', () => {
     rt.setReasoning('low');
     expect(rt.getReasoning()).toBe('low');
 
+    rt.setReasoning('off');
+    expect(rt.getReasoning()).toBe('off');
+    expect(process.env.MOCHI_REASONING).toBe('off');
+
+    rt.setReasoning('auto');
+    expect(rt.getReasoning()).toBe('auto');
+    expect(process.env.MOCHI_REASONING).toBe('auto');
+
     rt.newSession();
     expect(rt.activeSessionId).toBeUndefined();
     rmSync(rt.cwd, { recursive: true, force: true });

@@ -127,11 +127,17 @@ export function createOpenAIProvider(config: ProviderConfig) {
     // request and (later) the watchdog stall guard can tear down the in-flight
     // stream. We reuse one signal so the caller's abort still works identically.
     const signal = new AbortController();
-    const onAbort = () => signal.abort();
+    const onAbort = () => signal.abort(options?.signal?.reason);
     if (options?.signal) {
-      if (options.signal.aborted) signal.abort();
+      if (options.signal.aborted) signal.abort(options.signal.reason);
       else options.signal.addEventListener('abort', onAbort, { once: true });
     }
+
+    const headerTimeoutRaw = Number(process.env.MOCHI_MODEL_HEADERS_TIMEOUT_MS);
+    const headerTimeoutMs = Number.isFinite(headerTimeoutRaw) && headerTimeoutRaw > 0
+      ? Math.max(100, headerTimeoutRaw)
+      : 45_000;
+    const headerTimer = setTimeout(() => signal.abort(new Error(`Model response headers stalled for ${headerTimeoutMs}ms`)), headerTimeoutMs);
 
     // Rate-limit + transient-failure safe fetch: only the request is retried
     // (never mid-stream), with exponential backoff honoring Retry-After.
@@ -153,6 +159,10 @@ export function createOpenAIProvider(config: ProviderConfig) {
         if (!r.body) throw new Error('No response body from model');
         return r;
       } catch (err) {
+        if (signal.signal.aborted) {
+          if (options?.signal?.aborted) throw options.signal.reason ?? err;
+          throw new ProviderError(err instanceof Error ? err.message : String(err), { retryable: false, cause: err });
+        }
         // Network/transport errors carry no status; let the classifier decide
         // whether this is transient (retry) or permanent (host refused / bad DNS).
         if (err instanceof ProviderError) throw err;
@@ -163,7 +173,10 @@ export function createOpenAIProvider(config: ProviderConfig) {
       onBackoff: (attempt, delayMs, err) => logBackoff(attempt, delayMs, err),
       // Rotate to a fresh pool key (401/403/429) before the next attempt.
       onRetryable: (_attempt, err) => rotateCredentials(err),
-    });
+    }).catch((err: unknown) => {
+      options?.signal?.removeEventListener('abort', onAbort);
+      throw err;
+    }).finally(() => clearTimeout(headerTimer));
 
     if (!res.body) throw new ProviderError('No response body from model', { retryable: true });
     const reader = res.body.getReader();
@@ -253,6 +266,16 @@ export function createOpenAIProvider(config: ProviderConfig) {
     } finally {
       clearInterval(stallInterval);
       options?.signal?.removeEventListener('abort', onAbort);
+      // Consumer return() also reaches here: stop the underlying request,
+      // not just the generator, when a loop guard cuts generation short.
+      signal.abort();
+      try {
+        await reader.cancel();
+      } catch {
+        // An aborted or errored transport may already have closed the reader.
+      } finally {
+        reader.releaseLock();
+      }
     }
   }
 

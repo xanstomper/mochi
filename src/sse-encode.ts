@@ -79,6 +79,20 @@ export function buildContentChunk(
   return encodeSSEChunk(chunk);
 }
 
+/** Build one reasoning-delta chunk (deepseek-style `reasoning_content`,
+ *  the wire shape the Oct-2 reasoning-flood trace was made of). */
+export function buildReasoningChunk(
+  id: string,
+  reasoningContent: string,
+): string {
+  const chunk: SSEChunk = {
+    id,
+    object: 'chat.completion.chunk',
+    choices: [{ index: 0, delta: { role: 'assistant', reasoning_content: reasoningContent }, finish_reason: null }],
+  };
+  return encodeSSEChunk(chunk);
+}
+
 /** Build one tool-call chunk. Each call gets a DISTINCT `index` so the
  *  parser's per-index accumulator keeps it a separate call even though the
  *  arguments are emitted in a single (non-sliced) delta. */
@@ -132,12 +146,14 @@ export function buildFinishChunk(
 export function buildChatCompletion(params: {
   id?: string;
   content?: string;
+  reasoningContent?: string;
   toolCalls?: SSEToolCall[];
   finishReason?: string;
   usage?: SSEUsage;
 }): string {
   const id = params.id ?? randomChunkId();
   const content = params.content ?? '';
+  const reasoningContent = params.reasoningContent ?? '';
   const toolCalls = params.toolCalls ?? [];
   const finishReason = params.finishReason ?? (toolCalls.length ? 'tool_calls' : 'stop');
 
@@ -153,7 +169,16 @@ export function buildChatCompletion(params: {
   const out: string[] = [];
   if (toolCalls.length) {
     toolCalls.forEach((call, i) => out.push(buildToolCallChunk(id, call, i)));
-  } else if (content) {
+  } else if (content || reasoningContent) {
+    // Reasoning precedes content on the wire (real provider order); each is
+    // split across two chunks the way real providers stream.
+    if (reasoningContent) {
+      const rHalves = [reasoningContent.slice(0, Math.ceil(reasoningContent.length / 2)), reasoningContent.slice(Math.ceil(reasoningContent.length / 2))];
+      for (const part of rHalves) {
+        if (!part) continue;
+        out.push(buildReasoningChunk(id, part));
+      }
+    }
     const halves = [content.slice(0, Math.ceil(content.length / 2)), content.slice(Math.ceil(content.length / 2))];
     for (const part of halves) {
       if (!part) continue;

@@ -1,3 +1,4 @@
+import { statSync } from 'node:fs';
 import type { Tool } from './types.js';
 import { loadAllSkills, readSkillBody } from '../skills.js';
 import type { Skill } from '../skills.js';
@@ -20,7 +21,8 @@ function findSkill(projectDir: string, name: string): Skill | undefined {
 
 // Module-level: shared across agents in one process, matching the skill
 // source's lifetime (skills change across processes, not within one).
-const skillBodyCache = new Map<string, string>();
+const skillBodyCache = new Map<string, { body: string; path: string; mtimeNs: bigint; size: bigint }>();
+const loadedByAgent = new Set<string>();
 const skillLoadCounts = new Map<string, number>();
 
 export function getSkillLoadCounts(): ReadonlyMap<string, number> {
@@ -29,6 +31,7 @@ export function getSkillLoadCounts(): ReadonlyMap<string, number> {
 
 export function resetSkillCache(): void {
   skillBodyCache.clear();
+  loadedByAgent.clear();
   skillLoadCounts.clear();
 }
 
@@ -53,7 +56,23 @@ export const skillTool: Tool = {
     if (!skill) return `No skill named '${name}'. Run \`skill list\` to see available skills.`;
     skillLoadCounts.set(name, (skillLoadCounts.get(name) ?? 0) + 1);
     const cacheKey = `${ctx.cwd}::${name}`;
-    const cached = skillBodyCache.get(cacheKey);
+    const previous = skillBodyCache.get(cacheKey);
+    let stat: { mtimeNs: bigint; size: bigint } | undefined;
+    try { stat = statSync(skill.path, { bigint: true }); } catch { /* readSkillBody provides fallback */ }
+    const unchanged = previous !== undefined
+      && previous.path === skill.path
+      && previous.mtimeNs === stat?.mtimeNs
+      && previous.size === stat?.size;
+    const body = unchanged
+      ? previous.body
+      : `# ${skill.name}\n${readSkillBody(skill, ctx.cwd)}`.slice(0, 20000);
+    // A disk-cache hit does not mean this agent has received the instructions.
+    const hasIdentity = typeof ctx.agentId === 'string' && ctx.agentId.length > 0;
+    const receiptKey = hasIdentity
+      ? JSON.stringify([ctx.cwd, ctx.agentId, name, skill.path, stat?.mtimeNs.toString(), stat?.size.toString()])
+      : '';
+    const cached = unchanged && hasIdentity && loadedByAgent.has(receiptKey) ? body : undefined;
+    if (hasIdentity) loadedByAgent.add(receiptKey);
     // Serve the cached reminder ONLY when it is actually shorter than the
     // full body (tiny skills would otherwise cost MORE via the note overhead).
     const reminder = cached !== undefined
@@ -62,9 +81,11 @@ export const skillTool: Tool = {
     if (cached !== undefined && reminder!.length < cached.length) {
       return reminder!;
     }
-    const body = readSkillBody(skill, ctx.cwd);
-    const full = `# ${skill.name}\n${body}`.slice(0, 20000);
-    skillBodyCache.set(cacheKey, full);
-    return full;
+    if (stat) {
+      skillBodyCache.set(cacheKey, { body, path: skill.path, mtimeNs: stat.mtimeNs, size: stat.size });
+    } else {
+      skillBodyCache.delete(cacheKey);
+    }
+    return body;
   },
 };

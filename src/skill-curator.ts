@@ -21,7 +21,7 @@ export interface CuratorConfig {
   staleAfterDays: number;      // unused -> flag stale
   archiveAfterDays: number;    // unused -> archive (recoverable)
   intervalMs: number;          // minimum time between runs
-  consolidate: boolean;        // LLM umbrella-merge pass (off by default)
+  consolidate: boolean;        // merge near-duplicate agent-created skills (title/token overlap)
 }
 
 export function defaultCuratorConfig(): CuratorConfig {
@@ -30,7 +30,7 @@ export function defaultCuratorConfig(): CuratorConfig {
     staleAfterDays: 30,
     archiveAfterDays: 90,
     intervalMs: 24 * 3600 * 1000,
-    consolidate: false,
+    consolidate: true, // merge near-duplicate agent-created skills as the tree grows
   };
 }
 

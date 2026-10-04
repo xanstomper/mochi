@@ -37,6 +37,127 @@ function makeConfig(dir: string, url: string): MochiConfig {
 }
 
 describe('Agent', () => {
+  it('rejects unsupported completion after a varied execution preamble', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-varied-preamble-'));
+    const fake = await startFakeOpenAI([
+      { content: 'I will create the requested file.', finishReason: 'stop' },
+      { content: 'Done. Created greeting.txt.', finishReason: 'stop' },
+    ]);
+    try {
+      const config = makeConfig(dir, fake.url);
+      const workspace = new Workspace(dir, '.mochi');
+      workspace.ensure();
+      const context = new ContextEngine(config, dir);
+      context.setGoal('Create greeting.txt');
+      const task = createTask('Create greeting file', 'Create greeting.txt containing hello mochi.');
+      const agent = new Agent({ role: 'coder', config, workspace, events: new EventBus(), cwd: dir, context });
+      const result = await agent.run(task);
+      expect(existsSync(resolve(dir, 'greeting.txt'))).toBe(false);
+      expect(result.success).toBe(false);
+      expect(result.stopReason).not.toBe('completed');
+      expect(fake.requests.length).toBeLessThanOrEqual(3);
+    } finally {
+      await fake.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  it('does not report success when a coding preamble repeats without execution', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-repeated-preamble-'));
+    const reply = { content: 'I will create the requested file.', finishReason: 'stop' };
+    const fake = await startFakeOpenAI([reply, reply, reply]);
+    try {
+      const config = makeConfig(dir, fake.url);
+      const workspace = new Workspace(dir, '.mochi');
+      workspace.ensure();
+      const context = new ContextEngine(config, dir);
+      context.setGoal('Create greeting.txt');
+      const task = createTask('Create greeting file', 'Create greeting.txt containing hello mochi.');
+      const agent = new Agent({ id: 'repeated-preamble-agent', role: 'coder', config, workspace, events: new EventBus(), cwd: dir, context });
+      const result = await agent.run(task);
+      expect(existsSync(resolve(dir, 'greeting.txt'))).toBe(false);
+      expect(result.success).toBe(false);
+      expect(result.stopReason).not.toBe('completed');
+      expect(fake.requests.length).toBeLessThanOrEqual(3);
+    } finally {
+      await fake.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('ends the run when the same no-tool answer repeats even after a file already changed', async () => {
+    // The old `!fileChanged` gate disabled the same-answer guard forever once
+    // any file was edited — a model that then repeated the same two prose
+    // lines with zero tool calls burned every remaining iteration (the
+    // "five minutes in, spitting the same two lines" symptom). Here the model
+    // writes the file (fileChanged=true), then answers the same prose twice
+    // with no tool calls: the run must finish on the repeat, not keep
+    // requesting.
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-repeat-after-write-'));
+    const sameLine = 'Still writing the file, almost there.';
+    const fake = await startFakeOpenAI([
+      {
+        content: sameLine,
+        finishReason: 'tool_calls',
+        toolCalls: [{ id: 'call_w1', function: { name: 'write', arguments: JSON.stringify({ path: 'greeting.txt', content: 'hello mochi' }) } }],
+      },
+      { content: sameLine, finishReason: 'stop' },
+      { content: sameLine, finishReason: 'stop' },
+      { content: sameLine, finishReason: 'stop' },
+      { content: sameLine, finishReason: 'stop' },
+    ]);
+    try {
+      const config = makeConfig(dir, fake.url);
+      const workspace = new Workspace(dir, '.mochi');
+      workspace.ensure();
+      const context = new ContextEngine(config, dir);
+      context.setGoal('Create greeting.txt');
+      const task = createTask('Create greeting file', 'Create greeting.txt containing hello mochi.');
+      const agent = new Agent({ id: 'repeat-after-write-agent', role: 'coder', config, workspace, events: new EventBus(), cwd: dir, context });
+      const result = await agent.run(task);
+      expect(existsSync(resolve(dir, 'greeting.txt'))).toBe(true);
+      // First repeat nudges; second repeat ends the run as stagnation
+      // (tool_loop) — the repeated prose must never be crowned success.
+      expect(result.success).toBe(false);
+      expect(result.summary).toContain('Still writing the file');
+      expect(fake.requests.length).toBeLessThanOrEqual(5);
+    } finally {
+      await fake.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('continues an unscoped coding task after a prose-only preamble', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-preamble-'));
+    const fake = await startFakeOpenAI([
+      { content: 'I will inspect the project and create the requested file.', finishReason: 'stop' },
+      {
+        toolCalls: [{
+          id: 'preamble-recovery-write',
+          type: 'function',
+          function: { name: 'write', arguments: JSON.stringify({ path: resolve(dir, 'greeting.txt'), content: 'hello mochi' }) },
+        }],
+        finishReason: 'tool_calls',
+      },
+      { content: 'Created greeting.txt.', finishReason: 'stop' },
+    ]);
+    try {
+      const config = makeConfig(dir, fake.url);
+      const workspace = new Workspace(dir, '.mochi');
+      workspace.ensure();
+      const context = new ContextEngine(config, dir);
+      context.setGoal('Create greeting.txt containing hello mochi');
+      const task = createTask('Create greeting file', 'Create greeting.txt containing exactly hello mochi.');
+      const agent = new Agent({ id: 'preamble-agent', role: 'coder', config, workspace, events: new EventBus(), cwd: dir, context });
+      const result = await agent.run(task);
+      expect(existsSync(resolve(dir, 'greeting.txt'))).toBe(true);
+      expect(readFileSync(resolve(dir, 'greeting.txt'), 'utf8')).toBe('hello mochi');
+      expect(result.success).toBe(true);
+    } finally {
+      await fake.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('runs a task and writes a file', async () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-agent-'));
     const fake = await startFakeOpenAI([
@@ -888,6 +1009,167 @@ zigSuite('polyglot: zig repo end-to-end', () => {
     await fake.close();
     rmSync(dir, { recursive: true, force: true });
   }, 120_000);
+});
+
+describe('model stall guard (MOCHI_MODEL_RESPONSE_TIMEOUT_MS)', () => {
+  // A short stall timeout lets the guard fire fast so tests prove a silent
+  // provider hold no longer hangs the agent forever.
+  const STALL_MS = '1500';
+
+  async function runAgainst(script: Parameters<typeof startFakeOpenAI>[0]) {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-stall-'));
+    const fake = await startFakeOpenAI(script);
+    const old = process.env.MOCHI_MODEL_RESPONSE_TIMEOUT_MS;
+    process.env.MOCHI_MODEL_RESPONSE_TIMEOUT_MS = STALL_MS;
+    try {
+      const config = makeConfig(dir, fake.url);
+      const workspace = new Workspace(dir, '.mochi');
+      workspace.ensure();
+      const context = new ContextEngine(config, dir);
+      context.setGoal('answer briefly');
+      const task = createTask('Answer', 'Reply with "ok". Do not use tools.');
+      const agent = new Agent({ id: 'stall-ag', role: 'coder', config, workspace, events: new EventBus(), cwd: dir, context });
+      return { result: await agent.run(task), fake };
+    } finally {
+      await fake.close();
+      if (old === undefined) delete process.env.MOCHI_MODEL_RESPONSE_TIMEOUT_MS;
+      else process.env.MOCHI_MODEL_RESPONSE_TIMEOUT_MS = old;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it('a silent primary provider hold resolves with model_error instead of hanging', async () => {
+    // First /chat/completions holds silently (no data, no error). The agent
+    // must bound it via the stall guard, not hang forever.
+    const { result, fake } = await runAgainst([
+      { stall: true },
+      { content: 'ok', finishReason: 'stop' },
+    ]);
+    expect(fake.requests.length).toBeGreaterThanOrEqual(1);
+    expect(result.success).toBe(false);
+    expect(result.stopReason).toBe('model_error');
+  }, 20_000);
+
+  it('a silent retry/failover hold also resolves instead of hanging forever', async () => {
+    // Primary call returns a transient 500 -> propagates into the catch, which
+    // retries via the failover provider. Make THAT retry stall silently.
+    // Previously the retry ran UNBOUNDED and hung forever here.
+    const { result, fake } = await runAgainst([
+      { error: { status: 500, message: 'upstream boof' } },
+      { stall: true },
+      { content: 'ok', finishReason: 'stop' },
+    ]);
+    // The retry must have been attempted (the stalled request is a fresh call).
+    expect(fake.requests.length).toBeGreaterThanOrEqual(2);
+    expect(result.success).toBe(false);
+    expect(result.stopReason).toBe('model_error');
+  }, 20_000);
+
+  it('a mid-stream connection drop fails over and finishes instead of dying with model_error', async () => {
+    // Production shape: provider accepts the request, streams one chunk, then
+    // the socket dies ("The operation was aborted" / "terminated"). This used
+    // to finish the task immediately as model_error, killing minutes of real
+    // work. It must instead fail over to the next model and complete.
+    const { result, fake } = await runAgainst([
+      { dropConn: true },
+      { content: 'ok', finishReason: 'stop' },
+    ]);
+    expect(fake.requests.length).toBeGreaterThanOrEqual(2);
+    expect(result.success).toBe(true);
+    expect(result.stopReason).toBe('completed');
+  }, 30_000);
+});
+
+describe('stream repetition guards (reasoning floods + K-phrase cycles)', () => {
+  // The Oct-2 live trace: a model cycling the SAME 8 reasoning sentences ~50x
+  // each (2030 agent:reasoning events in 36s, ~56 events/sec) until the task
+  // died with model_error. The sliding-window guard (maxRep >= 8 within 20
+  // phrases) mathematically cannot catch any cycle longer than 2 phrases, and
+  // the reasoning branch never set `looped` at all. These tests pin the fix.
+
+  const loopBlock = Array.from({ length: 8 }, (_, i) =>
+    `Cycle line ${i} explains step number ${i} of the plan in some detail.`).join('\n');
+
+  async function runAgainst(script: Parameters<typeof startFakeOpenAI>[0]) {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-rep-'));
+    const fake = await startFakeOpenAI(script);
+    try {
+      const config = makeConfig(dir, fake.url);
+      const workspace = new Workspace(dir, '.mochi');
+      workspace.ensure();
+      const context = new ContextEngine(config, dir);
+      context.setGoal('fix the repetition loop');
+      // Title carries an action verb so classifyTaskKind does NOT route this
+      // to 'chat' — a chat task legally completes on its first prose answer,
+      // which would bypass the guards under test.
+      const task = createTask('Fix the repetition loop bug', 'Reproduce the loop and fix it.');
+      const agent = new Agent({ id: 'rep-ag', role: 'coder', config, workspace, events: new EventBus(), cwd: dir, context });
+      return { result: await agent.run(task), fake };
+    } finally {
+      await fake.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it('bounds an 8-phrase reasoning cycle instead of flooding and stalling', async () => {
+    // Reasoning-only flood: the loop block repeated enough times to cycle many
+    // times over, then a clean answer. Before the fix this streamed every
+    // copy to the TUI and never set looped.
+    const flood = Array.from({ length: 30 }, () => loopBlock).join('\n');
+    const { result, fake } = await runAgainst([
+      { reasoningContent: flood, finishReason: 'stop' },
+      { content: 'ok, done thinking. The answer is 4.', finishReason: 'stop' },
+    ]);
+    // The degenerate response must be detected (bounded), the loop recovers
+    // on the next scripted response instead of flooding forever.
+    expect(result.success).toBe(true);
+    expect(fake.requests.length).toBeLessThanOrEqual(3);
+  }, 30_000);
+
+  it('bounds a K-phrase CONTENT cycle the sliding window cannot reach', async () => {
+    // Content-side variant: 8 distinct sentences cycling (in-window count ~2,
+    // far below maxRep >= 8). cycleStreak must catch it.
+    const flood = Array.from({ length: 30 }, () => loopBlock).join('\n');
+    const { result } = await runAgainst([
+      { content: flood, finishReason: 'stop' },
+      { content: 'ok', finishReason: 'stop' },
+    ]);
+    expect(result.success).toBe(true);
+  }, 30_000);
+
+  it('does not punish a post-tool interim recap as failed recovery', async () => {
+    // Regression: the same-answer guard never reset on tool rounds, so
+    // "prose A -> (nudge) -> tools -> prose A" hit the guard with planNudges>0
+    // and failed the task as tool_loop — treating a legitimate interim
+    // summary repeated between tool batches as "no execution evidence" even
+    // though a tool had just executed. The reset on tool rounds must make
+    // this sequence COMPLETE.
+    const recap = 'Let me check the repository state first.';
+    const { result, fake } = await runAgainst([
+      // Execution preamble ("Let me check...") -> file-guard nudge, no completion.
+      { content: recap, finishReason: 'stop' },
+      // Real tool execution — proof of progress.
+      { toolCalls: [{ id: 't1', type: 'function', function: { name: 'read', arguments: JSON.stringify({ path: 'package.json' }) } }], finishReason: 'tool_calls' },
+      // Same prose again post-tool: with the reset this is a normal recap;
+      // without it the guard would fail the run as tool_loop.
+      { content: recap, finishReason: 'stop' },
+    ]);
+    expect(fake.requests.length).toBe(3);
+    expect(result.stopReason).toBe('completed');
+  }, 30_000);
+
+  it('still fails when prose repeats after tools but execution was nudged and never happened', async () => {
+    // Failure direction: preamble nudged, NO tool ever ran, prose repeats —
+    // that is failed recovery and must not complete.
+    const preamble = 'I will inspect the project and fix the bug.';
+    const { result, fake } = await runAgainst([
+      { content: preamble, finishReason: 'stop' }, // nudge (planNudges=1)
+      { content: 'I will inspect the project and fix the bug now.', finishReason: 'stop' }, // varied wording, still no tools
+    ]);
+    expect(result.success).toBe(false);
+    expect(result.stopReason).toBe('tool_loop');
+    expect(fake.requests.length).toBeLessThanOrEqual(2);
+  }, 30_000);
 });
 
 describe('stripThinkTags', () => {

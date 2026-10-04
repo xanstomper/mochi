@@ -5,7 +5,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { resolve, dirname, relative, isAbsolute } from 'node:path';
 import { WorktreeManager } from '../worktree.js';
 import { detectRepo } from '../repo.js';
 
@@ -20,6 +20,8 @@ export interface BranchCandidate {
   name: string;
   patches: BranchTrialPatch[];
   description?: string;
+  /** Optional verifier score from speculative planning; higher wins among passing candidates. */
+  score?: number;
 }
 
 export interface BranchRaceResult {
@@ -62,12 +64,20 @@ export class SpeculativeBranchRacer {
     }
 
     const repo = detectRepo(this.primaryCwd);
-    const testCmd = verificationCmd || repo.testCommand;
+    const testCmd = (verificationCmd || repo.testCommand)?.trim();
+    if (!testCmd) {
+      return {
+        candidatesEvaluated: candidates.map(({ name }) => ({
+          name, passed: false, durationMs: 0,
+          output: 'Not run: no verification command configured.',
+        })),
+        appliedToPrimary: false,
+        summary: 'Speculative candidates could not be verified: no verification command configured.',
+      };
+    }
 
     const evaluationResults: BranchRaceResult['candidatesEvaluated'] = [];
-    let winningCandidate: BranchCandidate | null = null;
-    let winningOutput = '';
-    let winningDuration = 0;
+    const passing = new Map<number, { candidate: BranchCandidate; output: string; durationMs: number }>();
 
     // Run candidates in parallel worktrees
     await Promise.all(
@@ -89,6 +99,10 @@ export class SpeculativeBranchRacer {
           // 2. Apply candidate patches in worktree
           for (const patch of candidate.patches) {
             const target = resolve(worktreePath, patch.filePath);
+            const rel = relative(worktreePath, target);
+            if (isAbsolute(patch.filePath) || rel === '..' || rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`)) {
+              throw new Error(`Patch path escapes worktree: ${patch.filePath}`);
+            }
             const dir = dirname(target);
             if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
             writeFileSync(target, patch.newContent);
@@ -115,25 +129,22 @@ export class SpeculativeBranchRacer {
               passed = false;
             }
           } else {
-            // No test command available: candidate passes if patches applied without error
-            passed = true;
-            output = 'No test command configured; syntax validated.';
+            passed = false;
+            output = 'Not verified: no test command configured.';
           }
 
           const durationMs = Date.now() - startTime;
 
-          evaluationResults.push({
+          evaluationResults[idx] = {
             name: candidate.name,
             passed,
             durationMs,
             output: output.slice(0, 2000),
-          });
+          };
 
-          if (passed && !winningCandidate) {
-            winningCandidate = candidate;
-            winningOutput = output;
-            winningDuration = durationMs;
-          }
+          if (passed) passing.set(idx, { candidate, output, durationMs });
+        } catch (err) {
+          evaluationResults[idx] = { name: candidate.name, passed: false, durationMs: 0, output: err instanceof Error ? err.message : String(err) };
         } finally {
           // Cleanup ephemeral worktree
           if (worktreeInfo) {
@@ -145,12 +156,18 @@ export class SpeculativeBranchRacer {
       })
     );
 
-    // If a candidate passed, apply its patches to the primary workspace
+
+    const winning = [...passing.entries()]
+      .map(([index, result]) => ({ ...result, index }))
+      .sort((a, b) => (b.candidate.score ?? 0) - (a.candidate.score ?? 0) || a.index - b.index)[0];
+
+    // Promote only a verified candidate, preserving deterministic ranking.
     let appliedToPrimary = false;
-    if (winningCandidate) {
-      const winner: BranchCandidate = winningCandidate;
-      for (const patch of winner.patches) {
+    if (winning) {
+      for (const patch of winning.candidate.patches) {
         const primaryFile = resolve(this.primaryCwd, patch.filePath);
+        const rel = relative(this.primaryCwd, primaryFile);
+        if (isAbsolute(patch.filePath) || rel === '..' || rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`)) continue;
         const dir = dirname(primaryFile);
         if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
         writeFileSync(primaryFile, patch.newContent);
@@ -158,18 +175,16 @@ export class SpeculativeBranchRacer {
       appliedToPrimary = true;
     }
 
-    const summary = winningCandidate
-      ? `Speculative race winner: "${(winningCandidate as BranchCandidate).name}" passed verification in ${winningDuration}ms and was promoted to workspace.`
+    const summary = winning
+      ? `Speculative race winner: "${winning.candidate.name}" passed verification in ${winning.durationMs}ms and was promoted to workspace.`
       : `Speculative race: All ${candidates.length} candidate branches failed verification.`;
 
     return {
-      winner: winningCandidate
-        ? {
-            name: (winningCandidate as BranchCandidate).name,
-            durationMs: winningDuration,
-            testOutput: winningOutput,
-          }
-        : undefined,
+      winner: winning ? {
+        name: winning.candidate.name,
+        durationMs: winning.durationMs!,
+        testOutput: winning.output!,
+      } : undefined,
       candidatesEvaluated: evaluationResults,
       appliedToPrimary,
       summary,
