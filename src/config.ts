@@ -2,6 +2,7 @@ import { homedir } from 'node:os';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { MochiConfig, ModelProfile } from './types.js';
+import { PROVIDERS } from './providers.js';
 
 const defaultConfig = (): MochiConfig => ({
   model: {
@@ -119,6 +120,44 @@ const envKeyMap: Record<string, string> = {
 const envKey = Object.entries(envKeyMap).find(([needle]) => p.includes(needle))?.[1];
 if (envKey) {
   cfg.model.apiKey = process.env[envKey] || configuredKey;
+}
+
+// Cross-provider failover (auto): the single biggest observed failure class
+// (150 of 159 failed traces, Oct 2026) was "Provider X is cooling down after
+// failures" — the in-loop failover only swapped model IDs on the SAME
+// provider, so a provider-wide cooldown killed every task. The router
+// (createProvider -> withFailover) already falls through a `config.failover`
+// chain when the primary errors before producing output; the missing piece
+// was that nothing ever POPULATED the chain. Build it automatically from
+// OTHER registered providers whose API key is present in the environment.
+// Locals (ollama/llamacpp, no envKey) and providers without keys never enter
+// the chain. Explicit user config always wins: if config.model.failover is
+// already set, leave it untouched.
+if (!cfg.model.failover || cfg.model.failover.length === 0) {
+  const primary = cfg.model.provider.toLowerCase();
+  const keyFor = (providerId: string): string | undefined => {
+    const probe = envKeyMap[providerId];
+    if (!probe) return undefined;
+    const v = process.env[probe];
+    if (!v || isPlaceholderKey(v)) return undefined;
+    return v;
+  };
+  const failover: NonNullable<MochiConfig['model']['failover']> = [];
+  for (const prov of PROVIDERS) {
+    if (prov.id === primary) continue;
+    if (primary.includes(prov.id) || prov.id.includes(primary)) continue; // same-provider aliases
+    const key = keyFor(prov.id);
+    if (!key) continue;
+    failover.push({
+      provider: prov.id,
+      baseUrl: prov.baseUrl,
+      apiKey: key,
+      model: prov.defaultModel,
+    });
+  }
+  if (failover.length) {
+    cfg.model.failover = failover;
+  }
 }
 
   merge(cfg as unknown as Record<string, unknown>, { model: envModelConfig() });
