@@ -2,20 +2,37 @@ import { spawn } from 'node:child_process';
 import type { Tool } from './types.js';
 import { clipToolOutput } from './output-budget.js';
 
+// Bounded kill for a hung git subprocess — a git awaiting a lock, network
+// fetch, or a huge repo must never block the loop forever (same freeze class
+// as the search-tool hang, 38c18d8). SIGTERM then SIGKILL after a grace.
+const GIT_TIMEOUT_MS = Number(process.env.MOCHI_GIT_TIMEOUT_MS) || 30_000;
+const GIT_KILL_GRACE_MS = 3_000;
+
 function runGit(cwd: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     const proc = spawn('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     let err = '';
+    let timedOut = false;
     // Accumulation guard: a git firehose (log of a 20k-commit repo, diff of a
     // vendored dependency tree) must not balloon process memory either.
     let over = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      proc.kill('SIGTERM');
+      setTimeout(() => proc.kill('SIGKILL'), GIT_KILL_GRACE_MS);
+    }, GIT_TIMEOUT_MS);
     proc.stdout.on('data', (c) => {
       if (out.length < 2_000_000) out += String(c); else over = true;
     });
     proc.stderr.on('data', (c) => { err += String(c); });
-    proc.on('error', reject);
+    proc.on('error', (e) => { clearTimeout(timer); reject(e); });
     proc.on('close', (code) => {
+      clearTimeout(timer);
+      if (timedOut) {
+        resolve(`git ${args[0]} did not complete within ${GIT_TIMEOUT_MS / 1000}s (timed out) — it was killed. Narrow the command or raise MOCHI_GIT_TIMEOUT_MS.`);
+        return;
+      }
       if (code !== 0 && out.trim().length === 0) return reject(new Error(err.trim() || `git ${args[0]} failed`));
       const trimmed = clipToolOutput(over ? out + '\n... [truncated by mochi]' : out.trim());
       resolve(trimmed);
