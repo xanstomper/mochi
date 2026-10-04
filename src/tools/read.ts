@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve, extname } from 'node:path';
 import type { Tool } from './types.js';
+import { clipToolOutput, DEFAULT_TOOL_RESULT_MAX_CHARS } from './output-budget.js';
 import { nativeSkeletonizeSource } from '../native/core.js';
 
 export const readTool: Tool = {
@@ -46,9 +47,19 @@ export const readTool: Tool = {
 
     const lines = content.split('\n');
     const offset = args.offset ? Math.max(1, Number(args.offset)) : 1;
-    const limit = args.limit ? Math.max(1, Number(args.limit)) : lines.length;
+    // Default window: 2,000 lines. Reading a minified bundle or a huge log
+    // whole used to plant hundreds of K tokens in the transcript; with the
+    // window the model paged through deliberately (offset/limit) instead.
+    const DEFAULT_READ_LINES = 2_000;
+    const limit = args.limit ? Math.max(1, Number(args.limit)) : Math.min(lines.length, DEFAULT_READ_LINES);
     const slice = lines.slice(offset - 1, offset - 1 + limit);
     const numbered = slice.map((l, i) => `${(offset + i).toString().padStart(4, ' ')} | ${l}`).join('\n');
-    return numbered;
+    // Char-level guard on top of the line window (minified lines are huge).
+    const clipped = clipToolOutput(numbered, { maxChars: DEFAULT_TOOL_RESULT_MAX_CHARS });
+    if (offset - 1 + limit < lines.length) {
+      const remaining = lines.length - (offset - 1 + limit);
+      return clipped + `\n... [mochi: ${remaining} more line(s) — pass offset/limit to continue]`;
+    }
+    return clipped;
   },
 };

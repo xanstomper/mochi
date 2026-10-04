@@ -1,17 +1,24 @@
 import { spawn } from 'node:child_process';
 import type { Tool } from './types.js';
+import { clipToolOutput } from './output-budget.js';
 
 function runGit(cwd: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     const proc = spawn('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     let err = '';
-    proc.stdout.on('data', (c) => { out += String(c); });
+    // Accumulation guard: a git firehose (log of a 20k-commit repo, diff of a
+    // vendored dependency tree) must not balloon process memory either.
+    let over = false;
+    proc.stdout.on('data', (c) => {
+      if (out.length < 2_000_000) out += String(c); else over = true;
+    });
     proc.stderr.on('data', (c) => { err += String(c); });
     proc.on('error', reject);
     proc.on('close', (code) => {
       if (code !== 0 && out.trim().length === 0) return reject(new Error(err.trim() || `git ${args[0]} failed`));
-      resolve(out.trim());
+      const trimmed = clipToolOutput(over ? out + '\n... [truncated by mochi]' : out.trim());
+      resolve(trimmed);
     });
   });
 }

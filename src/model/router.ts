@@ -150,7 +150,13 @@ interface RawProvider {
  * isolated). Set MOCHI_CAPABILITY_DIR to persist provider health across runs.
  */
 function withCapabilityGate(provider: RawProvider, config: ModelConfig, resolved: ProviderConfig) {
-  const key = providerKey(config.provider, resolved.baseUrl);
+  // Key health PER-MODEL (provider@base::model), not per-endpoint. One bad
+  // model on a multi-model aggregator (glm-5.2 500ing while glm-5.3-flash is
+  // fine) used to cool down the WHOLE endpoint and kill every task — the
+  // dominant failure class in the Oct-2026 trace audit. With per-model keys a
+  // failing model backs off alone and the router's next pick on the same
+  // endpoint stays callable.
+  const key = `${providerKey(config.provider, resolved.baseUrl)}::${resolved.model}`;
   const gate = function () {
     // Persistently remember provider health across runs ONLY when the dir is
     // explicit (MOCHI_CAPABILITY_DIR). Otherwise keep it in-memory for the

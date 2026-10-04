@@ -1,4 +1,5 @@
 import type { Tool } from './types.js';
+import { clipToolOutput } from './output-budget.js';
 
 const MAX_BYTES = 64 * 1024;
 
@@ -31,8 +32,10 @@ export const fetchTool: Tool = {
     const res = await fetch(url, init);
     const status = `HTTP ${res.status} ${res.statusText}`;
     const rawText = await res.text();
+    // 64KB stream guard stays; below that the shared budget applies
+    // (head+tail clip) so fetched pages don't eat the context budget either.
     const text = rawText.length > MAX_BYTES ? rawText.slice(0, MAX_BYTES) + '\n... [truncated]' : rawText;
     const contentType = res.headers.get('content-type') ?? '';
-    return `${status}\nContent-Type: ${contentType}\n\n${text}`;
+    return clipToolOutput(`${status}\nContent-Type: ${contentType}\n\n${text}`);
   },
 };

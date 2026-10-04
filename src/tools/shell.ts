@@ -2,7 +2,12 @@ import { spawn } from 'node:child_process';
 import type { Tool } from './types.js';
 import { classifyCommand } from '../security.js';
 
-const MAX_OUTPUT = 256_000;
+// Accumulation guard only (memory safety against firehose output). The final
+// RESULT the model sees is clipped to the shared tool-result budget by
+// clipToolOutput — keeping the accumulation cap higher means the clip's tail
+// is the true end of output (test summaries, git hints), not a mid-stream cut,
+// and the child never dies of EPIPE on long-but-bounded output.
+const MAX_OUTPUT = 2_000_000;
 
 // Desktop GUI applications that must never be launched by a coding agent.
 // Opening a window (gnome-calculator, kcalc, browsers, terminals, editors)
@@ -25,6 +30,8 @@ export function desktopGuiReason(command: string): string | null {
   }
   return null;
 }
+
+import { clipToolOutput } from './output-budget.js';
 
 export const shellTool: Tool = {
   def: {
@@ -153,11 +160,14 @@ export const shellTool: Tool = {
 
       child.on('close', (code) => {
         clearTimeout(timer);
-        const out = [
+        // Stream cap stays as the memory guard; the final result is clipped to
+        // head+tail so a verbose command can't plant ~65K tokens in the
+        // transcript that every later request re-sends.
+        const out = clipToolOutput([
           `exit_code: ${code}`,
           `stdout:\n${stdout || '(empty)'}`,
           `stderr:\n${stderr || '(empty)'}`,
-        ].join('\n');
+        ].join('\n'));
         if (killed.value) {
           resolve(out + '\n[command timed out or was cancelled]');
         } else {

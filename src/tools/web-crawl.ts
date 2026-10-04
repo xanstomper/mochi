@@ -1,4 +1,5 @@
 import type { Tool } from './types.js';
+import { clipToolOutput } from './output-budget.js';
 
 // Web crawler: fetch a seed URL, extract links, and follow them breadth-first
 // up to a page budget/depth. Returns readable text (tags stripped) per page
@@ -137,6 +138,8 @@ export const webCrawlTool: Tool = {
 
     const parts = pages.map((p) => `## ${p.url} (HTTP ${p.status})\n${p.text || '(empty)'}`);
     const header = `Crawled ${pages.length} page(s) from ${seed} (depth<=${maxDepth}${sameHost ? ', same host' : ''}${pattern ? `, pattern ${pattern}` : ''}).\n\n`;
-    return header + parts.join('\n\n---\n\n');
+    // Per-page 24KB cap stays; the assembled multi-page result still gets the
+    // shared budget so a 12-page crawl can't eat the whole context window.
+    return clipToolOutput(header + parts.join('\n\n---\n\n'));
   },
 };

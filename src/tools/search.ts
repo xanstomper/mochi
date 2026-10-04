@@ -3,6 +3,7 @@ import { readdirSync, readFileSync, statSync, openSync, readSync, closeSync, exi
 import { resolve, relative } from 'node:path';
 import { nativeSearchDir } from '../native/core.js';
 import type { Tool, ToolContext } from './types.js';
+import { clipToolOutput } from './output-budget.js';
 import { mutationGeneration } from './fs-signal.js';
 
 import { fileURLToPath } from 'node:url';
@@ -29,10 +30,13 @@ async function nativeSearch(cwd: string, query: string, glob?: string): Promise<
     if (glob) args.push(glob);
     const proc = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
-    proc.stdout.on('data', (c) => { out += String(c); if (out.length > MAX_TOTAL) out = out.slice(0, MAX_TOTAL) + '\n... [truncated]'; });
+    let over = false;
+    proc.stdout.on('data', (c) => {
+      if (out.length < 2_000_000) out += String(c); else over = true;
+    });
     proc.on('close', (code) => {
       if (code !== 0 && out.length === 0) return res(null);
-      res(out.trim() || null);
+      res(clipToolOutput(over ? out + '\n... [truncated by mochi]' : out.trim()) || null);
     });
     proc.on('error', () => res(null));
   });
@@ -51,11 +55,14 @@ async function ripgrep(cwd: string, query: string, glob?: string): Promise<strin
     const proc = spawn('rg', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     let err = '';
-    proc.stdout.on('data', (c) => { out += String(c); if (out.length > MAX_TOTAL) out = out.slice(0, MAX_TOTAL) + '\n... [truncated]'; });
+    let over = false;
+    proc.stdout.on('data', (c) => {
+      if (out.length < 2_000_000) out += String(c); else over = true;
+    });
     proc.stderr.on('data', (c) => { err += String(c); });
     proc.on('close', (code) => {
       if (code !== 0 && out.length === 0) return resolve(null);
-      resolve(out.trim());
+      resolve(clipToolOutput(over ? out + '\n... [truncated by mochi]' : out.trim()));
     });
     proc.on('error', () => resolve(null));
   });

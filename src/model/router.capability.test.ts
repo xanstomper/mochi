@@ -24,7 +24,8 @@ describe('router capability gate', () => {
 
   it('rejects fast a provider marked dead, without any network call', async () => {
     const { createProvider } = await import('./router.js');
-    const key = 'openai\u0000http://127.0.0.1:1';
+    // Health keys are PER-MODEL: provider\\u0000baseUrl::model (see router.ts).
+    const key = 'openai\u0000http://127.0.0.1:1::fake';
     new CapabilityRegistry(dir, true).markDead(key, 'ECONNREFUSED connect 127.0.0.1:1');
 
     const config: ModelConfig = { provider: 'openai', baseUrl: 'http://127.0.0.1:1', model: 'fake' };
@@ -35,6 +36,24 @@ describe('router capability gate', () => {
 
     // The dead mark was persisted to the configured dir.
     expect(readdirSync(dir).length).toBeGreaterThan(0);
+  });
+
+  it('a dead MODEL does not cool down sibling models on the same endpoint', async () => {
+    const { createProvider } = await import('./router.js');
+    // glm-5.2 is dead, but the request targets glm-5.3-flash: the per-model
+    // key must miss, the gate must pass through, and the real network error
+    // (not a registry skip) is what the caller sees.
+    const deadKey = 'openai\u0000http://127.0.0.1:1::glm-5.2';
+    new CapabilityRegistry(dir, true).markDead(deadKey, 'ECONNREFUSED connect 127.0.0.1:1');
+
+    const config: ModelConfig = { provider: 'openai', baseUrl: 'http://127.0.0.1:1', model: 'glm-5.3-flash' };
+    const provider = createProvider(config);
+    await expect(
+      provider.chat([{ role: 'user', content: 'hi' }] as any, [], {} as any),
+    ).rejects.toThrow(/fetch failed|network|ECONNREFUSED/);
+    await expect(
+      provider.chat([{ role: 'user', content: 'hi' }] as any, [], {} as any),
+    ).rejects.not.toThrow(/marked dead/);
   });
 
   it('does not short-circuit an unknown provider that has not failed yet', async () => {
