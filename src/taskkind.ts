@@ -46,6 +46,25 @@ export function classifyTaskKind(task: Pick<Task, 'title' | 'description' | 'rol
   return 'implement';
 }
 
+/** Reasoning tier used when `reasoning: "auto"` is configured. Distilled from
+ *  Claude Code's `--effort auto` and Codex's complexity-awareness: resolve the
+ *  tier from the task kind so simple work doesn't burn deep reasoning tokens
+ *  and hard work gets the full budget. Conservative default = the task's
+ *  heuristic kind. Pure, deterministic, no model call. */
+export function resolveAutoReasoning(kind: TaskKind): 'low' | 'medium' | 'high' | 'max' {
+  switch (kind) {
+    case 'chat':
+    case 'document':
+    case 'research': return 'low';
+    case 'refactor':
+    case 'test': return 'medium';
+    case 'fix': return 'high';
+    case 'implement':
+    case 'plan':
+    default: return 'max';
+  }
+}
+
 /** Tailored hint added to the system prompt per task kind. */
 export function kindHint(kind: TaskKind): string {
   switch (kind) {

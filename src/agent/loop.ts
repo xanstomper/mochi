@@ -12,7 +12,7 @@ import { executeTool, buildTools, TOOL_ALIASES, normalizeToolArgs } from '../too
 import { refreshAuthoredTools, RESERVED_TOOL_NAMES } from '../tools/tool-factory.js';
 import type { ToolContext, ReadCache } from '../tools/types.js';
 import { detectRepo, languageHint } from '../repo.js';
-import { classifyTaskKind } from '../taskkind.js';
+import { classifyTaskKind, resolveAutoReasoning } from '../taskkind.js';
 import { matchesBaseline, type VerificationBaseline } from '../verification.js';
 import { diagnoseFile, renderDiagnostics } from '../diagnostics.js';
 import type { AgentProfile } from '../types.js';
@@ -57,6 +57,7 @@ import { preEditSnapshot as gitPreEditSnapshot, rollbackToSnapshot as gitRollbac
 import { applyToolOutputPolicy } from '../core/tool-output.js';
 import { scrubAnsiFragments } from '../tui/ansi-hygiene.js';
 import { nativeStripThinkTags } from '../native/core.js';
+import { maybeRedact } from '../security.js';
 import { LoopStateMachine } from './loop-state.js';
 import { scanDiffForHygiene, renderHygieneFindings, type HygieneFinding } from '../core/diff-hygiene.js';
 import { parseCompilerDiagnostics, renderCompilerAdvisory } from './error-diagnostics.js';
@@ -322,6 +323,24 @@ export class Agent {
     this.events.emit({ type: 'agent:spawned', id: this.id, role: opts.role as any, taskId: '' });
   }
 
+  /** Effective reasoning tier for a task. Distilled from Claude Code's
+   *  `--effort auto`: when `reasoning: "auto"` is configured, map the task
+   *  kind to a tier so simple work doesn't burn deep-reasoning tokens and
+   *  hard work gets the full budget (resolveAutoReasoning in taskkind.ts).
+   *  Returns a literal tier in all other cases (off/low/medium/high/max). */
+  private resolveReasoning(task: Task): 'off' | 'low' | 'medium' | 'high' | 'max' {
+    const raw = (this.config.reasoning || process.env.MOCHI_REASONING || 'max').trim().toLowerCase();
+    if (raw === 'auto') {
+      const kind = classifyTaskKind(task);
+      return resolveAutoReasoning(kind);
+    }
+    // Guard against any stray invalid value (config re-validates, but stay safe).
+    if (raw === 'off' || raw === 'low' || raw === 'medium' || raw === 'high' || raw === 'max' || raw === 'extreme' || raw === 'deep' || raw === 'hard' || raw === 'easy') {
+      return raw === 'extreme' || raw === 'deep' || raw === 'hard' ? 'max' : (raw === 'easy' ? 'low' : (raw as 'off' | 'low' | 'medium' | 'high' | 'max'));
+    }
+    return 'max';
+  }
+
   async run(task: Task): Promise<AgentResult> {
     this.startTime = performance.now();
     this.events.emit({ type: 'task:started', task, agentId: this.id });
@@ -337,14 +356,17 @@ export class Agent {
       if (modeBlurb) this.context.addMessage({ role: 'system', content: modeBlurb });
     }
     // Adjustable reasoning mode: read from config or env and inject directive.
-    const reasoning = (this.config.reasoning || process.env.MOCHI_REASONING || 'max').trim().toLowerCase();
-    const blurb = reasoning === 'max' || reasoning === 'extreme' || reasoning === 'deep'
+    // `resolveReasoning` already normalizes aliases + the `auto` task-kind map.
+    const reasoning = this.resolveReasoning(task);
+    const blurb = reasoning === 'max'
       ? 'Engage MAXIMUM reasoning compute & cognitive depth: perform exhaustive multi-angle decomposition, trace full AST dependency blast radius, synthesize formal invariants (Chameleon reasoning), check all edge cases, and thoroughly verify correctness before concluding.'
-      : reasoning === 'high' || reasoning === 'hard'
+      : reasoning === 'high'
         ? 'Engage HIGH reasoning depth: thoroughly analyze edge cases, evaluate invariants, trace AST caller dependencies, isolate root causes, and confirm correctness with concrete checks.'
-        : reasoning === 'low' || reasoning === 'easy'
+        : reasoning === 'low'
           ? 'Engage LOW reasoning mode: act fast and decisively with minimal thinking overhead, make direct edits, verify quickly, and respond concisely.'
-          : 'Engage MEDIUM balanced reasoning: carefully inspect relevant context, isolate root causes before modifying code, maintain system invariants, and verify changes with concrete tests/checks.';
+          : reasoning === 'off'
+            ? 'Engage NO reasoning expansion: produce the answer or take the action directly, minimal deliberation.'
+            : 'Engage MEDIUM balanced reasoning: carefully inspect relevant context, isolate root causes before modifying code, maintain system invariants, and verify changes with concrete tests/checks.';
     this.context.addMessage({ role: 'system', content: `Active reasoning mode: ${reasoning.toUpperCase()}. ${blurb}` });
     // Each task gets a fresh autopsy record (idempotent on resume via
     // loadOrCreateAutopsy) so failure trajectories are durable and inspectable.
@@ -456,7 +478,8 @@ Continue from 'Next:', do not redo completed progress.`,
         const { promptCompiler } = await import('../prompt/prompt-compiler.js');
         const { detectRepo: detectRepoForCompiler } = await import('../repo.js');
         const cRepo = detectRepoForCompiler(this.cwd);
-        const tier = (this.config.reasoning || 'max') as 'low' | 'medium' | 'high' | 'max';
+        const resolvedTier = this.resolveReasoning(task);
+        const tier = resolvedTier === 'off' ? 'low' : resolvedTier;
         const spec = promptCompiler.compile(
           [task.title, task.description].filter(Boolean).join('\n\n'),
           {
@@ -637,7 +660,7 @@ Continue from 'Next:', do not redo completed progress.`,
         let tailCheckedAt = 0;
         let runawayFlagged = false;
 
-        const activeReasoning = (this.config.reasoning || process.env.MOCHI_REASONING || 'max').trim().toLowerCase();
+        const activeReasoning = this.resolveReasoning(task);
         sm.enter('stream-guard');
         for await (const chunk of activeProvider.streamChat(messages, this.toolDefs, { temperature: 0.2, signal: activeCallSignal.signal, reasoningEffort: activeReasoning as any })) {
           chunks.push(chunk);
@@ -1925,7 +1948,7 @@ Continue from 'Next:', do not redo completed progress.`,
     // one line the model needed with no recovery path.
     // ANSI hygiene FIRST: colored tool output (npm/git --color=always) in the
     // context is what makes the model parrot "138;43,226m"-style junk back.
-    const pol = applyToolOutputPolicy(scrubAnsiFragments(result.output), { toolName: tc.function.name });
+    const pol = applyToolOutputPolicy(scrubAnsiFragments(maybeRedact(result.output)), { toolName: tc.function.name });
     const foldedOutput = pol.content;
     this.context.addMessage({ role: 'tool', tool_call_id: tc.id, content: foldedOutput, name: tc.function.name });
     this.events.emit({ type: 'tool:completed', tool: tc.function.name, result, agentId: this.id });

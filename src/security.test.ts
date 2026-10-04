@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { redact, redactObject, classifyCommand, ApprovalQueue } from './security.js';
+import { redact, redactObject, maybeRedact, classifyCommand, ApprovalQueue } from './security.js';
 import { shellTool } from './tools/shell.js';
 
 describe('redact (from Horus)', () => {
@@ -25,6 +25,18 @@ describe('redact (from Horus)', () => {
 
   it('leaves normal text untouched', () => {
     expect(redact('just a normal verification failure')).toBe('just a normal verification failure');
+  });
+});
+
+describe('maybeRedact (context-boundary gate)', () => {
+  it('defaults ON: strips keys from tool output heading to the model', () => {
+    const out = maybeRedact('Config: {"api_key":"sk-proj-ABCdefGHIJKLMNOP","host":"localhost"}');
+    expect(out).not.toContain('sk-proj-ABC');
+    expect(out).toContain('[secret-redacted]');
+  });
+  it('passes normal output through unchanged in the common case', () => {
+    const out = maybeRedact('✅ 42 passed, 0 failed');
+    expect(out).toBe('✅ 42 passed, 0 failed');
   });
 });
 

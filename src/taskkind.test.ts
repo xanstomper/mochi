@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyTaskKind, kindHint } from './taskkind.js';
+import { classifyTaskKind, kindHint, resolveAutoReasoning } from './taskkind.js';
 
 describe('classifyTaskKind', () => {
   it('classifies a bug-fix task as fix', () => {
@@ -62,5 +62,25 @@ describe('kindHint', () => {
     const h = kindHint('test');
     expect(h).toMatch(/pytest|go test|cargo test|dotnet test/);
     expect(h.length).toBeGreaterThan(100);
+  });
+});
+
+describe('resolveAutoReasoning', () => {
+  it('maps simple kinds to low depth (token thrift)', () => {
+    expect(resolveAutoReasoning('chat')).toBe('low');
+    expect(resolveAutoReasoning('document')).toBe('low');
+    expect(resolveAutoReasoning('research')).toBe('low');
+  });
+  it('maps moderate kinds to medium', () => {
+    expect(resolveAutoReasoning('refactor')).toBe('medium');
+    expect(resolveAutoReasoning('test')).toBe('medium');
+  });
+  it('maps fixes to high (root-cause depth)', () => {
+    expect(resolveAutoReasoning('fix')).toBe('high');
+  });
+  it('maps implement/plan/unknown to max (full budget)', () => {
+    expect(resolveAutoReasoning('implement')).toBe('max');
+    expect(resolveAutoReasoning('plan')).toBe('max');
+    expect(resolveAutoReasoning('unknown')).toBe('max');
   });
 });

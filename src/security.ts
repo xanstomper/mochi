@@ -31,6 +31,18 @@ export function redact(input: string): string {
   return out;
 }
 
+/** Enabled-ness of secret redaction in the agent context feed. Default ON
+ *  (a stray key in tool output must never reach the model or disk); set
+ *  `MOCHI_REDACT_SECRETS=0` to disable. Snapshot once so it can't be flipped
+ *  mid-task by the model (Hermes prompt-hardening insight). */
+const REDACT_ENABLED = !/^(0|false|no)$/i.test(process.env.MOCHI_REDACT_SECRETS ?? '');
+
+/** Redact when enabled; identity when disabled. Central gate for the
+ *  tool-output→context boundary so a single call site works everywhere. */
+export function maybeRedact(input: string): string {
+  return REDACT_ENABLED ? redact(input) : input;
+}
+
 /** Key/value redaction for structured data (e.g. JSON.stringify of configs). */
 export function redactObject<T>(value: T, depth = 3): T {
   if (typeof value === 'string') return redact(value) as unknown as T;
