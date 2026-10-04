@@ -1,9 +1,21 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { ContextEngine } from './context.js';
 import type { MochiConfig } from './types.js';
+
+// Isolated user-skills dir so parallel test runs never read/mutate the real
+// ~/.mochi/skills — that global dir changing mid-suite was the "does not
+// freeze the leading prompt" parallel flake (hermetic context packet).
+let isolatedSkillsDir: string;
+beforeAll(() => { isolatedSkillsDir = mkdtempSync(join(tmpdir(), 'mochi-ctx-skills-')); });
+afterAll(() => rmSync(isolatedSkillsDir, { recursive: true, force: true }));
+
+function makeEngine(dir: string, overrides: Partial<MochiConfig> = {}): ContextEngine {
+  const base = cfg();
+  return new ContextEngine({ ...base, ...overrides } as MochiConfig, dir, isolatedSkillsDir);
+}
 
 function cfg(): MochiConfig {
   return {
@@ -21,7 +33,7 @@ describe('ContextEngine project-rule + memory caching', () => {
     const rulesPath = join(dir, 'AGENTS.md');
     writeFileSync(rulesPath, '# v1 rules');
 
-    const engine = new ContextEngine(cfg(), dir);
+    const engine = makeEngine(dir);
     const p1 = engine.buildPacket(NO_TOOLS);
     expect(p1.systemPrompt).toContain('# v1 rules');
 
@@ -37,14 +49,14 @@ describe('ContextEngine project-rule + memory caching', () => {
 
   it('returns empty rules when no candidate file exists', () => {
     const dir = mkdtempSync(join(tmpdir(), 'mochi-ctx-'));
-    const engine = new ContextEngine(cfg(), dir);
+    const engine = makeEngine(dir);
     const p = engine.buildPacket(NO_TOOLS);
     expect(p.systemPrompt).not.toContain('Project rules');
   });
 
   it('estimates growing transcript tokens', () => {
     const dir = mkdtempSync(join(tmpdir(), 'mochi-ctx-'));
-    const engine = new ContextEngine(cfg(), dir);
+    const engine = makeEngine(dir);
     const before = engine.estimateTokens();
     engine.addMessage({ role: 'user', content: 'hello world this is a message'.repeat(50) });
     const after = engine.estimateTokens();
@@ -54,7 +66,7 @@ describe('ContextEngine project-rule + memory caching', () => {
 
   it('advertises available skills in system prompt', () => {
     const dir = mkdtempSync(join(tmpdir(), 'mochi-ctx-'));
-    const engine = new ContextEngine(cfg(), dir);
+    const engine = makeEngine(dir);
     const p = engine.buildPacket(NO_TOOLS);
     expect(p.systemPrompt).toContain('<available_skills>');
     expect(p.systemPrompt).toContain('tdd-workflow');
@@ -64,7 +76,7 @@ describe('ContextEngine project-rule + memory caching', () => {
 
 describe('ContextEngine task-kind hints', () => {
   const dir = mkdtempSync(join(tmpdir(), 'mochi-ctx-kind-'));
-  const engine = new ContextEngine(cfg(), dir);
+  const engine = makeEngine(dir);
   it('injects a debug-focused hint when the task title says fix', () => {
     const p = engine.buildPacket(NO_TOOLS, {
       id: 't1', title: 'Fix the login crash', description: 'reproduces on every load',
@@ -91,7 +103,7 @@ describe('ContextEngine task-kind hints', () => {
 });
 describe('ContextEngine cache-stable packet prefix', () => {
   const dir = mkdtempSync(join(tmpdir(), 'mochi-ctx-cache-'));
-  const engine = new ContextEngine(cfg(), dir);
+  const engine = makeEngine(dir);
   const task = {
     id: 't', title: 'Add export to foo', description: 'export const x = 1',
     role: 'coder', status: 'pending', priority: 1, dependencies: [], fileScope: [],
@@ -132,7 +144,7 @@ describe('conditional tool guidelines (VNext P1.3)', () => {
       model: { provider: 'x', baseUrl: 'http://l', model: 'm' },
       safety: { contextBudgetTokens: 8000, mode: 'auto', commandTimeoutSeconds: 5, maxIterations: 5, maxRuntimeMinutes: 1, maxConcurrentAgents: 1 },
       permissions: { read: true, write: true, shell: true, network: true, gitDestructive: false },
-    } as any, dir);
+    } as any, dir, isolatedSkillsDir);
     const narrow = engine.buildPacket([mk('read'), mk('shell')]);
     const sys = String(narrow.messages[0].content);
     expect(sys).toContain('shell:');

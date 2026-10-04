@@ -6,6 +6,10 @@ import { join, relative, sep } from 'node:path';
 
 import type { Dirent } from 'node:fs';
 
+// Cap the recursive sync walk so a huge tree can't block the main-thread event
+// loop (the search-tool freeze class). Env-tunable.
+const FIND_REFS_MAX_FILES = Number(process.env.MOCHI_FIND_REFS_MAX_FILES) || 5000;
+
 const execFileAsync = promisify(execFile);
 
 /** Source-ish extensions most likely to hold symbol references/definitions. */
@@ -20,7 +24,8 @@ const IGNORED_DIRS = new Set([
   '.venv', 'venv', '__pycache__', 'coverage', 'vendor', '.cache',
 ]);
 
-function walk(dir: string, out: string[]): void {
+function walk(dir: string, out: string[], budget?: { seen: number; max: number }): void {
+  if (budget && budget.seen >= budget.max) return;
   let entries: Dirent[];
   try {
     entries = readdirSync(dir, { withFileTypes: true });
@@ -28,11 +33,12 @@ function walk(dir: string, out: string[]): void {
     return;
   }
   for (const e of entries) {
+    if (budget && budget.seen >= budget.max) return;
     const full = join(dir, e.name);
     if (e.isDirectory()) {
-      if (!IGNORED_DIRS.has(e.name)) walk(full, out);
+      if (!IGNORED_DIRS.has(e.name)) walk(full, out, budget);
     } else if (SEARCH_EXT.has((e.name.slice(e.name.lastIndexOf('.')) || '').toLowerCase())) {
-      try { if (statSync(full).size <= 2 * 1024 * 1024) out.push(full); } catch { /* skip */ }
+      try { if (statSync(full).size <= 2 * 1024 * 1024) { if (budget) budget.seen++; out.push(full); } } catch { /* skip */ }
     }
   }
 }
@@ -43,7 +49,7 @@ function nodeSearch(cwd: string, scope: string, pattern: RegExp): string[] {
   if (!existsSync(root)) return [];
   const files: string[] = [];
   if (statSync(root).isFile()) files.push(root);
-  else walk(root, files);
+  else walk(root, files, { seen: 0, max: FIND_REFS_MAX_FILES });
   const hits: string[] = [];
   for (const f of files) {
     let body: string;

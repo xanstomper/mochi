@@ -131,11 +131,13 @@ export class ContextEngine {
   private skillsFingerprint = '';
   private skillsInitialized = false;
   private config: MochiConfig;
+  private userSkillsDir?: string;
 
-  constructor(config: MochiConfig, projectRoot: string) {
+  constructor(config: MochiConfig, projectRoot: string, userSkillsDir?: string) {
     this.config = config;
     this.budget = config.safety.contextBudgetTokens;
     this.projectRoot = projectRoot;
+    this.userSkillsDir = userSkillsDir;
     this.state = {
       completedTasks: [],
       importantDecisions: [],
@@ -262,9 +264,10 @@ export class ContextEngine {
     try {
       this.skillsInitialized = true;
       this.skillsFingerprint = fp;
-      // Project + bundled only (bounded walk). User skills are loaded lazily by the
-      // skill tool, never synchronously during prompt build.
-      const { skills } = loadAllSkills(this.projectRoot);
+      // Project + bundled + user(optional). The user dir is explicit when a
+      // caller injects it (tests isolate it to stay hermetic across parallel
+      // runs); otherwise it falls back to ~/.mochi/skills.
+      const { skills } = loadAllSkills(this.projectRoot, this.userSkillsDir);
       this.skillsCache = formatSkillsForPrompt(skills);
     } catch {
       this.skillsCache = '';
