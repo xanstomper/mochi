@@ -1788,21 +1788,31 @@ Continue from 'Next:', do not redo completed progress.`,
     }
   }
 
-  /** Spawn multiple subagents concurrently and return their aggregated results. */
+  /** Spawn multiple subagents concurrently and return their aggregated results.
+   *  Bounded by safety.maxConcurrentAgents (distilled from Hermes'
+   *  max_concurrent_children): N unbounded Promise.allSettled would OOM or
+   *  hammer a free-tier provider. Runs in a fixed pool, reusing spawnSubagent. */
   private async spawnSubagents(
     tasks: Array<{ prompt: string; role?: string; timeoutMs?: number; scratchpad?: string }>
   ): Promise<string[]> {
-    const results = await Promise.allSettled(
-      tasks.map((t) => this.spawnSubagent(t.prompt, { role: t.role, timeoutMs: t.timeoutMs, scratchpad: t.scratchpad }))
-    );
-    return results.map((r, i) => {
-      const role = tasks[i]?.role ?? 'coder';
-      if (r.status === 'fulfilled') {
-        return `[Subagent #${i + 1} (${role})]: ${r.value}`;
+    const limit = Math.max(1, this.config.safety.maxConcurrentAgents || 3);
+    const results = new Array<string>(tasks.length);
+    let cursor = 0;
+    const worker = async (): Promise<void> => {
+      while (cursor < tasks.length) {
+        const i = cursor++;
+        const t = tasks[i];
+        try {
+          const val = await this.spawnSubagent(t.prompt, { role: t.role, timeoutMs: t.timeoutMs, scratchpad: t.scratchpad });
+          results[i] = `[Subagent #${i + 1} (${t.role ?? 'coder'})]: ${val}`;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          results[i] = `[Subagent #${i + 1} (${t.role ?? 'coder'}) FAILED]: ${msg}`;
+        }
       }
-      const err = r.reason instanceof Error ? r.reason.message : String(r.reason);
-      return `[Subagent #${i + 1} (${role}) FAILED]: ${err}`;
-    });
+    };
+    await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, () => worker()));
+    return results;
   }
 
   private async runMoolCall(tc: ToolCall): Promise<void> {

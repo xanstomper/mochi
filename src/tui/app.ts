@@ -5,7 +5,7 @@ import { findProjectRoot } from '../repo.js';
 import type { Runtime } from '../runtime.js';
 import type { MochiEvent } from '../types.js';
 import { PROVIDERS, providerById } from '../providers.js';
-import { reduceEvent, trimTranscript, rewrapSummaries } from './state.js';
+import { reduceEvent, trimTranscript, rewrapSummaries, type TuiLine } from './state.js';
 import { describeProviderFailure } from '../model/provider-failure.js';
 import { wrap, visibleLen } from './wrap.js';
 import pkg from '../../package.json' with { type: 'json' };
@@ -104,6 +104,10 @@ const COMMANDS = [
   { name: '/chameleon', hint: 'Synthesize Chameleon synthetic reasoning parameters for a task' },
   { name: '/doctor', hint: 'Diagnose workspace configuration' },
   { name: '/init', hint: 'Create project MOCHI.md instructions' },
+  { name: '/context', hint: 'Show context usage health (colored bar + tips)' },
+  { name: '/compact [focus]', hint: 'Compact the session transcript, optionally keeping lines about <focus>' },
+  { name: '/review [staged|last]', hint: 'Review the working-tree diff before commit' },
+  { name: '/security-review [staged|last]', hint: 'Security-focused review of the diff' },
   { name: '/new', hint: 'Start a fresh conversation session' },
   { name: '/skip', hint: 'Skip/interrupt current in-flight task' },
   { name: '/stop', hint: 'Interrupt current in-flight task' },
@@ -1391,10 +1395,103 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       scheduleRender();
       return;
     }
-    if (line === '/compact') { await run(async () => { const res = await (await import('../context.js')).approxTokens(state.lines.map(l=>l.text).join('\n')); return `Entire transcript ≈ ${res} tokens. Compaction is managed automatically per-turn.`; }); return; }
+    if (line === '/compact' || line.startsWith('/compact ')) {
+      // Distilled from Claude Code's `/compact [focus]`: collapse the oldest
+      // transcript turns into a short summary while keeping the RECENT tail
+      // verbatim (that's what the model still reasons over). An optional focus
+      // keyword makes older lines mentioning it survive too. Mirrors the
+      // checkpoints the agent loop writes for the model.
+      const focus = (line.includes(' ') ? line.slice(line.indexOf(' ') + 1).trim() : '');
+      const KEEP_RECENT = 8;
+      const kept: TuiLine[] = [];
+      const collapsed: string[] = [];
+      const target = state.lines.length - KEEP_RECENT;
+      for (let i = 0; i < state.lines.length; i++) {
+        const l = state.lines[i];
+        const text = ('kind' in l ? String(l.text) : String((l as { text?: unknown }).text ?? '')).toLowerCase();
+        if (i >= target || (focus && text.includes(focus.toLowerCase()))) {
+          kept.push(l);
+        } else if (l.kind === 'user' || l.kind === 'assistant' || l.kind === 'tool') {
+          const head = String(l.text).trim().replace(/\s+/g, ' ').slice(0, 90);
+          if (head) collapsed.push(`[${l.kind}] ${head}`);
+        }
+      }
+      state.lines = kept;
+      if (collapsed.length) {
+        state.lines.unshift({ kind: 'system', text: `[session compacted: ${collapsed.slice(0, 12).join(' | ')}${collapsed.length > 12 ? ` | … ${collapsed.length - 12} more` : ''}]` });
+      }
+      state.chatVer++;
+      scheduleRender();
+      push('system', `Compacted session${focus ? ` (focus: "${focus}")` : ''}: kept ${kept.length} recent/focused line(s), collapsed ${collapsed.length} older turn(s).`);
+      return;
+    }
     if (line === '/init') { await run(async () => { const { existsSync, writeFileSync } = await import('node:fs'); const { resolve: rp } = await import('node:path'); const p = rp(projectRoot, 'MOCHI.md'); if (existsSync(p)) return 'MOCHI.md already exists.'; writeFileSync(p, `# MOCHI.md\n\nProject instructions for the Mochi coding agent.\n`); return 'Created ' + p; }); return; }
-    if (line === '/context') { push('system', `ctx budget: ${runtime.config.safety.contextBudgetTokens.toLocaleString()} tokens · agents: ${runtime.config.safety.maxConcurrentAgents}`); return; }
-    if (line === '/branch') { await run(async () => (await import('../git.js')).status(projectRoot)); return; }
+    if (line === '/context' || line.startsWith('/context ')) {
+      // Claude-Code-style context health view (distilled): real usage vs the
+      // budget, color-coded by band, with guidance at the thresholds where
+      // precision actually drops (<70% fine, 70–85% plan compaction, >85% act).
+      const budget = runtime.config.safety.contextBudgetTokens || 0;
+      const { approxTokens } = await import('../context.js');
+      const prose = await approxTokens(state.lines.map((l) => l.text).join('\n'));
+      // Add a modest constant for the system prompt + tool schemas the
+      // per-line estimate excludes (15% of budget ≈ the stable prefix overhead).
+      const used = prose + (budget ? Math.round(budget * 0.15) : 0);
+      const pct = budget ? Math.round((used / budget) * 100) : 0;
+      const filled = Math.max(0, Math.min(20, Math.round((pct / 100) * 20)));
+      const bar = '█'.repeat(filled) + '░'.repeat(20 - filled);
+      const { T } = await import('./view.js');
+      const color = pct < 70 ? (T.success ?? '') : pct < 85 ? (T.warning ?? '') : (T.error ?? '');
+      const tip = pct < 70
+        ? '🟢 Normal — full precision. No action needed.'
+        : pct < 85
+          ? '🟡 Precision starting to drop. Consider /compact or /clear soon.'
+          : '🔴 Hallucination risk spikes. Run /compact now or /clear for a fresh session.';
+      push('system', `[context] ${color}${bar}${T.reset} ${used.toLocaleString()} / ${(budget || used).toLocaleString()} tokens (${pct}%)\n${tip}`);
+      return;
+    }
+    if (line === '/review' || line.startsWith('/review ') || line === '/security-review' || line.startsWith('/security-review ')) {
+      // Distilled from Claude Code's `/review` + `/security-review`: review the
+      // current working-tree diff before commit. `/security-review` skews the
+      // prompt to injection/authz/secrets exposure. Reuses the existing
+      // `runtime.review` pipeline (mochi review CLI).
+      const security = line.startsWith('/security-review');
+      const arg = (line.includes(' ') ? line.slice(line.indexOf(' ') + 1).trim() : '').toLowerCase();
+      const reviewScope = arg === 'staged' ? '(cached)' : arg === 'last' ? 'HEAD^' : 'HEAD';
+      await run(async () => {
+        const { promisify } = await import('node:util');
+        const { execFile } = await import('node:child_process');
+        const exec = promisify(execFile);
+        let diff = '';
+        try {
+          if (reviewScope === '(cached)') {
+            const { stdout } = await exec('git', ['diff', '--cached'], { cwd: projectRoot });
+            diff = stdout;
+          } else if (reviewScope === 'HEAD^') {
+            const { stdout } = await exec('git', ['diff', 'HEAD^'], { cwd: projectRoot });
+            diff = stdout;
+          } else {
+            const { stdout } = await exec('git', ['diff', 'HEAD'], { cwd: projectRoot });
+            diff = stdout;
+          }
+        } catch {
+          diff = '';
+        }
+        if (!diff.trim()) return 'No uncommitted diff to review. Commit or stage changes first.';
+        const focus = security
+          ? 'SECURITY-FOCUSED review of this diff. Prioritize: injection (SQL/command/XSS), authn/authz flaws, secrets or credentials committed, unsafe deserialization, path traversal, and privilege escalation. Flag concrete exploit paths.'
+          : 'Review this diff for correctness, regressions, and best practices. Be specific.';
+        const summary = await runtime.review(`${focus}\n\n${diff}`);
+        const { parseFindings, renderFindings, countBySeverity } = await import('../pipeline.js');
+        const findings = parseFindings(summary);
+        if (findings.length) {
+          const counts = countBySeverity(findings);
+          return `${renderFindings(findings)}\n\n${counts.HIGH} HIGH, ${counts.MEDIUM} MEDIUM, ${counts.LOW} LOW, ${counts.INFO} INFO.`;
+        }
+        return summary;
+      });
+      return;
+    }
+if (line === '/branch') { await run(async () => (await import('../git.js')).status(projectRoot)); return; }
     if (line === '/commit') {
       const msg = await ask('Commit message:');
       await run(async () => {
@@ -2103,7 +2200,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         if (state.dropActive) {
           const items = currentDropItems();
           const pick = items[Math.min(state.dropSelected, items.length - 1)];
-          const takesArg = pick && ['/goal', '/plan', '/team', '/model', '/reasoning', '/theme', '/inspect', '/run', '/shell', '/login', '/import', '/rename'].includes(pick.name);
+          const takesArg = pick && ['/goal', '/plan', '/team', '/model', '/reasoning', '/theme', '/inspect', '/run', '/shell', '/login', '/import', '/rename', '/compact', '/review', '/security-review'].includes(pick.name);
           // Only hijack Enter when the composer holds the BARE command name
           // (no arguments typed yet) — then expand to "/cmd " for the user to
           // type args. Once arguments exist, Enter must SEND the command
