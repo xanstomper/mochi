@@ -11,6 +11,14 @@ import { dirname } from 'node:path';
 
 const MAX_TOTAL = 256_000;
 
+// Bounded kill for a hung search subprocess (rg / native bin). A search
+// against a huge/network-backed tree must never block the loop forever —
+// this froze the agent (CPU spin at 38%, no trace progress, SIGINT ignored)
+// when the model issued repeated search calls and one never completed.
+// SIGTERM then SIGKILL after 3s, matching the shell tool's cancel semantics.
+const SEARCH_TIMEOUT_MS = Number(process.env.MOCHI_SEARCH_TIMEOUT_MS) || 30_000;
+const SEARCH_KILL_GRACE_MS = 3_000;
+
 function nativeSearchBin(): string | undefined {
   try {
     const here = dirname(fileURLToPath(import.meta.url));
@@ -31,14 +39,16 @@ async function nativeSearch(cwd: string, query: string, glob?: string): Promise<
     const proc = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     let over = false;
+    const timer = setTimeout(() => { proc.kill('SIGTERM'); setTimeout(() => proc.kill('SIGKILL'), SEARCH_KILL_GRACE_MS); }, SEARCH_TIMEOUT_MS);
     proc.stdout.on('data', (c) => {
       if (out.length < 2_000_000) out += String(c); else over = true;
     });
     proc.on('close', (code) => {
+      clearTimeout(timer);
       if (code !== 0 && out.length === 0) return res(null);
       res(clipToolOutput(over ? out + '\n... [truncated by mochi]' : out.trim()) || null);
     });
-    proc.on('error', () => res(null));
+    proc.on('error', () => { clearTimeout(timer); res(null); });
   });
 }
 
@@ -56,15 +66,17 @@ async function ripgrep(cwd: string, query: string, glob?: string): Promise<strin
     let out = '';
     let err = '';
     let over = false;
+    const timer = setTimeout(() => { proc.kill('SIGTERM'); setTimeout(() => proc.kill('SIGKILL'), SEARCH_KILL_GRACE_MS); }, SEARCH_TIMEOUT_MS);
     proc.stdout.on('data', (c) => {
       if (out.length < 2_000_000) out += String(c); else over = true;
     });
     proc.stderr.on('data', (c) => { err += String(c); });
     proc.on('close', (code) => {
+      clearTimeout(timer);
       if (code !== 0 && out.length === 0) return resolve(null);
       resolve(clipToolOutput(over ? out + '\n... [truncated by mochi]' : out.trim()));
     });
-    proc.on('error', () => resolve(null));
+    proc.on('error', () => { clearTimeout(timer); resolve(null); });
   });
 }
 
