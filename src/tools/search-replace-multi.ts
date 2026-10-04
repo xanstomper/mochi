@@ -2,18 +2,25 @@ import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { resolve, relative } from 'node:path';
 import type { Tool } from './types.js';
 
+// Cap the recursive sync walk so a huge tree can't block the main-thread event
+// loop (the search-tool freeze class, 4a19bd1). Env-tunable.
+const FIND_FILES_MAX = Number(process.env.MOCHI_FIND_FILES_MAX) || 5000;
+
 // Find all files matching a pattern, optionally filtered by extension
-function findFiles(dir: string, pattern: RegExp, extensions: string[] = []): string[] {
+function findFiles(dir: string, pattern: RegExp, extensions: string[] = [], budget?: { seen: number; max: number }): string[] {
   const results: string[] = [];
+  if (budget && budget.seen >= budget.max) return results;
   const entries = readdirSync(dir, { withFileTypes: true });
   for (const entry of entries) {
+    if (budget && budget.seen >= budget.max) return results;
     const fullPath = resolve(dir, entry.name);
     if (entry.isDirectory()) {
       if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist' || entry.name === '.next') continue;
-      results.push(...findFiles(fullPath, pattern, extensions));
+      results.push(...findFiles(fullPath, pattern, extensions, budget));
     } else if (entry.isFile()) {
       if (extensions.length === 0 || extensions.some(ext => entry.name.endsWith(ext))) {
         if (pattern.test(entry.name)) {
+          if (budget) budget.seen++;
           results.push(fullPath);
         }
       }
@@ -57,7 +64,7 @@ export const searchReplaceMultiTool: Tool = {
       throw new Error(`Invalid regex: ${e instanceof Error ? e.message : String(e)}`);
     }
 
-    const files = findFiles(dirPath, filePattern, extensions);
+    const files = findFiles(dirPath, filePattern, extensions, { seen: 0, max: FIND_FILES_MAX });
     if (files.length === 0) return `No files found matching pattern in ${args.path ?? '.'}`;
 
     const changes: string[] = [];

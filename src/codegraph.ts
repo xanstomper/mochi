@@ -66,18 +66,29 @@ const SKIP_DIRS = new Set([
   'vendor', 'target', '.gradle',
 ]);
 
-function* walkFiles(root: string, dir: string): Generator<string> {
+function* walkFiles(root: string, dir: string, budget?: { seen: number; max: number }): Generator<string> {
+  if (budget && budget.seen >= budget.max) return;
   let entries: string[];
   try { entries = readdirSync(dir); } catch { return; }
   for (const e of entries) {
+    if (budget && budget.seen >= budget.max) return;
     if (SKIP_DIRS.has(e)) continue;
     const full = resolve(dir, e);
     let st: ReturnType<typeof statSync>;
     try { st = statSync(full); } catch { continue; }
-    if (st.isDirectory()) yield* walkFiles(root, full);
-    else if (langOf(full) && st.size < 1_500_000) yield full;
+    if (st.isDirectory()) yield* walkFiles(root, full, budget);
+    else if (langOf(full) && st.size < 1_500_000) {
+      if (budget) budget.seen++;
+      yield full;
+    }
   }
 }
+
+// Cap the sync code-graph walk so a huge tree can't block the main-thread
+// event loop for minutes (the search-tool freeze class, 4a19bd1). The graph
+// still indexes up to this many source files, then returns a partial graph
+// instead of hard-freezing the agent. Env-tunable.
+const CODEGRAPH_WALK_MAX = Number(process.env.MOCHI_CODEGRAPH_WALK_MAX) || 8000;
 
 // ---------------------------- tsc backend ----------------------------------
 const scriptKind = (f: string): ts.ScriptKind =>
@@ -459,7 +470,7 @@ function db(cwd: string): SqliteDb {
   const delSym = database.prepare('DELETE FROM symbols WHERE file=?');
   const delRel = database.prepare('DELETE FROM relations WHERE file=?');
 
-  for (const full of walkFiles(cwd, cwd)) {
+  for (const full of walkFiles(cwd, cwd, { seen: 0, max: CODEGRAPH_WALK_MAX })) {
     const fp = fingerprint(full);
     if (fp && fp === files.get(full)) {
       prevRels.delete(full); // unchanged and still present
@@ -522,7 +533,9 @@ export async function findCallers(cwd: string, name: string): Promise<string> {
   }
   const hits: string[] = graphHits;
   const seen = new Set<string>(graphHits);
-  for (const full of walkFiles(cwd, cwd)) {
+  const walkBudget = { seen: 0, max: CODEGRAPH_WALK_MAX };
+  let sinceYield = 0;
+  for (const full of walkFiles(cwd, cwd, walkBudget)) {
     let lines: string[];
     try { lines = readFileSync(full, 'utf8').split('\n'); } catch { continue; }
     for (let i = 0; i < lines.length; i++) {
@@ -532,6 +545,9 @@ export async function findCallers(cwd: string, name: string): Promise<string> {
         if (hits.length >= 12) return [...new Set(hits)].join('\n');
       }
     }
+    // The fallback line-grep reads every file synchronously — yield so a huge
+    // tree can't block the main-thread event loop (the search freeze class).
+    if (++sinceYield >= 200) { sinceYield = 0; await new Promise((r) => setImmediate(r)); }
   }
   return hits.length ? [...new Set(hits)].join('\n') : `No references to "${name}" found.`;
 }

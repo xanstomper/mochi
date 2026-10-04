@@ -13,7 +13,8 @@ const CODE_EXTENSIONS = new Set([
   '.rb', '.php', '.vue', '.svelte', '.sql', '.json', '.md',
 ]);
 
-function walkCodeFiles(dir: string, out: string[]): void {
+function walkCodeFiles(dir: string, out: string[], budget?: { seen: number; max: number }): void {
+  if (budget && budget.seen >= budget.max) return;
   let entries: import('node:fs').Dirent[];
   try {
     entries = readdirSync(dir, { withFileTypes: true });
@@ -21,14 +22,18 @@ function walkCodeFiles(dir: string, out: string[]): void {
     return;
   }
   for (const entry of entries) {
+    if (budget && budget.seen >= budget.max) return;
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (!IGNORE_DIRS.has(entry.name)) walkCodeFiles(full, out);
+      if (!IGNORE_DIRS.has(entry.name)) walkCodeFiles(full, out, budget);
     } else if (entry.isFile()) {
       const ext = entry.name.slice(entry.name.lastIndexOf('.')).toLowerCase();
       if (CODE_EXTENSIONS.has(ext)) {
         try {
-          if (statSync(full).size <= 2 * 1024 * 1024) out.push(full);
+          if (statSync(full).size <= 2 * 1024 * 1024) {
+            if (budget) budget.seen++;
+            out.push(full);
+          }
         } catch { /* skip */ }
       }
     }
@@ -60,7 +65,7 @@ export const renameSymbolTool: Tool = {
     const files: string[] = [];
     try {
       if (statSync(searchScope).isFile()) files.push(searchScope);
-      else walkCodeFiles(searchScope, files);
+      else walkCodeFiles(searchScope, files, { seen: 0, max: 5000 });
     } catch {
       return `Path not found: ${args.path}`;
     }
