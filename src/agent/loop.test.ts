@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from 'no
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { execSync } from 'node:child_process';
-import { Agent, isPlanShaped, sanitizeVerifyCommand, stripThinkTags } from './loop.js';
+import { Agent, isPlanShaped, sanitizeVerifyCommand, stripThinkTags, isComplexRewritingTask } from './loop.js';
 import { ContextEngine } from '../context.js';
 import { EventBus } from '../events.js';
 import { Workspace } from '../workspace.js';
@@ -1184,7 +1184,25 @@ describe('stripThinkTags', () => {
   });
 
   it('handles unclosed trailing think tags', () => {
-    const raw = '<think>Still thinking...';
+    const raw = ' thinkingStill thinking...';
     expect(stripThinkTags(raw)).toBe('');
+  });
+});
+
+describe('isComplexRewritingTask (large-rewrite protocol gate)', () => {
+  it('flags multi-file / sweeping-work tasks', () => {
+    expect(isComplexRewritingTask('Refactor the auth module')).toBe(true);
+    expect(isComplexRewritingTask('Rewrite the renderer across multiple files')).toBe(true);
+    expect(isComplexRewritingTask('Migrate the build to esbuild')).toBe(true);
+    expect(isComplexRewritingTask('Design a new plugin architecture')).toBe(true);
+    expect(isComplexRewritingTask('Extract the cache into its own module')).toBe(true);
+    expect(isComplexRewritingTask('Add a new service', 'for the payment pipeline')).toBe(true);
+  });
+
+  it('does not flag one-answer / chat tasks', () => {
+    expect(isComplexRewritingTask('Explain what ESRGANx2 does')).toBe(false);
+    expect(isComplexRewritingTask('Say hello')).toBe(false);
+    expect(isComplexRewritingTask('What is in this repo?')).toBe(false);
+    expect(isComplexRewritingTask('Summarize the last 10 commits')).toBe(false);
   });
 });

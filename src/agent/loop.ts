@@ -160,6 +160,44 @@ export function isPlanShaped(text: string): boolean {
   );
 }
 
+/** Plan shape: a substantive multi-file change the model must plan, track,
+ *  and execute with engineering discipline — the Cline/Codex harness shape.
+ *  Injected once as a system directive for complex coding tasks (not chat). */
+const LARGE_REWRITE_PROTOCOL = [
+  'This is a substantial multi-file coding task. Work like a senior engineer:',
+  '1. PLAN FIRST: use the todo tool to lay out the ordered tasks (add each as a',
+  '   todo item). Update statuses as you go; todo list is your persistent ledger',
+  '   and survives compaction — do not restart the plan from memory later.',
+  '2. UNDERSTAND IMPACT: before editing a symbol/file, call blast_radius (or',
+  '   find_callers / type_hierarchy) to see who depends on it. Refuse to rename',
+  '   or change a signature until you know the call sites.',
+  '3. READ THE CURRENT IMPLEMENTATION: open the actual file/function you are',
+  '   changing before rewriting it — never rewrite from memory of an earlier',
+  '   mention. Preserve behavior you are not explicitly told to change.',
+  '4. CHECKPOINT BEFORE RISKY EDITS: if a change is large or destructive, save a',
+  '   checkpoint first so a bad step can roll back cleanly.',
+  '5. PERSIST DECISIONS: use the memory tool (action:add) to record key decisions',
+  '   and constraints mid-task so a later step (or a compacted transcript) does',
+  '   not lose them.',
+  '6. FAN OUT PARALLEL WORK: independent, well-specified pieces — multiple',
+  '   modules, distinct refactors — can go to subagents concurrently; give each',
+  '   a self-contained prompt + scratchpad with the exact contract.',
+  '7. VERIFY EACH STEP: after editing, run the relevant test/build for that piece',
+  '   before moving on; fix regressions immediately, do not defer them.',
+  '8. FINISH CLEAN: when done, remove scaffolding/debug leftovers, run the full',
+  '   suite once, and summarize what changed + why + what to watch (risks).',
+  '',
+].join('\n');
+
+/** Pure heuristic: does a task look like substantive multi-file work that
+ *  merits the large-rewrite protocol (vs a one-answer chat)? Extracted so it's
+ *  unit-testable. Chat scans and one-liners stay lean and skip it. */
+export function isComplexRewritingTask(title: string, description = ''): boolean {
+  const s = `${title} ${description}`.toLowerCase();
+  return /(?:refactor|rewrite|reimplement|migrat(?:e|ion|ing|es|ed)?|port|overhaul|restructure|abstract|extract|split|modulariz(?:e|ation|ing|ed)?|large|broad|multi-(?:file|module)|new (?:feature|module)|scaffold|architecture|design|rearchitect|replace .* across|convert .* to)\b/.test(s)
+    || /\b(?:files?|modules?|components?|packages?|services?|plugins?|drivers?)\b/.test(s);
+}
+
 export interface AgentOptions {
   id?: string;
   role: string;
@@ -282,6 +320,7 @@ export class Agent {
   /** Master prompt compiler: runs once per task (guarded) so the compiled
    *  blueprint is injected exactly once at the active reasoning tier. */
   private compilerInjected = false;
+  private rewriteProtocolInjected = false;
   /** Diff-hygiene: one bounded cleanup nudge for debug logs / TODO /
    *  suppressed-check debris the model added before we accept "done". */
   private hygieneNudges = 0;
@@ -589,6 +628,19 @@ Continue from 'Next:', do not redo completed progress.`,
       }
 
       const packet = this.context.buildPacket(this.toolDefs, task, taskKind === 'chat' ? undefined : repo);
+      // Large-rewrite protocol: for substantive coding work (not chat), inject a
+      // one-time discipline directive on the first iteration. This is the
+      // Cline/Codex harness shape — plan first, track with todo, check blast
+      // radius before risky edits, checkpoint before big changes, persist
+      // decisions, fan out parallelizable pieces to subagents. It's what makes
+      // Mochi hold a complex multi-file refactor's state instead of drifting.
+      if (taskKind !== 'chat' && !this.rewriteProtocolInjected) {
+        this.rewriteProtocolInjected = true;
+        const complex = isComplexRewritingTask(task.title, task.description);
+        if (complex) {
+          this.context.addMessage({ role: 'system', content: LARGE_REWRITE_PROTOCOL });
+        }
+      }
       // Anti-loop: if it's just gathering context (read/search) without editing, encourage an answer.
       if (this.toolCallsTotal >= 12 && !this.fileChanged && !this.planMode) {
         this.context.addMessage({ role: 'system', content: 'You have gathered sufficient context. Provide your answer directly now without further tool calls.' });
