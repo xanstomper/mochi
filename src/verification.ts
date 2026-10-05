@@ -269,14 +269,11 @@ export class VerifierEngine {
   private async safeGitDiff(fileScope?: string[]): Promise<string> {
     try {
       const trackedDiff = await gitDiff(this.cwd);
-      // `git diff` is empty for UNTRACKED files (new files the agent created
-      // or scratch files it was asked to edit), which previously made the
-      // evidence read "No git changes detected" and the judge fail perfectly
-      // correct work. Include untracked content as pseudo-diff additions so
-      // new-file work is verifiable. Harness state (.mochi), dependencies
-      // (node_modules), and build output are NOT source product: they are
-      // skipped and source files are listed FIRST so a 2k evidence budget is
-      // spent on the actual work, not noise.
+      // fileScope pre-filter for the tracked-diff preamble: when there are no
+      // tracked changes, gitDiff() falls back to `git status --short` of
+      // untracked files, which previously bypassed the scope filter and
+      // leaked out-of-scope filenames into the judge evidence. Route the
+      // whole trackedDiff through the same inScope block filter below.
       const untracked = await execFileAsync('git', ['ls-files', '--others', '--exclude-standard'], this.cwd);
       const source: string[] = [];
       const other: string[] = [];
@@ -302,6 +299,10 @@ export class VerifierEngine {
               if (line.startsWith('diff --git ')) {
                 const m = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
                 currentInScope = m ? inScope(m[1]) : true;
+              } else if (/^\?\? /.test(line)) {
+                // Untracked-status preamble line (`?? path`) from gitDiff()'s
+                // no-tracked-changes fallback: scope-filter it like a block.
+                currentInScope = inScope(line.slice(3).trim());
               }
               if (currentInScope) out.push(line);
             }
