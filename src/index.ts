@@ -1,4 +1,5 @@
 export { Runtime } from './runtime.js';
+export { Mochi, RemoteMochi, type RunResult, type GoalResultSdk } from './sdk.js';
 export { EventBus } from './events.js';
 export { Workspace } from './workspace.js';
 export { GoalEngine } from './goals/goal.js';
