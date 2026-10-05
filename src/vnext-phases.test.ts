@@ -52,7 +52,7 @@ describe('Phase 2: file-op carryover across compaction', () => {
     const ledger = msgs.find((m) => m.role === 'system' && String(m.content).includes('(compacted)'));
     expect(ledger).toBeTruthy();
     const c = String(ledger!.content);
-    expect(c).toContain('Files already read');
+    expect(c).toContain('Files previously read');
     expect(c).toContain('src/f0.ts');
     expect(c).toContain('Files already edited');
     expect(c).toContain('src/g5.ts');

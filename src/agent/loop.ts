@@ -540,29 +540,37 @@ Continue from 'Next:', do not redo completed progress.`,
     // setting actually change execution behavior instead of just swapping a
     // one-line "think harder" blurb. Bounded: runs once per task, and any
     // compiler failure degrades silently to the plain prompt.
+    // COST GUARD (2026-10-05): the compiled spec is a large (~10-20K char)
+    // static block injected into EVERY non-chat task — real repo context is
+    // crowded out of the model window on low/medium tiers where a deep
+    // architectural blueprint is wasted tokens. Only inject the full compiled
+    // spec at high/max reasoning; lower tiers keep the compact one-line
+    // reasoning blurb (already added above) so the window holds repo code.
     if (taskKind !== 'chat' && !this.planMode && !this.compilerInjected) {
       this.compilerInjected = true;
-      try {
-        const { promptCompiler } = await import('../prompt/prompt-compiler.js');
-        const { detectRepo: detectRepoForCompiler } = await import('../repo.js');
-        const cRepo = detectRepoForCompiler(this.cwd);
-        const resolvedTier = this.resolveReasoning(task);
-        const tier = resolvedTier === 'off' ? 'low' : resolvedTier;
-        const spec = promptCompiler.compile(
-          [task.title, task.description].filter(Boolean).join('\n\n'),
-          {
-            reasoning: tier,
-            testCommand: task.verificationCommand || cRepo.testCommand,
-            primaryLanguage: cRepo.language,
-          },
-        );
-        if (spec?.compiledMarkdownPrompt) {
-          this.context.addMessage({
-            role: 'system',
-            content: `# COMPILED EXECUTION BLUEPRINT (reasoning tier: ${tier.toUpperCase()})\nFollow this specification. It was derived from the user's request and calibrates depth, phases, and verification to the active reasoning level.\n\n${spec.compiledMarkdownPrompt}`,
-          });
-        }
-      } catch { /* compiler failure must never block the task */ }
+      const resolvedTier = this.resolveReasoning(task);
+      if (resolvedTier === 'high' || resolvedTier === 'max') {
+        try {
+          const { promptCompiler } = await import('../prompt/prompt-compiler.js');
+          const { detectRepo: detectRepoForCompiler } = await import('../repo.js');
+          const cRepo = detectRepoForCompiler(this.cwd);
+          const tier = resolvedTier;
+          const spec = promptCompiler.compile(
+            [task.title, task.description].filter(Boolean).join('\n\n'),
+            {
+              reasoning: tier,
+              testCommand: task.verificationCommand || cRepo.testCommand,
+              primaryLanguage: cRepo.language,
+            },
+          );
+          if (spec?.compiledMarkdownPrompt) {
+            this.context.addMessage({
+              role: 'system',
+              content: `# COMPILED EXECUTION BLUEPRINT (reasoning tier: ${tier.toUpperCase()})\nFollow this specification. It was derived from the user's request and calibrates depth, phases, and verification to the active reasoning level.\n\n${spec.compiledMarkdownPrompt}`,
+            });
+          }
+        } catch { /* compiler failure must never block the task */ }
+      }
     }
 
     // Speculative reasoning preflight (opt-in via model.speculative.preflight).
@@ -639,10 +647,13 @@ Continue from 'Next:', do not redo completed progress.`,
 
       // Compact-first context floor: once the live transcript grows past a
       // fraction of the context budget, roll up old turns so the packet never
-      // balloons. The floor is ALSO capped by a fixed ceiling so a huge
-      // configured budget (e.g. 120k+) cannot let the live transcript balloon —
-      // long runs stay lean no matter what the user's safety config says.
-      const ceiling = 32_000;
+      // balloons. The floor scales with the configured budget (the user's chosen
+      // model window), NOT an arbitrary small cap — a hardcoded 32K ceiling
+      // ignored a 120K budget and nuked repo context mid-task. Keep a generous
+      // upper guard (80% of budget) solely so a typo'd giant budget can't
+      // balloon the transcript to a non-response; the *floor* itself stays
+      // proportional so long coding runs hold live repo code in-window.
+      const ceiling = Math.floor(this.config.safety.contextBudgetTokens * 0.8);
       const floor = Math.min(this.config.safety.contextBudgetTokens * 0.6, ceiling);
       if (i > 0 && this.context.effectiveContextTokens() > floor) {
         await this.checkpointAndCompact('floor');
@@ -2629,12 +2640,32 @@ Continue from 'Next:', do not redo completed progress.`,
       lines.join('\n'),
     ].join('\n');
     const msg: ChatMessage = { role: 'user', content: prompt };
+    // COST GUARD (2026-10-05): the narrative call runs inside finish() with
+    // NO caller-side timeout — a provider that stalls on the summary call
+    // hangs the whole run past the loop's stall guard (the openai.ts watchdog
+    // is a hardcoded 30s and ignores MOCHI_MODEL_RESPONSE_TIMEOUT_MS). Race it
+    // against a modest budget so a stalled narrative can never block task
+    // completion. We also ABORT the underlying call on timeout so the orphaned
+    // stream is torn down (its finally clears the openai.ts stall interval).
+    const narrativeTimeoutMs = (() => {
+      const raw = Number(process.env.MOCHI_MODEL_RESPONSE_TIMEOUT_MS);
+      return Number.isFinite(raw) && raw > 0 ? Math.max(5_000, raw) : 12_000;
+    })();
+    const narrativeController = new AbortController();
+    const timeout = new Promise<'__narrative_timeout'>((r) => setTimeout(() => {
+      narrativeController.abort(new Error('narrative timeout'));
+      r('__narrative_timeout');
+    }, narrativeTimeoutMs));
+    const call = async () => {
+      const response = await this.provider.chat([msg], [], { signal: narrativeController.signal, maxTokens: 600 });
+      return (response.content ?? '').trim();
+    };
     try {
-      const response = await this.provider.chat([msg], [], { signal: this.abortSignal, maxTokens: 600 });
-      const text = (response.content ?? '').trim();
-      return text || '';
-    } catch {
-      return '';
+      const raced = await Promise.race([call(), timeout]);
+      if (raced === '__narrative_timeout') return '';
+      return raced || '';
+    } finally {
+      narrativeController.abort(new Error('narrative timeout'));
     }
   }
 
