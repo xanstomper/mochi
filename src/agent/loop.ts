@@ -1109,14 +1109,39 @@ Continue from 'Next:', do not redo completed progress.`,
           const rMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
 
           // Caller cancellation (Ctrl-C / runtime shutdown) is never retried
-          // and never failed over: respect the reason and stop. Previously a
-          // user abort here surfaced as "Model request failed: The operation
-          // was aborted." with stop reason model_error.
+          // and never failed over: respect the reason and stop.
           if (this.abortSignal?.aborted) {
-            return this.finish(task, false, 'Run aborted by caller.', 'aborted');
+            try {
+              const activeGoal = this.context.state.goal || task.title;
+              this.workspace.saveCheckpoint(activeGoal, `Task aborted by caller at iteration ${i}.\nObjective: ${task.title}\nFiles touched: ${this.context.state.filesModified.join(', ') || 'none'}\nNext: Run "mochi resume" to continue.`);
+            } catch { /* best effort */ }
+            return this.finish(task, false, 'Run aborted by caller. Resume anytime with "mochi resume".', 'aborted');
           }
 
-          // Failover strategy for repeated rate limits: switch to an alternate model instead of dying
+          // Provider cooldown resilience: pause, wait cooldown, fail over or retry
+          const isCooldown = /cooling down/i.test(rMsg) || /cooling down/i.test(message);
+          if (isCooldown) {
+            const alt = this.pickAlternateModel();
+            if (alt) {
+              this.events.emit({ type: 'agent:log', agentId: this.id, message: `[cooldown] Provider cooling down. Failing over to ${alt}` });
+              this.setActiveModel(alt);
+              continue;
+            }
+            this.cooldownRetries++;
+            if (this.cooldownRetries <= 2) {
+              const waitMs = 5000 * this.cooldownRetries;
+              this.events.emit({ type: 'agent:log', agentId: this.id, message: `[cooldown] Provider cooling down; pausing ${waitMs / 1000}s before retry (${this.cooldownRetries}/2)` });
+              await new Promise((r) => setTimeout(r, waitMs));
+              continue;
+            }
+            try {
+              const activeGoal = this.context.state.goal || task.title;
+              this.workspace.saveCheckpoint(activeGoal, `Task paused due to provider cooldown at iteration ${i}.\nObjective: ${task.title}\nNext: Run "mochi resume" shortly.`);
+            } catch { /* best effort */ }
+            return this.finish(task, false, 'Provider is temporarily cooling down. Work checkpointed — resume with "mochi resume".', 'model_error');
+          }
+
+          // Failover & queue strategy for repeated rate limits: switch to an alternate model or queue backoff
           if (rMsg.toLowerCase().includes('429') || rMsg.toLowerCase().includes('rate limit')) {
             const alt = this.pickAlternateModel();
             if (alt) {
@@ -1124,6 +1149,18 @@ Continue from 'Next:', do not redo completed progress.`,
               this.setActiveModel(alt);
               continue; // Restart the loop iteration with the new model
             }
+            this.rateLimitRetries++;
+            if (this.rateLimitRetries <= 3) {
+              const waitMs = 4000 * this.rateLimitRetries;
+              this.events.emit({ type: 'agent:log', agentId: this.id, message: `[rate-limit] Backing off ${waitMs / 1000}s before retry (${this.rateLimitRetries}/3)...` });
+              await new Promise((r) => setTimeout(r, waitMs));
+              continue;
+            }
+            try {
+              const activeGoal = this.context.state.goal || task.title;
+              this.workspace.saveCheckpoint(activeGoal, `Task paused due to rate limits at iteration ${i}.\nObjective: ${task.title}\nNext: Run "mochi resume" once rate limits clear.`);
+            } catch { /* best effort */ }
+            return this.finish(task, false, 'Rate limit ceiling reached after retries. Work checkpointed — resume with "mochi resume".', 'model_error');
           }
 
           // Transient transport aborts ("The operation was aborted",
@@ -1177,6 +1214,8 @@ Continue from 'Next:', do not redo completed progress.`,
       if ((response.content && response.content.trim()) || response.toolCalls?.length) {
         this.emptyResponseCount = 0;
         this.transientAbortRetries = 0;
+        this.rateLimitRetries = 0;
+        this.cooldownRetries = 0;
       }
       
       // Reset stream-loop counter if the model successfully used a tool,
