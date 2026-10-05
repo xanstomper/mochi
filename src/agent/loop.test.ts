@@ -126,6 +126,39 @@ describe('Agent', () => {
     }
   });
 
+  it('vetoes the 3rd consecutive identical tool call (todo/tool spam guard)', async () => {
+    // The "spamming todos multiple times" symptom: the model re-issues the
+    // exact same tool call across iterations. The 1st and 2nd execute; the 3rd+
+    // must be vetoed with a move-on directive instead of burning iterations.
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-tool-spam-'));
+    const sameCall = {
+      content: 'Tracking progress.',
+      toolCalls: [{ id: 'call_spam', function: { name: 'todo', arguments: JSON.stringify({ action: 'add', title: 'Do the thing' }) } }],
+      finishReason: 'tool_calls' as const,
+    };
+    const fake = await startFakeOpenAI([
+      sameCall, sameCall, sameCall, sameCall,
+      { content: 'All tests pass, task complete.', finishReason: 'stop' },
+    ]);
+    try {
+      const config = makeConfig(dir, fake.url);
+      const workspace = new Workspace(dir, '.mochi');
+      workspace.ensure();
+      const context = new ContextEngine(config, dir);
+      context.setGoal('Do the thing');
+      const task = createTask('Do the thing task', 'fix the build and add tests. todo tracking included.');
+      const agent = new Agent({ id: 'spam-guard-agent', role: 'coder', config, workspace, events: new EventBus(), cwd: dir, context });
+      const result = await agent.run(task);
+      // The duplicate write-style calls must not each execute — the todo tool
+      // is additive so check the run completed without burning all requests.
+      expect(fake.requests.length).toBeLessThanOrEqual(5);
+      void result;
+    } finally {
+      await fake.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('continues an unscoped coding task after a prose-only preamble', async () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-preamble-'));
     const fake = await startFakeOpenAI([

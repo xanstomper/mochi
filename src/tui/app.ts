@@ -121,6 +121,7 @@ const COMMANDS = [
   { name: '/review [staged|last]', hint: 'Review the working-tree diff before commit' },
   { name: '/security-review [staged|last]', hint: 'Security-focused review of the diff' },
   { name: '/new', hint: 'Start a fresh conversation session' },
+  { name: '/branch [title]', hint: 'Branch the current session (forks the transcript, keeps lineage)' },
   { name: '/skip', hint: 'Skip/interrupt current in-flight task' },
   { name: '/stop', hint: 'Interrupt current in-flight task' },
   { name: '/exit', hint: 'Quit Mochi CLI' },
@@ -1674,7 +1675,15 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       });
       return;
     }
-if (line === '/branch') { await run(async () => (await import('../git.js')).status(projectRoot)); return; }
+if (line === '/branch' || line.startsWith('/branch ')) {
+      // Session branching (Hermes-style): create a child session linked to the
+      // current one, copying the transcript so the branch keeps full context.
+      const title = line.startsWith('/branch ') ? line.slice(8).trim() : undefined;
+      push('user', line);
+      await run(async () => runtime.branchSession(title || undefined));
+      scheduleRender();
+      return;
+    }
     if (line === '/commit') {
       const msg = await ask('Commit message:');
       await run(async () => {
@@ -1791,6 +1800,9 @@ if (line === '/branch') { await run(async () => (await import('../git.js')).stat
     }
   }
 
+    /** Message queue: messages typed while a task runs; drained on completion. */
+  const messageQueue: string[] = [];
+
   async function run(fn: () => Promise<string>, echo = true) {
     state.busy = true;
     startSpinner();
@@ -1824,6 +1836,13 @@ if (line === '/branch') { await run(async () => (await import('../git.js')).stat
       state.busy = false;
       stopSpinner();
       scheduleRender();
+      // Drain the message queue: messages typed mid-run send now, in order.
+      // Sequential (not parallel) so each queued message gets a full run.
+      while (messageQueue.length > 0 && !exited) {
+        const next = messageQueue.shift()!;
+        push('system', `◇ sending queued message (${messageQueue.length + 1} total were queued)`);
+        await handleCommand(next);
+      }
     }
   }
 
@@ -2672,6 +2691,14 @@ if (line === '/branch') { await run(async () => (await import('../git.js')).stat
             state.promptActive = false;
             state.input = '';
             state.cursor = 0;
+          } else if (state.busy) {
+            // MESSAGE QUEUE: while a task is running, Enter queues the message
+            // instead of interleaving/dropping it. Drains automatically when
+            // the current run finishes (see queueDrain in run()).
+            messageQueue.push(text.trim());
+            push('system', `◇ queued (${messageQueue.length}) — sends when the current task finishes. Alt+↑ pops the last queued message.`);
+            state.input = '';
+            state.cursor = 0;
           } else {
             Promise.resolve(handleCommand(text)).catch((e) => {
               push('error', e instanceof Error ? `${e.message}` : String(e));
@@ -2844,6 +2871,18 @@ if (line === '/branch') { await run(async () => (await import('../git.js')).stat
       case '\x1b[C': if (state.cursor < state.input.length) state.cursor++; break;
       case '\x1b[H': state.cursor = 0; break;
       case '\x1b[F': state.cursor = state.input.length; break;
+      case '\x1b[1;3A': {
+          // Alt+Up: pop the last queued message back into the composer for editing.
+          const popped = messageQueue.pop();
+          if (popped) {
+            state.input = popped;
+            state.cursor = state.input.length;
+            push('system', `◇ un-queued (${messageQueue.length} still queued)`);
+          } else {
+            push('system', 'Queue is empty.');
+          }
+          break;
+        }
       case '\x1b[A':
         if (state.dropActive) { state.dropSelected = Math.max(0, state.dropSelected - 1); break; }
         historyPrev(); break;

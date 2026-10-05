@@ -4,6 +4,7 @@ import { EventBus } from './events.js';
 import { Workspace } from './workspace.js';
 import { GoalEngine } from './goals/goal.js';
 import { findProjectRoot } from './repo.js';
+import { SessionStore } from './session-store.js';
 import { readdirSync, statSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { checkpoint as gitCheckpoint, restore as gitRestore, type CheckpointResult } from './git.js';
@@ -183,6 +184,33 @@ export class Runtime {
   newSession(): string {
     this.activeSessionId = undefined;
     return 'Started fresh session';
+  }
+
+  /** Branch the active conversation: create a child session whose parentId
+   *  links to the current one, copying the transcript so the branch starts
+   *  with full context. Returns a human-readable confirmation. */
+  branchSession(title?: string): string {
+    const store = new SessionStore(this.cwd);
+    const parentId = this.activeSessionId;
+    if (!parentId) {
+      // No active session yet — a branch of nothing is just a new session.
+      this.activeSessionId = store.begin({ objective: title ?? 'Branched session' });
+      return `No prior conversation to branch from — started a fresh session ${this.activeSessionId.slice(0, 8)}.`;
+    }
+    const parent = store.list(200).find((s) => s.id === parentId);
+    const childId = store.begin({
+      parentId,
+      goalId: parent?.goalId ?? undefined,
+      role: parent?.role ?? undefined,
+      objective: title ?? (parent ? `Branch of: ${parent.objective.slice(0, 60)}` : 'Branched session'),
+    });
+    // Copy the parent transcript into the child so the branch resumes with
+    // full context (the parent_id link also records the lineage).
+    for (const m of store.messages(parentId)) {
+      store.append(childId, m.role, m.content);
+    }
+    this.activeSessionId = childId;
+    return `Branched session ${parentId.slice(0, 8)} → ${childId.slice(0, 8)} (${store.messages(childId).length} messages copied). You are now talking in the branch.`;
   }
 
   /** Reset active conversation session. */
@@ -641,6 +669,7 @@ export class Runtime {
     if (!this.config.reasoning) {
       this.config.reasoning = 'max';
     }
+    this.syncEngines();
     return describeConfig(this.config);
   }
 
@@ -650,7 +679,17 @@ export class Runtime {
     if (!this.config.reasoning) {
       this.config.reasoning = 'max';
     }
+    this.syncEngines();
     return describeConfig(this.config);
+  }
+
+  /** Propagate a config swap to engines that captured the config object at
+   *  construction. GoalEngine (and anything else holding a reference) would
+   *  otherwise keep serving the PREVIOUS model forever: useProvider replaced
+   *  this.config but the engines still pointed at the old object — so /model
+   *  looked applied while every run silently used the stale model. */
+  private syncEngines() {
+    (this.goals as unknown as { config: MochiConfig }).config = this.config;
   }
 
   private async runChecks(): Promise<Record<string, string>> {

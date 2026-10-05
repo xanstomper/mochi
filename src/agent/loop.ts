@@ -335,6 +335,9 @@ export class Agent {
   private contextCutoffNudged = false;
   private lastCompletionAnswer = '';
   private sameAnswerStreak = 0;
+  /** Consecutive-identical tool-call spam guard state (runMoolCall). */
+  private lastToolSig = '';
+  private toolSigRepeat = 0;
   /** Bounded retry budget for transient transport aborts when no fallback
    *  model remains (reset on any successful model output). */
   private transientAbortRetries = 0;
@@ -2047,6 +2050,21 @@ Continue from 'Next:', do not redo completed progress.`,
   private async runMoolCall(tc: ToolCall): Promise<void> {
     if (this.abortSignal?.aborted) return;
     const toolName = TOOL_ALIASES[tc.function.name] || tc.function.name;
+    // Consecutive-identical-call spam guard: the same tool + same args issued
+    // 3 times in a row (across iterations) is the "todo spam" pattern — the
+    // model loops re-announcing instead of progressing. Veto the 3rd+ with a
+    // directive, which both stops the waste and teaches the model to move on.
+    const sig = toolName + ':' + (tc.function.arguments ?? '');
+    if (sig === this.lastToolSig) {
+      this.toolSigRepeat++;
+    } else {
+      this.lastToolSig = sig;
+      this.toolSigRepeat = 1;
+    }
+    if (this.toolSigRepeat >= 3) {
+      this.vetoToolCall(tc, `You have already called ${toolName} with these exact arguments ${this.toolSigRepeat} times in a row. The result will not change. Do NOT call it again — use the result you already have and proceed to the next step of the task.`);
+      return;
+    }
     if (this.budget) {
       this.budget.recordToolCall();
       if (!this.budget.canExecuteTool()) {
