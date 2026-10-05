@@ -68,7 +68,11 @@ async function ripgrep(cwd: string, query: string, glob?: string): Promise<strin
   if (nat) return nat;
   return new Promise((resolve) => {
     const args = ['-n', '--no-heading', '--color=never', '-F', query];
-    if (glob) args.push('-g', glob);
+    if (glob) {
+      args.push('-g', glob);
+    } else {
+      args.push('-g', '!{dist,build,.next,coverage,node_modules,.cache}/**');
+    }
     const proc = spawn('rg', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     let err = '';
@@ -93,7 +97,7 @@ function* walkFiles(root: string, dir: string, budget: { seen: number; max: numb
   try { entries = readdirSync(dir); } catch { return; }
   for (const e of entries) {
     if (budget.seen >= budget.max) return;
-    if (e === '.git' || e === 'node_modules' || e === '.mochi') continue;
+    if (['.git', 'node_modules', '.mochi', 'dist', 'build', '.next', '.turbo', 'coverage', '.cache'].includes(e)) continue;
     const full = resolve(dir, e);
     let st: ReturnType<typeof statSync>;
     try { st = statSync(full); } catch { continue; }

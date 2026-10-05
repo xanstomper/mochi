@@ -100,7 +100,8 @@ export const findReferencesTool: Tool = {
     if (!symbol) return 'Error: symbol parameter is required.';
 
     const searchScope = args.path ? String(args.path).trim() : '.';
-    const rgArgs = ['-n', '--word-regexp', symbol, searchScope];
+    const COMMON_IGNORE_GLOBS = ['-g', '!{dist,build,out,target,.next,.turbo,coverage,node_modules,.cache}/**'];
+    const rgArgs = ['-n', '--word-regexp', ...COMMON_IGNORE_GLOBS, symbol, searchScope];
     const regex = new RegExp(`\\b${escapeRegExp(symbol)}\\b`);
     const lines = await search(ctx.cwd, searchScope, rgArgs, regex);
     if (lines.length === 0) {
@@ -128,7 +129,8 @@ export const findDefinitionsTool: Tool = {
 
     // `export function symbol`, `class symbol`, `interface symbol`, `def symbol`, `fn symbol`, `func symbol`
     const pattern = `\\b(function|class|interface|type|enum|const|let|var|def|fn|func|struct|trait|impl)\\s+${escapeRegExp(symbol)}\\b`;
-    const rgArgs = ['-n', '-e', pattern, '.'];
+    const COMMON_IGNORE_GLOBS = ['-g', '!{dist,build,out,target,.next,.turbo,coverage,node_modules,.cache}/**'];
+    const rgArgs = ['-n', '-e', pattern, ...COMMON_IGNORE_GLOBS, '.'];
     const regex = new RegExp(pattern);
     const lines = await search(ctx.cwd, '.', rgArgs, regex);
     if (lines.length === 0) {

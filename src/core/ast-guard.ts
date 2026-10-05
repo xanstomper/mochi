@@ -2,7 +2,9 @@
 // Performs sub-millisecond static syntax and structural validation on file modifications
 // before the agent completes its turn, enabling instant self-correction without running slow CLI test suites.
 
-import { extname } from 'node:path';
+import { extname, dirname, resolve } from 'node:path';
+import { existsSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 
 let _ts: typeof import('typescript') | null = null;
@@ -71,6 +73,61 @@ export function validateTypeScriptSyntax(filePath: string, content: string): AST
   } catch {
     return { valid: true, errors: [] };
   }
+}
+
+/**
+ * Verifies that relative imports within TypeScript / JavaScript files exist on disk.
+ * Catches hallucinated module paths before the agent finishes its turn.
+ */
+export function validateRelativeImports(filePath: string, content: string): ASTDiagnosticResult {
+  const dir = dirname(filePath);
+  const errors: ASTDiagnosticError[] = [];
+
+  const importRegex = /(?:import|export)\s+(?:[\w*\s{},]*\s+from\s+)?['"](\.[^'"]+)['"]|require\s*\(\s*['"](\.[^'"]+)['"]\s*\)/g;
+  const lines = content.split('\n');
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim().startsWith('//') || line.trim().startsWith('/*')) continue;
+
+    let match: RegExpExecArray | null;
+    while ((match = importRegex.exec(line)) !== null) {
+      const importPath = match[1] || match[2];
+      if (!importPath || !importPath.startsWith('.')) continue;
+
+      const basePath = resolve(dir, importPath);
+      const candidates = [
+        basePath,
+        basePath.replace(/\.js$/, '.ts'),
+        basePath.replace(/\.mjs$/, '.mts'),
+        basePath.replace(/\.cjs$/, '.cts'),
+        basePath.replace(/\.jsx$/, '.tsx'),
+        `${basePath}.ts`,
+        `${basePath}.tsx`,
+        `${basePath}.js`,
+        `${basePath}.jsx`,
+        `${basePath}.json`,
+        `${basePath}/index.ts`,
+        `${basePath}/index.tsx`,
+        `${basePath}/index.js`,
+      ];
+
+      const exists = candidates.some((c) => existsSync(c));
+      if (!exists) {
+        errors.push({
+          line: i + 1,
+          message: `Cannot find module '${importPath}' relative to ${filePath}`,
+          severity: 'warning',
+        });
+      }
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    summary: errors.length > 0 ? errors.map((e) => `Line ${e.line}: ${e.message}`).join('; ') : undefined,
+  };
 }
 
 /** Validates JSON syntax and isolates exact error line */
@@ -219,10 +276,46 @@ export function validateBalancedStructure(content: string, language: string): AS
   };
 }
 
+/**
+ * Validates Python syntax using Python 3's built-in AST compiler via stdin.
+ * Catches syntax errors, indentation errors, and unclosed blocks with exact line numbers.
+ */
+export function validatePythonSyntax(content: string): ASTDiagnosticResult {
+  try {
+    execFileSync(
+      'python3',
+      ['-c', 'import sys, ast; ast.parse(sys.stdin.read())'],
+      {
+        input: content,
+        encoding: 'utf8',
+        timeout: 2000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }
+    );
+    return { valid: true, errors: [] };
+  } catch (err: any) {
+    const stderr = String(err.stderr || err.message || '');
+    const lineMatch = stderr.match(/line\s+(\d+)/i);
+    const line = lineMatch ? Number(lineMatch[1]) : 1;
+    const msgMatch = stderr.match(/(?:SyntaxError|IndentationError):\s*(.*)/i);
+    const message = msgMatch ? msgMatch[0] : 'Python syntax error';
+    return {
+      valid: false,
+      errors: [{ line, message, severity: 'error' }],
+      summary: `Line ${line}: ${message}`,
+    };
+  }
+}
+
 /** Python indentation and header colon validator */
 export function validatePythonStructure(content: string): ASTDiagnosticResult {
   const balanced = validateBalancedStructure(content, 'python');
   if (!balanced.valid) return balanced;
+
+  try {
+    const pyAst = validatePythonSyntax(content);
+    if (!pyAst.valid) return pyAst;
+  } catch {}
 
   const lines = content.split(/\r?\n/);
   const errors: ASTDiagnosticError[] = [];
@@ -266,6 +359,14 @@ export function validateFileSyntax(filePath: string, content: string): ASTDiagno
     if (!balanced.valid) return balanced;
     const tsCheck = validateTypeScriptSyntax(filePath, content);
     if (!tsCheck.valid) return tsCheck;
+    const importCheck = validateRelativeImports(filePath, content);
+    if (!importCheck.valid) {
+      return {
+        valid: false,
+        errors: importCheck.errors,
+        summary: `⚠️ [Module Import Warning]: ${importCheck.summary}`,
+      };
+    }
     return { valid: true, errors: [] };
   }
 

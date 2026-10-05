@@ -59,4 +59,12 @@ describe('read tool', () => {
     const out = String(await readTool.execute({ path: codeFile, skeleton: true }, ctx));
     expect(out).toContain('calculate');
   });
+
+  it('supports structural skeleton extraction on Python files via fallback outline', async () => {
+    const pyFile = 'src/example.py';
+    writeFileSync(resolve(dir, pyFile), 'class UserService:\n    def get_user(self, user_id):\n        return None\n');
+    const out = String(await readTool.execute({ path: pyFile, skeleton: true }, ctx));
+    expect(out).toContain('UserService');
+    expect(out).toContain('get_user');
+  });
 });

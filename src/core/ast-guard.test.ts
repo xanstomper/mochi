@@ -5,6 +5,8 @@ import {
   validatePythonStructure,
   validateFileSyntax,
   validateTypeScriptSyntax,
+  validateRelativeImports,
+  validatePythonSyntax,
 } from './ast-guard.js';
 
 describe('In-Turn AST Diagnostic Guard', () => {
@@ -59,7 +61,7 @@ def calculate_metrics(items)
 `;
     const res = validatePythonStructure(missingColon);
     expect(res.valid).toBe(false);
-    expect(res.summary).toContain("Missing colon ':'");
+    expect(res.summary).toMatch(/colon|SyntaxError/i);
   });
 
   it('dispatches file syntax checks transparently by extension', () => {
@@ -80,5 +82,27 @@ def calculate_metrics(items)
     expect(res.errors[0].line).toBe(4);
     expect(res.summary).toContain('Line 4:');
   });
+
+  it('validates relative imports and flags non-existent relative files', () => {
+    const valid = 'import { validateJSON } from "./ast-guard.js";\nconst a = 1;';
+    const resValid = validateRelativeImports('/home/jewboy420/mochi/src/core/ast-guard.test.ts', valid);
+    expect(resValid.valid).toBe(true);
+
+    const invalid = 'import { ghost } from "./non_existent_module_xyz123.js";';
+    const resInvalid = validateRelativeImports('/home/jewboy420/mochi/src/core/ast-guard.test.ts', invalid);
+    expect(resInvalid.valid).toBe(false);
+    expect(resInvalid.summary).toContain("Cannot find module './non_existent_module_xyz123.js'");
+  });
+
+  it('validates Python syntax using AST parser and catches syntax/indentation errors', () => {
+    const validPy = 'def add(a, b):\n    return a + b\n';
+    expect(validatePythonSyntax(validPy).valid).toBe(true);
+
+    const invalidPy = 'def add(a, b)\n    return a + b\n';
+    const res = validatePythonSyntax(invalidPy);
+    expect(res.valid).toBe(false);
+    expect(res.summary).toContain('SyntaxError');
+  });
 });
+
 

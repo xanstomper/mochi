@@ -2463,18 +2463,25 @@ Continue from 'Next:', do not redo completed progress.`,
     // A lesson was just surfaced; if this task class recurs, nudge the model to
     // persist a reusable SKILL.md via skill_manage (auto skill creation).
     this.maybeSuggestSkill();
-    // DeepSeek-style structured self-critique on the FIRST verify failure of a
+    // DeepSeek-style structured self-critique on the verify failure of a
     // hard task: forces a deliberate repair plan instead of a blind retry.
-    this.maybeSelfCritique(failureText);
+    this.maybeSelfCritique(task, failureText);
   }
 
   /** model.speculative.selfCritique: inject a structured self-critique directive
-   *  after the first verification failure so the next attempt is a conscious
+   *  after verification failure so the next attempt is a conscious
    *  repair with an explicit causal theory. Once per task, never blocks. */
   private selfCritiqued = false;
-  private maybeSelfCritique(failureText: string): void {
+  private maybeSelfCritique(task: Task, failureText: string): void {
     if (this.selfCritiqued || this.planMode) return;
-    if (!this.config.model?.speculative?.selfCritique) return;
+    const reasoning = this.resolveReasoning(task);
+    const shouldCritique = Boolean(
+      this.config.model?.speculative?.selfCritique ||
+      reasoning === 'high' ||
+      reasoning === 'max' ||
+      this.verifyCount >= 2
+    );
+    if (!shouldCritique) return;
     this.selfCritiqued = true;
     try {
       this.context.addMessage({

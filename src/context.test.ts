@@ -174,4 +174,32 @@ describe('conditional tool guidelines (VNext P1.3)', () => {
     expect(sys.length).toBeLessThan(sys2.length);
     rmSync(dir, { recursive: true, force: true });
   });
+
+  it('intelligently condenses large tool output with errors using condenseOutput', () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-ctx3-'));
+    const engine = new ContextEngine({
+      model: { provider: 'x', baseUrl: 'http://l', model: 'm' },
+      safety: { contextBudgetTokens: 8000, mode: 'auto', commandTimeoutSeconds: 5, maxIterations: 5, maxRuntimeMinutes: 1, maxConcurrentAgents: 1 },
+      permissions: { read: true, write: true, shell: true, network: true, gitDestructive: false },
+    } as any, dir, isolatedSkillsDir);
+
+    const noisyOutput = [
+      'Build started...',
+      ...Array.from({ length: 60 }, (_, i) => `Compiling module ${i}...`),
+      'FAIL src/app.test.ts > renders header',
+      'AssertionError: expected "Mochi" to equal "Terminus"',
+      '  - Terminus',
+      '  + Mochi',
+      ...Array.from({ length: 60 }, (_, i) => `Cleaned up module ${i}...`),
+    ].join('\n');
+
+    engine.addMessage({ role: 'tool', tool_call_id: 'tc1', content: noisyOutput });
+    const msgs = (engine as any).messages;
+    const added = msgs[msgs.length - 1];
+    expect(added.content).toContain('FAIL src/app.test.ts');
+    expect(added.content).toContain('AssertionError: expected "Mochi" to equal "Terminus"');
+    expect(added.content.length).toBeLessThan(noisyOutput.length);
+    rmSync(dir, { recursive: true, force: true });
+  });
 });
+

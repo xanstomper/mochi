@@ -3,6 +3,7 @@ import { resolve, extname } from 'node:path';
 import type { Tool } from './types.js';
 import { clipToolOutput, DEFAULT_TOOL_RESULT_MAX_CHARS } from './output-budget.js';
 import { nativeSkeletonizeSource } from '../native/core.js';
+import { extractCodeOutline } from './outline.js';
 
 export const readTool: Tool = {
   def: {
@@ -43,14 +44,23 @@ export const readTool: Tool = {
       const ext = extname(rawPath).replace(/^\./, '') || 'ts';
       const skel = nativeSkeletonizeSource(content, ext);
       if (skel) return skel;
+
+      const symbols = extractCodeOutline(content, extname(rawPath));
+      if (symbols.length > 0) {
+        const outLines = [`Structural Skeleton for ${rawPath} (${symbols.length} symbols):\n`];
+        for (const s of symbols) {
+          const pad = ' '.repeat(Math.min(s.indent, 8));
+          outLines.push(`${String(s.line).padStart(5, ' ')} | ${pad}[${s.kind}] ${s.signature}`);
+        }
+        return outLines.join('\n');
+      }
     }
 
     const lines = content.split('\n');
     const offset = args.offset ? Math.max(1, Number(args.offset)) : 1;
-    // Default window: 2,000 lines. Reading a minified bundle or a huge log
-    // whole used to plant hundreds of K tokens in the transcript; with the
-    // window the model paged through deliberately (offset/limit) instead.
-    const DEFAULT_READ_LINES = 2_000;
+    // Default window: 300 lines (or explicit limit). Prevents multi-thousand-line
+    // files from blowing up the prompt context on naive read calls.
+    const DEFAULT_READ_LINES = 300;
     const limit = args.limit ? Math.max(1, Number(args.limit)) : Math.min(lines.length, DEFAULT_READ_LINES);
     const slice = lines.slice(offset - 1, offset - 1 + limit);
     const numbered = slice.map((l, i) => `${(offset + i).toString().padStart(4, ' ')} | ${l}`).join('\n');
@@ -58,7 +68,7 @@ export const readTool: Tool = {
     const clipped = clipToolOutput(numbered, { maxChars: DEFAULT_TOOL_RESULT_MAX_CHARS });
     if (offset - 1 + limit < lines.length) {
       const remaining = lines.length - (offset - 1 + limit);
-      return clipped + `\n... [mochi: ${remaining} more line(s) — pass offset/limit to continue]`;
+      return clipped + `\n... [mochi: ${remaining} more line(s) — pass offset/limit to continue or skeleton: true for outline]`;
     }
     return clipped;
   },

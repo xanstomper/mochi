@@ -19,6 +19,7 @@ import { feedbackDigest } from './feedback.js';
 import { detectCircle } from './circle.js';
 import { evaluateOwl } from './cognitive/owl.js';
 import { formatEnvironmentBlock } from './core/env-profiler.js';
+import { condenseOutput } from './core/output-condenser.js';
 
 const CANDIDATE_RULES = ['MOCHI.md', 'mochi.md', 'AGENTS.md', 'CLAUDE.md', '.cursorrules', '.github/copilot-instructions.md'];
 
@@ -219,12 +220,33 @@ export class ContextEngine {
   addMessage(message: ChatMessage) {
     // Phase 2: mine file-op tool calls so read/edited sets survive compaction.
     this.trackFileOp(message);
-    if (message.role === 'tool' && typeof message.content === 'string' && message.content.length > 6000) {
-      const head = message.content.slice(0, 3000);
-      const tail = message.content.slice(-1500);
-      const trimmed = `${head}\n\n… [${message.content.length - 4500} lines omitted] …\n\n${tail}`;
-      this.messages.push({ ...message, content: trimmed });
-      return;
+    if (message.role === 'tool' && typeof message.content === 'string') {
+      const text = message.content;
+      const hasErrors =
+        /error(\[[A-Za-z0-9_-]+\])?:/i.test(text) ||
+        /\bFAIL\b/.test(text) ||
+        /AssertionError:/i.test(text) ||
+        /SyntaxError:/i.test(text) ||
+        /TypeError:/i.test(text) ||
+        /TS\d{4,5}:/i.test(text);
+
+      if ((text.length > 2000 || text.split('\n').length > 35) && hasErrors) {
+        const condensed = condenseOutput(text, { maxLines: 50, preserveContext: 3 });
+        this.messages.push({ ...message, content: condensed.condensed });
+        return;
+      }
+
+      if (text.length > 5000) {
+        const lines = text.split('\n');
+        if (lines.length > 60) {
+          const headLines = lines.slice(0, 40);
+          const tailLines = lines.slice(-20);
+          const omitted = lines.length - 60;
+          const folded = `${headLines.join('\n')}\n\n… [mochi: ${omitted} lines omitted to conserve tokens — use offset/limit or outline to inspect more] …\n\n${tailLines.join('\n')}`;
+          this.messages.push({ ...message, content: folded });
+          return;
+        }
+      }
     }
     this.messages.push(message);
   }
@@ -422,6 +444,8 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
     add(['skill_manage'], 'skill_manage: create/edit/patch YOUR OWN reusable SKILL.md skills to persist repeatable procedures. When you solve a task class that recurs (or a lesson sticks), author a concise one so the next time is faster. delete archives (recoverable) — nothing is hard-deleted.');
     add(['tool_factory'], 'tool_factory: create YOUR OWN callable TOOLS when you build a non-trivial command pipeline or repeat a multi-command workflow — shell-backed, stored in .mochi/tools/, hot-loaded so you can call the new tool by name immediately and in every future session. Always action="test" a freshly created tool before relying on it. Authored tools cannot shadow built-ins.');
     add(['web_search', 'web_crawl', 'fetch'], 'web_search / web_crawl / fetch: for research. Search first; fetch a known URL; crawl a documentation site (same-host by default).');
+    add(['lint'], 'lint: auto-detect and run project linters (eslint, biome, ruff, clippy) on a file or directory. Pass fix: true to auto-heal errors.');
+    add(['format'], 'format: auto-format a file or directory using project prettier, biome, or black.');
     lines.push('   - plan mode (when active): research with read-only tools and return a plan. Mutating calls are vetoed.');
     return lines.join('\n');
   }

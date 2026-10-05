@@ -107,6 +107,7 @@ const EXTENDED_TOOL_NAMES = new Set([
   'web_search', 'get_diagnostics', 'create_directory', 'move_file', 'copy_file',
   'git_blame', 'git_history', 'system_info', 'find_references', 'find_definitions',
   'db_inspect', 'create_pr', 'type_hierarchy', 'chameleon', 'rename_symbol', 'repl',
+  'lint', 'format',
 ]);
 
 /** Detect whether a model name implies a weak/free-tier model that struggles
