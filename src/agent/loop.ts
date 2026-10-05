@@ -5,6 +5,7 @@ import type { Attempt, ChatMessage, MochiConfig, ModelProfile, Task, ToolDefinit
 import type { EventBus } from '../events.js';
 import type { Workspace } from '../workspace.js';
 import { ContextEngine } from '../context.js';
+import { MemoryStore } from '../memory.js';
 import { createProvider } from '../model/router.js';
 import { isMode, modeInstruction } from '../modes.js';
 import { kvCache } from '../kv-cache.js';
@@ -198,6 +199,26 @@ export function isComplexRewritingTask(title: string, description = ''): boolean
     || /\b(?:files?|modules?|components?|packages?|services?|plugins?|drivers?)\b/.test(s);
 }
 
+/** Multi-session project continuity: injected once (inside a git repo) so a new
+ *  session on the same project resumes with prior context instead of a blank
+ *  slate. The durable project memory + session_recall + open todos already
+ *  persist this project's state — this directive makes the model warm up with
+ *  them before editing, the Cline/Claude Code multi-session edge. */
+const MULTI_SESSION_RESUME_PROTOCOL = [
+  'This project has prior work recorded across sessions. Before editing, quickly',
+  'orient yourself in it. On your FIRST tool call, run BOTH:',
+  '1. memory action="read" — the durable project memory (decisions, architecture,',
+  '   conventions, known failures). These are the project\'s ground truth.',
+  '2. todo action="list" — any open (non-done) tasks from a previous session are',
+  '   likely incomplete work you should pick up or consciously mark done.',
+  '3. session_recall action="list" then session_recall action="get" for the most',
+  '   recent session, so you know exactly where the last session left off.',
+  'Then act on the current task with that continuity: respect prior decisions',
+  'and conventions; do not undo or re-decide things the memory already settled;',
+  'continue unfinished work rather than restarting it.',
+  '',
+].join('\n');
+
 export interface AgentOptions {
   id?: string;
   role: string;
@@ -321,6 +342,7 @@ export class Agent {
    *  blueprint is injected exactly once at the active reasoning tier. */
   private compilerInjected = false;
   private rewriteProtocolInjected = false;
+  private resumeProtocolInjected = false;
   /** Diff-hygiene: one bounded cleanup nudge for debug logs / TODO /
    *  suppressed-check debris the model added before we accept "done". */
   private hygieneNudges = 0;
@@ -640,6 +662,15 @@ Continue from 'Next:', do not redo completed progress.`,
         if (complex) {
           this.context.addMessage({ role: 'system', content: LARGE_REWRITE_PROTOCOL });
         }
+      }
+      // Multi-session project continuity: inside a real git repo, tell the model
+      // once to warm up with prior project context before editing — the durable
+      // memory, any open todos, and the most recent session's state. This is what
+      // lets Mochi RESUME a dense multi-session project instead of starting each
+      // session from a blank slate (the Cline/Claude Code multi-session edge).
+      if (taskKind !== 'chat' && repo && !this.resumeProtocolInjected) {
+        this.resumeProtocolInjected = true;
+        this.context.addMessage({ role: 'system', content: MULTI_SESSION_RESUME_PROTOCOL });
       }
       // Anti-loop: if it's just gathering context (read/search) without editing, encourage an answer.
       if (this.toolCallsTotal >= 12 && !this.fileChanged && !this.planMode) {
@@ -2421,10 +2452,26 @@ Continue from 'Next:', do not redo completed progress.`,
     }
   }
 
+  /** Auto-persist a successful task's outcome to durable project memory so the
+   *  NEXT session on this project (via the multi-session resume protocol) has
+   *  real state to load — what changed and where we left things. Deduplicated,
+   *  best-effort (never blocks completion on a write failure). */
+  private recordDurableState(task: Task): void {
+    const changed = this.context['state'].filesModified ?? [];
+    if (!changed.length) return;
+    try {
+      const { MemoryStore } = require('../memory.js');
+      const store = new MemoryStore(resolve(this.workspace.dir, '.mochi'));
+      const body = `Completed "${task.title}". Files changed: ${changed.slice(0, 6).join(', ')}${changed.length > 6 ? ` (+${changed.length - 6} more)` : ''}.`;
+      store.add({ kind: 'decision', title: `Completed: ${task.title}`.slice(0, 80), body, source: 'mochi-session' });
+    } catch { /* durable-state write is best-effort */ }
+  }
+
   /** Called when verification finally passed; finalize the autopsy with the
    *  resolved outcome and write a procedural lesson from the top hypothesis. */
   private recordSuccess(task: Task, repo: ReturnType<typeof detectRepo>): void {
     this.anchor.recordClaim(task.title, 'Verified', 'Verification passed');
+    this.recordDurableState(task);
     // Speculation memory: the preflight's strategy class just RESOLVED a task —
     // record it so future preflights on similar tasks prefer this class.
     if (this.speculatedStrategy) {
