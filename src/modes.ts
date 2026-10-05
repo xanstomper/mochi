@@ -19,7 +19,7 @@ export interface ModeSpec {
   /** Instruction block appended to the agent's system prompt. */
   instruction: string;
   /** Safety mode to enforce (auto, ask...). undefined = leave unchanged. */
-  safetyMode?: 'safe' | 'ask' | 'auto';
+  safetyMode?: 'safe' | 'ask' | 'auto' | 'uncensored';
   planMode?: boolean;
   /** Tool names to prioritize when this mode is active. */
   preferredTools?: string[];

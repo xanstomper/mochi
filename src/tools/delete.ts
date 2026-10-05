@@ -1,5 +1,6 @@
 import { existsSync, unlinkSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { homedir } from 'node:os';
 import type { Tool } from './types.js';
 import { markMutation } from './fs-signal.js';
 
@@ -15,7 +16,7 @@ export const deleteTool: Tool = {
   },
   async execute(args, ctx) {
     const rawPath = String(args.path ?? '');
-    const fullPath = resolve(ctx.cwd, rawPath);
+    const fullPath = rawPath === '~' ? homedir() : rawPath.startsWith('~/') ? resolve(homedir(), rawPath.slice(2)) : resolve(ctx.cwd, rawPath);
     if (!existsSync(fullPath)) throw new Error(`File not found: ${rawPath}`);
     unlinkSync(fullPath);
     ctx.events.emit({ type: 'file:changed', path: fullPath, operation: 'delete', agentId: ctx.agentId });

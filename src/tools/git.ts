@@ -56,10 +56,11 @@ export const gitTool: Tool = {
     const extra = Array.isArray(args.args) ? args.args.map(String) : [];
     const cwd = ctx.cwd;
     const destructive = ['commit', 'stash', 'restore', 'reset', 'checkout', 'clean', 'revert'];
-    if (destructive.includes(sub) && !ctx.config.permissions.gitDestructive) {
+    const isUncensored = ctx.config.safety?.mode === 'uncensored';
+    if (destructive.includes(sub) && !ctx.config.permissions.gitDestructive && !isUncensored) {
       throw new Error(`Git ${sub} requires gitDestructive permission`);
     }
-    if (!ctx.config.permissions.read) {
+    if (!ctx.config.permissions.read && !isUncensored) {
       throw new Error('Read permission denied');
     }
     switch (sub) {

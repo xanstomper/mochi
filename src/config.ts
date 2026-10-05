@@ -169,6 +169,17 @@ if (!cfg.model.failover || cfg.model.failover.length === 0) {
   if (process.env.MOCHI_PROJECT_DIR) cfg.projectDir = process.env.MOCHI_PROJECT_DIR;
   if (process.env.MOCHI_CONFIG_DIR) cfg.configDir = process.env.MOCHI_CONFIG_DIR;
   if (process.env.MOCHI_TELEMETRY) cfg.telemetry = /^1|true|yes$/i.test(process.env.MOCHI_TELEMETRY);
+  if (process.env.MOCHI_UNCENSORED === '1') {
+    cfg.safety.mode = 'uncensored';
+    cfg.permissions = {
+      read: true,
+      write: true,
+      shell: true,
+      network: true,
+      gitDestructive: true,
+      admin: true,
+    };
+  }
   if (process.env.MOCHI_SAFETY) cfg.safety.mode = process.env.MOCHI_SAFETY as MochiConfig['safety']['mode'];
   if (process.env.MOCHI_PERMISSION_READ) cfg.permissions.read = /^1|true|yes$/i.test(process.env.MOCHI_PERMISSION_READ);
   if (process.env.MOCHI_PERMISSION_WRITE) cfg.permissions.write = /^1|true|yes$/i.test(process.env.MOCHI_PERMISSION_WRITE);
@@ -176,6 +187,14 @@ if (!cfg.model.failover || cfg.model.failover.length === 0) {
   if (process.env.MOCHI_PERMISSION_NETWORK) cfg.permissions.network = /^1|true|yes$/i.test(process.env.MOCHI_PERMISSION_NETWORK);
   if (process.env.MOCHI_PERMISSION_GIT_DESTRUCTIVE) cfg.permissions.gitDestructive = /^1|true|yes$/i.test(process.env.MOCHI_PERMISSION_GIT_DESTRUCTIVE);
   if (process.env.MOCHI_PERMISSION_ADMIN) cfg.permissions.admin = /^1|true|yes$/i.test(process.env.MOCHI_PERMISSION_ADMIN);
+  if (cfg.safety.mode === 'uncensored') {
+    cfg.permissions.read = true;
+    cfg.permissions.write = true;
+    cfg.permissions.shell = true;
+    cfg.permissions.network = true;
+    cfg.permissions.gitDestructive = true;
+    cfg.permissions.admin = true;
+  }
   if (process.env.MOCHI_QUIET) cfg.quiet = true;
   if (process.env.MOCHI_VERBOSE) cfg.verbose = true;
   if (process.env.MOCHI_DEBUG) cfg.debug = true;
@@ -252,8 +271,8 @@ export function validateConfig(config: MochiConfig): string[] {
   if (s.maxConcurrentAgents < 1 || s.maxConcurrentAgents > 32) {
     problems.push(`safety.maxConcurrentAgents (${s.maxConcurrentAgents}) is out of range 1–32`);
   }
-  if (s.mode !== 'safe' && s.mode !== 'ask' && s.mode !== 'auto') {
-    problems.push(`safety.mode "${s.mode}" is invalid — must be "safe", "ask", or "auto"`);
+  if (s.mode !== 'safe' && s.mode !== 'ask' && s.mode !== 'auto' && s.mode !== 'uncensored') {
+    problems.push(`safety.mode "${s.mode}" is invalid — must be "safe", "ask", "auto", or "uncensored"`);
   }
 
   // Optional budgets

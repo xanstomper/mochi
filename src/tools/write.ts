@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { homedir } from 'node:os';
 import type { Tool } from './types.js';
 import { markMutation } from './fs-signal.js';
 import { validateFileSyntax } from '../core/ast-guard.js';
@@ -19,7 +20,7 @@ export const writeTool: Tool = {
     const rawPath = String(args.path ?? '');
     const content = String(args.content ?? '');
     const append = Boolean(args.append);
-    const fullPath = resolve(ctx.cwd, rawPath);
+    const fullPath = rawPath === '~' ? homedir() : rawPath.startsWith('~/') ? resolve(homedir(), rawPath.slice(2)) : resolve(ctx.cwd, rawPath);
     const dir = dirname(fullPath);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     if (append) {

@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve, extname } from 'node:path';
+import { homedir } from 'node:os';
 import type { Tool } from './types.js';
 import { clipToolOutput, DEFAULT_TOOL_RESULT_MAX_CHARS } from './output-budget.js';
 import { nativeSkeletonizeSource } from '../native/core.js';
@@ -19,7 +20,7 @@ export const readTool: Tool = {
   },
   async execute(args, ctx) {
     const rawPath = String(args.path ?? '');
-    const fullPath = resolve(ctx.cwd, rawPath);
+    const fullPath = rawPath === '~' ? homedir() : rawPath.startsWith('~/') ? resolve(homedir(), rawPath.slice(2)) : resolve(ctx.cwd, rawPath);
     if (!existsSync(fullPath)) throw new Error(`File not found: ${rawPath}`);
 
     // Per-run cache: only read non-firstTime from disk once per unchanged

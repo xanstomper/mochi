@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { readdirSync, readFileSync, statSync, openSync, readSync, closeSync, existsSync } from 'node:fs';
 import { resolve, relative } from 'node:path';
+import { homedir } from 'node:os';
 import { nativeSearchDir } from '../native/core.js';
 import type { Tool, ToolContext } from './types.js';
 import { clipToolOutput } from './output-budget.js';
@@ -219,7 +220,7 @@ function buildStructured(cwd: string, groups: GroupResult[], limit: number): str
   return parts.join('\n') || 'No matches.';
 }
 
-async function fallbackSearch(cwd: string, query: string, glob?: string, limit = 60): Promise<string> {
+async function fallbackSearch(cwd: string, query: string, glob?: string, limit = 60, displayRoot?: string): Promise<string> {
   const regex = new RegExp(escapeRegex(query), 'i');
   const matches: MatchLine[] = [];
   const budget = { seen: 0, max: SEARCH_WALK_MAX_FILES };
@@ -238,7 +239,8 @@ async function fallbackSearch(cwd: string, query: string, glob?: string, limit =
     const lines = content.split('\n');
     for (let i = 0; i < lines.length; i++) {
       if (regex.test(lines[i])) {
-        matches.push({ path: relative(cwd, full).replace(/\\/g, '/'), line: i + 1, text: lines[i] });
+        const p = displayRoot && displayRoot !== cwd ? full : relative(cwd, full).replace(/\\/g, '/');
+        matches.push({ path: p, line: i + 1, text: lines[i] });
       }
     }
     // Yield to the event loop so a large tree walk can't block Agent timer/
@@ -258,8 +260,8 @@ async function fallbackSearch(cwd: string, query: string, glob?: string, limit =
     : result;
 }
 
-function cacheKey(query: string, glob?: string): string {
-  return `${query}::${glob ?? ''}`;
+function cacheKey(query: string, glob?: string, dir?: string): string {
+  return `${dir ?? ''}::${query}::${glob ?? ''}`;
 }
 
 export const searchTool: Tool = {
@@ -269,6 +271,7 @@ export const searchTool: Tool = {
     parameters: [
       { name: 'query', type: 'string', description: 'Text to search', required: true },
       { name: 'glob', type: 'string', description: 'Optional file glob filter', required: false },
+      { name: 'path', type: 'string', description: 'Optional directory path to search in (defaults to workspace cwd)', required: false },
       { name: 'limit', type: 'integer', description: 'Maximum result lines to return', required: false },
     ],
     permission: 'read',
@@ -278,15 +281,19 @@ export const searchTool: Tool = {
     if (!query) throw new Error('No query provided');
     const globArg = args.glob ? String(args.glob) : undefined;
     const limit = typeof args.limit === 'number' ? Math.max(1, Math.min(200, Math.floor(args.limit))) : 60;
+    const rawPath = args.path ? String(args.path) : undefined;
+    const targetDir = rawPath
+      ? (rawPath === '~' ? homedir() : rawPath.startsWith('~/') ? resolve(homedir(), rawPath.slice(2)) : resolve(ctx.cwd, rawPath))
+      : ctx.cwd;
 
     const gen = mutationGeneration();
-    const key = cacheKey(query, globArg);
-    const hit = getCached(ctx.cwd, key, gen);
+    const key = cacheKey(query, globArg, targetDir);
+    const hit = getCached(targetDir, key, gen);
     if (hit) {
       return hit.result + (hit.result === 'No matches.' ? '' : '\n[query cache hit]');
     }
 
-    const rg = await ripgrep(ctx.cwd, query, globArg);
+    const rg = await ripgrep(targetDir, query, globArg);
     let result: string;
     if (rg) {
       const lines = rg.split('\n');
@@ -294,18 +301,19 @@ export const searchTool: Tool = {
       for (const l of lines) {
         const idx = l.indexOf(':');
         if (idx < 0) continue;
-        const path = l.slice(0, idx);
+        const rawP = l.slice(0, idx);
         const rest = l.slice(idx + 1);
         const c2 = rest.indexOf(':');
         if (c2 < 0) continue;
         const line = Number(rest.slice(0, c2)) || 1;
-        matches.push({ path, line, text: rest.slice(c2 + 1) });
+        const finalP = targetDir !== ctx.cwd ? resolve(targetDir, rawP) : rawP;
+        matches.push({ path: finalP, line, text: rest.slice(c2 + 1) });
       }
-      result = buildStructured(ctx.cwd, groupMatches(ctx.cwd, matches), limit);
+      result = buildStructured(targetDir, groupMatches(targetDir, matches), limit);
     } else {
-      result = await fallbackSearch(ctx.cwd, query, globArg, limit);
+      result = await fallbackSearch(targetDir, query, globArg, limit, ctx.cwd);
     }
-    putCached(ctx.cwd, key, result, gen);
+    putCached(targetDir, key, result, gen);
     return result;
   },
 };

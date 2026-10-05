@@ -1,6 +1,7 @@
 import { readdir } from 'node:fs/promises';
 import { existsSync, statSync } from 'node:fs';
 import { resolve, relative, sep } from 'node:path';
+import { homedir } from 'node:os';
 import type { Tool } from './types.js';
 
 // Walk budget: async, pruned, and bounded to prevent event loop freezes
@@ -177,7 +178,9 @@ export const globTool: Tool = {
     const normPattern = rawPattern.split('\\').join('/');
 
     // Base search directory
-    const searchRoot = rawPath ? resolve(ctx.cwd, rawPath) : ctx.cwd;
+    const searchRoot = rawPath
+      ? (rawPath === '~' ? homedir() : rawPath.startsWith('~/') ? resolve(homedir(), rawPath.slice(2)) : resolve(ctx.cwd, rawPath))
+      : ctx.cwd;
     if (!existsSync(searchRoot)) {
       return 'No files matched.';
     }
@@ -192,14 +195,14 @@ export const globTool: Tool = {
           if (st.isFile()) {
             let rel = relative(ctx.cwd, direct);
             if (sep !== '/') rel = rel.split(sep).join('/');
-            return rel;
+            return rel.startsWith('..') ? direct : rel;
           }
           if (st.isDirectory()) {
             // If user passed a directory name literally, list top-level files
             const files = await readdir(direct);
             let dirRel = relative(ctx.cwd, direct);
             if (sep !== '/') dirRel = dirRel.split(sep).join('/');
-            const prefix = dirRel && dirRel !== '.' ? `${dirRel}/` : '';
+            const prefix = dirRel && dirRel !== '.' ? (dirRel.startsWith('..') ? `${direct}/` : `${dirRel}/`) : '';
             const res = files
               .filter((f) => !f.startsWith('.') && !SKIP_DIRS.has(f))
               .slice(0, limit)
@@ -235,16 +238,17 @@ export const globTool: Tool = {
     }
 
     // Allow hidden files only if pattern or prefix explicitly starts with a dot
-    const allowsHidden = normPattern.startsWith('.') || normPattern.includes('/.') || Boolean(rawPath.startsWith('.'));
+    const allowsHidden = normPattern.startsWith('.') || normPattern.includes('/.') || Boolean(rawPath && rawPath.startsWith('.'));
 
     const results: string[] = [];
     const state: WalkState = { entriesVisited: 0, truncated: false, startedAt: Date.now() };
 
     for await (const rel of walk(searchRoot, walkDir, 1, maxAllowedDepth, allowsHidden, state)) {
       if (matches(normPattern, rel.split('/'))) {
-        let finalRel = relative(ctx.cwd, resolve(searchRoot, rel));
+        const fullMatched = resolve(searchRoot, rel);
+        let finalRel = relative(ctx.cwd, fullMatched);
         if (sep !== '/') finalRel = finalRel.split(sep).join('/');
-        results.push(finalRel);
+        results.push(finalRel.startsWith('..') ? fullMatched : finalRel);
         if (results.length >= limit) break;
       }
     }

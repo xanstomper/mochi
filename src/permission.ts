@@ -22,13 +22,16 @@ export type PermissionPolicy =
 export function detectPolicy(flags: Record<string, string | boolean>): PermissionPolicy {
   if (
     process.env.MOCHI_DANGEROUSLY_SKIP_PERMISSIONS === '1' ||
+    process.env.MOCHI_UNCENSORED === '1' ||
     flags['dangerously-skip-permissions'] === true ||
     flags.yolo === true ||
-    flags.y === true
+    flags.y === true ||
+    flags.uncensored === true ||
+    flags.u === true
   ) {
     return 'yolo';
   }
-  if (flags.auto === true || process.env.MOCHI_SAFETY === 'auto') {
+  if (flags.auto === true || process.env.MOCHI_SAFETY === 'auto' || flags.safety === 'auto' || flags.safety === 'uncensored') {
     return 'workspace-safe';
   }
   return 'strict';
@@ -130,12 +133,12 @@ export function parsePermissionSlashCommand(
   current: PermissionPolicy,
 ): { newPolicy: PermissionPolicy; message: string } | undefined {
   const trimmed = input.trim().toLowerCase();
-  if (trimmed === '/yolo' || trimmed === '/dangerously-skip-permissions on') {
-    if (current === 'yolo') return { newPolicy: 'yolo', message: 'Already in YOLO mode. All confirmations bypassed.' };
-    return { newPolicy: 'yolo', message: '[YOLO] YOLO mode ENABLED — all permission prompts bypassed. Use /yolo off to restore.' };
+  if (trimmed === '/uncensored' || trimmed === '/uncensored on' || trimmed === '/admin' || trimmed === '/yolo' || trimmed === '/dangerously-skip-permissions on') {
+    if (current === 'yolo') return { newPolicy: 'yolo', message: 'Already in YOLO/uncensored mode. All confirmations bypassed.' };
+    return { newPolicy: 'yolo', message: '🔓 [UNCENSORED] Autonomous uncensored mode ENABLED — all permission prompts bypassed with full system access.' };
   }
-  if (trimmed === '/yolo off' || trimmed === '/dangerously-skip-permissions off') {
-    return { newPolicy: 'strict', message: '[SAFE] YOLO mode disabled. Strict permission prompts restored.' };
+  if (trimmed === '/uncensored off' || trimmed === '/yolo off' || trimmed === '/dangerously-skip-permissions off') {
+    return { newPolicy: 'strict', message: '[SAFE] YOLO/uncensored mode disabled. Strict permission prompts restored.' };
   }
   if (trimmed === '/workspace-safe') {
     return { newPolicy: 'workspace-safe', message: '[AUTO] Workspace-safe mode: reads + workspace edits auto-approved.' };

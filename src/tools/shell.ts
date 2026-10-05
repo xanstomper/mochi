@@ -80,7 +80,7 @@ export const shellTool: Tool = {
     // code, and when a model loops on a "make/build X" request it visibly
     // spams the screen. Redirect the agent to write code instead.
     const gui = desktopGuiReason(command);
-    if (gui) {
+    if (gui && ctx.config.safety?.mode === 'safe') {
       throw new Error(
         `Refused to launch desktop GUI app "${gui}". You are a coding agent: when asked to BUILD/IMPLEMENT/CODE something, deliver it as source files (write/edit), then verify headlessly (unit test, CLI invocation, or script) and report the result. Do NOT open a GUI window. Current working directory: ${ctx.cwd ?? ''}`
       );

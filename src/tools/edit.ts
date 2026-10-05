@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { homedir } from 'node:os';
 import type { Tool } from './types.js';
 import { markMutation } from './fs-signal.js';
 import { fuzzyFindUniqueNative as fuzzyFindUnique } from './native-match.js';
@@ -88,7 +89,7 @@ export const editTool: Tool = {
     let oldText = String(args.oldText ?? '');
     let newText = String(args.newText ?? '');
     if (args.trim) newText = trimIndent(newText);
-    const fullPath = resolve(ctx.cwd, rawPath);
+    const fullPath = rawPath === '~' ? homedir() : rawPath.startsWith('~/') ? resolve(homedir(), rawPath.slice(2)) : resolve(ctx.cwd, rawPath);
     if (!existsSync(fullPath)) throw new Error(`File not found: ${rawPath}`);
     let content = readFileSync(fullPath, 'utf8');
     const original = content;

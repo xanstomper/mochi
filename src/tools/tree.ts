@@ -1,5 +1,6 @@
 import { readdirSync, statSync, existsSync } from 'node:fs';
 import { resolve, join, basename } from 'node:path';
+import { homedir } from 'node:os';
 import type { Tool } from './types.js';
 
 function matchesExclude(name: string, patterns: string[]): boolean {
@@ -61,7 +62,8 @@ export const treeTool: Tool = {
     permission: 'read',
   },
   async execute(args, ctx) {
-    const dir = args.path ? resolve(ctx.cwd, String(args.path)) : ctx.cwd;
+    const raw = args.path ? String(args.path) : '';
+    const dir = raw ? (raw === '~' ? homedir() : raw.startsWith('~/') ? resolve(homedir(), raw.slice(2)) : resolve(ctx.cwd, raw)) : ctx.cwd;
     if (!existsSync(dir)) throw new Error(`Directory not found: ${dir}`);
     const maxDepth = args.depth ? Math.max(1, Math.min(10, Number(args.depth))) : 3;
     const excludePatterns = args.exclude

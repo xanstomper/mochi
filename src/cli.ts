@@ -69,6 +69,7 @@ const BOOLEAN_FLAGS = new Set([
   'p', 'print', 'auto', 'quiet', 'q', 'verbose', 'v', 'debug', 'h', 'help', 'version', 'offline', 'enhance', 'install', 'plan',
   'w', 'worktree',
   'y', 'yolo', 'dangerously-skip-permissions', 'force', 'user',
+  'u', 'uncensored', 'admin',
   'strict', 'json', 'diff-only', 'auto-commit', 'repair',
 ]);
 
@@ -131,8 +132,22 @@ function configFromFlags(flags: Record<string, string | boolean>): Partial<Mochi
   // is positional and unaffected) makes every agent in the run research and
   // return a plan instead of editing files.
   if (flags.plan) overrides.planMode = true;
-  // --yolo / -y / --dangerously-skip-permissions: bypass all permission gates
-  if (flags.yolo || flags.y || flags['dangerously-skip-permissions'] ||
+  // --uncensored / -u / --yolo / -y / --dangerously-skip-permissions: bypass all permission gates
+  const isUncensored = flags.uncensored === true || flags.u === true || process.env.MOCHI_UNCENSORED === '1';
+  if (isUncensored) {
+    overrides.safety = { ...(overrides.safety ?? {} as any), mode: 'uncensored' as const };
+    overrides.permissions = {
+      read: true,
+      write: true,
+      shell: true,
+      network: true,
+      gitDestructive: true,
+      admin: true,
+    };
+    (overrides as any).__uncensored = true;
+    (overrides as any).__yolo = true;
+    process.env.MOCHI_UNCENSORED = '1';
+  } else if (flags.yolo || flags.y || flags['dangerously-skip-permissions'] ||
       process.env.MOCHI_DANGEROUSLY_SKIP_PERMISSIONS === '1') {
     overrides.safety = { ...(overrides.safety ?? {} as any), mode: 'auto' as const };
     (overrides as any).__yolo = true;
@@ -202,6 +217,7 @@ Options:
   --workspace <name>      Use workspace
   -w, --worktree          Run session in an isolated ephemeral Git worktree
   --plan                  Plan mode (no edits)
+  -u, --uncensored        Uncensored harness: bypass all permission gates & grant full system/admin privileges
   -y, --yolo              Bypass all permission prompts (alias: --dangerously-skip-permissions)
   --dangerously-skip-permissions  Same as --yolo
   -q, --quiet             Less output
@@ -212,6 +228,7 @@ Options:
   --version               Show version
 
 Environment:
+  MOCHI_UNCENSORED=1                    Same as --uncensored
   MOCHI_DANGEROUSLY_SKIP_PERMISSIONS=1  Same as --yolo
 `);
 }
@@ -308,13 +325,18 @@ async function main() {
   const { status, diff, isRepo } = await import('./git.js');
   const runtime = Runtime.create({ cwd, config: configOverrides });
 
-  // Permission policy — propagate --yolo / env var to the runtime object so
+  // Permission policy — propagate --yolo / --uncensored / env var to the runtime object so
   // the TUI status badge and PermissionManager can read it without config hacks.
   const isYolo = (configOverrides as any).__yolo === true ||
     process.env.MOCHI_DANGEROUSLY_SKIP_PERMISSIONS === '1';
-  (runtime as any).__permPolicy = isYolo ? 'yolo'
+  const isUncensored = (configOverrides as any).__uncensored === true ||
+    configOverrides.safety?.mode === 'uncensored' ||
+    process.env.MOCHI_UNCENSORED === '1';
+  (runtime as any).__permPolicy = (isUncensored || isYolo) ? 'yolo'
     : (configOverrides.safety?.mode === 'auto' ? 'workspace-safe' : 'strict');
-  if (isYolo) {
+  if (isUncensored) {
+    console.error('🔓 [UNCENSORED] Autonomous uncensored harness active: unrestricted system access & admin privileges.');
+  } else if (isYolo) {
     console.error('[YOLO] YOLO mode: all permission prompts bypassed. Proceeding autonomously.');
   }
 

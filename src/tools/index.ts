@@ -1,5 +1,7 @@
 import type {MochiConfig} from '../types.js';
 import type { ToolContext, Tool } from './types.js';
+import { homedir } from 'node:os';
+import { resolve } from 'node:path';
 import { readTool } from './read.js';
 import { writeTool } from './write.js';
 import { editTool } from './edit.js';
@@ -277,6 +279,18 @@ export function normalizeToolArgs(toolName: string, args: Record<string, unknown
   if (norm.path === undefined) {
     norm.path = norm.file_path ?? norm.filePath ?? norm.filename ?? norm.file ?? norm.TargetFile ?? norm.target_file ?? norm.AbsolutePath ?? norm.absolute_path ?? norm.target ?? norm.dir ?? norm.directory;
   }
+  const expandTilde = (p: unknown): unknown => {
+    if (typeof p !== 'string') return p;
+    if (p === '~') return homedir();
+    if (p.startsWith('~/')) return resolve(homedir(), p.slice(2));
+    return p;
+  };
+  norm.path = expandTilde(norm.path);
+  if (norm.file !== undefined) norm.file = expandTilde(norm.file);
+  if (norm.source !== undefined) norm.source = expandTilde(norm.source);
+  if (norm.destination !== undefined) norm.destination = expandTilde(norm.destination);
+  if (norm.cwd !== undefined) norm.cwd = expandTilde(norm.cwd);
+  if (norm.dir !== undefined) norm.dir = expandTilde(norm.dir);
 
   // 2. Command normalization
   if (norm.command === undefined) {
@@ -301,10 +315,25 @@ export function normalizeToolArgs(toolName: string, args: Record<string, unknown
     norm.pattern = norm.Pattern ?? norm.glob ?? norm.glob_pattern ?? norm.query ?? norm.Query ?? norm.search_pattern;
   }
   if (toolName === 'glob') {
+    if (typeof norm.pattern === 'string' && (norm.pattern === '~' || norm.pattern.startsWith('~/'))) {
+      if (norm.pattern === '~') {
+        norm.path = homedir();
+        norm.pattern = '*';
+      } else {
+        norm.path = homedir();
+        norm.pattern = norm.pattern.slice(2);
+      }
+    }
     if (norm.pattern === undefined && norm.path !== undefined) {
       const rec = norm.recursive !== false;
       norm.pattern = rec ? `${norm.path}/**` : `${norm.path}/*`;
     }
+  }
+  if (toolName === 'search') {
+    if (norm.path === undefined) {
+      norm.path = norm.dir ?? norm.directory ?? norm.folder ?? norm.cwd;
+    }
+    norm.path = expandTilde(norm.path);
   }
   if (norm.query === undefined && (toolName === 'search' || toolName === 'web_search')) {
     norm.query = norm.Query ?? norm.pattern ?? norm.Pattern ?? norm.term ?? norm.search_term ?? norm.regex ?? norm.Regex;
@@ -396,9 +425,10 @@ export async function executeTool(
   // Permission gate: admin privileges & standard permissions
   const perm = tool.def.permission;
   if (perm) {
-    const isPermitted = perm === 'admin'
+    const isUncensored = ctx.config.safety?.mode === 'uncensored';
+    const isPermitted = isUncensored || (perm === 'admin'
       ? ctx.config.permissions.admin !== false
-      : (ctx.config.permissions[perm] ?? (perm === 'read' || perm === 'write' || perm === 'shell' || perm === 'network'));
+      : (ctx.config.permissions[perm] ?? (perm === 'read' || perm === 'write' || perm === 'shell' || perm === 'network')));
     if (!isPermitted) {
       return { output: '', error: `Permission denied for tool ${name} (${perm})`, durationMs: 0 };
     }

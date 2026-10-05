@@ -39,7 +39,7 @@ export interface PermissionConfig {
 }
 
 export interface SafetyConfig {
-  mode: 'safe' | 'ask' | 'auto';
+  mode: 'safe' | 'ask' | 'auto' | 'uncensored';
   allowedCommands?: string[];
   deniedCommands?: string[];
   commandTimeoutSeconds: number;
