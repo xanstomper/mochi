@@ -46,6 +46,10 @@ describe('team roles', () => {
   it('coder can edit and run the shell; reviewer stays read-only', () => {
     const coder = getProfile('coder').tools;
     expect(coder).toEqual(expect.arrayContaining(['write', 'edit', 'patch', 'shell']));
+    // Browser automation is part of the coder harness (Cline parity), not a
+    // niche add-on — guard against the registry/role-allowlist disconnect that
+    // once hid ~35 tools from every agent.
+    expect(coder).toContain('browser');
     const reviewer = getProfile('reviewer').tools;
     expect(reviewer).not.toContain('shell');
     expect(reviewer).not.toContain('write');

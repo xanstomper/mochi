@@ -5,7 +5,7 @@ const ROLES: Record<AgentRole, AgentProfile> = {
     role: 'lead',
     name: 'Lead orchestrator',
     defaultModel: 'reasoning',
-    tools: ['read', 'search', 'glob', 'git', 'inspect', 'outline', 'chameleon', 'fetch', 'web_search', 'web_crawl', 'think', 'subagent', 'deepwiki'],
+    tools: ['read', 'search', 'glob', 'git', 'inspect', 'outline', 'chameleon', 'fetch', 'web_search', 'web_crawl', 'browser', 'think', 'subagent', 'deepwiki'],
     systemPrompt: `You are the Lead Orchestrator agent. You do not write code directly. Your primary function is to decompose complex goals, prioritize tasks, and coordinate a swarm of specialized subagents.
 - DECOMPOSITION: Break the user's objective into non-overlapping, strictly ordered subtasks.
 - DELEGATION: Aggressively use the \`subagent\` tool to dispatch work to specialized roles (e.g., 'coder', 'researcher', 'devops', 'db_admin'). Do not pollute your own context with massive file reads.
@@ -16,7 +16,7 @@ const ROLES: Record<AgentRole, AgentProfile> = {
     role: 'coder',
     name: 'Software Engineer',
     defaultModel: 'coding',
-    tools: ['read', 'write', 'edit', 'delete', 'patch', 'replace_symbol', 'search', 'glob', 'git', 'git_blame', 'git_history', 'inspect', 'outline', 'ast_slice', 'get_function', 'find_callers', 'find_definitions', 'find_references', 'type_hierarchy', 'get_diagnostics', 'analyze_code', 'code_similarity', 'regex_replace', 'search_replace_multi', 'resolve_conflicts', 'rename_symbol', 'shell', 'repl', 'fetch', 'web_search', 'web_crawl', 'think', 'diff', 'tree', 'verify', 'lint', 'format', 'env', 'system_info', 'chameleon', 'bg_task', 'copy_file', 'create_directory', 'move_file', 'create_pr', 'notes', 'timer', 'color', 'tui_builder', 'sql_codebase', 'compile_prompt'],
+    tools: ['read', 'write', 'edit', 'delete', 'patch', 'replace_symbol', 'search', 'glob', 'git', 'git_blame', 'git_history', 'inspect', 'outline', 'ast_slice', 'get_function', 'find_callers', 'find_definitions', 'find_references', 'type_hierarchy', 'get_diagnostics', 'analyze_code', 'code_similarity', 'regex_replace', 'search_replace_multi', 'resolve_conflicts', 'rename_symbol', 'shell', 'repl', 'fetch', 'web_search', 'web_crawl', 'browser', 'think', 'diff', 'tree', 'verify', 'lint', 'format', 'env', 'system_info', 'chameleon', 'bg_task', 'copy_file', 'create_directory', 'move_file', 'create_pr', 'notes', 'timer', 'color', 'tui_builder', 'sql_codebase', 'compile_prompt'],
     systemPrompt: `You are a Senior Software Engineer. You write clean, idiomatic, minimal code.
 - SURGICAL EDITS: Prefer targeted \`edit\` or \`patch\` operations over rewriting entire files.
 - TESTING: Never claim code works without running a headless compiler, linter, or test suite using the \`shell\` tool.
@@ -47,7 +47,7 @@ const ROLES: Record<AgentRole, AgentProfile> = {
     role: 'researcher',
     name: 'Codebase Researcher',
     defaultModel: 'fast',
-    tools: ['read', 'search', 'glob', 'get_function', 'find_callers', 'find_definitions', 'find_references', 'type_hierarchy', 'inspect', 'outline', 'ast_slice', 'fetch', 'web_search', 'web_crawl', 'think', 'deepwiki', 'clipboard'],
+    tools: ['read', 'search', 'glob', 'get_function', 'find_callers', 'find_definitions', 'find_references', 'type_hierarchy', 'inspect', 'outline', 'ast_slice', 'fetch', 'web_search', 'web_crawl', 'browser', 'think', 'deepwiki', 'clipboard'],
     systemPrompt: `You are an elite Codebase Researcher and context gatherer. You do not edit code.
 - DISCOVERY: Aggressively trace execution flows, find symbol definitions (\`get_function\`), and identify callers (\`find_callers\`).
 - DISTILLATION: Do not return massive raw code dumps. Summarize the control flow, list the exact file paths and line numbers of relevant logic, and return a highly compressed context payload to the orchestrator.

@@ -51,7 +51,8 @@ import { securityAuditTool } from './security-audit.js';
 import { skillManageTool } from '../skill-manager.js';
 import { astSliceTool } from './ast-slice.js';
 import { compilePromptTool } from './compile-prompt.js';
-import {toolFactoryTool, RESERVED_TOOL_NAMES, loadAuthoredTools} from './tool-factory.js';
+import { toolFactoryTool, RESERVED_TOOL_NAMES, loadAuthoredTools } from './tool-factory.js';
+import { browserTool } from './browser.js';
 
 import { timerTool } from './timer.js';
 import { envTool } from './env.js';
@@ -80,6 +81,7 @@ export const ALL_TOOLS: Tool[] = [
   timerTool, envTool, lintTool, formatTool, benchmarkTool,
   notesTool, tuiBuilderTool, mcpManageTool, markdownTool, colorTool,
   toolFactoryTool,
+  browserTool,
 ];
 
 export const ALL_TOOLS_MAP = new Map<string, Tool>(ALL_TOOLS.map((t) => [t.def.name, t]));
