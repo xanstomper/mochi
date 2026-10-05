@@ -4,7 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildMcpTools } from './tools.js';
 import type { EventBus } from '../events.js';
+import { EventBus as RealEventBus } from '../events.js';
 import { ContextEngine } from '../context.js';
+import { Agent } from '../agent/loop.js';
+import { Workspace } from '../workspace.js';
+import { createTask } from '../goals/task.js';
+import { startFakeOpenAI } from '../testutil/fake-openai.js';
+import type { MochiConfig } from '../types.js';
 
 // Same minimal stdio MCP server used by the client tests: initialize,
 // tools/list (one `uppercase` tool), tools/call. The integration test below
@@ -226,6 +232,85 @@ describe('buildMcpTools (real subprocess)', () => {
       expect(toolMsg!.content).toBe('TEST TRANSCRIPTION');
     } finally {
       built.close();
+    }
+  });
+
+  it('Agent loop end-to-end: registers mcpServers, model calls MCP tool, transcribes result, and closes cleanly (MCH-17)', async () => {
+    const fake = await startFakeOpenAI([
+      {
+        content: null,
+        toolCalls: [
+          {
+            id: 'call_mcp_rt_1',
+            function: {
+              name: 'mini__uppercase',
+              arguments: JSON.stringify({ text: 'mcp roundtrip works' }),
+            },
+          },
+        ],
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'Done uppercasing text.',
+        finishReason: 'stop',
+      },
+    ]);
+
+    try {
+      const config = {
+        model: { provider: 'openai', baseUrl: fake.url, model: 'fake-model' },
+        safety: {
+          mode: 'auto',
+          commandTimeoutSeconds: 10,
+          maxIterations: 5,
+          maxRuntimeMinutes: 5,
+          maxConcurrentAgents: 1,
+          contextBudgetTokens: 4000,
+        },
+        permissions: { read: true, write: true, shell: true, network: true, gitDestructive: true },
+        telemetry: false,
+        projectDir: '.mochi',
+        configDir: dir,
+        quiet: true,
+        verbose: false,
+        debug: false,
+        mcpServers: {
+          mini: { command: process.execPath, args: [serverPath] },
+        },
+      } as unknown as MochiConfig;
+
+      const workspace = new Workspace(dir, '.mochi');
+      workspace.ensure();
+      const context = new ContextEngine(config, dir);
+      context.setGoal('Test MCP roundtrip');
+      const task = createTask('MCP task', 'Call uppercase tool via MCP');
+      const agent = new Agent({
+        role: 'coder',
+        config,
+        workspace,
+        events: new RealEventBus(),
+        cwd: dir,
+        context,
+      });
+
+      const result = await agent.run(task);
+
+      // 1. Tool listed: check request payload sent to fake server has mini__uppercase in tools
+      const firstReq = fake.requests[0];
+      const toolNames = firstReq.body.tools?.map((t: any) => t.function?.name) ?? [];
+      expect(toolNames).toContain('mini__uppercase');
+
+      // 2. Tool called & transcribed into context messages
+      const msgs = context.getMessages();
+      const toolMsg = msgs.find((m: any) => m.role === 'tool' && m.tool_call_id === 'call_mcp_rt_1');
+      expect(toolMsg).toBeDefined();
+      expect(toolMsg?.content).toBe('MCP ROUNDTRIP WORKS');
+
+      // 3. Agent finished successfully
+      expect(result.success).toBe(true);
+      expect(result.stopReason).toBe('completed');
+    } finally {
+      await fake.close();
     }
   });
 });

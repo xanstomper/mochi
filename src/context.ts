@@ -260,6 +260,10 @@ export class ContextEngine {
     this.messages.push(message);
   }
 
+  getMessages(): readonly ChatMessage[] {
+    return this.messages;
+  }
+
   /** Rough size of the current transcript in approximate tokens (excludes the
    *  per-request system/state/tool headers, which are re-added separately). */
   estimateTokens(): number {
