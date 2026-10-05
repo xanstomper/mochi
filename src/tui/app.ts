@@ -5,7 +5,7 @@ import { findProjectRoot } from '../repo.js';
 import type { Runtime } from '../runtime.js';
 import type { MochiEvent } from '../types.js';
 import { PROVIDERS, providerById } from '../providers.js';
-import { reduceEvent, trimTranscript, rewrapSummaries, type TuiLine } from './state.js';
+import { reduceEvent, trimTranscript, rewrapSummaries, resolveCommandPrefix, type TuiLine } from './state.js';
 import { describeProviderFailure } from '../model/provider-failure.js';
 import { wrap, visibleLen } from './wrap.js';
 import pkg from '../../package.json' with { type: 'json' };
@@ -113,6 +113,7 @@ const COMMANDS = [
   { name: '/tokens', hint: 'Show token breakdown and prompt cache efficiency' },
   { name: '/stats', hint: 'Show real-time performance and cost statistics' },
   { name: '/chameleon', hint: 'Synthesize Chameleon synthetic reasoning parameters for a task' },
+  { name: '/self-train', hint: 'Auto-improve Mochi: self-review, iterate to done, train its own skills/code' },
   { name: '/doctor', hint: 'Diagnose workspace configuration' },
   { name: '/init', hint: 'Create project MOCHI.md instructions' },
   { name: '/context', hint: 'Show context usage health (colored bar + tips)' },
@@ -203,6 +204,10 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     selActive: false,
     selStart: null as { row: number; col: number } | null,
     selEnd: null as { row: number; col: number } | null,
+    /** Click-count tracking for double/triple-click selection (word / line). */
+    lastClickAt: 0,
+    lastClickRow: -1,
+    clickCount: 1,
     /** true while receiving a bracketed-paste block. */
     pasting: false,
     /** set true to abort the current auto-improve loop. */
@@ -707,6 +712,48 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     scheduleRender();
   }
 
+  /** Double-click: select the word under the cursor on the clicked transcript row. */
+  function selectWord(row: number, col: number) {
+    const w = width();
+    const { chatMw } = transcriptGeometry(w);
+    const indent = transcriptIndent(w);
+    const chatLines = transcriptLines(chatMw);
+    const contentCol = col - indent;
+    const idx = row; // transcript row index within the visible window
+    const line = chatLines[idx];
+    if (!line) return;
+    const bare = stripAnsi(line);
+    if (contentCol < 0 || contentCol > bare.length) return;
+    // Word boundaries: expand to non-whitespace on either side of the click col.
+    let start = contentCol;
+    while (start > 0 && !/\s/.test(bare[start - 1])) start--;
+    let end = contentCol;
+    while (end < bare.length && !/\s/.test(bare[end])) end++;
+    if (end <= start) end = start + 1;
+    state.selStart = { row, col: start + indent };
+    state.selEnd = { row, col: end + indent };
+    state.selActive = true;
+    lastFrame = [];
+    scheduleRender();
+  }
+
+  /** Triple-click: select the ENTIRE chat line under the cursor, so a long
+   *  wrapped message copies in one clean gesture instead of an exact drag. */
+  function selectLine(row: number) {
+    const w = width();
+    const { chatMw } = transcriptGeometry(w);
+    const indent = transcriptIndent(w);
+    const chatLines = transcriptLines(chatMw);
+    const line = chatLines[row];
+    if (!line) return;
+    const bare = stripAnsi(line);
+    state.selStart = { row, col: indent };
+    state.selEnd = { row, col: indent + Math.max(1, bare.length) };
+    state.selActive = true;
+    lastFrame = [];
+    scheduleRender();
+  }
+
   function updateSelection(row: number, col: number) {
     if (!state.selActive) return;
     state.selEnd = { row, col };
@@ -955,16 +1002,29 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
 
     rows[cTop] = composerTopRule(w);
     const visibleTextRows = composerBoxRows - 2;
-    const shownRows = rawRows.slice(-visibleTextRows);
+    // Cursor-following scroll: instead of always pinning the TAIL of a long
+    // input (which hides the caret and the text you're actively typing),
+    // anchor the visible slice around the cursor's wrapped row. The caret stays
+    // on-screen while you type/edit any line; the tail is only pinned when the
+    // cursor is already on the last visible row. (This is the multiline-editor
+    // scroll the old `slice(-visibleTextRows)` never did.)
+    const caretRow = Math.max(0, wrap(state.input.slice(0, state.cursor), innerW).length - 1);
+    let sliceStart = caretRow - Math.floor((visibleTextRows - 1) / 2);
+    sliceStart = Math.max(0, Math.min(Math.max(0, rawRows.length - visibleTextRows), sliceStart));
+    const shownRows = rawRows.slice(sliceStart, sliceStart + visibleTextRows);
+    const firstVisibleRow = sliceStart;
     for (let i = 0; i < visibleTextRows; i++) {
       const r = cTop + 1 + i;
       if (r < h) {
         if (i < shownRows.length) {
-          rows[r] = composerRow(shownRows[i], w);
+          // Only the FIRST visible row carries the `❯` prompt glyph; wrapped
+          // continuation rows render without it so a long input doesn't stack
+          // ❯❯❯ symbols and corrupt the box edge.
+          rows[r] = composerRow(shownRows[i], w, i === 0);
         } else if (i === 0 && !state.input) {
           rows[r] = composerPlaceholderRow('Message mochi… (type / for commands)', w);
         } else {
-          rows[r] = composerRow('', w);
+          rows[r] = composerRow('', w, i === 0);
         }
       }
     }
@@ -1105,8 +1165,10 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     const beforeCursor = state.input.slice(0, state.cursor);
     const beforeLines = wrap(beforeCursor, innerW);
     const cursorVisualRow = Math.max(0, beforeLines.length - 1);
-    const firstVisibleRow = Math.max(0, rawRows.length - shownRows.length);
-    const cursorRow = cTop + 1 + Math.max(0, cursorVisualRow - firstVisibleRow);
+    // `firstVisibleRow`/`caretRow` are defined above (cursor-following scroll),
+    // so the caret row simply = slice offset + caret's position in the window,
+    // clamped into the box so a short box can't push it off-screen.
+    const cursorRow = cTop + 1 + Math.min(Math.max(0, visibleTextRows - 1), Math.max(0, cursorVisualRow - firstVisibleRow));
     const cursorCol = Math.min(Math.max(1, w - 1), 4 + (beforeLines.length ? visibleLen(beforeLines[beforeLines.length - 1]) : 0));
     if (state.inspectorActive) {
       out += '\x1b[' + h + ';1H' + HIDE;
@@ -1324,6 +1386,27 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
           return lines.join('\n');
         }, true);
       }
+      return;
+    }
+    if (line.startsWith('/self-train') || line === '/train') {
+      // Continuous self-improvement: cycles of self-review (iterate until the
+      // work is verified DONE), then a skill-curator pass so lessons persist.
+      // Optional: "/self-train <focus>" or "/self-train 5 <focus>".
+      const rest = line.replace(/^\/(self-train|train)\s*/, '').trim();
+      const numMatch = rest.match(/^(\d+)\s*(.*)$/);
+      const cycles = numMatch ? Number(numMatch[1]) : 3;
+      const focus = numMatch ? numMatch[2].trim() : rest;
+      push('user', line);
+      push('goal', `Self-train: ${cycles} cycle(s)${focus ? ` — ${focus}` : ''}`);
+      scheduleRender();
+      await run(async () => {
+        const r = await runtime.selfTrain({
+          cycles,
+          focus: focus || undefined,
+          onProgress: (_i, msg) => { push('system', msg); scheduleRender(); },
+        });
+        return `${r.report}\n${T.grayDark}tokens ${r.tokensUsed} · $${r.costUsd.toFixed(4)} · ${Math.round(r.durationMs / 1000)}s${T.reset}`;
+      }, true);
       return;
     }
     if (line.startsWith('/chameleon ') || line === '/chameleon' || line.startsWith('/enhance ') || line === '/enhance') {
@@ -1684,52 +1767,24 @@ if (line === '/branch') { await run(async () => (await import('../git.js')).stat
     // Free-form prompt (already echo:false — agent pushes its own turns via events)
     push('user', line);
     if (state.autoImproveArmed) {
-      // Auto-improve is on: chain N agent passes, each one receiving the
-      // previous best summary. The first pass is the user's literal prompt.
+      // Auto-improve is on: run the self-review pipeline. Each pass critically
+      // reviews what the previous pass did, verifies it, and makes real fixes —
+      // iterating until the model declares the work DONE (verified) or progress
+      // converges, instead of repeating a "keep going" nudge. This delegates to
+      // Runtime.autoImprove so the TUI and headless paths share ONE behavior.
       const passes = (runtime as any).__maxRuns ?? 5;
       state.autoImproveArmed = false;
       state.autoImproveAbort = false;
       await run(async () => {
-        let lastSummary = '';
-        let consecutiveStagnant = 0;
-        const total = passes;
-        for (let i = 0; i < total; i++) {
-          if (state.autoImproveAbort) break;
-          const iterPrompt = lastSummary
-            ? `${line}\n\n---\n[Auto-improve pass ${i + 1}/${total}]\n\nPrevious best answer:\n${lastSummary.slice(0, 4000)}\n\nContinue: refine, fix remaining issues, deepen the work.`
-            : `${line}\n\n---\n[Auto-improve pass ${i + 1}/${total}]`;
-          push('system', `◇ auto-improve  pass ${i + 1}/${total}`);
-          const pass = await runtime.runPrompt(iterPrompt);
-          push('assistant', pass);
-
-          if (lastSummary) {
-            const isIdentical = pass.trim() === lastSummary.trim();
-            const declaredDone = /(no\s+(further|remaining)\s+(issues|changes|improvements)|all\s+tests\s+pass|nothing\s+(left|further)\s+to\s+(fix|do|refine)|already\s+(complete|optimal|verified))/i.test(pass);
-            const wordsA = new Set(lastSummary.toLowerCase().split(/\s+/).filter((w) => w.length > 2));
-            const wordsB = new Set(pass.toLowerCase().split(/\s+/).filter((w) => w.length > 2));
-            let intersection = 0;
-            for (const w of wordsA) if (wordsB.has(w)) intersection++;
-            const union = new Set([...wordsA, ...wordsB]).size;
-            const similarity = union > 0 ? intersection / union : 0;
-
-            if (isIdentical || declaredDone) {
-              consecutiveStagnant += 2;
-            } else if (similarity >= 0.88) {
-              consecutiveStagnant += 1;
-            } else {
-              consecutiveStagnant = 0;
-            }
-
-            if (consecutiveStagnant >= 2) {
-              lastSummary = pass;
-              push('system', `✓ auto-improve converged at pass ${i + 1}/${total} (no further changes needed)`);
-              break;
-            }
-          }
-          lastSummary = pass;
-        }
-        push('system', `✓ auto-improve complete: ${total} passes max`);
-        return lastSummary;
+        const r = await runtime.autoImprove(line, passes, {
+          onProgress: (i, lastSummary) => {
+            if (state.autoImproveAbort) return;
+            push('system', `◇ self-review pass ${i}/${passes}`);
+            if (lastSummary) push('assistant', lastSummary);
+          },
+        });
+        push('system', `✓ auto-improve complete: ${r.summaries.length} pass(es), stopped when verified done or converged`);
+        return r.finalSummary;
       }, false);
     } else {
       await run(() => runtime.runPrompt(line), false);
@@ -1809,7 +1864,7 @@ if (line === '/branch') { await run(async () => (await import('../git.js')).stat
         (runtime as any).__maxRuns = chosen;
         state.autoApprove = true;
         (runtime as any).__permPolicy = 'yolo';
-        push('system', `Auto improve: ON — ${chosen} passes with best-synthesis feedback. Send a message to begin.`);
+        push('system', `Auto improve: ON — up to ${chosen} self-review passes. Each pass reviews + verifies the previous one and iterates until it's verified done, then moves on. Send a message to begin.`);
         state.autoImproveArmed = true;
       } else {
         push('system', 'Auto improve: cancelled — current mode preserved.');
@@ -2409,10 +2464,33 @@ if (line === '/branch') { await run(async () => (await import('../git.js')).stat
         const col = Number(sgrMouse[2]);
         if (isPress) {
           const isMotion = (btn & 32) !== 0;
-          if (isMotion) updateSelection(row - 1, col - 1);
-          else beginSelection(row - 1, col - 1);
+          if (isMotion) {
+            updateSelection(row - 1, col - 1);
+          } else {
+            // Click-count detection for double (word) / triple (whole line)
+            // selection. A click within 500ms of the last one on the same row
+            // increments the count; otherwise it resets to a fresh drag start.
+            const now = Date.now();
+            const r0 = row - 1;
+            if (state.lastClickRow === r0 && now - state.lastClickAt < 500) {
+              state.clickCount += 1;
+            } else {
+              state.clickCount = 1;
+            }
+            state.lastClickAt = now;
+            state.lastClickRow = r0;
+            if (state.clickCount >= 3) {
+              selectLine(r0);                 // triple-click whole line
+              state.clickCount = 0;
+            } else if (state.clickCount === 2) {
+              selectWord(r0, col - 1);        // double-click word
+            } else {
+              beginSelection(r0, col - 1);
+            }
+          }
         } else {
           endSelection();
+          state.clickCount = 1;
         }
         continue;
       }
@@ -2535,13 +2613,32 @@ if (line === '/branch') { await run(async () => (await import('../git.js')).stat
         if (state.dropActive) {
           const items = currentDropItems();
           const pick = items[Math.min(state.dropSelected, items.length - 1)];
-          const takesArg = pick && ['/goal', '/plan', '/team', '/model', '/reasoning', '/theme', '/inspect', '/run', '/shell', '/login', '/import', '/rename', '/compact', '/review', '/security-review'].includes(pick.name);
+          const takesArg = pick && ['/goal', '/plan', '/team', '/model', '/reasoning', '/theme', '/inspect', '/run', '/shell', '/login', '/import', '/rename', '/compact', '/review', '/security-review', '/self-train'].includes(pick.name);
           // Only hijack Enter when the composer holds the BARE command name
           // (no arguments typed yet) — then expand to "/cmd " for the user to
           // type args. Once arguments exist, Enter must SEND the command
           // (the old condition re-expanded "/goal fix the login bug" back to
           // bare "/goal " and swallowed the send forever).
           const bareCommand = pick && state.input.trim() === pick.name;
+          // PREFIX SELECT (typeahead): if the composer holds a bare partial
+          // command like `/his`, Enter completes the best match IN-BOX (e.g.
+          // `/history`) and does NOT send — the user finishes editing or hits
+          // Enter again to run it. Ambiguous prefixes leave the dropdown open
+          // and do NOT hijack Enter. Logic lives in the tested pure helper.
+          const prefixPick = resolveCommandPrefix(
+            state.input,
+            items.map((c) => c.name),
+            pick?.name,
+          );
+          if (prefixPick) {
+            state.input = prefixPick;
+            state.cursor = state.input.length;
+            state.dropActive = false;
+            state.dropSelected = 0;
+            scheduleRender();
+            i++;
+            continue;
+          }
           if (bareCommand && takesArg) {
             state.input = pick.name + ' ';
             state.cursor = state.input.length;

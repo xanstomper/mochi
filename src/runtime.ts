@@ -4,6 +4,8 @@ import { EventBus } from './events.js';
 import { Workspace } from './workspace.js';
 import { GoalEngine } from './goals/goal.js';
 import { findProjectRoot } from './repo.js';
+import { readdirSync, statSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { checkpoint as gitCheckpoint, restore as gitRestore, type CheckpointResult } from './git.js';
 import { HookManager } from './hooks.js';
 import { AgentProfileService } from './agents/profile.js';
@@ -259,70 +261,173 @@ export class Runtime {
    * is not artificially bounded at 8 internal iterations per pass.
    */
   async autoImprove(prompt: string, runs: number, opts?: { sessionId?: string; onProgress?: (i: number, lastSummary: string) => void; signal?: AbortSignal }): Promise<{ summaries: string[]; finalSummary: string; tokensUsed: number; costUsd: number; durationMs: number }> {
-    const boundedRuns = Math.max(1, Math.min(40, runs | 0));
-    const cap = this.config.safety.maxIterations;
-    if (cap < 50) (this.config.safety as { maxIterations: number }).maxIterations = 50;
-    const startedAt = performance.now();
-    const summaries: string[] = [];
-    const sessionId = opts?.sessionId ?? this.activeSessionId;
-    try {
-      let priorSummary = '';
-      let consecutiveStagnant = 0;
-      for (let i = 0; i < boundedRuns; i++) {
-        if (opts?.signal?.aborted) break;
-        const iterPrompt = priorSummary && priorSummary.trim()
-          ? `${prompt}\n\n---\n[Auto-improve pass ${i + 1}/${boundedRuns}]\n\nPrevious best answer:\n${priorSummary.slice(0, 4000)}\n\nContinue: refine, fix any remaining issues you can see, and deepen the work. Don't repeat what already works.`
-          : `${prompt}\n\n---\n[Auto-improve pass ${i + 1}/${boundedRuns}]\n\nProduce the strongest first pass you can. Subsequent passes will refine.`;
-        const summary = await this.runPrompt(iterPrompt, { sessionId });
-        summaries.push(summary);
-        opts?.onProgress?.(i + 1, summary);
-        this.events.emit({
-          type: 'agent:log',
-          agentId: 'auto-improve',
-          message: `[auto-improve] pass ${i + 1}/${boundedRuns} complete (${summary.length} chars)`,
-        } as any);
-
-        if (priorSummary) {
-          const isIdentical = summary.trim() === priorSummary.trim();
-          const declaredDone = /(no\s+(further|remaining)\s+(issues|changes|improvements)|all\s+tests\s+pass|nothing\s+(left|further)\s+to\s+(fix|do|refine)|already\s+(complete|optimal|verified))/i.test(summary);
-          const wordsA = new Set(priorSummary.toLowerCase().split(/\s+/).filter((w) => w.length > 2));
-          const wordsB = new Set(summary.toLowerCase().split(/\s+/).filter((w) => w.length > 2));
-          let intersection = 0;
-          for (const w of wordsA) if (wordsB.has(w)) intersection++;
-          const union = new Set([...wordsA, ...wordsB]).size;
-          const similarity = union > 0 ? intersection / union : 0;
-
-          if (isIdentical || declaredDone) {
-            consecutiveStagnant += 2;
-          } else if (similarity >= 0.88) {
-            consecutiveStagnant += 1;
+      const boundedRuns = Math.max(1, Math.min(40, runs | 0));
+      const cap = this.config.safety.maxIterations;
+      if (cap < 50) (this.config.safety as { maxIterations: number }).maxIterations = 50;
+      const startedAt = performance.now();
+      const summaries: string[] = [];
+      const sessionId = opts?.sessionId ?? this.activeSessionId;
+      try {
+        let priorSummary = '';
+        let consecutiveStagnant = 0;
+        for (let i = 0; i < boundedRuns; i++) {
+          if (opts?.signal?.aborted) break;
+          // Self-review pass chain (NOT "keep going"): pass 1 produces the
+          // strongest first draft; each later pass first CRITICALLY reviews what
+          // was just done — naming concrete flaws, missing cases, and anything
+          // that needs real verification — then applies only real improvements.
+          // The prompt forces a verdict decision so the model must either make a
+          // measurable improvement or explicitly declare the work complete.
+          let iterPrompt: string;
+          if (!priorSummary || !priorSummary.trim()) {
+            iterPrompt = `${prompt}\n\n---\n[Self-review pass 1/${boundedRuns}]\nProduce the strongest complete first pass you can. Do NOT rush to declare it done — implement it fully and verify as you go.`;
           } else {
-            consecutiveStagnant = 0;
+            iterPrompt = `${prompt}\n\n---\n[Self-review pass ${i + 1}/${boundedRuns}]\n\nHere is what the previous pass produced:\n${priorSummary.slice(0, 5000)}\n\nYour job now is a CRITICAL SELF-REVIEW and IMPROVEMENT pass:\n1. Review what was just done. Identify concrete flaws: missing edge cases, unimplemented requirements, incorrect logic, unverified assumptions, or opportunities to make it materially better.\n2. Run the task's verification (tests / lint / build / sample the output) to confirm what actually works vs what is broken.\n3. Make the fixes that are real and measurable. Do NOT just restate or rephrase what already exists.\n4. End with a single verdict line between <VERDICT> tags:\n   - <VERDICT>DONE</VERDICT>   — only if verification passes AND there are no remaining real improvements.\n   - <VERDICT>IMPROVED</VERDICT> — if you made at least one concrete improvement this pass.\n   If you changed code or files, say exactly what you changed and how you verified it.`;
           }
+          const summary = await this.runPrompt(iterPrompt, { sessionId });
+          summaries.push(summary);
+          opts?.onProgress?.(i + 1, summary);
+          this.events.emit({
+            type: 'agent:log',
+            agentId: 'auto-improve',
+            message: `[auto-improve] self-review pass ${i + 1}/${boundedRuns} complete (${summary.length} chars)`,
+          } as any);
 
-          if (consecutiveStagnant >= 2) {
-            this.events.emit({
-              type: 'agent:log',
-              agentId: 'auto-improve',
-              message: `[auto-improve] early convergence reached at pass ${i + 1}/${boundedRuns}: no further work or improvements detected.`,
-            } as any);
-            priorSummary = summary;
-            break;
+          if (priorSummary) {
+            const isIdentical = summary.trim() === priorSummary.trim();
+            const declaredDone = /<VERDICT>\s*DONE\s*<\/VERDICT>|no\s+(further|remaining)\s+(issues|changes|improvements)|all\s+tests\s+pass|nothing\s+(left|further)\s+to\s+(fix|do|refine)|already\s+(complete|optimal|verified|perfect)/i.test(summary);
+            const improvedDeclared = /<VERDICT>\s*IMPROVED\s*<\/VERDICT>/i.test(summary);
+            const wordsA = new Set(priorSummary.toLowerCase().split(/\s+/).filter((w) => w.length > 2));
+            const wordsB = new Set(summary.toLowerCase().split(/\s+/).filter((w) => w.length > 2));
+            let intersection = 0;
+            for (const w of wordsA) if (wordsB.has(w)) intersection++;
+            const union = new Set([...wordsA, ...wordsB]).size;
+            const similarity = union > 0 ? intersection / union : 0;
+
+            if (declaredDone) {
+              // Verified perfect → stop and move on (this is the real exit).
+              this.events.emit({
+                type: 'agent:log',
+                agentId: 'auto-improve',
+                message: `[auto-improve] work declared DONE and verified at pass ${i + 1}/${boundedRuns} — moving on.`,
+              } as any);
+              priorSummary = summary;
+              break;
+            }
+            if (improvedDeclared) {
+              // The model explicitly asserts a concrete improvement — trust the
+              // verdict and do NOT count this pass as stagnation, even when the
+              // prose is textually similar (e.g. only a number/identifier
+              // changed). Only convergence WITHOUT a verdict is real stagnation.
+              consecutiveStagnant = 0;
+            } else if (isIdentical || similarity >= 0.90) {
+              // No verdict AND near-identical text: nothing new was done.
+              consecutiveStagnant += 2;
+            } else {
+              // No verdict, text changed — cautious single strike.
+              consecutiveStagnant += 1;
+            }
+
+            if (consecutiveStagnant >= 2) {
+              this.events.emit({
+                type: 'agent:log',
+                agentId: 'auto-improve',
+                message: `[auto-improve] early convergence reached at pass ${i + 1}/${boundedRuns}: no further work or improvements detected.`,
+              } as any);
+              priorSummary = summary;
+              break;
+            }
           }
+          if (summary) priorSummary = summary;
         }
-        if (summary) priorSummary = summary;
+      } finally {
+        if (cap < 50) (this.config.safety as { maxIterations: number }).maxIterations = cap;
       }
-    } finally {
-      if (cap < 50) (this.config.safety as { maxIterations: number }).maxIterations = cap;
+      const finalSummary = summaries[summaries.length - 1] ?? '';
+      const t = this.usage.total();
+      return {
+        summaries,
+        finalSummary,
+        tokensUsed: (t.tokensIn ?? 0) + (t.tokensOut ?? 0),
+        costUsd: t.costUsd ?? 0,
+        durationMs: Math.round(performance.now() - startedAt),
+      };
     }
-    const finalSummary = summaries[summaries.length - 1] ?? '';
+
+  /** Continuous self-improvement / self-training driver.
+   *
+   *  Runs Mochi's own improvement loop in a bounded number of cycles. Each
+   *  cycle composes a self-improvement task from the codebase's current state
+   *  (recent traces, skill coverage, test failures) and runs it through the
+   *  self-review `autoImprove` pipeline, then triggers the skill curator so new
+   *  lessons persist as durable, reusable skills. When pointed at Mochi's own
+   *  repo this can author code changes to itself — the "learn and get better
+   *  over time" loop — bounded by `cycles` and the safety budget.
+   */
+  async selfTrain(opts: { cycles?: number; focus?: string; sessionId?: string; onProgress?: (i: number, message: string) => void; signal?: AbortSignal } = {}): Promise<{ report: string; tokensUsed: number; costUsd: number; durationMs: number }> {
+    const cycles = Math.max(1, Math.min(20, opts.cycles ?? 3));
+    const startedAt = performance.now();
+    const reports: string[] = [];
+
+    for (let c = 0; c < cycles; c++) {
+      if (opts?.signal?.aborted) break;
+      // Compose a concrete improvement task from the repo's current state so
+      // each cycle targets a REAL gap instead of generic "make me better".
+      const improvementTask = this.composeImprovementTask(c + 1, cycles, opts.focus);
+
+      opts?.onProgress?.(c + 1, `self-train cycle ${c + 1}/${cycles}: ${improvementTask.title}`);
+      const { finalSummary } = await this.autoImprove(
+        improvementTask.prompt,
+        3, // up to 3 self-review passes per goal until DONE
+        { sessionId: opts.sessionId, signal: opts.signal, onProgress: (i, s) => opts.onProgress?.(c + 1, `  self-review pass ${i}: ${s.slice(0, 120)}`) },
+      );
+      reports.push(`## Cycle ${c + 1}/${cycles}: ${improvementTask.title}\n${finalSummary.trim()}\n`);
+    }
+
+    // Persist lessons as durable skills after the cycles (curator pass).
+    try {
+      const { runCurator, defaultCuratorConfig } = await import('./skill-curator.js');
+      const co = runCurator(this.cwd, defaultCuratorConfig());
+      const curatorSummary = `scanned ${co.scanned}, agent-authored ${co.agentCreated}, stale ${co.stale.length}, archived ${co.archived.length}, consolidated ${co.consolidated.length}${co.reportPath ? `\nreport: ${co.reportPath}` : ''}`;
+      reports.push(`## Skill curator\n${curatorSummary}\n`);
+    } catch { /* curator failure must not fail the training run */ }
+
     const t = this.usage.total();
     return {
-      summaries,
-      finalSummary,
+      report: reports.join('\n'),
       tokensUsed: (t.tokensIn ?? 0) + (t.tokensOut ?? 0),
       costUsd: t.costUsd ?? 0,
       durationMs: Math.round(performance.now() - startedAt),
+    };
+  }
+
+  /** Build one targeted self-improvement task from the current codebase,
+   *  grounded in the most recent run trace so the model fixes real observed
+   *  gaps rather than inventing work. */
+  private composeImprovementTask(cycle: number, total: number, focus?: string): { title: string; prompt: string } {
+    const repoHint = /\/mochi(?:\/|$)/.test(this.cwd)
+      ? 'This is the Mochi codebase itself — you may read and modify its TypeScript source. Prefer small, correct, well-typed patches; always typecheck (`npm run typecheck`), run targeted tests, and rebuild before finishing.'
+      : 'Work inside the current project. Make focused, correct improvements and verify them.';
+    let evidence = '';
+    try {
+      const traceDir = resolve(this.cwd, '.mochi', 'traces');
+      const files = readdirSync(traceDir).filter((f: string) => f.endsWith('.jsonl')).map((f: string) => resolve(traceDir, f));
+      const latest = files.sort((a: string, b: string) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
+      if (latest) {
+        const raw = readFileSync(latest, 'utf8');
+        const messages = raw.split('\n').filter(Boolean).slice(-40)
+          .map((l: string) => { try { const o = JSON.parse(l); return typeof o.message === 'string' ? o.message : ''; } catch { return ''; } })
+          .filter((s: string) => s.length > 0).slice(-8).join('\n').slice(0, 1500);
+        if (messages) evidence = `Recent run tail (most recent trace ${latest.split('/').pop()}):\n${messages}\n`;
+      }
+    } catch { /* trace grounding is best-effort */ }
+
+    const cycleGoal = focus ?? (cycle === 1
+      ? 'identify the single most impactful correctness or reliability issue in this codebase and fix it properly'
+      : 'improve the weakest area you can find: correctness bugs, robustness gaps, missing edge cases, performance, or self-test coverage');
+    return {
+      title: `Self-improvement cycle ${cycle}/${total}${focus ? `: ${focus}` : ''}`,
+      prompt: `Self-improvement task.\n\n${evidence}${repoHint}\n\nGoal: ${cycleGoal}\n\nFix it fully, verify with the repo's own checks, and clearly report what you changed and how you verified it.`,
     };
   }
 

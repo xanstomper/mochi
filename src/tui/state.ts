@@ -216,6 +216,31 @@ export function toolFamily(text: string): string {
   return m ? m[1].toLowerCase() : '';
 }
 
+/** Typeahead resolution for the command palette.
+ *
+ *  Given the current composer text and a list of candidate command names,
+ *  return the command the user most likely means when they hit Enter on a
+ *  BARE PARTIAL command (e.g. `/his` → `/history`), or null when no clear
+ *  completion exists. Selection rules (mirrors Hermes typeahead):
+ *   - non-slash input          → null (never hijack normal prompts/args)
+ *   - input already an exact cmd → null (caller handles exact/arg sending)
+ *   - input carries an argument  → null (only bare partials auto-complete)
+ *   - exactly one prefix match   → that command
+ *   - several matches, one is the highlighted pick → that pick
+ *   - several matches, none highlighted uniquely  → null (leave dropdown open)
+ *  Returning a name means "complete the input IN-BOX, do not send".
+ */
+export function resolveCommandPrefix(input: string, commands: string[], highlighted?: string): string | null {
+  const trimmed = input.trim();
+  if (!trimmed.startsWith('/') || /\s/.test(trimmed)) return null;   // has args or isn't a command
+  const matches = commands.filter((c) => c.startsWith(trimmed));
+  if (matches.length === 0) return null;
+  if (matches.some((c) => c === trimmed)) return null;              // already exact
+  if (matches.length === 1) return matches[0];
+  if (highlighted && matches.includes(highlighted)) return highlighted;
+  return null;                                                      // ambiguous → don't hijack
+}
+
 /** Stable signature of a tool-call payload for duplicate detection. */
 function safeArgsSig(args: unknown): string {
   try {

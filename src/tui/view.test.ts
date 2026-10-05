@@ -255,6 +255,25 @@ describe('composer', () => {
     expect(plain).toContain('fix the bug');
   });
 
+  it('wrapped continuation rows do NOT repeat the ❯ prompt (no stacked symbols)', () => {
+    const first = composerRow('line one', 60, true).replace(/\x1b\[[0-9;]*m/g, '');
+    const cont = composerRow('line two', 60, false).replace(/\x1b\[[0-9;]*m/g, '');
+    expect(first).toContain('❯');
+    expect(cont).not.toContain('❯');
+    // Continuation keeps the left border and grafts the text at the same column.
+    expect(cont.startsWith('│')).toBe(true);
+  });
+
+  it('first and continuation rows have identical total width (box stays square)', () => {
+    for (const w of [60, 40, 30]) {
+      const first = composerRow('abc', w).replace(/\x1b\[[0-9;]*m/g, '');
+      const cont = composerRow('def', w, false).replace(/\x1b\[[0-9;]*m/g, '');
+      expect(visibleLen(first), `width ${w} first`).toBe(w);
+      expect(visibleLen(cont), `width ${w} cont`).toBe(w);
+      expect(visibleLen(first)).toBe(visibleLen(cont));
+    }
+  });
+
   it('bottom rule is a plain rule (hint moved above the box)', () => {
     const rule = composerBottomRule(60);
     const plain = rule.replace(/\x1b\[[0-9;]*m/g, '');

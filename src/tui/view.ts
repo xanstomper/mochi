@@ -1077,10 +1077,25 @@ export function composerTopRule(width: number): string {
   return `${T.rule}┌${'─'.repeat(Math.max(0, width - 2))}┐${T.reset}`;
 }
 
-export function composerRow(text: string, width: number): string {
+/** One text row of the composer box.
+ *
+ *  `isFirst` controls the prompt glyph: the `❯` cursor and its padding are
+ *  rendered ONLY on the first visible row, so a multi-line (wrapped) input does
+ *  not repeat `❯` on every continuation line — which previously made a long
+ *  input look like a row of stacked `❯❯❯` symbols and corrupted the box. The
+ *  `❯` column still matches the caret math (`4 = ❯ + 2 spaces`).
+ */
+export function composerRow(text: string, width: number, isFirst = true): string {
   const inner = Math.max(1, width - 6);
   const shown = visibleLen(text) > inner ? ellipsize(text, inner) : text;
-  return `${T.rule}│${T.reset} ${T.act}${T.bold}❯${T.reset} ${T.fg}${padEnd(shown, inner)}${T.reset} ${T.rule}│${T.reset}`;
+  // First row: `│ ❯ <text> │`; continuation rows: `│    <text> │`.
+  // Skeleton per row is `│ ` + prompt + padEnd + ` │` = prompt + pad + 4 cells.
+  // First prompt `❯ ` is 2 wide, so pad to `inner`; the continuation prompt is
+  // 3 spaces so pad to `inner - 1` — both sum to `inner + 6 == width`, keeping
+  // the right border `│` at a fixed column and the box perfectly square.
+  const prompt = isFirst ? `${T.act}${T.bold}❯${T.reset} ` : '   ';
+  const padLen = isFirst ? inner : inner - 1;
+  return `${T.rule}│${T.reset} ${prompt}${T.fg}${padEnd(shown, padLen)}${T.reset} ${T.rule}│${T.reset}`;
 }
 
 export function composerPlaceholderRow(placeholder: string, width: number): string {

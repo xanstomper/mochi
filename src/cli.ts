@@ -523,6 +523,22 @@ async function main() {
     console.log(await runtime.plan(objective));
     return;
   }
+  if (first === 'self-train' || first === 'selftrain' || first === 'train') {
+    // Continuous self-improvement: cycles of self-review until verified done,
+    // then a skill-curator pass. Optional focus text after the cycle count.
+    const rest = positional.slice(1);
+    const cycles = rest.length && /^\d+$/.test(rest[0]) ? Number(rest[0]) : 3;
+    const focus = (rest.length && /^\d+$/.test(rest[0]) ? rest.slice(1) : rest).join(' ').trim() || undefined;
+    console.log(`🍡 Self-training: ${cycles} cycle(s)${focus ? ` — focus: ${focus}` : ''}\n`);
+    const r = await runtime.selfTrain({
+      cycles,
+      focus,
+      onProgress: (_i, msg) => console.log(`  • ${msg}`),
+    });
+    console.log(r.report);
+    console.log(`\ntokens ${r.tokensUsed} · $${r.costUsd.toFixed(4)} · ${Math.round(r.durationMs / 1000)}s`);
+    return;
+  }
   if (first === 'resume') {
     const goals = runtime.workspace.listGoals();
     if (goals.length === 0) { console.log('No saved goals to resume.'); return; }

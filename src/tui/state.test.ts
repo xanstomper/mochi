@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createTuiState, reduceEvent, pushLine, truncateArgs, toolFamily } from './state.js';
+import { createTuiState, reduceEvent, pushLine, truncateArgs, toolFamily, resolveCommandPrefix } from './state.js';
 import { STREAM_LINE_CAP } from './state.js';
 
 function ev(partial: Record<string, unknown>): Record<string, unknown> { return partial; }
@@ -279,5 +279,39 @@ describe('duplicate tool:called guard (dual-emitter dedupe)', () => {
     }));
     const toolLine = s.lines[s.lines.length - 1];
     expect(toolLine.fullContent).toBe('file contents 12345');
+  });
+});
+
+describe('resolveCommandPrefix (typeahead Enter selection)', () => {
+  const cmds = ['/goal', '/history', '/help', '/mode', '/model', '/reasoning', '/review', '/run'];
+
+  it('completes a unique bare partial to the full command', () => {
+    expect(resolveCommandPrefix('/his', cmds)).toBe('/history');
+    expect(resolveCommandPrefix('/re', cmds, '/review')).toBe('/review'); // ambiguous + highlighted
+  });
+
+  it('never hijacks an exact command (caller sends it)', () => {
+    expect(resolveCommandPrefix('/history', cmds)).toBeNull();
+    expect(resolveCommandPrefix('/goal', cmds)).toBeNull();
+  });
+
+  it('does not complete when arguments are already typed', () => {
+    expect(resolveCommandPrefix('/goal fix the login bug', cmds)).toBeNull();
+    expect(resolveCommandPrefix('/his 3', cmds)).toBeNull();
+  });
+
+  it('does not touch non-slash input (normal prompts)', () => {
+    expect(resolveCommandPrefix('history of the world', cmds)).toBeNull();
+    expect(resolveCommandPrefix('', cmds)).toBeNull();
+  });
+
+  it('leaves ambiguous prefixes open when nothing is highlighted', () => {
+    // /re matches /reasoning and /review — without a unique highlighted pick, no hijack.
+    expect(resolveCommandPrefix('/re', cmds)).toBeNull();
+  });
+
+  it('ignores a highlighted pick that is not among the matches', () => {
+    expect(resolveCommandPrefix('/his', cmds, '/goal')).toBe('/history'); // unique match wins
+    expect(resolveCommandPrefix('/re', cmds, '/goal')).toBeNull();        // bogus highlight → no hijack
   });
 });

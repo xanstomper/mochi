@@ -377,7 +377,14 @@ Return ONLY the JSON array, no markdown.`;
       scheduler.fail(task.id, 'Task blocked by before_task hook', this.agentId(task));
       return;
     }
-    const result = await this.runTask(goal, task, abortSignal, budget, extraContext, readCache, sessionId);
+    // Self-review retry loop (per task): if a task's verification fails, don't
+    // give up immediately — re-run the SAME task with a critical-review nudge
+    // that names the verification failure and asks the agent to fix the real
+    // gap, up to a bounded number of attempts. This is what lets /goal iterate a
+    // task toward "perfect" before moving on to the next one. Bounded so a
+    // genuinely broken task still fails and the goal progresses.
+    const maxSelfReviews = Math.max(0, Number(process.env.MOCHI_GOAL_SELF_REVIEW_ATTEMPTS ?? 2) || 0);
+    let result = await this.runTask(goal, task, abortSignal, budget, extraContext, readCache, sessionId);
     this.goalStats.tokens += result.tokensUsed;
     this.goalStats.duration += result.durationMs;
     if (hasSqlite() && (sessionId || goal.id)) {
@@ -428,7 +435,43 @@ Return ONLY the JSON array, no markdown.`;
           return;
         }
       }
-      const verification = await verifier.verify(task, result.summary);
+      let verification = await verifier.verify(task, result.summary);
+      // Self-review improvement passes: iterate the task toward verified-passing
+      // before declaring it done, so /goal refines each step instead of leaving
+      // it half-finished.
+      let review = 0;
+      while (verification.status !== 'PASS' && review < maxSelfReviews && !abortSignal.aborted) {
+        review++;
+        this.events.emit({
+          type: 'agent:log',
+          agentId: this.agentId(task),
+          message: `[goal self-review ${review}/${maxSelfReviews}] task verification failed — re-running with a critical-review fix pass.`,
+        });
+        const reviewPrompt =
+          `${task.title}\n${task.description}\n\n` +
+          `[CRITICAL SELF-REVIEW ${review}/${maxSelfReviews}] Your previous attempt did NOT pass verification:\n` +
+          `<verification>\n${(verification.summary ?? '').slice(0, 2500)}\n</verification>\n\n` +
+          `Review what you did, find the REAL reason verification failed (do not guess — inspect the current files/tests), fix it properly, and re-run the verification until it passes. ` +
+          `If the failure is pre-existing/unrelated, state exactly why with evidence.`;
+        const reviewContext = new ContextEngine(this.config, this.cwd);
+        reviewContext.setGoal(goal.objective);
+        reviewContext.updateState({ constraints: goal.constraints, nextAction: task.title });
+        reviewContext.addMessage({ role: 'user', content: reviewPrompt });
+        const reviewProfile = this.profiles.get(task.role) ?? this.profiles.get('coder')!;
+        const reviewModelProfile = reviewProfile.defaultModel ?? 'coding';
+        const reviewAgent = new Agent({
+          id: this.agentId(task), role: task.role, modelProfile: reviewModelProfile, profile: reviewProfile,
+          config: this.config, workspace: this.workspace, events: this.events,
+          cwd: this.cwd, context: reviewContext, abortSignal, budget, readCache,
+          verifyBaseline: this.runBaseline,
+        });
+        const reviewResult = await this.runAgentWithAutoResume(reviewAgent, goal, task, reviewContext, abortSignal);
+        this.goalStats.tokens += reviewResult.tokensUsed;
+        this.goalStats.duration += reviewResult.durationMs;
+        if (!reviewResult.success) break;
+        result = reviewResult;
+        verification = await verifier.verify(task, reviewResult.summary);
+      }
       task.output = verification.summary;
       if (verification.status !== 'PASS') {
         scheduler.fail(task.id, verification.summary, this.agentId(task));

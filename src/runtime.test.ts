@@ -178,4 +178,50 @@ describe('Runtime abort + interrupt', () => {
     expect(res.finalSummary).toContain('All tasks completed cleanly');
     rmSync(rt.cwd, { recursive: true, force: true });
   });
+
+  it('autoImprove prompts each later pass to CRITICALLY SELF-REVIEW (not "keep going")', async () => {
+    const rt = Runtime.create({ cwd: makeRepo() });
+    const prompts: string[] = [];
+    rt.runPrompt = async (p: string) => {
+      prompts.push(p);
+      return `draft ${prompts.length}`;
+    };
+    await rt.autoImprove('Refactor the auth module', 3);
+    // First pass has no prior summary; later passes must carry the review directive.
+    expect(prompts[0]).not.toContain('CRITICAL SELF-REVIEW');
+    expect(prompts[1]).toContain('CRITICAL SELF-REVIEW');
+    expect(prompts[1]).toContain('<VERDICT>');
+    // The old broken nudge must be gone.
+    expect(prompts.every((p) => !/Continue: refine, fix remaining issues/.test(p))).toBe(true);
+    rmSync(rt.cwd, { recursive: true, force: true });
+  });
+
+  it('autoImprove stops immediately when a pass declares <VERDICT>DONE</VERDICT>', async () => {
+    const rt = Runtime.create({ cwd: makeRepo() });
+    let calls = 0;
+    rt.runPrompt = async () => {
+      calls++;
+      return calls === 1 ? 'first draft' : 'verified and finished\n<VERDICT>DONE</VERDICT>';
+    };
+    const res = await rt.autoImprove('Fix the bug', 10);
+    expect(calls).toBe(2); // pass 1 + pass 2 (DONE) then stop — never reaches 10
+    expect(res.summaries.length).toBe(2);
+    expect(res.finalSummary).toContain('<VERDICT>DONE</VERDICT>');
+    rmSync(rt.cwd, { recursive: true, force: true });
+  });
+
+  it('autoImprove keeps iterating when passes declare <VERDICT>IMPROVED</VERDICT>', async () => {
+    const rt = Runtime.create({ cwd: makeRepo() });
+    let calls = 0;
+    rt.runPrompt = async () => {
+      calls++;
+      // Every pass reports a concrete improvement with an IMPROVED verdict —
+      // stagnation must NOT accumulate, so it runs the full budget.
+      return `made measurable change #${calls}\n<VERDICT>IMPROVED</VERDICT>`;
+    };
+    const res = await rt.autoImprove('Harden the parser', 4);
+    expect(calls).toBe(4);
+    expect(res.summaries.length).toBe(4);
+    rmSync(rt.cwd, { recursive: true, force: true });
+  });
 });
