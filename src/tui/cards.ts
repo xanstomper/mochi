@@ -49,7 +49,7 @@ function padEnd(s: string, n: number): string {
   return s + ' '.repeat(n - vis);
 }
 
-function truncate(s: string, max: number): string {
+export function truncate(s: string, max: number): string {
   const vis = visibleLen(s);
   if (vis <= max) return s;
   let out = '';

@@ -258,8 +258,10 @@ describe('duplicate tool:called guard (dual-emitter dedupe)', () => {
     const toolLines = s.lines.filter((l) => l.kind === 'summary');
     expect(toolLines.length).toBeGreaterThan(0);
     const joined = toolLines.map((l) => l.text).join('\n');
-    expect(joined).toContain('SUMMARY');
-    expect(joined).toContain('FILES');
+    // Cline-style card: status title instead of a literal "SUMMARY" header;
+    // metrics row is lowercase-labeled; section headers keep uppercase.
+    expect(joined).toContain('Task Complete');
+    expect(joined).toContain('files');
     expect(joined).toContain('WHAT CHANGED');
   });
 });

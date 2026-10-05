@@ -1,8 +1,10 @@
-// Summary renderer (master rebuild Phase 19 + 43): renders a SummaryDocument
-// as the Cline/Claude-Code-style structured summary — compact status header,
-// one-line metric strip, priority-weighted sections. NO fixed-width box
-// drawing: every line is plain content that reflows natively at any terminal
-// width (windowed mode included), so the card never looks compressed.
+// Summary renderer: renders a SummaryDocument as a Cline-style summary CARD —
+// a rounded border box with the status in the title border, a one-line metrics
+// row inside, and section blocks under clean colored sub-headers. The user
+// asked for the Cline "nice chart box" look explicitly; this bordered style
+// supersedes the earlier borderless rule FOR SUMMARY CARDS ONLY (menus and
+// transcript keep the existing treatment).
+//
 // Structure first: empty sections are never rendered; layout adapts to the
 // populated sections.
 //
@@ -10,62 +12,100 @@
 // semantically instead of all-white — ops bold orange, paths cyan, checks
 // green/red, warnings yellow, numbers in the theme's number color.
 
-import { T, R } from './view.js';
-import { wrap } from './wrap.js';
-import { statusLabel, SEMANTIC_COLOR } from './semantic.js';
+import { T, R, stripAnsi } from './view.js';
+import { wrap, visibleLen } from './wrap.js';
+import { SEMANTIC_COLOR } from './semantic.js';
 import type { Semantic } from './semantic.js';
+import { STATUS_GLYPH } from './semantic.js';
+import { truncate } from './cards.js';
 import type { SummaryDocument, SummaryItem } from '../summary/engine.js';
 
 /** Render the summary as styled transcript lines (caller prints them). */
 export function renderSummary(doc: SummaryDocument, width = 80): string[] {
   const lines: string[] = [];
   const status: 'complete' | 'failed' | 'partial' = doc.status;
-  const statusKind = status === 'complete' ? 'completed' : status === 'failed' ? 'failed' : 'warning';
-  // Content width: leaves room for the transcript's 2-space gutter so lines
-  // fit WITHOUT a second wrap pass in the renderer (no mid-ANSI re-splitting,
-  // no compressed look in narrow/windowed terminals).
-  const textWidth = Math.max(24, width - 2);
+  const statusKind: 'completed' | 'failed' | 'warning' =
+    status === 'complete' ? 'completed' : status === 'failed' ? 'failed' : 'warning';
+  const statusText =
+    status === 'complete' ? 'Task Complete' : status === 'failed' ? 'Task Failed' : 'Partially Complete';
+  const statusColor =
+    status === 'complete' ? SEMANTIC_COLOR.SUCCESS : status === 'failed' ? SEMANTIC_COLOR.ERROR : SEMANTIC_COLOR.WARNING;
+  const statusGlyph = STATUS_GLYPH[statusKind];
 
-  // Compact status header: bold SUMMARY + colored status glyph. No border box.
-  lines.push(`${T.bold}SUMMARY${T.reset}  ${statusLabel(statusKind as 'completed' | 'failed' | 'warning')}`);
+  // Box geometry: total width ≈ `width` (the transcript content width the
+  // caller passes); inner text area = boxW - 4 (│ + 1 space each side).
+  const boxW = Math.max(20, Math.min(width, 120));
+  const innerW = boxW - 4;
 
-  // Metric strip: one line of muted labels + colored values (no box cells).
-  // Chunks onto multiple strip lines at narrow widths so it never spills
-  // past the terminal (windowed mode stays clean).
-  if (doc.metrics.length) {
-    lines.push(...renderMetricStrip(doc.metrics, textWidth));
-  }
+  const border = SEMANTIC_COLOR.CONTEXT; // muted frame color
 
-  // Exactly one blank line between blocks (never stacks — kills the
-  // "lots of enters" wall-of-gaps the per-line renderer produced).
-  const gap = () => {
-    if (lines.length && lines[lines.length - 1] !== '') lines.push('');
+  // Visible-length truncate + ellipsis (ANSI-safe via cards' truncate).
+  const fit = (s: string, max: number): string => (visibleLen(s) > max ? `${truncate(stripAnsi(s), max - 1)}…` : s);
+
+  // Visible-length padEnd: pad to `n` visible columns (ANSI-safe).
+  const padEndVis = (s: string, n: number): string => s + ' '.repeat(Math.max(0, n - visibleLen(s)));
+
+  // ── Title border: status lives IN the top border line ──
+  const title = fit(` ${statusGlyph} ${statusText} `, Math.max(8, boxW - 5));
+  const titleVis = visibleLen(title);
+  const titleFill = Math.max(0, boxW - 3 - titleVis); // ╭─<title>…─╮
+  lines.push(
+    `${border}╭─${T.bold}${statusColor}${title}${T.reset}${border}${'─'.repeat(titleFill)}╮${T.reset}`,
+  );
+
+  // ── Overview line (one factual sentence), if present ──
+  const emitRow = (text: string): void => {
+    for (const l of wrap(text, innerW - 2)) {
+      lines.push(`${border}│${T.reset} ${padEndVis(l, innerW)} ${border}│${T.reset}`);
+    }
   };
 
   if (doc.overview) {
-    for (const l of wrap(paintNumbers(doc.overview), textWidth)) lines.push(l);
-    gap();
+    emitRow(doc.overview);
+    lines.push(`${border}├${'─'.repeat(boxW - 2)}┤${T.reset}`);
   }
 
+  // ── Metrics row: files n · checks n · tools n · time ──
+  if (doc.metrics.length) {
+    const cells = doc.metrics.slice(0, 4).map((m) => `${m.label.toLowerCase()} ${m.value}`);
+    let row = cells.join(`${border} · ${T.reset}`);
+    // Degenerate-narrow fallback: 4 cells → 2 → 1, then hard-clip. A metrics
+    // row must never exceed the inner width (it would break the box in
+    // windowed panes — the width-harness guard).
+    if (visibleLen(row) > innerW - 2) row = cells.slice(0, 2).join(' · ');
+    if (visibleLen(row) > innerW - 2) row = cells[0] ?? '';
+    if (visibleLen(row) > innerW - 2) row = `${cells[0]?.slice(0, innerW - 5)}…`;
+    lines.push(`${border}│${T.reset} ${padEndVis(row, innerW)} ${border}│${T.reset}`);
+    lines.push(`${border}├${'─'.repeat(boxW - 2)}┤${T.reset}`);
+  }
+
+  // ── Sections: colored sub-header rows + content rows ──
   const section = (header: string, semantic: Semantic, items: SummaryItem[], painter: (line: string) => string) => {
     if (!items.length) return;
-    gap();
-    lines.push(`${SEMANTIC_COLOR[semantic]}${T.bold}${header}${T.reset}`);
-    lines.push(`${SEMANTIC_COLOR[semantic]}${'─'.repeat(header.length)}${T.reset}`);
+    const hdr = ` ${header.toUpperCase()} `;
+    const hdrFill = Math.max(0, boxW - 3 - visibleLen(hdr));
+    lines.push(`${border}├─${SEMANTIC_COLOR[semantic]}${T.bold}${hdr}${T.reset}${border}${'─'.repeat(hdrFill)}┤${T.reset}`);
     for (const item of items) {
-      for (const l of wrap(item.text, Math.max(10, textWidth - 2))) {
-        lines.push(`  ${painter(l)}`);
+      for (const l of wrap(item.text, innerW - 4)) {
+        lines.push(`${border}│${T.reset} ${padEndVis(painter(l), innerW)} ${border}│${T.reset}`);
       }
     }
   };
 
-  section('WHAT CHANGED', 'CHANGE', doc.whatChanged, paintChangeLine);
-  section('VERIFICATION', 'TEST', doc.verification, paintVerifyLine);
-  section('FAILED', 'ERROR', doc.failures, (l) => `${T.error}${l}${T.reset}`);
-  section('WARNINGS', 'WARNING', doc.warnings, (l) => `${T.warning}${l}${T.reset}`);
-  section('REFERENCES', 'REFERENCE', doc.references, paintReferenceLine);
-  section('NEXT', 'PLAN', doc.next, (l) => `${SEMANTIC_COLOR.PLAN}${l}${T.reset}`);
+  section('What Changed', 'CHANGE', doc.whatChanged, paintChangeLine);
+  section('Verification', 'TEST', doc.verification, paintVerifyLine);
+  section('Failed', 'ERROR', doc.failures, (l) => `${T.error}${l}${T.reset}`);
+  section('Warnings', 'WARNING', doc.warnings, (l) => `${T.warning}${l}${T.reset}`);
+  section('References', 'REFERENCE', doc.references, paintReferenceLine);
+  section('Next Steps', 'PLAN', doc.next, (l) => `${SEMANTIC_COLOR.PLAN}${l}${T.reset}`);
 
+  // Empty card: never emit a lone border pair.
+  if (lines.length === 1) {
+    lines.push(`${border}│${T.reset}${padEndVis(' No activity recorded', boxW - 3)}${border}│${T.reset}`);
+  }
+
+  // ── Bottom border ──
+  lines.push(`${border}╰${'─'.repeat(boxW - 2)}╯${T.reset}`);
   return lines;
 }
 
@@ -156,3 +196,5 @@ function paintReferenceLine(line: string): string {
 function paintNumbers(text: string): string {
   return text.replace(/\b\d[\d.,]*\b/g, (n) => `${R.codeNumber}${n}${T.reset}`);
 }
+
+void paintNumbers;

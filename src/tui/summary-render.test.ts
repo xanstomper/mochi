@@ -32,25 +32,28 @@ function sampleDoc(): SummaryDocument {
 }
 
 describe('summary renderer', () => {
-  it('renders a compact header with a status glyph (no border box)', () => {
+  it('renders a Cline-style bordered card with the status in the title border', () => {
     const lines = renderSummary(sampleDoc(), 80);
     const plain = lines.map(stripAnsi).join('\n');
-    expect(plain).toContain('SUMMARY');
-    expect(plain).toContain(STATUS_GLYPH.completed);
-    // No fixed-width box drawing anywhere in the card.
-    expect(plain).not.toContain('╭');
-    expect(plain).not.toContain('┌');
+    // Bordered card: rounded top/bottom, status + glyph IN the title border.
+    expect(plain).toContain('╭─');
+    expect(plain).toContain('╮');
+    expect(plain).toContain('╰');
+    expect(plain).toContain('╯');
+    expect(plain).toContain('✓ Task Complete');
+    expect(plain).not.toContain('┌'); // rounded corners, not sharp
   });
 
-  it('renders all four metrics on one strip line', () => {
+  it('renders all metrics on one row inside the card', () => {
     const lines = renderSummary(sampleDoc(), 80);
-    const strip = lines.filter((l) => stripAnsi(l).includes('FILES'));
+    // The metrics ROW (not the overview sentence): it carries the '·' separators.
+    const strip = lines.filter((l) => stripAnsi(l).toLowerCase().includes('files') && stripAnsi(l).includes('·'));
     expect(strip).toHaveLength(1);
     const plain = stripAnsi(strip[0]);
     expect(plain).toContain('2 changed');
-    expect(plain).toContain('CHECKS');
-    expect(plain).toContain('TOOLS');
-    expect(plain).toContain('DURATION');
+    expect(plain).toContain('checks');
+    expect(plain).toContain('tools');
+    expect(plain).toContain('duration');
   });
 
   it('omits empty sections (no empty headers)', () => {
@@ -63,6 +66,15 @@ describe('summary renderer', () => {
     expect(plain).not.toContain('NEXT');
     expect(plain).toContain('WHAT CHANGED');
     expect(plain).toContain('VERIFICATION');
+  });
+
+  it('every card row is exactly the box width (border alignment)', () => {
+    for (const w of [80, 60, 44]) {
+      const lines = renderSummary(sampleDoc(), w).map(stripAnsi);
+      for (const l of lines) {
+        expect([...l].length).toBe(w);
+      }
+    }
   });
 
   it('renders failures with failed status glyph', () => {
