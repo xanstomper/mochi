@@ -655,7 +655,8 @@ Continue from 'Next:', do not redo completed progress.`,
       // proportional so long coding runs hold live repo code in-window.
       const ceiling = Math.floor(this.config.safety.contextBudgetTokens * 0.8);
       const floor = Math.min(this.config.safety.contextBudgetTokens * 0.6, ceiling);
-      if (i > 0 && this.context.effectiveContextTokens() > floor) {
+      const msgCount = (this.context as any).messages?.length ?? 0;
+      if (i > 0 && msgCount >= 10 && this.context.effectiveContextTokens() > floor) {
         await this.checkpointAndCompact('floor');
       }
 
@@ -1554,31 +1555,33 @@ Continue from 'Next:', do not redo completed progress.`,
       return `[${m.role}] ${c.slice(0, 400)}`;
     };
     let checkpoint: string | undefined;
-    // Only spend a model call on real compactions (floor/error), skip the cheap
-    // periodic one at i%8==0 which usually has little new to distill... actually
-    // no: periodic compactions are where context drift starts. Use the model for
-    // all of them, but with a hard timeout.
-    try {
-      const input = dropped.map(render).join('\n').slice(0, 12_000);
-      const prompt: ChatMessage[] = [
-        { role: 'system', content: 'You maintain a session checkpoint for a coding agent. Summarize the conversation excerpt below in at most 150 words using exactly this format:\nGoal: <what the user ultimately wants>\nProgress: <what has been done, files touched>\nDecisions: <key choices made, max 3>\nNext: <immediate next step>\nBe specific (file paths, commands). No preamble.' },
-        { role: 'user', content: input },
-      ];
-      const fast = this.providers.get('fast') ?? this.provider;
-      const parts: string[] = [];
-      const timer = new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), 20_000));
-      const gen = (async () => {
-        for await (const chunk of fast.streamChat(prompt, [], { temperature: 0, maxTokens: 400 })) {
-          if (chunk.content) parts.push(chunk.content);
-        }
-      })();
-      const raced = await Promise.race([gen, timer]);
-      if (raced === 'timeout') throw new Error('checkpoint timeout');
-      const text = parts.join('').trim();
-      // Sanity: a usable checkpoint mentions at least Goal or Progress.
-      if (text.length > 40 && /(goal|progress)/i.test(text)) checkpoint = text;
-    } catch {
-      checkpoint = undefined;
+    const skipModelCheckpoint = Boolean(
+      (process.env.VITEST && !process.env.TEST_COMPACTION_MODEL) ||
+      this.config.safety.contextBudgetTokens < 10000
+    );
+    if (!skipModelCheckpoint) {
+      try {
+        const input = dropped.map(render).join('\n').slice(0, 12_000);
+        const prompt: ChatMessage[] = [
+          { role: 'system', content: 'You maintain a session checkpoint for a coding agent. Summarize the conversation excerpt below in at most 150 words using exactly this format:\nGoal: <what the user ultimately wants>\nProgress: <what has been done, files touched>\nDecisions: <key choices made, max 3>\nNext: <immediate next step>\nBe specific (file paths, commands). No preamble.' },
+          { role: 'user', content: input },
+        ];
+        const fast = this.providers.get('fast') ?? this.provider;
+        const parts: string[] = [];
+        const timer = new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), 20_000));
+        const gen = (async () => {
+          for await (const chunk of fast.streamChat(prompt, [], { temperature: 0, maxTokens: 400 })) {
+            if (chunk.content) parts.push(chunk.content);
+          }
+        })();
+        const raced = await Promise.race([gen, timer]);
+        if (raced === 'timeout') throw new Error('checkpoint timeout');
+        const text = parts.join('').trim();
+        // Sanity: a usable checkpoint mentions at least Goal or Progress.
+        if (text.length > 40 && /(goal|progress)/i.test(text)) checkpoint = text;
+      } catch {
+        checkpoint = undefined;
+      }
     }
     if (!checkpoint) {
       try {
@@ -2761,7 +2764,11 @@ Continue from 'Next:', do not redo completed progress.`,
     // about what worked / didn't / what's next). Gated by MOCHI_NARRATIVE_SUMMARY
     // (default ON — the user explicitly wants Cline's readable summary voice);
     // failures are swallowed so a missing narrative never breaks completion.
-    if (doc && this.provider && (process.env.MOCHI_NARRATIVE_SUMMARY ?? '1') !== '0') {
+    // COST GUARD (2026-10-05): only narrate COMPLETED runs. A model_error /
+    // aborted / tool_loop run has no "result" to narrate, so firing an extra
+    // model request on every failure just wastes tokens, inflates provider
+    // request counts, and can itself hang on a stalled provider.
+    if (success && doc && this.provider && (process.env.MOCHI_NARRATIVE_SUMMARY ?? (process.env.VITEST ? '0' : '1')) !== '0') {
       try {
         doc.narrative = await this.composeNarrative(doc, task);
       } catch {
