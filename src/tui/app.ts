@@ -1199,7 +1199,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       exit();
       return;
     }
-    if (line === '/help') { pushHelp(); return; }
+    if (line === '/help' || line === '/shortcuts' || line === '/keys') { pushHelp(); return; }
     if (line === '/clear') { state.lines = []; state.tasks.clear(); state.scroll = 0; scheduleRender(); return; }
     if (line === '/copy' || line.startsWith('/copy ')) {
       // Keyboard fallback for terminal selection. By default copies the
@@ -2337,12 +2337,20 @@ if (line === '/branch' || line.startsWith('/branch ')) {
     const tips =
       `\nCopying text from the transcript:\n` +
       `  Drag with the left mouse button to select text — release copies to clipboard.\n` +
+      `  Double-click selects a word; triple-click selects the whole line.\n` +
       `  Shift+drag uses the host terminal's native selection (works in tmux / older terminals).\n` +
       `  /copy [last | err | N] — keyboard fallback: copy last assistant, last error,\n` +
       `    or the Nth-most-recent line. Works on every terminal, no mouse needed.\n` +
-      `\nTerminal shortcuts:\n` +
-      `  Wheel or PgUp/PgDn scroll the transcript — Home/End jump to top/bottom.\n` +
-      `  Shift+Tab toggles auto-approve, Double Esc exits.`;
+      `\nKeyboard shortcuts (also /shortcuts):\n` +
+      `  Enter          send / queue the message while a task runs (drains on finish)\n` +
+      `  Alt+↑          pop the last queued message back into the composer\n` +
+      `  Tab            toggle plan/act mode (Tab on a dropdown completes the command)\n` +
+      `  Enter on /his  typeahead: completes the partial command in-box (no send)\n` +
+      `  Shift+Tab      auto-improve menu (self-review passes)\n` +
+      `  Ctrl+O         uncompressed inspector (full tool output / hidden thinking)\n` +
+      `  Esc            stop the current task · Double Esc exits\n` +
+      `  Wheel/PgUp/PgDn scroll · Home/End jump to top/bottom\n` +
+      `  Up/Down        prompt history`;
     push('system', text + tips);
   }
 
