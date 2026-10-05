@@ -9,6 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import { visibleLen, wrap } from './wrap.js';
 import { renderSummary, renderMetricStrip } from './summary-render.js';
+import { renderMarkdown } from './view.js';
 import type { SummaryDocument } from '../summary/engine.js';
 
 const WIDTHS = [26, 30, 40, 50, 56, 60, 70, 80, 90, 100, 110];
@@ -86,6 +87,23 @@ describe('render width harness (windowed-overflow guard)', () => {
           expect(visibleLen(row), `width ${w}: wrapped row overflow`)
             .toBeLessThanOrEqual(w);
         }
+      }
+    }
+  });
+
+  it('renderMarkdown tables never exceed the given width at any terminal size', () => {
+    const tableMd = [
+      '| Project | Port | Service |',
+      '|---|---|---|',
+      '| Terminus – multi-agent terminal control plane | 9120 | terminus.service |',
+      '| Hermes Dashboard – web UI + agent API | 9119 | hermes-dashboard.service |',
+      '| Clash Royale Mission Control – autoplay + vision | 9125 | clash-webui.service |',
+    ].join('\n');
+    for (const w of WIDTHS) {
+      const rows = renderMarkdown(tableMd, w);
+      for (const row of rows) {
+        expect(visibleLen(row), `width ${w}: table row overflow`)
+          .toBeLessThanOrEqual(w);
       }
     }
   });

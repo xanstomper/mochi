@@ -517,13 +517,63 @@ describe('renderMarkdown', () => {
     expect(plain).toContain('caution line');
   });
 
-  it('collapses blank lines (paragraphs merge, no double blanks)', () => {
-    const rows = m.renderMarkdown('Para one.\n\nPara two.');
+  it('collapses blank lines (clean single blank between paragraphs, no double blanks)', () => {
+    const rows = m.renderMarkdown('Para one.\n\n\n\nPara two.');
     const plain = rows.map((r) => r.replace(/\x1b\[[0-9;]*m/g, ''));
-    // No row should be empty between two paragraphs.
+    // Exactly one empty row between paragraphs — clean readable spacing, no double blanks.
     const blanks = plain.filter((l) => l.trim() === '').length;
-    expect(blanks).toBe(0);
+    expect(blanks).toBe(1);
     expect(plain.join('\n')).toContain('Para one.');
     expect(plain.join('\n')).toContain('Para two.');
+  });
+
+  it('renders markdown tables inside a Cline-style boxed matrix with borders', () => {
+    const tableMd = [
+      '| Project | Port | Service |',
+      '|---|---|---|',
+      '| Terminus | 9120 | terminus.service |',
+      '| Hermes Dashboard | 9119 | hermes-dashboard.service |',
+      '| Clash Royale | 9125 | clash-webui.service |',
+    ].join('\n');
+
+    const rows = m.renderMarkdown(tableMd, 80);
+    const plain = rows.map((r) => r.replace(/\x1b\[[0-9;]*m/g, ''));
+
+    // Top border contains box drawing characters
+    expect(plain.some((l) => l.startsWith('┌') && l.endsWith('┐') && l.includes('┬'))).toBe(true);
+    // Header row contains column names
+    expect(plain.some((l) => l.includes('Project') && l.includes('Port') && l.includes('Service'))).toBe(true);
+    // Separator line contains cross branches
+    expect(plain.some((l) => l.startsWith('├') && l.endsWith('┤') && l.includes('┼'))).toBe(true);
+    // Body rows contain data
+    expect(plain.some((l) => l.includes('Terminus') && l.includes('9120'))).toBe(true);
+    expect(plain.some((l) => l.includes('Hermes Dashboard') && l.includes('9119'))).toBe(true);
+    // Bottom border closes the box
+    expect(plain.some((l) => l.startsWith('└') && l.endsWith('┘') && l.includes('┴'))).toBe(true);
+
+    // Invariant: no row exceeds given width
+    for (const r of plain) {
+      expect([...r].length).toBeLessThanOrEqual(80);
+    }
+  });
+
+  it('preserves clean vertical spacing between paragraphs and tables', () => {
+    const md = [
+      'Here is the status:',
+      '',
+      '| Name | Status |',
+      '|---|---|',
+      '| worker | ok |',
+      '',
+      'All systems operational.',
+    ].join('\n');
+
+    const rows = m.renderMarkdown(md, 80);
+    const plain = rows.map((r) => r.replace(/\x1b\[[0-9;]*m/g, ''));
+
+    expect(plain[0]).toBe('Here is the status:');
+    expect(plain[1]).toBe('');
+    expect(plain[2].startsWith('┌')).toBe(true);
+    expect(plain[plain.length - 1]).toBe('All systems operational.');
   });
 });

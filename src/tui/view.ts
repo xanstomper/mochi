@@ -529,14 +529,248 @@ function highlightCodeLine(line: string): string {
  *  - blockquotes with a colored left bar on every continuation line
  *  - code fences with a language tag + highlighted lines, indented
  */
+/** Parse cells from a markdown table row (handles escaped pipes). */
+export function parseTableCells(line: string): string[] {
+  const trimmed = line.trim();
+  const inner = trimmed.replace(/^\|/, '').replace(/\|$/, '');
+  const placeholder = '\u0000PIPE\u0000';
+  const escaped = inner.replace(/\\\|/g, placeholder);
+  return escaped.split('|').map((c) => c.replace(new RegExp(placeholder, 'g'), '|').trim());
+}
+
+/** Check if a line is a markdown table delimiter row (e.g. |---|---| or |:---|---:|). */
+export function isTableDelimiter(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed.includes('-')) return false;
+  const inner = trimmed.replace(/^\|/, '').replace(/\|$/, '');
+  const cells = inner.split('|').map((c) => c.trim());
+  if (cells.length < 1) return false;
+  return cells.every((c) => /^:?-{1,}:?$/.test(c));
+}
+
+/** Check if a line can be a markdown table row. */
+export function isTableRow(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed.includes('|')) return false;
+  if (trimmed.startsWith('|') && trimmed.endsWith('|')) return true;
+  const inner = trimmed.replace(/^\|/, '').replace(/\|$/, '');
+  return inner.split('|').length >= 2;
+}
+
+export type TableAlignment = 'left' | 'center' | 'right';
+
+export function parseTableAlignments(delimLine: string): TableAlignment[] {
+  const inner = delimLine.trim().replace(/^\|/, '').replace(/\|$/, '');
+  return inner.split('|').map((c) => {
+    const trimmed = c.trim();
+    const left = trimmed.startsWith(':');
+    const right = trimmed.endsWith(':');
+    if (left && right) return 'center';
+    if (right) return 'right';
+    return 'left';
+  });
+}
+
+/** Compute column widths allocating available space proportionally up to maxTableWidth. */
+export function computeColumnWidths(headers: string[], bodyRows: string[][], maxTableWidth: number): number[] {
+  const numCols = headers.length;
+  if (numCols === 0) return [];
+  const borderOverhead = numCols + 1;
+  const avail = Math.max(numCols * 2, maxTableWidth - borderOverhead);
+
+  // 1. Natural width of each column: visible content length + 2 spaces padding (1 left, 1 right)
+  const natural: number[] = headers.map((h, colIdx) => {
+    let maxVis = visibleLen(stripAnsi(h));
+    for (const row of bodyRows) {
+      if (row[colIdx]) {
+        maxVis = Math.max(maxVis, visibleLen(stripAnsi(formatInlineMarkdown(row[colIdx]))));
+      }
+    }
+    return Math.max(4, maxVis + 2);
+  });
+
+  const sumNatural = natural.reduce((a, b) => a + b, 0);
+
+  if (sumNatural <= avail) {
+    return natural;
+  }
+
+  // Shrink columns to fit inside avail while protecting small columns (<= 12 chars).
+  const minCol = Math.max(2, Math.min(4, Math.floor(avail / numCols)));
+  const widths = natural.slice();
+
+  const smallCutoff = 12;
+  let smallColsTotal = 0;
+  let largeColsNatural = 0;
+  let largeColsCount = 0;
+
+  for (let i = 0; i < numCols; i++) {
+    if (natural[i] <= smallCutoff) {
+      smallColsTotal += natural[i];
+    } else {
+      largeColsNatural += natural[i];
+      largeColsCount++;
+    }
+  }
+
+  if (largeColsCount > 0 && avail - smallColsTotal >= largeColsCount * minCol) {
+    const remainingAvail = avail - smallColsTotal;
+    let allocated = 0;
+    for (let i = 0; i < numCols; i++) {
+      if (natural[i] > smallCutoff) {
+        const share = Math.max(minCol, Math.floor(remainingAvail * (natural[i] / largeColsNatural)));
+        widths[i] = share;
+        allocated += share;
+      }
+    }
+    let rem = remainingAvail - allocated;
+    while (rem > 0) {
+      let maxIdx = -1;
+      for (let i = 0; i < numCols; i++) {
+        if (natural[i] > smallCutoff && (maxIdx === -1 || widths[i] < widths[maxIdx])) {
+          maxIdx = i;
+        }
+      }
+      if (maxIdx === -1) break;
+      widths[maxIdx]++;
+      rem--;
+    }
+    while (widths.reduce((a, b) => a + b, 0) > avail) {
+      let maxIdx = -1;
+      for (let i = 0; i < numCols; i++) {
+        if (widths[i] > minCol && (maxIdx === -1 || widths[i] > widths[maxIdx])) {
+          maxIdx = i;
+        }
+      }
+      if (maxIdx === -1) break;
+      widths[maxIdx]--;
+    }
+    return widths;
+  }
+
+  const totalMin = numCols * minCol;
+  if (avail <= totalMin) {
+    const each = Math.max(2, Math.floor(avail / numCols));
+    const res = new Array(numCols).fill(each);
+    let rem = avail - each * numCols;
+    for (let i = 0; i < rem; i++) res[i]++;
+    return res;
+  }
+
+  const extra = avail - totalMin;
+  const naturalExtra = Math.max(1, sumNatural - totalMin);
+  let allocatedExtra = 0;
+  for (let i = 0; i < numCols; i++) {
+    const share = Math.floor(extra * ((natural[i] - minCol) / naturalExtra));
+    widths[i] = minCol + share;
+    allocatedExtra += share;
+  }
+  let rem = extra - allocatedExtra;
+  for (let i = 0; i < numCols && rem > 0; i++, rem--) {
+    widths[i]++;
+  }
+  while (widths.reduce((a, b) => a + b, 0) > avail) {
+    let maxIdx = 0;
+    for (let i = 1; i < numCols; i++) {
+      if (widths[i] > widths[maxIdx]) maxIdx = i;
+    }
+    if (widths[maxIdx] <= 2) break;
+    widths[maxIdx]--;
+  }
+  return widths;
+}
+
+function formatTableCell(s: string, colW: number, align: TableAlignment = 'left'): string {
+  const contentW = Math.max(0, colW - 2);
+  const truncated = visibleLen(s) > contentW ? ellipsize(s, contentW) : s;
+  const vis = visibleLen(truncated);
+  const pad = Math.max(0, contentW - vis);
+  if (align === 'right') {
+    return ' ' + ' '.repeat(pad) + truncated + ' ';
+  }
+  if (align === 'center') {
+    const leftPad = Math.floor(pad / 2);
+    const rightPad = pad - leftPad;
+    return ' ' + ' '.repeat(leftPad) + truncated + ' '.repeat(rightPad) + ' ';
+  }
+  return ' ' + truncated + ' '.repeat(pad) + ' ';
+}
+
+/** Render a markdown table as a Cline-grade boxed matrix (┌─┬─┐, │ │ │, ├─┼─┤, └─┴─┘). */
+export function renderTable(headerRaw: string, delimRaw: string, bodyRaws: string[], maxW: number): string[] {
+  const headers = parseTableCells(headerRaw);
+  if (headers.length === 0) return [];
+  const numCols = headers.length;
+  const alignments = parseTableAlignments(delimRaw);
+  while (alignments.length < numCols) alignments.push('left');
+
+  const bodyRows: string[][] = bodyRaws.map((rowRaw) => {
+    const cells = parseTableCells(rowRaw);
+    while (cells.length < numCols) cells.push('');
+    return cells.slice(0, numCols);
+  });
+
+  const colWidths = computeColumnWidths(headers, bodyRows, maxW);
+  const borderCol = T.rule ?? T.grayDark ?? '\x1b[38;2;86;95;137m';
+  const out: string[] = [];
+
+  // Top border: ┌───┬───┐
+  out.push(`${borderCol}┌${colWidths.map((w) => '─'.repeat(w)).join('┬')}┐${T.reset}`);
+
+  // Header row: │ Header 1 │ Header 2 │
+  const headerCells = headers.map((h, colIdx) => {
+    const styledText = `${T.bold}${T.cyan}${h}${T.reset}`;
+    return formatTableCell(styledText, colWidths[colIdx], alignments[colIdx]);
+  });
+  out.push(`${borderCol}│${T.reset}${headerCells.join(`${borderCol}│${T.reset}`)}${borderCol}│${T.reset}`);
+
+  // Header separator: ├───┼───┤
+  out.push(`${borderCol}├${colWidths.map((w) => '─'.repeat(w)).join('┼')}┤${T.reset}`);
+
+  // Body rows: │ Cell 1 │ Cell 2 │
+  for (const row of bodyRows) {
+    const rowCells = row.map((cell, colIdx) => {
+      const styledText = formatInlineMarkdown(cell);
+      return formatTableCell(styledText, colWidths[colIdx], alignments[colIdx]);
+    });
+    out.push(`${borderCol}│${T.reset}${rowCells.join(`${borderCol}│${T.reset}`)}${borderCol}│${T.reset}`);
+  }
+
+  // Bottom border: └───┴───┘
+  out.push(`${borderCol}└${colWidths.map((w) => '─'.repeat(w)).join('┴')}┘${T.reset}`);
+
+  return out;
+}
+
+/**
+ * Cline-grade terminal markdown renderer ("same as Cline but better"):
+ *  - headings: bold colored text + a hairline that MATCHES the text length
+ *  - unordered bullets: cyan `•` glyphs (distinct from ordered lists)
+ *  - ordered lists: orange auto-numbers
+ *  - NESTED lists: 2-space indent per level, parent-colored markers
+ *  - HANGING INDENTS: wrapped continuation lines align under the text,
+ *    not under the marker (the Cline signature look)
+ *  - width-aware wrapping at `width` (defaults to the terminal) so the
+ *    renderer itself produces final rows — no double-wrap drift
+ *  - blockquotes with a colored left bar on every continuation line
+ *  - code fences with a language tag + highlighted lines, indented
+ *  - tables: boxed matrix with single-line borders (┌─┬─┐, │ │ │, ├─┼─┤, └─┴─┘)
+ *  - proper vertical paragraph and block spacing (clean single blank lines)
+ */
 export function renderMarkdown(text: string, width?: string | number): string[] {
   const termW = typeof width === 'number' ? width : (process.stdout.columns || 100);
-  const W = Math.max(30, Math.min(Number(termW) || 100, 200));
+  const W = Math.max(20, Math.min(Number(termW) || 100, 200));
   const rawLines = text.split('\n');
   const out: string[] = [];
   let inCodeBlock = false;
   let codeBlockLang = '';
   let paragraph: string[] = [];
+
+  const emitBlankIfNeeded = () => {
+    if (out.length > 0 && out[out.length - 1] !== '') {
+      out.push('');
+    }
+  };
 
   // Emit one wrapped paragraph with a hanging indent: continuation rows pad
   // to `hang` visible columns so they align under the text, not the marker.
@@ -574,6 +808,7 @@ export function renderMarkdown(text: string, width?: string | number): string[] 
       flushParagraph();
       bulletStack.length = 0;
       if (!inCodeBlock) {
+        emitBlankIfNeeded();
         inCodeBlock = true;
         codeBlockLang = trimmed.slice(3).trim();
         const tag = codeBlockLang ? `${R.codeType}${codeBlockLang}${T.reset}` : `${T.grayDark}code${T.reset}`;
@@ -591,10 +826,36 @@ export function renderMarkdown(text: string, width?: string | number): string[] 
       continue;
     }
 
-    // Blank line → paragraph boundary + list reset.
+    // Blank line → paragraph boundary + list reset + clean single spacing.
     if (!trimmed) {
       flushParagraph();
       bulletStack.length = 0;
+      emitBlankIfNeeded();
+      continue;
+    }
+
+    // Markdown table: header row followed by delimiter row (|---|---|)
+    if (isTableRow(raw) && i + 1 < rawLines.length && isTableDelimiter(rawLines[i + 1])) {
+      flushParagraph();
+      bulletStack.length = 0;
+      emitBlankIfNeeded();
+
+      const headerRaw = raw;
+      const delimRaw = rawLines[i + 1];
+      const tableRowsRaw: string[] = [];
+      i += 2;
+      while (i < rawLines.length) {
+        const nextLine = rawLines[i];
+        if (!nextLine.trim() || !isTableRow(nextLine)) break;
+        tableRowsRaw.push(nextLine);
+        i++;
+      }
+      i--; // loop increment counter will advance to next line
+
+      const tableRows = renderTable(headerRaw, delimRaw, tableRowsRaw, W);
+      for (const row of tableRows) {
+        out.push(row);
+      }
       continue;
     }
 
@@ -603,6 +864,7 @@ export function renderMarkdown(text: string, width?: string | number): string[] 
     if (hMatch) {
       flushParagraph();
       bulletStack.length = 0;
+      emitBlankIfNeeded();
       const headingText = hMatch[2];
       out.push(`${R.mdHeading}${T.bold}${headingText}${T.reset}`);
       out.push(`${R.mdHeading}${'─'.repeat(Math.max(8, Math.min(40, visibleLen(headingText))))}${T.reset}`);
@@ -672,6 +934,9 @@ export function renderMarkdown(text: string, width?: string | number): string[] 
     paragraph.push(raw);
   }
   flushParagraph();
+  while (out.length > 0 && out[out.length - 1] === '') {
+    out.pop();
+  }
   return out;
 }
 
