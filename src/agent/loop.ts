@@ -2491,6 +2491,47 @@ Continue from 'Next:', do not redo completed progress.`,
     return this.selfReviewCount < 2;
   }
 
+  /** Turn the run into a Cline-voice narrative: a readable plain-English
+   *  summary with a bold headline per topic, honest about what worked / didn't
+   *  / what's next — the opposite of a wall of terse bullet points. Feeds only
+   *  REAL facts from the SummaryDocument (numbers are never fabricated). */
+  private async composeNarrative(doc: import('../summary/engine.js').SummaryDocument, task: Task): Promise<string> {
+    const { status, metrics } = doc;
+    const lines = [`Task: ${task.title}`, `Status: ${status}`];
+    const head = (label: string, items: import('../summary/engine.js').SummaryItem[]) =>
+      items.length ? `${label}:\n${items.map((i) => `- ${i.text}${i.detail ? ` (${i.detail})` : ''}`).join('\n')}` : '';
+    if (doc.whatChanged.length) lines.push(head('Changed', doc.whatChanged));
+    if (doc.verification.length) lines.push(head('Verification', doc.verification));
+    if (doc.failures.length) lines.push(head('Failed', doc.failures));
+    if (doc.warnings.length) lines.push(head('Warnings', doc.warnings));
+    if (doc.next.length) lines.push(head('Next', doc.next));
+    if (metrics.length) lines.push(`Metrics: ${metrics.map((m) => `${m.label} ${m.value}`).join(', ')}`);
+    const prompt = [
+      'Write a concise summary of this coding run the way an excellent senior engineer',
+      'would, in the voice Claude Code/Cline use at the end of a task. Requirements:',
+      '1. A short bold headline phrased as a clear result, not filler greeting.',
+      '2. Follow the structure: what got done/fixed and enforced; the honest headline',
+      '   (what did NOT work / is still blocked, stated plainly, no dressing up); what',
+      '   the blocker actually looks like (1-2 concrete facts); anything the next',
+      '   person should know (risks, misattributions, undone work); the recommended',
+      '   next step. Skip a section only if it truly has nothing.',
+      '3. Use short sentences and the user\'s terminology. Be direct and honest —',
+      '   explicitly call out failures and uncertain results rather than spinning them.',
+      '4. Keep it tight: 4-9 lines. Use markdown **bold** on the key clause of each',
+      '   line only. Never invent facts or numbers — use ONLY the provided data.',
+      '',
+      lines.join('\n'),
+    ].join('\n');
+    const msg: ChatMessage = { role: 'user', content: prompt };
+    try {
+      const response = await this.provider.chat([msg], [], { signal: this.abortSignal, maxTokens: 600 });
+      const text = (response.content ?? '').trim();
+      return text || '';
+    } catch {
+      return '';
+    }
+  }
+
   /** One cheap model call reviewing the working diff. Returns nothing when the
    *  change looks clean, else a concrete, actionable problem for the loop to
    *  fix (and re-verify). */
@@ -2546,7 +2587,7 @@ Continue from 'Next:', do not redo completed progress.`,
     this.events.emit({ type: 'message', role, content, agentId: this.id });
   }
 
-  private finish(task: Task, success: boolean, summary: string, stopReason: AgentStopReason = success ? 'completed' : 'aborted'): AgentResult {
+  private async finish(task: Task, success: boolean, summary: string, stopReason: AgentStopReason = success ? 'completed' : 'aborted'): Promise<AgentResult> {
     // Harness-v2 Phase 1: close the lifecycle — emit the final iteration's
     // trace with the run's stop reason (abort/timeout from ANY phase lands
     // here, so the trace records where the run actually stopped).
@@ -2577,6 +2618,18 @@ Continue from 'Next:', do not redo completed progress.`,
       doc = summarize(this.events.snapshot(), { goal: task.title });
     } catch {
       /* ignore summary error */
+    }
+    // Cline-style narrative lead: one extra cheap model call that re-writes the
+    // run as a readable plain-English narrative (bold headline per topic, honest
+    // about what worked / didn't / what's next). Gated by MOCHI_NARRATIVE_SUMMARY
+    // (default ON — the user explicitly wants Cline's readable summary voice);
+    // failures are swallowed so a missing narrative never breaks completion.
+    if (doc && this.provider && (process.env.MOCHI_NARRATIVE_SUMMARY ?? '1') !== '0') {
+      try {
+        doc.narrative = await this.composeNarrative(doc, task);
+      } catch {
+        /* narrative is optional */
+      }
     }
     this.events.emit({
       type: 'summary:rendered',

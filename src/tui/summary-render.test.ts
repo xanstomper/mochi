@@ -44,6 +44,23 @@ describe('summary renderer', () => {
     expect(plain).not.toContain('┌'); // rounded corners, not sharp
   });
 
+  it('renders the Cline-voice narrative as the lead block, width-aligned', () => {
+    const doc = sampleDoc();
+    doc.narrative =
+      '**Fixed and enforced.** Root cause was a stale binary.\n\nWhat did NOT break: the boot wall — negative result, not dressed up.';
+    for (const w of [80, 60]) {
+      const lines = renderSummary(doc, w).map(stripAnsi);
+      const joined = lines.join('\n');
+      // Narrative text appears inside the box (word-wrapping may split a
+      // phrase across rows, so assert on words, not the joined phrase), and
+      // every row is box-width.
+      expect(joined).toContain('Fixed and enforced');
+      expect(joined).toContain('negative');
+      expect(joined).toContain('dressed up');
+      for (const l of lines) expect([...l].length).toBe(w);
+    }
+  });
+
   it('renders all metrics on one row inside the card', () => {
     const lines = renderSummary(sampleDoc(), 80);
     // The metrics ROW (not the overview sentence): it carries the '·' separators.

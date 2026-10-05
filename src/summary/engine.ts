@@ -37,6 +37,9 @@ export interface SummaryItem {
 export interface SummaryDocument {
   status: 'complete' | 'failed' | 'partial';
   overview: string;
+  /** Optional model-written Cline-style narrative ("Here's where things stand…"),
+   *  rendered as the lead prose block of the card. Empty = omit it. */
+  narrative?: string;
   /** Only metrics with real data appear; never a fabricated zero. */
   metrics: SummaryMetric[];
   whatChanged: SummaryItem[];

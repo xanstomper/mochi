@@ -12,7 +12,7 @@
 // semantically instead of all-white — ops bold orange, paths cyan, checks
 // green/red, warnings yellow, numbers in the theme's number color.
 
-import { T, R, stripAnsi } from './view.js';
+import { T, R, stripAnsi, renderMarkdown } from './view.js';
 import { wrap, visibleLen } from './wrap.js';
 import { SEMANTIC_COLOR } from './semantic.js';
 import type { Semantic } from './semantic.js';
@@ -52,6 +52,14 @@ export function renderSummary(doc: SummaryDocument, width = 80): string[] {
   lines.push(
     `${border}╭─${T.bold}${statusColor}${title}${T.reset}${border}${'─'.repeat(titleFill)}╮${T.reset}`,
   );
+
+  // ── Cline-style narrative lead, if the model wrote one ──
+  if (doc.narrative && doc.narrative.trim()) {
+    for (const l of narrativeRows(doc.narrative, innerW)) {
+      lines.push(`${border}│${T.reset} ${padEndVis(l, innerW)} ${border}│${T.reset}`);
+    }
+    lines.push(`${border}├${'─'.repeat(boxW - 2)}┤${T.reset}`);
+  }
 
   // ── Overview line (one factual sentence), if present ──
   const emitRow = (text: string): void => {
@@ -107,6 +115,19 @@ export function renderSummary(doc: SummaryDocument, width = 80): string[] {
   // ── Bottom border ──
   lines.push(`${border}╰${'─'.repeat(boxW - 2)}╯${T.reset}`);
   return lines;
+}
+
+/** Cline-voice narrative lead rendered through the markdown renderer (bold,
+ *  inline code, etc.), then hard-wrapped to the card's content width so no
+ *  row ever overflows the box (the width-harness invariant). */
+function narrativeRows(text: string, innerW: number): string[] {
+  const out: string[] = [];
+  for (const l of renderMarkdown(text, innerW - 2)) {
+    const row = stripAnsi(l);
+    if (row === '') continue;
+    out.push(`${' '.repeat(Math.max(0, row.length - visibleLen(row)))}${row}`);
+  }
+  return out;
 }
 
 /** Metric strip: "FILES 2 changed · CHECKS 2 passed · …" — chunked to fit
