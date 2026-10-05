@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildMcpTools } from './tools.js';
 import type { EventBus } from '../events.js';
-import { Context } from '../context.js';
+import { ContextEngine } from '../context.js';
 
 // Same minimal stdio MCP server used by the client tests: initialize,
 // tools/list (one `uppercase` tool), tools/call. The integration test below
@@ -173,6 +173,57 @@ describe('buildMcpTools (real subprocess)', () => {
     try {
       expect(built.tools.size).toBe(0);
       expect(built.errors).toEqual([]);
+    } finally {
+      built.close();
+    }
+  });
+
+  it('round-trip: tool listed → called → result transcribed into context', async () => {
+    const built = await buildMcpTools({ mini: { command: process.execPath, args: [serverPath] } });
+    try {
+      const tool = built.tools.get('mini__uppercase');
+      expect(tool).toBeDefined();
+
+      // 1. Tool listed in definitions
+      const toolDefs = [tool!.def];
+      expect(toolDefs.some((d) => d.name === 'mini__uppercase')).toBe(true);
+
+      // 2. Tool called
+      const ctx = {
+        cwd: dir,
+        workspace: {} as never,
+        config: { permissions: { network: true, read: true } } as never,
+        events: { emit: () => {} } as unknown as EventBus,
+        agentId: 'mcp-agent',
+      };
+      const res = await tool!.execute({ text: 'test transcription' }, ctx);
+      expect(res).toBe('TEST TRANSCRIPTION');
+
+      // 3. Result transcribed into context
+      const context = new ContextEngine({
+        safety: { contextBudgetTokens: 10000, mode: 'auto' },
+        permissions: { read: true, write: true, network: true, shell: true, gitDestructive: false },
+        model: { model: 'test' },
+      } as any, dir);
+      context.addMessage({
+        role: 'assistant',
+        content: null as any,
+        toolCalls: [{
+          id: 'call_1',
+          type: 'function',
+          function: { name: 'mini__uppercase', arguments: '{"text":"test transcription"}' },
+        }],
+      });
+      context.addMessage({
+        role: 'tool',
+        toolCallId: 'call_1',
+        content: String(res),
+      });
+
+      const packet = context.buildPacket(toolDefs);
+      const toolMsg = packet.messages.find((m) => m.role === 'tool' && m.toolCallId === 'call_1');
+      expect(toolMsg).toBeDefined();
+      expect(toolMsg!.content).toBe('TEST TRANSCRIPTION');
     } finally {
       built.close();
     }
