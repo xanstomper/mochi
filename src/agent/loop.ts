@@ -338,6 +338,11 @@ export class Agent {
   /** Consecutive-identical tool-call spam guard state (runMoolCall). */
   private lastToolSig = '';
   private toolSigRepeat = 0;
+  /** Task currently being run — needed by runMoolCall to finish the run when
+   *  the budget is truly exhausted (bounded early-finish vs veto-looping). */
+  private activeTask: Task | null = null;
+  /** Fuzzy read-spam: per-target read/glob/search counts within one run. */
+  private readTargetCounts = new Map<string, number>();
   /** Bounded retry budget for transient transport aborts when no fallback
    *  model remains (reset on any successful model output). */
   private transientAbortRetries = 0;
@@ -416,6 +421,7 @@ export class Agent {
 
   async run(task: Task): Promise<AgentResult> {
     this.startTime = performance.now();
+    this.activeTask = task;
     this.events.emit({ type: 'task:started', task, agentId: this.id });
     // Harness-v2 Phase 1: deterministic iteration lifecycle. Every loop turn
     // flows preflight → model-call → stream-guard → tool-exec → verify →
@@ -1192,7 +1198,19 @@ Continue from 'Next:', do not redo completed progress.`,
       }
       if (response.usage) {
         this.tokensUsed += response.usage.totalTokens;
-        this.budget?.recordTokens(response.usage.totalTokens, this.config.model.model);
+        // Budget accounting — count ONLY freshly generated (output) tokens.
+        // Counting totalTokens (which re-bills the whole prompt+history on
+        // every call) made the cumulative budget hit safety.maxTokens after a
+        // dozen-odd iterations of ANY long task: ratio() hit 0 → phase
+        // 'exhausted' → canExecuteTool() false → every tool call vetoed → the
+        // agent could read/think forever but never edit (the "token budget
+        // exhausted, cannot make edits" failure class). Output tokens are the
+        // resource that actually scales with agent work.
+        this.budget?.recordTokens(
+          (response.usage as { completionTokens?: number }).completionTokens
+            ?? response.usage.totalTokens,
+          this.config.model.model,
+        );
         // Phase 4 (VNext): feed REAL provider usage into the context engine so
         // the compaction floor triggers on actuals instead of the chars/3.8 guess.
         this.context.recordReportedUsage((response.usage as { promptTokens?: number }).promptTokens);
@@ -2065,11 +2083,44 @@ Continue from 'Next:', do not redo completed progress.`,
       this.vetoToolCall(tc, `You have already called ${toolName} with these exact arguments ${this.toolSigRepeat} times in a row. The result will not change. Do NOT call it again — use the result you already have and proceed to the next step of the task.`);
       return;
     }
+    // Fuzzy read-spam guard: exact-match above misses the observed cycling
+    // pattern (the same FILE read again a few calls later, args slightly
+    // different or interleaved with other reads). Track read-target frequency;
+    // re-reading the same path 4+ times in one run means the model is not
+    // retaining context — point it at what it already read.
+    if (toolName === 'read' || toolName === 'glob' || toolName === 'search') {
+      const target = String(((): string => {
+        try { const a = JSON.parse(tc.function.arguments ?? '{}'); return String(a.path ?? a.pattern ?? a.query ?? ''); } catch { return ''; }
+      })());
+      if (target) {
+        const n = (this.readTargetCounts.get(target) ?? 0) + 1;
+        this.readTargetCounts.set(target, n);
+        if (n >= 4) {
+          this.vetoToolCall(tc, `You have read "${target}" ${n} times this run. The content has not changed. Stop re-reading — recall what you already have (or use session_recall) and continue the task.`);
+          return;
+        }
+      }
+    }
     if (this.budget) {
       this.budget.recordToolCall();
       if (!this.budget.canExecuteTool()) {
         this.context.addKnownError('Tool budget exhausted');
         this.vetoToolCall(tc, 'Tool budget exhausted. Stop calling tools and give your final answer now.');
+        // True exhaustion (not just the 'cheap' phase): end the run NOW with
+        // what's already on disk instead of veto-looping for minutes. The
+        // model hears "give your final answer" but flash models keep issuing
+        // tool calls anyway — each one burning a full model round-trip. A
+        // bounded, honest early-finish beats an endless veto loop.
+        if (this.budget.phase() === 'exhausted') {
+          this.events.emit({
+            type: 'agent:log' as any,
+            agentId: this.id,
+            message: '[budget] exhausted — finishing with work completed so far.',
+          });
+          if (this.activeTask) {
+            await this.finish(this.activeTask, this.fileChanged, 'Budget exhausted — finished with the work completed so far.', 'budget');
+          }
+        }
         return;
       }
     }

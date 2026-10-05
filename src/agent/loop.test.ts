@@ -159,6 +159,73 @@ describe('Agent', () => {
     }
   });
 
+  it('token budget counts OUTPUT tokens only — a task can still edit after many input-heavy iterations', async () => {
+    // The old accounting added response.usage.totalTokens (prompt + completion
+    // re-billed every call) into the cumulative budget. Any long task blew
+    // past safety.maxTokens => phase 'exhausted' => every tool call vetoed =>
+    // the agent could read/think for minutes but never write. Now the budget
+    // counts completion tokens; a write-heavy run under a tight token cap
+    // must still complete its file edit.
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-budget-output-'));
+    const fake = await startFakeOpenAI([
+      {
+        content: 'Writing the file now.',
+        toolCalls: [{ id: 'call_b1', function: { name: 'write', arguments: JSON.stringify({ path: 'out.txt', content: 'done' }) } }],
+        finishReason: 'tool_calls',
+      },
+      { content: 'File written and verified. <VERDICT>DONE</VERDICT>', finishReason: 'stop' },
+    ]);
+    try {
+      const config = makeConfig(dir, fake.url);
+      // Tiny cap that WOULD be blown by cumulative input tokens (~2 calls * big prompts).
+      config.safety.maxTokens = 500;
+      const workspace = new Workspace(dir, '.mochi');
+      workspace.ensure();
+      const context = new ContextEngine(config, dir);
+      context.setGoal('Write out.txt');
+      const task = createTask('Write out file task', 'Create out.txt containing done.');
+      const agent = new Agent({ id: 'budget-output-agent', role: 'coder', config, workspace, events: new EventBus(), cwd: dir, context });
+      const result = await agent.run(task);
+      expect(existsSync(resolve(dir, 'out.txt'))).toBe(true);
+      expect(result.success).toBe(true);
+    } finally {
+      await fake.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a truly exhausted budget finishes the run instead of veto-looping', async () => {
+    // When phase() hits 'exhausted' the run must END (bounded early-finish),
+    // not keep issuing veto messages for every remaining iteration.
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-budget-exhaust-'));
+    const fake = await startFakeOpenAI([
+      { content: 'Reading the build first.', toolCalls: [{ id: 'call_ex', function: { name: 'read', arguments: JSON.stringify({ path: 'package.json' }) } }], finishReason: 'tool_calls' },
+      // Budget already exhausted by call 1 — this 2nd tool call must hit the
+      // veto path and the run must finish 'budget' instead of looping.
+      { content: 'Reading again.', toolCalls: [{ id: 'call_ex2', function: { name: 'read', arguments: JSON.stringify({ path: 'README.md' }) } }], finishReason: 'tool_calls' },
+      { content: 'More reading.', finishReason: 'stop' },
+    ]);
+    try {
+      const config = makeConfig(dir, fake.url);
+      config.safety.maxTokens = 1; // anything recorded => ratio 0 => exhausted
+      const workspace = new Workspace(dir, '.mochi');
+      workspace.ensure();
+      const context = new ContextEngine(config, dir);
+      context.setGoal('Fix something');
+      const task = createTask('Fix the flaky build', 'fix the build and run tests');
+      const { BudgetEngine } = await import('../budget.js');
+      const budget = new BudgetEngine(config.safety);
+      budget.start();
+      const agent = new Agent({ id: 'budget-exhaust-agent', role: 'coder', config, workspace, events: new EventBus(), cwd: dir, context, budget });
+      const result = await agent.run(task);
+      expect(result.stopReason).toBe('budget');
+      expect(result.success).toBe(false);
+    } finally {
+      await fake.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('continues an unscoped coding task after a prose-only preamble', async () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-preamble-'));
     const fake = await startFakeOpenAI([
