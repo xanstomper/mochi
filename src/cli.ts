@@ -1265,6 +1265,12 @@ async function main() {
         console.log(JSON.stringify(detailed, null, 2));
       } else {
         console.log(detailed.summary);
+        if (detailed.filesModified && detailed.filesModified.length > 0) {
+          console.log('\nFiles modified:');
+          for (const f of detailed.filesModified) {
+            console.log(`  • ${f}`);
+          }
+        }
       }
       // Exit code reflects the real outcome (CI can branch on it):
       // 0 = task completed, 1 = task failed/aborted.

@@ -422,9 +422,11 @@ export class Runtime {
       this.recordUsage(prompt, result);
       recorder.log({ t: Date.now(), kind: 'goal:summary', status: goal.status, tokensUsed: result.tokensUsed, costUsd: result.costUsd, durationMs: result.durationMs });
       let summary = result.summary;
+      const outputs = result.completedTasks.map((t) => t.output).filter((o) => o && o.trim()).join('\n\n');
       if (this.config.planMode) {
-        const plan = result.completedTasks.map((t) => t.output).filter((o) => o && o.trim()).join('\n\n');
-        if (plan) summary = `Goal ${goal.status}.\n\n${plan}`;
+        if (outputs) summary = `Goal ${goal.status}.\n\n${outputs}`;
+      } else if (outputs && !outputs.includes(result.summary)) {
+        summary = `${outputs}\n\n${result.summary}`;
       }
       return {
         summary,

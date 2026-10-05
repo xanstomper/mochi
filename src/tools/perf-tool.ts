@@ -59,7 +59,7 @@ export const perfTool: Tool = {
         const { execFileSync } = await import('node:child_process');
         let output: string;
         try {
-          output = execFileSync('sh', ['-c', cmd], { cwd: ctx.cwd, maxBuffer: 4 * 1024 * 1024 }).toString();
+          output = execFileSync('sh', ['-c', cmd], { cwd: ctx.cwd, maxBuffer: 4 * 1024 * 1024, timeout: 60_000 }).toString();
         } catch (e) {
           output = e instanceof Error ? e.message : String(e);
         }

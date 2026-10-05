@@ -163,6 +163,7 @@ export function changedSourceFiles(cwd: string): string[] {
       cwd,
       encoding: 'utf8',
       maxBuffer: 4 * 1024 * 1024,
+      timeout: 15_000,
     });
     const files: string[] = [];
     for (const line of out.split('\n')) {

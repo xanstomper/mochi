@@ -66,6 +66,8 @@ import { parseCompilerDiagnostics, renderCompilerAdvisory } from './error-diagno
 import { AnchorEngine } from '../cognitive/anchor.js';
 import { summarize } from '../summary/engine.js';
 import { compactSession, compactToPrompt } from '../summary/compact.js';
+import { ExecutionRegistry } from '../core/execution-registry.js';
+import { evaluateTestDensity } from '../core/test-density.js';
 
 export function stripThinkTags(text: string): string {
   if (!text) return '';
@@ -319,6 +321,9 @@ export class Agent {
    *  fails repeatedly so a broken agent run never leaves the tree dirty. */
   private preEditCheckpoint?: CheckpointResult;
   private checkpointFailed = false;
+  private executionRegistry = new ExecutionRegistry({ dedupeWindowMs: 1500 });
+  private recentToolSignatures: string[] = [];
+  private cycleNudges = 0;
   private lastSig = '';
   private sigStreak = 0;
   /** Cumulative repeated-tool-name count (fires regardless of arg variation) so a
@@ -1312,6 +1317,33 @@ Continue from 'Next:', do not redo completed progress.`,
           if (this.context.stuckSignal) this.context.stuckSignal = null;
         }
         this.lastSig = nowSig;
+
+        // Oscillatory cycle detection (A-B-A-B or A-B-C-A-B-C ping-pong loops):
+        this.recentToolSignatures.push(nowSig);
+        if (this.recentToolSignatures.length > 8) this.recentToolSignatures.shift();
+        const rLen = this.recentToolSignatures.length;
+        let isCycle = false;
+        if (rLen >= 4 &&
+            this.recentToolSignatures[rLen - 1] === this.recentToolSignatures[rLen - 3] &&
+            this.recentToolSignatures[rLen - 2] === this.recentToolSignatures[rLen - 4]) {
+          isCycle = true;
+        } else if (rLen >= 6 &&
+                   this.recentToolSignatures[rLen - 1] === this.recentToolSignatures[rLen - 4] &&
+                   this.recentToolSignatures[rLen - 2] === this.recentToolSignatures[rLen - 5] &&
+                   this.recentToolSignatures[rLen - 3] === this.recentToolSignatures[rLen - 6]) {
+          isCycle = true;
+        }
+        if (isCycle && !this.fileChanged) {
+          this.cycleNudges++;
+          if (this.cycleNudges >= 2) {
+            return this.finish(task, false, 'Loop guard: stopped after detecting an oscillatory tool loop.', 'tool_loop');
+          }
+          this.context.addMessage({
+            role: 'system',
+            content: 'You are caught in an alternating loop between repeated tool calls. Stop this cycle immediately: step back, inspect why this sequence is failing to make progress, and try a completely different approach or conclude now.',
+          });
+        }
+
         // Was raised from 3 -> 8 so that legitimate batch work (e.g. editing
         // many files in sequence, repeated reads on a long file tree) does
         // not get cancelled. A truly stuck model will hit 8 identical calls
@@ -1982,9 +2014,45 @@ Continue from 'Next:', do not redo completed progress.`,
     }
     if (toolName === 'shell') {
       const shellHook = await this.hooks.runBefore('before_shell', { tool: toolName });
-      if (!shellHook.allowed) return;
+      if (!shellHook.allowed) {
+        this.vetoToolCall(tc, 'before_shell hook vetoed this shell command.');
+        return;
+      }
     }
     const args = normalizeToolArgs(toolName, this.parseArgs(tc.function.arguments));
+
+    // Execution Registry deduplication: if identical execution already finished within window, replay it
+    const execRecord = this.executionRegistry.register({
+      toolName,
+      args,
+      executionId: tc.id,
+    });
+    if (execRecord.duplicate && execRecord.result) {
+      const cached = execRecord.result as { output: string; error?: string };
+      if (cached.error) {
+        this.events.emit({ type: 'tool:failed', tool: tc.function.name, error: cached.error, agentId: this.id });
+        this.context.addMessage({
+          role: 'tool',
+          tool_call_id: tc.id,
+          name: tc.function.name,
+          content: `Error: ${cached.error}`,
+        });
+      } else {
+        this.context.addMessage({
+          role: 'tool',
+          tool_call_id: tc.id,
+          name: tc.function.name,
+          content: cached.output,
+        });
+        this.events.emit({
+          type: 'tool:completed',
+          tool: tc.function.name,
+          result: { toolCallId: tc.id, name: tc.function.name, output: cached.output, durationMs: 0 },
+          agentId: this.id,
+        });
+      }
+      return;
+    }
     // Pre-execution snapshot: take it BEFORE the first mutating tool runs so
     // the restore point predates the agent's own edits. Only on a CLEAN tree
     // (a dirty tree has user work we must never stash or reset away).
@@ -2098,9 +2166,13 @@ Continue from 'Next:', do not redo completed progress.`,
     // model can re-read. Replaces the old 6k-char fold that could lose the
     // one line the model needed with no recovery path.
     // ANSI hygiene FIRST: colored tool output (npm/git --color=always) in the
-    // context is what makes the model parrot "138;43,226m"-style junk back.
     const pol = applyToolOutputPolicy(scrubAnsiFragments(maybeRedact(result.output)), { toolName: tc.function.name });
     const foldedOutput = pol.content;
+    if (error) {
+      this.executionRegistry.markFailed(execRecord.executionId, error);
+    } else {
+      this.executionRegistry.markCompleted(execRecord.executionId, { output: foldedOutput });
+    }
     this.context.addMessage({ role: 'tool', tool_call_id: tc.id, content: foldedOutput, name: tc.function.name });
     this.events.emit({ type: 'tool:completed', tool: tc.function.name, result, agentId: this.id });
     await this.hooks.runAfter('after_tool', { tool: toolName });
@@ -2734,6 +2806,10 @@ Continue from 'Next:', do not redo completed progress.`,
     try {
       const diff = await this.runShell(`git diff --stat && git diff`, 30);
       if (!diff.trim() || diff.includes('exit_code: 128')) return { tail: 'no diff' };
+      const testDensity = evaluateTestDensity(this.cwd, diff);
+      const densityAdvice = (!testDensity.hasSufficientCoverage && testDensity.productionLinesChanged > 20)
+        ? `\nTest Density Warning: ${testDensity.synthesisAdvice}\n`
+        : '';
       const packet = this.context.buildPacket([], task, repo);
       const reviewMsg: ChatMessage[] = [
         ...packet.messages,
@@ -2747,6 +2823,7 @@ Continue from 'Next:', do not redo completed progress.`,
             '3. wrong constants / off-by-one / inverted logic vs the task,',
             '4. placeholder "TODO" or debug leftovers committed as the real fix,',
             '5. the change being larger or smaller than the task asked for.',
+            densityAdvice,
             'Reply with the single most important real problem (with the file+line),',
             'or reply with exactly NO_ISSUE if the diff is correct.',
             '',

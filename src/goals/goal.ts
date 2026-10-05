@@ -210,18 +210,22 @@ Return ONLY the JSON array, no markdown.`;
       baselinePromise = Promise.resolve(this.baselineCache.baseline);
     } else {
       // Capture baseline concurrently in the background so prompt execution starts immediately without 15-30s lag.
-      baselinePromise = captureBaseline(this.cwd, async (cmd) => {
-        const { execFile } = await import('node:child_process');
-        return await new Promise<string>((res) => {
-          execFile('sh', ['-c', cmd], { cwd: this.cwd, timeout: 30_000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
-            const code = err && 'code' in err ? Number((err as { code?: number }).code ?? 1) : err ? 1 : 0;
-            res(`exit_code: ${code}\n${stdout ?? ''}\n${stderr ?? ''}`);
+      const timeoutPromise = new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 15_000));
+      baselinePromise = Promise.race([
+        captureBaseline(this.cwd, async (cmd) => {
+          const { execFile } = await import('node:child_process');
+          return await new Promise<string>((res) => {
+            execFile('sh', ['-c', cmd], { cwd: this.cwd, timeout: 12_000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+              const code = err && 'code' in err ? Number((err as { code?: number }).code ?? 1) : err ? 1 : 0;
+              res(`exit_code: ${code}\n${stdout ?? ''}\n${stderr ?? ''}`);
+            });
           });
-        });
-      }).then((b) => {
-        this.baselineCache = { baseline: b, cachedAt: Date.now() };
-        return b;
-      }).catch(() => undefined);
+        }).then((b) => {
+          this.baselineCache = { baseline: b, cachedAt: Date.now() };
+          return b;
+        }).catch(() => undefined),
+        timeoutPromise,
+      ]);
     }
     const verifier = new VerifierEngine({ cwd: this.cwd, workspace: this.workspace, config: this.config, events: this.events, budget, baseline: baselinePromise });
     this.runBaseline = baselinePromise;

@@ -19,7 +19,7 @@ export interface WorktreeInfo {
 
 function git(cwd: string, args: string[]): string {
   try {
-    return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000 }).trim();
   } catch (err: any) {
     throw new Error(`git ${args.join(' ')} failed: ${err.stderr ?? err.message}`);
   }
@@ -27,7 +27,7 @@ function git(cwd: string, args: string[]): string {
 
 function gitAsync(cwd: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile('git', args, { cwd, encoding: 'utf8' }, (err, stdout, stderr) => {
+    execFile('git', args, { cwd, encoding: 'utf8', timeout: 30_000 }, (err, stdout, stderr) => {
       if (err) reject(new Error(`git ${args.join(' ')}: ${stderr || err.message}`));
       else resolve((stdout as string).trim());
     });

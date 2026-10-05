@@ -287,13 +287,15 @@ export function renderTurnSummaryCard(s: TurnSummary): string {
 
   const lines: string[] = [
     `${T.grayDark}${rule}${T.reset}`,
-    `${statusColor}${icon}${T.reset} ${T.bold}${ok ? 'Done' : 'Stopped'}${T.reset}${T.grayDark} · ${formatDuration(s.durationMs)} · ${s.toolCallsTotal} tool${s.toolCallsTotal === 1 ? '' : 's'}${s.tokensUsed ? ` · ${s.tokensUsed.toLocaleString()} tokens` : ''}${T.reset}`,
+    '',
+    `  ${statusColor}${icon}${T.reset} ${T.bold}${ok ? 'Done' : 'Stopped'}${T.reset}${T.grayDark} · ${formatDuration(s.durationMs)} · ${s.toolCallsTotal} tool${s.toolCallsTotal === 1 ? '' : 's'}${s.tokensUsed ? ` · ${s.tokensUsed.toLocaleString()} tokens` : ''}${T.reset}`,
   ];
 
   if (s.summary) {
     const firstLine = s.summary.trim().split('\n').map((l) => l.trim()).find((l) => l) ?? '';
     if (firstLine) {
-      lines.push(`${T.fg}${truncate(firstLine, width - 4)}${T.reset}`);
+      lines.push('');
+      lines.push(`  ${T.fg}${truncate(firstLine, width - 6)}${T.reset}`);
     }
   }
 
@@ -304,15 +306,17 @@ export function renderTurnSummaryCard(s: TurnSummary): string {
     let remaining = total - shown.length;
     let text = shown.join(', ');
     if (remaining > 0) text += ` (+${remaining} more)`;
-    while (visibleLen(text) > width - 14 && shown.length > 1) {
+    while (visibleLen(text) > width - 16 && shown.length > 1) {
       shown = shown.slice(0, -1);
       remaining = total - shown.length;
       text = shown.join(', ');
       if (remaining > 0) text += ` (+${remaining} more)`;
     }
-    text = truncate(text, width - 14);
-    lines.push(`${T.cyan}~${T.reset} ${T.dim}files:${T.reset} ${text}`);
+    text = truncate(text, width - 16);
+    lines.push(`  ${T.cyan}~${T.reset} ${T.dim}files:${T.reset} ${text}`);
   }
 
+  lines.push('');
+  lines.push(`${T.grayDark}${rule}${T.reset}`);
   return lines.join('\n');
 }

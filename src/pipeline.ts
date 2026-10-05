@@ -110,7 +110,7 @@ export function loadDiff(files: string[], cwd: string): string {
 
 function runGit(cwd: string, args: string[]): string {
   try {
-    return execFileSync('git', args, { cwd, maxBuffer: 16 * 1024 * 1024 }).toString('utf8');
+    return execFileSync('git', args, { cwd, maxBuffer: 16 * 1024 * 1024, timeout: 30_000 }).toString('utf8');
   } catch (e) {
     const stderr = (e as { stderr?: Buffer }).stderr?.toString() ?? '';
     throw new Error(`git ${args.join(' ')} failed${stderr ? ': ' + stderr.trim() : ''}`);

@@ -122,19 +122,53 @@ export const shellTool: Tool = {
       let stdout = '';
       let stderr = '';
       const killed = { value: false };
+      let settled = false;
+
+      const finish = (code: number | null, reason?: string) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        const out = clipToolOutput([
+          `exit_code: ${code ?? 1}`,
+          `stdout:\n${stdout || '(empty)'}`,
+          `stderr:\n${stderr || '(empty)'}`,
+        ].join('\n'));
+        if (reason) {
+          resolve(out + `\n[${reason}]`);
+        } else if (killed.value) {
+          resolve(out + '\n[command timed out or was cancelled]');
+        } else {
+          resolve(out);
+        }
+      };
 
       const timer = setTimeout(() => {
         killed.value = true;
-        child.kill('SIGTERM');
-        setTimeout(() => child.kill('SIGKILL'), 5000);
+        try { child.kill('SIGTERM'); } catch {}
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        setTimeout(() => {
+          if (!settled) {
+            try { child.kill('SIGKILL'); } catch {}
+            finish(124, `command timed out after ${timeoutMs / 1000}s`);
+          }
+        }, 1500);
       }, timeoutMs);
 
       ctx.abortSignal?.addEventListener('abort', () => {
+        if (settled) return;
         killed.value = true;
-        child.kill('SIGTERM');
-        // SIGTERM can be ignored by stubborn children; guarantee the shell is
-        // reaped so the tool call can never hang the agent (the "freeze").
-        setTimeout(() => child.kill('SIGKILL'), 5000);
+        try { child.kill('SIGTERM'); } catch {}
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        setTimeout(() => {
+          if (!settled) {
+            try { child.kill('SIGKILL'); } catch {}
+            finish(130, 'command was cancelled');
+          }
+        }, 800);
       });
 
       child.stdout?.on('data', (chunk) => {
@@ -154,25 +188,14 @@ export const shellTool: Tool = {
       });
 
       child.on('error', (err) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         reject(err);
       });
 
       child.on('close', (code) => {
-        clearTimeout(timer);
-        // Stream cap stays as the memory guard; the final result is clipped to
-        // head+tail so a verbose command can't plant ~65K tokens in the
-        // transcript that every later request re-sends.
-        const out = clipToolOutput([
-          `exit_code: ${code}`,
-          `stdout:\n${stdout || '(empty)'}`,
-          `stderr:\n${stderr || '(empty)'}`,
-        ].join('\n'));
-        if (killed.value) {
-          resolve(out + '\n[command timed out or was cancelled]');
-        } else {
-          resolve(out);
-        }
+        finish(code);
       });
     });
   },

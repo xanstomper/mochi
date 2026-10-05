@@ -52,23 +52,29 @@ export function renderSummary(doc: SummaryDocument, width = 80): string[] {
   lines.push(
     `${border}╭─${T.bold}${statusColor}${title}${T.reset}${border}${'─'.repeat(titleFill)}╮${T.reset}`,
   );
+  lines.push(`${border}│${T.reset}${' '.repeat(innerW + 2)}${border}│${T.reset}`);
 
   // ── Cline-style narrative lead, if the model wrote one ──
-  if (doc.narrative && doc.narrative.trim()) {
-    for (const l of narrativeRows(doc.narrative, innerW)) {
+  const hasNarrative = Boolean(doc.narrative && doc.narrative.trim());
+  if (hasNarrative) {
+    lines.push(`${border}│${T.reset}${' '.repeat(innerW + 2)}${border}│${T.reset}`);
+    for (const l of narrativeRows(doc.narrative!, innerW)) {
       lines.push(`${border}│${T.reset} ${padEndVis(l, innerW)} ${border}│${T.reset}`);
     }
+    lines.push(`${border}│${T.reset}${' '.repeat(innerW + 2)}${border}│${T.reset}`);
     lines.push(`${border}├${'─'.repeat(boxW - 2)}┤${T.reset}`);
   }
 
-  // ── Overview line (one factual sentence), if present ──
+  // ── Overview line (one factual sentence), if present (omit if narrative already covered it) ──
   const emitRow = (text: string): void => {
-    for (const l of wrap(text, innerW - 2)) {
-      lines.push(`${border}│${T.reset} ${padEndVis(l, innerW)} ${border}│${T.reset}`);
+    lines.push(`${border}│${T.reset}${' '.repeat(innerW + 2)}${border}│${T.reset}`);
+    for (const l of wrap(text, innerW - 4)) {
+      lines.push(`${border}│${T.reset} ${padEndVis(`  ${l}`, innerW)} ${border}│${T.reset}`);
     }
+    lines.push(`${border}│${T.reset}${' '.repeat(innerW + 2)}${border}│${T.reset}`);
   };
 
-  if (doc.overview) {
+  if (!hasNarrative && doc.overview) {
     emitRow(doc.overview);
     lines.push(`${border}├${'─'.repeat(boxW - 2)}┤${T.reset}`);
   }
@@ -80,10 +86,12 @@ export function renderSummary(doc: SummaryDocument, width = 80): string[] {
     // Degenerate-narrow fallback: 4 cells → 2 → 1, then hard-clip. A metrics
     // row must never exceed the inner width (it would break the box in
     // windowed panes — the width-harness guard).
-    if (visibleLen(row) > innerW - 2) row = cells.slice(0, 2).join(' · ');
-    if (visibleLen(row) > innerW - 2) row = cells[0] ?? '';
-    if (visibleLen(row) > innerW - 2) row = `${cells[0]?.slice(0, innerW - 5)}…`;
-    lines.push(`${border}│${T.reset} ${padEndVis(row, innerW)} ${border}│${T.reset}`);
+    if (visibleLen(row) > innerW - 4) row = cells.slice(0, 2).join(' · ');
+    if (visibleLen(row) > innerW - 4) row = cells[0] ?? '';
+    if (visibleLen(row) > innerW - 4) row = `${cells[0]?.slice(0, innerW - 7)}…`;
+    lines.push(`${border}│${T.reset}${' '.repeat(innerW + 2)}${border}│${T.reset}`);
+    lines.push(`${border}│${T.reset} ${padEndVis(`  ${row}`, innerW)} ${border}│${T.reset}`);
+    lines.push(`${border}│${T.reset}${' '.repeat(innerW + 2)}${border}│${T.reset}`);
     lines.push(`${border}├${'─'.repeat(boxW - 2)}┤${T.reset}`);
   }
 
@@ -93,11 +101,16 @@ export function renderSummary(doc: SummaryDocument, width = 80): string[] {
     const hdr = ` ${header.toUpperCase()} `;
     const hdrFill = Math.max(0, boxW - 3 - visibleLen(hdr));
     lines.push(`${border}├─${SEMANTIC_COLOR[semantic]}${T.bold}${hdr}${T.reset}${border}${'─'.repeat(hdrFill)}┤${T.reset}`);
+    lines.push(`${border}│${T.reset}${' '.repeat(innerW + 2)}${border}│${T.reset}`);
+    const bullet = (header === 'Verification' || header === 'Failed') ? '' : '• ';
     for (const item of items) {
-      for (const l of wrap(item.text, innerW - 4)) {
-        lines.push(`${border}│${T.reset} ${padEndVis(painter(l), innerW)} ${border}│${T.reset}`);
+      const wrapped = wrap(item.text, Math.max(8, innerW - 6));
+      for (let idx = 0; idx < wrapped.length; idx++) {
+        const lineText = idx === 0 ? `  ${bullet}${painter(wrapped[idx])}` : `    ${painter(wrapped[idx])}`;
+        lines.push(`${border}│${T.reset} ${padEndVis(lineText, innerW)} ${border}│${T.reset}`);
       }
     }
+    lines.push(`${border}│${T.reset}${' '.repeat(innerW + 2)}${border}│${T.reset}`);
   };
 
   section('What Changed', 'CHANGE', doc.whatChanged, paintChangeLine);
@@ -108,11 +121,12 @@ export function renderSummary(doc: SummaryDocument, width = 80): string[] {
   section('Next Steps', 'PLAN', doc.next, (l) => `${SEMANTIC_COLOR.PLAN}${l}${T.reset}`);
 
   // Empty card: never emit a lone border pair.
-  if (lines.length === 1) {
+  if (lines.length <= 2) {
     lines.push(`${border}│${T.reset}${padEndVis(' No activity recorded', boxW - 3)}${border}│${T.reset}`);
   }
 
   // ── Bottom border ──
+  lines.push(`${border}│${T.reset}${' '.repeat(innerW + 2)}${border}│${T.reset}`);
   lines.push(`${border}╰${'─'.repeat(boxW - 2)}╯${T.reset}`);
   return lines;
 }
