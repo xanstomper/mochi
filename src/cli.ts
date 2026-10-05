@@ -148,6 +148,7 @@ Usage:
   mochi goal "..."
   mochi team "..."
   mochi plan "..."
+  mochi self-train [N] [focus]        # cycles of self-review + skill curation
   mochi resume
   mochi checkpoint [save <name>|list|restore <name>]  # named snapshots & rollback
   mochi docgen [--write]             # generate architecture diagram & API reference
