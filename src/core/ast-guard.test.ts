@@ -4,6 +4,7 @@ import {
   validateBalancedStructure,
   validatePythonStructure,
   validateFileSyntax,
+  validateTypeScriptSyntax,
 } from './ast-guard.js';
 
 describe('In-Turn AST Diagnostic Guard', () => {
@@ -67,4 +68,17 @@ def calculate_metrics(items)
     expect(validateFileSyntax('app.py', 'def run():\n    pass\n').valid).toBe(true);
     expect(validateFileSyntax('app.rs', 'fn main() { println!("hi"); }').valid).toBe(true);
   });
+
+  it('validates TypeScript/TSX syntax and catches syntax errors with line numbers', () => {
+    const validTs = 'export interface Config { timeout: number; }\nexport const def: Config = { timeout: 1000 };';
+    expect(validateTypeScriptSyntax('config.ts', validTs).valid).toBe(true);
+
+    const invalidTs = 'export interface Config {\n  timeout: number;\n}\nconst broken = ;';
+    const res = validateTypeScriptSyntax('broken.ts', invalidTs);
+    expect(res.valid).toBe(false);
+    expect(res.errors.length).toBeGreaterThan(0);
+    expect(res.errors[0].line).toBe(4);
+    expect(res.summary).toContain('Line 4:');
+  });
 });
+

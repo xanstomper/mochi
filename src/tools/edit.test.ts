@@ -78,4 +78,22 @@ describe('edit tool', () => {
     expect(out).toContain('Edited');
     expect(readFileSync(resolve(dir, F), 'utf8')).toContain('const foo = "baz";');
   });
+
+  it('reports exact line numbers on ambiguous duplicate matches', async () => {
+    seed('line 1: hello\nline 2: middle\nline 3: hello\n');
+    await expect(
+      editTool.execute({ path: F, oldText: 'hello', newText: 'goodbye' }, ctx)
+    ).rejects.toThrow(/at lines 1, 3/);
+  });
+
+  it('tolerates quote and trailing semicolon differences via relaxed matching', async () => {
+    seed('const msg = "hello world";\nconst val = 100;\n');
+    const out = String(await editTool.execute({
+      path: F,
+      oldText: "const msg = 'hello world'", // single quotes and no semicolon
+      newText: 'const msg = "goodbye world";',
+    }, ctx));
+    expect(out).toContain('fuzzy match');
+    expect(readFileSync(resolve(dir, F), 'utf8')).toContain('goodbye world');
+  });
 });

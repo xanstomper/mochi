@@ -3,6 +3,17 @@
 // before the agent completes its turn, enabling instant self-correction without running slow CLI test suites.
 
 import { extname } from 'node:path';
+import { createRequire } from 'node:module';
+
+let _ts: typeof import('typescript') | null = null;
+function getTsCompiler(): typeof import('typescript') | null {
+  try {
+    if (!_ts) _ts = createRequire(import.meta.url)('typescript') as typeof import('typescript');
+    return _ts;
+  } catch {
+    return null;
+  }
+}
 
 export interface ASTDiagnosticError {
   line: number;
@@ -15,6 +26,51 @@ export interface ASTDiagnosticResult {
   valid: boolean;
   errors: ASTDiagnosticError[];
   summary?: string;
+}
+
+/** Validates TypeScript / JavaScript source syntax using the TypeScript compiler AST parser */
+export function validateTypeScriptSyntax(filePath: string, content: string): ASTDiagnosticResult {
+  const ts = getTsCompiler();
+  if (!ts) return { valid: true, errors: [] };
+
+  try {
+    const isTsx = filePath.endsWith('.tsx') || filePath.endsWith('.jsx');
+    const isTs = filePath.endsWith('.ts') || filePath.endsWith('.mts') || filePath.endsWith('.cts');
+    const kind = isTsx ? ts.ScriptKind.TSX : (isTs ? ts.ScriptKind.TS : ts.ScriptKind.JS);
+    const sourceFile = ts.createSourceFile(
+      filePath,
+      content,
+      ts.ScriptTarget.Latest,
+      true,
+      kind
+    );
+
+    const diags = (sourceFile as any).parseDiagnostics ?? [];
+    if (!diags || diags.length === 0) {
+      return { valid: true, errors: [] };
+    }
+
+    const errors: ASTDiagnosticError[] = [];
+    for (const d of diags) {
+      const pos = d.start !== undefined ? sourceFile.getLineAndCharacterOfPosition(d.start) : { line: 0, character: 0 };
+      const msg = typeof d.messageText === 'string' ? d.messageText : (d.messageText?.messageText ?? 'Syntax error');
+      errors.push({
+        line: pos.line + 1,
+        column: pos.character + 1,
+        message: msg,
+        severity: 'error',
+      });
+    }
+
+    const summary = errors.map((e) => `Line ${e.line}: ${e.message}`).join('; ');
+    return {
+      valid: errors.length === 0,
+      errors,
+      summary: errors.length > 0 ? summary : undefined,
+    };
+  } catch {
+    return { valid: true, errors: [] };
+  }
 }
 
 /** Validates JSON syntax and isolates exact error line */
@@ -206,7 +262,11 @@ export function validateFileSyntax(filePath: string, content: string): ASTDiagno
   }
 
   if (['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts'].includes(ext)) {
-    return validateBalancedStructure(content, 'javascript');
+    const balanced = validateBalancedStructure(content, 'javascript');
+    if (!balanced.valid) return balanced;
+    const tsCheck = validateTypeScriptSyntax(filePath, content);
+    if (!tsCheck.valid) return tsCheck;
+    return { valid: true, errors: [] };
   }
 
   if (['.rs', '.go', '.c', '.cpp', '.h', '.hpp', '.java'].includes(ext)) {

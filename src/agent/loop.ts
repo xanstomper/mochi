@@ -48,8 +48,9 @@ import {
   type Lesson,
 } from '../lessons.js';
 import { HookManager } from '../hooks.js';
-import { resolve } from 'node:path';
-import { statSync } from 'node:fs';
+import { resolve, extname } from 'node:path';
+import { statSync, existsSync, readFileSync } from 'node:fs';
+import { condenseOutput } from '../core/output-condenser.js';
 import { autoTestCommand, isWeakVerification, cwdForScope, withCwd } from '../testdetect.js';
 import { classifyOneShot } from '../one-shot.js';
 import { classifyContentOnly } from '../one-shot.js';
@@ -511,9 +512,30 @@ Continue from 'Next:', do not redo completed progress.`,
     if (taskKind !== 'chat') {
       const gitStatus = await this.runShell('git status --short');
       const langHint = languageHint(repo);
+      let scopeOutline = '';
+      if (task.fileScope && task.fileScope.length > 0) {
+        try {
+          const { extractCodeOutline } = await import('../tools/outline.js');
+          const outlineSections: string[] = [];
+          for (const relPath of task.fileScope.slice(0, 5)) {
+            const absPath = resolve(this.cwd, relPath);
+            if (existsSync(absPath)) {
+              const content = readFileSync(absPath, 'utf8');
+              const symbols = extractCodeOutline(content, extname(absPath));
+              if (symbols.length > 0) {
+                const symSummary = symbols.slice(0, 15).map((s) => `  L${s.line}: [${s.kind}] ${s.signature}`).join('\n');
+                outlineSections.push(`Outline for ${relPath} (${symbols.length} symbols):\n${symSummary}`);
+              }
+            }
+          }
+          if (outlineSections.length > 0) {
+            scopeOutline = '\n\nFile Scope Symbol Outline:\n' + outlineSections.join('\n\n');
+          }
+        } catch {}
+      }
       this.context.addMessage({
         role: 'system',
-        content: `Preflight: repo=${repo.language ?? 'unknown'}, git status:\n${gitStatus}${langHint ? '\n\n' + langHint : ''}`,
+        content: `Preflight: repo=${repo.language ?? 'unknown'}, git status:\n${gitStatus}${langHint ? '\n\n' + langHint : ''}${scopeOutline}`,
       });
     }
 
@@ -2242,7 +2264,8 @@ Continue from 'Next:', do not redo completed progress.`,
       if (!wantsGreen && matchesBaseline(baseline, cmd, out)) {
         continue;
       }
-      return { passed: false, summary: `Check failed: ${cmd}\n${truncateMiddle(out, 1200)}` };
+      const condensed = condenseOutput(out, { maxLines: 60, preserveContext: 3 });
+      return { passed: false, summary: `Check failed: ${cmd}\n${condensed.condensed}` };
     }
     return { passed: true, summary: `All checks passed: ${checks.join(', ')}` };
   }

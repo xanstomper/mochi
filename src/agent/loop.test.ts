@@ -765,6 +765,97 @@ describe('Agent', () => {
     expect(result.summary).toContain('Planner never produced a plan');
     await fake.close();
   });
+
+  it('injects file scope symbol outlines into Turn 0 preflight', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-scope-preflight-'));
+    writeFileSync(
+      resolve(dir, 'math.ts'),
+      'export class Calculator {\n  add(a: number, b: number): number { return a + b; }\n}\n'
+    );
+    const fake = await startFakeOpenAI([
+      { content: 'Done.', finishReason: 'stop' },
+    ]);
+    const config = makeConfig(dir, fake.url);
+    const workspace = new Workspace(dir, '.mochi');
+    workspace.ensure();
+    const context = new ContextEngine(config, dir);
+    context.setGoal('test preflight');
+    const task = createTask('Calculate', 'Run calculation', {
+      fileScope: ['math.ts'],
+      verificationCommand: 'true',
+    });
+
+    const agent = new Agent({
+      id: 'preflight-test',
+      role: 'coder',
+      config,
+      workspace,
+      events: new EventBus(),
+      cwd: dir,
+      context,
+    });
+
+    await agent.run(task);
+    const messages = (context as any).messages as any[];
+    const preflight = messages.find((m) => m.role === 'system' && m.content.includes('File Scope Symbol Outline'));
+    expect(preflight).toBeDefined();
+    expect(preflight?.content).toContain('[class] export class Calculator');
+    expect(preflight?.content).toContain('[method] add(a: number, b: number)');
+    await fake.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('condenses verification failures preserving critical assertion diffs and lines', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-verify-condense-'));
+    const noisyFailScript = [
+      'console.log("=== Build started ===");',
+      'for (let i = 0; i < 40; i++) console.log("Compiling package " + i);',
+      'console.error("FAIL src/calc.test.ts > adds two numbers");',
+      'console.error("AssertionError: expected 5 to deeply equal 6");',
+      'console.error("  + expected - actual");',
+      'console.error("  - 6");',
+      'console.error("  + 5");',
+      'for (let i = 0; i < 40; i++) console.log("Cleaning up target " + i);',
+      'process.exit(1);',
+    ].join('\n');
+    writeFileSync(resolve(dir, 'fail.js'), noisyFailScript);
+
+    const writeCall = (id: string, path: string) => ({
+      id,
+      type: 'function' as const,
+      function: { name: 'write', arguments: JSON.stringify({ path, content: 'broken' }) },
+    });
+    const fake = await startFakeOpenAI([
+      { content: 'Writing.', toolCalls: [writeCall('1', resolve(dir, 'out.txt'))], finishReason: 'tool_calls' },
+      { content: 'Done, completed.', finishReason: 'stop' },
+    ]);
+    const config = makeConfig(dir, fake.url);
+    config.safety.maxVerifyRetries = 1;
+    const workspace = new Workspace(dir, '.mochi');
+    workspace.ensure();
+    const context = new ContextEngine(config, dir);
+    context.setGoal('test verify condense');
+    const task = createTask('Fail Task', 'Should condense failure', {
+      verificationCommand: 'node fail.js',
+    });
+
+    const agent = new Agent({
+      id: 'verify-condense-agent',
+      role: 'coder',
+      config,
+      workspace,
+      events: new EventBus(),
+      cwd: dir,
+      context,
+    });
+
+    const result = await agent.run(task);
+    expect(result.success).toBe(false);
+    expect(result.summary).toContain('FAIL src/calc.test.ts');
+    expect(result.summary).toContain('AssertionError: expected 5 to deeply equal 6');
+    await fake.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 // Polyglot E2E: the agent works on a Python repo end to end. Uses the fake

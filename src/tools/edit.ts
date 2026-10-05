@@ -31,6 +31,46 @@ export function stripLineNumberGutter(text: string): string {
   return lines.map((l) => l.replace(/^\s*\d+\s*[|:]\s?/, '')).join('\n');
 }
 
+export function normalizeRelaxedLine(line: string): string {
+  return line
+    .trim()
+    .replace(/["'`]/g, '"')
+    .replace(/;+$/, '')
+    .replace(/\s+/g, ' ');
+}
+
+export function findRelaxedUnique(text: string, needle: string): { start: number; end: number } | null {
+  if (needle.trim() === '') return null;
+  const textLines = text.split('\n');
+  const needleLines = needle.replace(/\r\n/g, '\n').split('\n');
+  while (needleLines.length && needleLines[0].trim() === '') needleLines.shift();
+  while (needleLines.length && needleLines[needleLines.length - 1].trim() === '') needleLines.pop();
+  if (needleLines.length === 0) return null;
+
+  const normNeedle = needleLines.map(normalizeRelaxedLine);
+  const normText = textLines.map(normalizeRelaxedLine);
+
+  const matches: { start: number; end: number }[] = [];
+  for (let i = 0; i + normNeedle.length <= normText.length; i++) {
+    let ok = true;
+    for (let j = 0; j < normNeedle.length; j++) {
+      if (normText[i + j] !== normNeedle[j]) {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok) continue;
+    let start = 0;
+    for (let k = 0; k < i; k++) start += textLines[k].length + 1;
+    let end = start;
+    for (let k = i; k < i + normNeedle.length; k++) end += textLines[k].length + 1;
+    matches.push({ start, end: Math.max(start, end - 1) });
+  }
+
+  if (matches.length === 1) return matches[0];
+  return null;
+}
+
 export const editTool: Tool = {
   def: {
     name: 'edit',
@@ -81,6 +121,14 @@ export const editTool: Tool = {
             m = fuzzyFindUnique(content, unnumbered);
             if (m) newText = stripLineNumberGutter(newText);
           }
+          if (!m) {
+            // Relaxed quote and trailing semicolon matching fallback
+            m = findRelaxedUnique(content, oldText);
+            if (!m && unnumbered !== oldText) {
+              m = findRelaxedUnique(content, unnumbered);
+              if (m) newText = stripLineNumberGutter(newText);
+            }
+          }
           if (!m) throw new Error(`oldText not found in ${rawPath} (exact and fuzzy match failed)`);
           content = content.slice(0, m.start) + newText + content.slice(m.end);
           usedFuzzy = true;
@@ -92,7 +140,16 @@ export const editTool: Tool = {
       // silently edits a location the model may not have meant. Require a
       // unique target; tell the model to include more surrounding context.
       const count = content.split(oldText).length - 1;
-      if (count > 1) throw new Error(`oldText matches ${count} locations in ${rawPath}; include more surrounding context so it is unique`);
+      if (count > 1) {
+        const lines: number[] = [];
+        let idx = 0;
+        while ((idx = content.indexOf(oldText, idx)) !== -1) {
+          const lineNum = content.slice(0, idx).split('\n').length;
+          lines.push(lineNum);
+          idx += oldText.length;
+        }
+        throw new Error(`oldText matches ${count} locations in ${rawPath} (at lines ${lines.join(', ')}); include more surrounding context so it is unique`);
+      }
       content = content.replace(oldText, newText);
     }
     if (content === original) throw new Error(`oldText was found but replacement did not change ${rawPath}`);
@@ -100,7 +157,7 @@ export const editTool: Tool = {
     ctx.events.emit({ type: 'file:changed', path: fullPath, operation: 'edit', agentId: ctx.agentId });
     markMutation();
     const diag = validateFileSyntax(fullPath, content);
-    let out = usedFuzzy ? `Edited ${rawPath} (fuzzy match: whitespace differences were tolerated)` : `Edited ${rawPath}`;
+    let out = usedFuzzy ? `Edited ${rawPath} (fuzzy match: whitespace/quote differences were tolerated)` : `Edited ${rawPath}`;
     if (!diag.valid && diag.summary) {
       out += `\n⚠️ [AST Syntax Alert]: ${diag.summary}`;
     }

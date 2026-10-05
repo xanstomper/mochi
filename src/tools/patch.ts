@@ -3,6 +3,7 @@ import { dirname, resolve } from 'node:path';
 import type { Tool } from './types.js';
 import { markMutation } from './fs-signal.js';
 import { fuzzyFindUniqueNative as fuzzyFindUnique } from './native-match.js';
+import { validateFileSyntax } from '../core/ast-guard.js';
 
 // Codex-style patch application. The model emits a compact, token-efficient
 // patch format instead of full-file rewrites or fragile exact-match blocks:
@@ -146,9 +147,15 @@ export const patchTool: Tool = {
         if (existsSync(fullPath)) throw new Error(`*** Add File: ${fp.path} already exists`);
         mkdirSync(dirname(fullPath), { recursive: true });
         const content = fp.lines.filter((l) => l.kind === 'add').map((l) => l.text).join('\n');
-        writeFileSync(fullPath, content.endsWith('\n') || content === '' ? content : content + '\n');
+        const finalContent = content.endsWith('\n') || content === '' ? content : content + '\n';
+        writeFileSync(fullPath, finalContent);
         ctx.events.emit({ type: 'file:changed', path: fullPath, operation: 'write', agentId: ctx.agentId });
-        results.push(`added ${fp.path} (${fp.lines.length} lines)`);
+        const diag = validateFileSyntax(fullPath, finalContent);
+        if (!diag.valid && diag.summary) {
+          results.push(`added ${fp.path} (${fp.lines.length} lines) ⚠️ [AST Syntax Alert]: ${diag.summary}`);
+        } else {
+          results.push(`added ${fp.path} (${fp.lines.length} lines)`);
+        }
       } else if (fp.op === 'delete') {
         if (!existsSync(fullPath)) throw new Error(`*** Delete File: ${fp.path} not found`);
         rmSync(fullPath);
@@ -161,7 +168,12 @@ export const patchTool: Tool = {
         if (after === before) throw new Error(`Patch produced no change to ${fp.path}`);
         writeFileSync(fullPath, after);
         ctx.events.emit({ type: 'file:changed', path: fullPath, operation: 'edit', agentId: ctx.agentId });
-        results.push(`updated ${fp.path}`);
+        const diag = validateFileSyntax(fullPath, after);
+        if (!diag.valid && diag.summary) {
+          results.push(`updated ${fp.path} ⚠️ [AST Syntax Alert]: ${diag.summary}`);
+        } else {
+          results.push(`updated ${fp.path}`);
+        }
       }
       markMutation();
     }
