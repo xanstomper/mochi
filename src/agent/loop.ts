@@ -2222,6 +2222,7 @@ Continue from 'Next:', do not redo completed progress.`,
             spawnSubagents: (tasks: Array<{ prompt: string; role?: string; timeoutMs?: number; scratchpad?: string }>) => this.spawnSubagents(tasks),
           }
         : {}),
+      callerEmittedEvent: true,
     };
     this.events.emit({ type: 'tool:called', tool: tc.function.name, args, agentId: this.id, tool_call_id: tc.id });
     const { output, error, durationMs } = await executeTool(tc.function.name, args, ctx, this.tools);

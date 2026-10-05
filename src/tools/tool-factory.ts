@@ -59,6 +59,12 @@ export const RESERVED_TOOL_NAMES = new Set([
   'patch', 'delete', 'glob', 'search', 'outline', 'inspect', 'git', 'todo',
   'memory', 'think', 'subagent', 'bg_task', 'fetch', 'web_search', 'web_crawl',
   'chameleon', 'blast_radius', 'session_recall', 'compile_prompt', 'perf',
+  // Built-in aliases that must never be shadowed by authored tools
+  'sh', 'bash', 'cmd', 'exec', 'terminal', 'run_cmd', 'run_command', 'execute_command',
+  'run_shell', 'list_files', 'listFiles', 'file_search', 'find_files', 'list_dir', 'dir',
+  'search_files', 'grep', 'grep_search', 'ripgrep', 'read_file', 'readFile', 'view_file',
+  'viewFile', 'cat', 'write_to_file', 'writeFile', 'create_file', 'edit_file', 'editFile',
+  'replace_file_content', 'apply_diff', 'patch_file', 'browser_action', 'use_mcp_tool',
 ]);
 
 export function validateManifest(m: AuthoredToolManifest): string | null {
@@ -169,7 +175,8 @@ export function runAuthoredCommand(m: AuthoredToolManifest, args: Record<string,
     }
   }
   return new Promise((resolve) => {
-    const child = execFile('sh', ['-c', m.command, 'sh', ...positional], {
+    const shellBin = process.platform === 'win32' ? 'sh' : '/bin/bash';
+    const child = execFile(shellBin, ['-c', m.command, 'bash', ...positional], {
       cwd: projectDir,
       timeout: timeoutMs,
       maxBuffer: 4 * 1024 * 1024,

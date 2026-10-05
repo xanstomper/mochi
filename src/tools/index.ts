@@ -212,6 +212,8 @@ export const TOOL_ALIASES: Record<string, string> = {
   grep_search: 'search',
   ripgrep: 'search',
   grepSearch: 'search',
+  list_code_definition_names: 'outline',
+  code_definitions: 'outline',
   skeleton: 'outline',
   symbols_outline: 'outline',
   get_outline: 'outline',
@@ -225,6 +227,8 @@ export const TOOL_ALIASES: Record<string, string> = {
   audit: 'security_audit',
   vuln_scan: 'security_audit',
   scan_security: 'security_audit',
+  ask_followup_question: 'think',
+  ask_question: 'think',
 
   // Deletion
   delete_file: 'delete',
@@ -255,6 +259,9 @@ export const TOOL_ALIASES: Record<string, string> = {
   read_url_content: 'fetch',
   search_web: 'web_search',
   google_search: 'web_search',
+  browser_action: 'browser',
+  use_mcp_tool: 'mcp_manage',
+  access_mcp_resource: 'mcp_manage',
 
   // AST & Code Slicing
   slice_symbol: 'ast_slice',
@@ -268,7 +275,7 @@ export function normalizeToolArgs(toolName: string, args: Record<string, unknown
 
   // 1. Path normalization
   if (norm.path === undefined) {
-    norm.path = norm.file_path ?? norm.filePath ?? norm.filename ?? norm.file ?? norm.TargetFile ?? norm.target_file ?? norm.AbsolutePath ?? norm.absolute_path ?? norm.target;
+    norm.path = norm.file_path ?? norm.filePath ?? norm.filename ?? norm.file ?? norm.TargetFile ?? norm.target_file ?? norm.AbsolutePath ?? norm.absolute_path ?? norm.target ?? norm.dir ?? norm.directory;
   }
 
   // 2. Command normalization
@@ -293,11 +300,42 @@ export function normalizeToolArgs(toolName: string, args: Record<string, unknown
   if (norm.pattern === undefined) {
     norm.pattern = norm.Pattern ?? norm.glob ?? norm.glob_pattern ?? norm.query ?? norm.Query ?? norm.search_pattern;
   }
+  if (toolName === 'glob') {
+    if (norm.pattern === undefined && norm.path !== undefined) {
+      const rec = norm.recursive !== false;
+      norm.pattern = rec ? `${norm.path}/**` : `${norm.path}/*`;
+    }
+  }
   if (norm.query === undefined && (toolName === 'search' || toolName === 'web_search')) {
-    norm.query = norm.Query ?? norm.pattern ?? norm.Pattern ?? norm.term ?? norm.search_term;
+    norm.query = norm.Query ?? norm.pattern ?? norm.Pattern ?? norm.term ?? norm.search_term ?? norm.regex ?? norm.Regex;
+  }
+  if (norm.glob === undefined && toolName === 'search') {
+    norm.glob = norm.file_pattern ?? norm.filePattern ?? norm.filter;
   }
 
-  // 6. Subagent / Prompt normalization
+  // 6. Read tool line numbers (StartLine / EndLine -> offset / limit)
+  if (toolName === 'read') {
+    if (norm.offset === undefined) {
+      norm.offset = norm.start_line ?? norm.StartLine ?? norm.startLine ?? norm.line_start ?? norm.lineStart;
+    }
+    if (norm.limit === undefined) {
+      const endLine = norm.end_line ?? norm.EndLine ?? norm.endLine ?? norm.line_end ?? norm.lineEnd;
+      if (endLine !== undefined) {
+        const start = Number(norm.offset ?? 1);
+        const end = Number(endLine);
+        if (end >= start) norm.limit = end - start + 1;
+      }
+    }
+  }
+
+  // 7. Patch tool diff parameter
+  if (toolName === 'patch') {
+    if (norm.patch === undefined) {
+      norm.patch = norm.diff ?? norm.Diff ?? norm.patchText ?? norm.patch_text;
+    }
+  }
+
+  // 8. Subagent / Prompt normalization
   if (norm.prompt === undefined) {
     norm.prompt = norm.Prompt ?? norm.instructions ?? norm.instruction ?? norm.task ?? norm.description ?? norm.Description;
   }
@@ -305,7 +343,7 @@ export function normalizeToolArgs(toolName: string, args: Record<string, unknown
     norm.role = norm.Role;
   }
 
-  // 7. Background task action / taskId normalization
+  // 9. Background task action / taskId normalization
   if (norm.task_id === undefined) {
     norm.task_id = norm.taskId ?? norm.TaskId ?? norm.id ?? norm.taskID;
   }
@@ -313,7 +351,7 @@ export function normalizeToolArgs(toolName: string, args: Record<string, unknown
     norm.action = norm.Action ?? norm.operation ?? norm.op;
   }
 
-  // 8. Symbol name normalization
+  // 10. Symbol name normalization
   if (norm.symbol === undefined) {
     norm.symbol = norm.symbol_name ?? norm.symbolName ?? norm.name ?? norm.targetSymbol;
   }
@@ -355,10 +393,13 @@ export async function executeTool(
   const validation = validateArgs(tool, args);
   if (validation) return { output: '', error: validation, durationMs: 0 };
 
-  // Permission gate
+  // Permission gate: admin privileges & standard permissions
   const perm = tool.def.permission;
   if (perm) {
-    if (!ctx.config.permissions[perm]) {
+    const isPermitted = perm === 'admin'
+      ? ctx.config.permissions.admin !== false
+      : (ctx.config.permissions[perm] ?? (perm === 'read' || perm === 'write' || perm === 'shell' || perm === 'network'));
+    if (!isPermitted) {
       return { output: '', error: `Permission denied for tool ${name} (${perm})`, durationMs: 0 };
     }
     if (ctx.config.safety.mode === 'safe' && tool.def.dangerous) {
@@ -366,7 +407,9 @@ export async function executeTool(
     }
   }
 
-  ctx.events.emit({ type: 'tool:called', tool: name, args, agentId: ctx.agentId });
+  if (!ctx.callerEmittedEvent) {
+    ctx.events.emit({ type: 'tool:called', tool: name, args, agentId: ctx.agentId });
+  }
   const start = performance.now();
   try {
     const output = await tool.execute(args, ctx);

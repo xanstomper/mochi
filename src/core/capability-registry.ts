@@ -151,7 +151,10 @@ export function toolToCapability(tool: Tool): Capability {
       // Permission gate
       const perm = tool.def.permission;
       if (perm && req.context.config.permissions) {
-        if (!req.context.config.permissions[perm]) {
+        const isPermitted = perm === 'admin'
+          ? req.context.config.permissions.admin !== false
+          : (req.context.config.permissions[perm] ?? (perm === 'read' || perm === 'write' || perm === 'shell' || perm === 'network'));
+        if (!isPermitted) {
           return {
             callId: req.callId,
             name: tool.def.name,

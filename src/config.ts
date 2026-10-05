@@ -33,7 +33,7 @@ const defaultConfig = (): MochiConfig => ({
     write: true,
     shell: true,
     network: true,
-    gitDestructive: false,
+    gitDestructive: true,
     admin: true,
   },
   telemetry: false,
@@ -175,6 +175,7 @@ if (!cfg.model.failover || cfg.model.failover.length === 0) {
   if (process.env.MOCHI_PERMISSION_SHELL) cfg.permissions.shell = /^1|true|yes$/i.test(process.env.MOCHI_PERMISSION_SHELL);
   if (process.env.MOCHI_PERMISSION_NETWORK) cfg.permissions.network = /^1|true|yes$/i.test(process.env.MOCHI_PERMISSION_NETWORK);
   if (process.env.MOCHI_PERMISSION_GIT_DESTRUCTIVE) cfg.permissions.gitDestructive = /^1|true|yes$/i.test(process.env.MOCHI_PERMISSION_GIT_DESTRUCTIVE);
+  if (process.env.MOCHI_PERMISSION_ADMIN) cfg.permissions.admin = /^1|true|yes$/i.test(process.env.MOCHI_PERMISSION_ADMIN);
   if (process.env.MOCHI_QUIET) cfg.quiet = true;
   if (process.env.MOCHI_VERBOSE) cfg.verbose = true;
   if (process.env.MOCHI_DEBUG) cfg.debug = true;

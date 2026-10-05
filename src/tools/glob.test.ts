@@ -64,6 +64,24 @@ describe('glob tool', () => {
     const out = await runGlob('**', 2);
     expect(out.split('\n').filter(Boolean).length).toBeLessThanOrEqual(2);
   });
+
+  it('resolves direct literal file paths instantly', async () => {
+    const out = await globTool.execute({ pattern: 'README.md' }, ctx);
+    expect(out).toBe('README.md');
+  });
+
+  it('supports Cline list_files style parameters with path and recursive:false', async () => {
+    const out = await globTool.execute({ path: resolve(dir, 'src'), recursive: false }, ctx);
+    expect(out).toContain('src/a.ts');
+    expect(out).toContain('src/b.ts');
+    expect(out).not.toContain('src/deep/d.ts');
+  });
+
+  it('prunes search to fixed directory prefix', async () => {
+    const out = await globTool.execute({ pattern: 'src/deep/*.ts' }, ctx);
+    expect(out).toContain('src/deep/d.ts');
+    expect(out).not.toContain('src/a.ts');
+  });
 });
 
 // Walk-budget regressions: the old glob walker recursed synchronously over

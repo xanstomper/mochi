@@ -23,6 +23,8 @@ export interface ToolContext {
   spawnSubagent?: (prompt: string, opts?: { role?: string; timeoutMs?: number; scratchpad?: string }) => Promise<string>;
   /** Spawn multiple subagents concurrently and return their aggregated results. */
   spawnSubagents?: (tasks: Array<{ prompt: string; role?: string; timeoutMs?: number; scratchpad?: string }>) => Promise<string[]>;
+  /** Set to true when the caller already emitted tool:called on the event bus. */
+  callerEmittedEvent?: boolean;
 }
 
 export interface Tool {

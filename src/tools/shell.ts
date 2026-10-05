@@ -105,7 +105,14 @@ export const shellTool: Tool = {
       ctx.events.emit({ type: 'agent:log', agentId: ctx.agentId, message: `[shell:${risk}] ${command.slice(0, 160)}` });
     }
 
-    const cwd = args.cwd ? String(args.cwd) : ctx.cwd;
+    let targetCwd = args.cwd ? String(args.cwd) : ctx.cwd;
+    if (targetCwd.startsWith('~/')) {
+      const { homedir } = await import('node:os');
+      targetCwd = targetCwd.replace(/^~\//, homedir() + '/');
+    } else if (targetCwd === '~') {
+      const { homedir } = await import('node:os');
+      targetCwd = homedir();
+    }
     const timeoutMs = ((args.timeout ? Number(args.timeout) : ctx.config.safety.commandTimeoutSeconds) ?? 120) * 1000;
 
     const env: NodeJS.ProcessEnv = { ...process.env };
@@ -116,9 +123,19 @@ export const shellTool: Tool = {
       env.MOCHI_WORKSPACE = ctx.workspace.dir;
       env.MOCHI_AGENT_ID = ctx.agentId;
     }
+    // Ensure administrative system paths (/usr/sbin, /sbin, /usr/local/sbin) are in PATH
+    const currentPath = env.PATH || '';
+    const adminPaths = ['/usr/local/sbin', '/usr/sbin', '/sbin'];
+    const missingPaths = adminPaths.filter((p) => !currentPath.includes(p));
+    if (missingPaths.length > 0) {
+      env.PATH = `${currentPath}:${missingPaths.join(':')}`;
+    }
 
     return new Promise((resolve, reject) => {
-      const child = spawn('sh', ['-c', command], { cwd, env, stdio: 'pipe' });
+      const shellBin = process.platform === 'win32'
+        ? (process.env.ComSpec || 'cmd.exe')
+        : (process.env.SHELL || '/bin/bash');
+      const child = spawn(shellBin, ['-c', command], { cwd: targetCwd, env, stdio: 'pipe' });
       let stdout = '';
       let stderr = '';
       const killed = { value: false };

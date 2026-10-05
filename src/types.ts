@@ -155,7 +155,7 @@ export interface ToolDefinition {
   description: string;
   parameters: ToolParameter[];
   dangerous?: boolean;
-  permission?: 'read' | 'write' | 'shell' | 'network' | 'gitDestructive';
+  permission?: 'read' | 'write' | 'shell' | 'network' | 'gitDestructive' | 'admin';
 }
 
 export interface ToolCall {
