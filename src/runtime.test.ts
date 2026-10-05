@@ -224,4 +224,20 @@ describe('Runtime abort + interrupt', () => {
     expect(res.summaries.length).toBe(4);
     rmSync(rt.cwd, { recursive: true, force: true });
   });
+
+  it('autoImprove terminates early when passes repeat verbatim identical summaries even if IMPROVED is asserted (MCH-01)', async () => {
+    const rt = Runtime.create({ cwd: makeRepo() });
+    let calls = 0;
+    rt.runPrompt = async () => {
+      calls++;
+      // Every pass repeats the EXACT same summary text with <VERDICT>IMPROVED</VERDICT>.
+      // The breaker must detect verbatim identical repetition across passes and stop early.
+      return 'Refactored code and ran tests.\n<VERDICT>IMPROVED</VERDICT>';
+    };
+    const res = await rt.autoImprove('Optimize performance', 10);
+    // Pass 1 sets priorSummary; Pass 2 is identical to pass 1 -> stagnation += 2 -> break. Never reaches 10.
+    expect(calls).toBe(2);
+    expect(res.summaries.length).toBe(2);
+    rmSync(rt.cwd, { recursive: true, force: true });
+  });
 });

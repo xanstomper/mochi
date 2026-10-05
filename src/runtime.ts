@@ -342,13 +342,13 @@ export class Runtime {
               priorSummary = summary;
               break;
             }
-            if (improvedDeclared) {
-              // The model explicitly asserts a concrete improvement — trust the
-              // verdict and do NOT count this pass as stagnation, even when the
-              // prose is textually similar (e.g. only a number/identifier
-              // changed). Only convergence WITHOUT a verdict is real stagnation.
+            if (isIdentical) {
+              // Verbatim identical summary: stagnation even if <VERDICT>IMPROVED</VERDICT> was repeated
+              consecutiveStagnant += 2;
+            } else if (improvedDeclared) {
+              // Concrete non-identical improvement asserted
               consecutiveStagnant = 0;
-            } else if (isIdentical || similarity >= 0.90) {
+            } else if (similarity >= 0.90) {
               // No verdict AND near-identical text: nothing new was done.
               consecutiveStagnant += 2;
             } else {
