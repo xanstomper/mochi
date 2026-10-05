@@ -14,5 +14,20 @@ export default defineConfig({
     // high enough to absorb worst-case scheduler starvation.
     testTimeout: 120_000,
     hookTimeout: 120_000,
+    // RAM guard (2026-10-05): vitest's default is one worker per CPU core, and
+    // every worker loads the full TypeScript compiler plus the whole Mochi app.
+    // On this 4-core box that meant 4 heavy workers (each hundreds of MB, more
+    // under swap pressure) that ate the machine into 10Gi/11Gi used and threw
+    // edge flakes (e.g. ast-guard's TS-compiler load failing under contention).
+    // Cap the pool to 2 forks: keeps real parallelism while bounding peak RAM,
+    // and reduces the scheduler starvation the old 4-worker contention caused.
+    pool: 'forks',
+    poolOptions: {
+      forks: {
+        minForks: 1,
+        maxForks: 2,
+        singleFork: false,
+      },
+    },
   },
 });
