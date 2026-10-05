@@ -1266,7 +1266,11 @@ Continue from 'Next:', do not redo completed progress.`,
             this.context.addMessage({ role: 'system', content: `The previous model degenerated. You are now a fresh model continuing this task. Summarize nothing; just continue the task directly with a tool call or a direct answer.` });
             continue;
           }
-          return this.finish(task, false, 'The model repeatedly restreamed the same block and could not produce a clean answer. Try again or switch models.', 'model_error');
+          try {
+            const activeGoal = this.context.state.goal || task.title;
+            this.workspace.saveCheckpoint(activeGoal, `Task paused: stream loop detected at iteration ${i}.\nObjective: ${task.title}\nFiles touched: ${this.context.state.filesModified.join(', ') || 'none'}\nNext: Run "mochi resume" with an alternate model.`);
+          } catch { /* best effort */ }
+          return this.finish(task, false, 'The model repeatedly restreamed the same block and could not produce a clean answer. Work checkpointed; resume with "mochi resume".', 'model_error');
         }
         if (truncatedContent) {
           this.context.addMessage({

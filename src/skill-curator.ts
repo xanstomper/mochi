@@ -14,6 +14,7 @@
 // skill_manage tool (auto skill creation, Hermes-faithful).
 import { readdirSync, existsSync, readFileSync, statSync, mkdirSync, writeFileSync, renameSync, rmdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import {skillsRoot, archiveRoot, loadUsage, safeSlug, parseFrontmatter} from './skill-manager.js';
 
 export interface CuratorConfig {
@@ -293,4 +294,265 @@ export function recordCuratorRun(projectDir: string, summary: string): void {
   s.runCount += 1;
   s.lastSummary = summary;
   saveCuratorState(projectDir, s);
+}
+
+// ─── Skill Regression Doctor (MCH-20) ──────────────────────────────────
+
+export interface SkillDoctorFailure {
+  name: string;
+  path: string;
+  kind: 'empty' | 'missing-frontmatter' | 'syntax-error' | 'verification-failed';
+  error: string;
+  consecutiveFailures: number;
+  archived: boolean;
+}
+
+export interface SkillDoctorReport {
+  scanned: number;
+  healthy: number;
+  failures: SkillDoctorFailure[];
+  archived: string[];
+  reportPath: string;
+}
+
+export interface SkillDoctorHistory {
+  byName: Record<string, {
+    consecutiveFailures: number;
+    lastError?: string;
+    lastCheckedAt: number;
+  }>;
+}
+
+function doctorHistoryPath(projectDir: string): string {
+  return join(projectDir, '.mochi', 'skill-doctor-history.json');
+}
+
+export function loadDoctorHistory(projectDir: string): SkillDoctorHistory {
+  try {
+    return JSON.parse(readFileSync(doctorHistoryPath(projectDir), 'utf8'));
+  } catch {
+    return { byName: {} };
+  }
+}
+
+export function saveDoctorHistory(projectDir: string, hist: SkillDoctorHistory): void {
+  mkdirSync(join(projectDir, '.mochi'), { recursive: true });
+  writeFileSync(doctorHistoryPath(projectDir), JSON.stringify(hist, null, 2), 'utf8');
+}
+
+export interface SkillDoctorOptions {
+  autoArchive?: boolean;           // default: true (archives agent skills with >= maxConsecutiveFailures)
+  maxConsecutiveFailures?: number; // default: 2
+  executeSnippets?: boolean;       // default: true
+  timeoutMs?: number;              // default: 3000ms
+}
+
+export function extractVerificationSnippet(rawText: string): string | null {
+  const pf = parseFrontmatter(rawText);
+  if (pf?.meta && typeof pf.meta.verification === 'string' && pf.meta.verification.trim()) {
+    return pf.meta.verification.trim();
+  }
+  if (pf?.meta && typeof pf.meta.test === 'string' && pf.meta.test.trim()) {
+    return pf.meta.test.trim();
+  }
+  const body = pf ? pf.body : rawText;
+  const commentMatch = /<!--\s*mochi:verify\s*\n([\s\S]*?)\n\s*-->/i.exec(body);
+  if (commentMatch) {
+    return commentMatch[1].trim();
+  }
+  const blockMatch = /```(?:bash|sh)\s+verify\s*\n([\s\S]*?)\n```/i.exec(body);
+  if (blockMatch) {
+    return blockMatch[1].trim();
+  }
+  const inlineMatch = /^[ \t]*#\s*(?:verify|doctest):\s*(.+)$/m.exec(body);
+  if (inlineMatch) {
+    return inlineMatch[1].trim();
+  }
+  return null;
+}
+
+/** Run the skill regression doctor over a workspace.
+ *  Validates structure, frontmatter, and executes any embedded verification
+ *  snippets or tests. Tracks failure history across runs and archives broken
+ *  agent-created skills after 2 consecutive failures. */
+export function runSkillDoctor(
+  projectDir: string,
+  opts: SkillDoctorOptions = {},
+): SkillDoctorReport {
+  const cfg = defaultCuratorConfig();
+  const { snapshots } = scanSkills(projectDir, cfg);
+  const history = loadDoctorHistory(projectDir);
+  const now = Date.now();
+  const maxFailures = opts.maxConsecutiveFailures ?? 2;
+  const autoArchive = opts.autoArchive ?? true;
+  const executeSnippets = opts.executeSnippets ?? true;
+  const timeoutMs = opts.timeoutMs ?? 3000;
+
+  const failures: SkillDoctorFailure[] = [];
+  const archived: string[] = [];
+  let healthy = 0;
+
+  for (const s of snapshots) {
+    let raw = '';
+    try {
+      raw = readFileSync(s.path, 'utf8');
+    } catch (e: any) {
+      const err = e?.message || String(e);
+      const rec = history.byName[s.name] || { consecutiveFailures: 0, lastCheckedAt: now };
+      rec.consecutiveFailures += 1;
+      rec.lastError = err;
+      rec.lastCheckedAt = now;
+      history.byName[s.name] = rec;
+      failures.push({
+        name: s.name,
+        path: s.path,
+        kind: 'syntax-error',
+        error: err,
+        consecutiveFailures: rec.consecutiveFailures,
+        archived: false,
+      });
+      continue;
+    }
+
+    if (!raw.trim()) {
+      const rec = history.byName[s.name] || { consecutiveFailures: 0, lastCheckedAt: now };
+      rec.consecutiveFailures += 1;
+      rec.lastError = 'Skill file is empty';
+      rec.lastCheckedAt = now;
+      history.byName[s.name] = rec;
+      let isArchived = false;
+      if (autoArchive && s.agentCreated && rec.consecutiveFailures >= maxFailures) {
+        try {
+          const arc = join(archiveRoot(projectDir), safeSlug(s.name), 'SKILL.md');
+          mkdirSync(dirname(arc), { recursive: true });
+          renameSync(s.path, arc);
+          try { rmdirSync(dirname(s.path)); } catch { /* ignore */ }
+          isArchived = true;
+          archived.push(s.name);
+        } catch { /* best effort */ }
+      }
+      failures.push({
+        name: s.name,
+        path: s.path,
+        kind: 'empty',
+        error: 'Skill file is empty (0 bytes)',
+        consecutiveFailures: rec.consecutiveFailures,
+        archived: isArchived,
+      });
+      continue;
+    }
+
+    const pf = parseFrontmatter(raw);
+    if (!pf || !pf.meta || !pf.meta.name) {
+      const rec = history.byName[s.name] || { consecutiveFailures: 0, lastCheckedAt: now };
+      rec.consecutiveFailures += 1;
+      rec.lastError = 'Missing frontmatter with required name';
+      rec.lastCheckedAt = now;
+      history.byName[s.name] = rec;
+      let isArchived = false;
+      if (autoArchive && s.agentCreated && rec.consecutiveFailures >= maxFailures) {
+        try {
+          const arc = join(archiveRoot(projectDir), safeSlug(s.name), 'SKILL.md');
+          mkdirSync(dirname(arc), { recursive: true });
+          renameSync(s.path, arc);
+          try { rmdirSync(dirname(s.path)); } catch { /* ignore */ }
+          isArchived = true;
+          archived.push(s.name);
+        } catch { /* best effort */ }
+      }
+      failures.push({
+        name: s.name,
+        path: s.path,
+        kind: 'missing-frontmatter',
+        error: 'Missing YAML frontmatter with required "name" field',
+        consecutiveFailures: rec.consecutiveFailures,
+        archived: isArchived,
+      });
+      continue;
+    }
+
+    // Check runnable snippet if present
+    const snippet = extractVerificationSnippet(raw);
+    if (snippet && executeSnippets) {
+      try {
+        execFileSync('/bin/bash', ['-c', snippet], {
+          cwd: projectDir,
+          timeout: timeoutMs,
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+          env: { ...process.env, PATH: `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${process.env.PATH || ''}` },
+        });
+        // Success: reset failure count
+        history.byName[s.name] = { consecutiveFailures: 0, lastCheckedAt: now };
+        healthy++;
+      } catch (err: any) {
+        const errorMsg = (err.stderr?.toString() || err.message || String(err)).trim().slice(0, 300);
+        const rec = history.byName[s.name] || { consecutiveFailures: 0, lastCheckedAt: now };
+        rec.consecutiveFailures += 1;
+        rec.lastError = errorMsg;
+        rec.lastCheckedAt = now;
+        history.byName[s.name] = rec;
+
+        let isArchived = false;
+        if (autoArchive && s.agentCreated && rec.consecutiveFailures >= maxFailures) {
+          try {
+            const arc = join(archiveRoot(projectDir), safeSlug(s.name), 'SKILL.md');
+            mkdirSync(dirname(arc), { recursive: true });
+            renameSync(s.path, arc);
+            try { rmdirSync(dirname(s.path)); } catch { /* ignore */ }
+            isArchived = true;
+            archived.push(s.name);
+          } catch { /* best effort */ }
+        }
+        failures.push({
+          name: s.name,
+          path: s.path,
+          kind: 'verification-failed',
+          error: errorMsg,
+          consecutiveFailures: rec.consecutiveFailures,
+          archived: isArchived,
+        });
+      }
+    } else {
+      // Structurally valid and no snippet or execution disabled
+      history.byName[s.name] = { consecutiveFailures: 0, lastCheckedAt: now };
+      healthy++;
+    }
+  }
+
+  saveDoctorHistory(projectDir, history);
+
+  // Generate markdown report
+  const reportLines = [
+    `# Skill Doctor Health Report (${new Date(now).toISOString()})`,
+    `Total Scanned: ${snapshots.length}`,
+    `Healthy: ${healthy}`,
+    `Failures: ${failures.length}`,
+    `Archived: ${archived.length ? archived.join(', ') : 'none'}`,
+    '',
+  ];
+
+  if (failures.length > 0) {
+    reportLines.push('## Diagnostic Failures');
+    for (const f of failures) {
+      reportLines.push(`- **${f.name}** (${f.kind}) [consecutive: ${f.consecutiveFailures}]${f.archived ? ' -> ARCHIVED' : ''}`);
+      reportLines.push(`  Path: \`${f.path}\``);
+      reportLines.push(`  Error: ${f.error}`);
+    }
+  } else {
+    reportLines.push('All evaluated skills are healthy.');
+  }
+
+  const reportDir = join(projectDir, '.mochi', 'reports');
+  mkdirSync(reportDir, { recursive: true });
+  const reportPath = join(reportDir, `skill-doctor-${now}.md`);
+  writeFileSync(reportPath, reportLines.join('\n'), 'utf8');
+
+  return {
+    scanned: snapshots.length,
+    healthy,
+    failures,
+    archived,
+    reportPath,
+  };
 }

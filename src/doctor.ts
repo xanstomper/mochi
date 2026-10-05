@@ -62,26 +62,53 @@ export async function doctorReport(opts: {
     try { sessionCount = new SessionStore(opts.workspaceDir).list().length; } catch { /* store not initialised yet */ }
   }
 
-  // Skill regression doctor (MCH-20): scan the skills directory for degraded
+  // Skill regression doctor (MCH-20): scan the skills directories for degraded
   // entries — empty files, missing frontmatter, or stale orphans.
-  const skillsDir = resolve(opts.workspaceDir, 'skills');
+  const candidateDirs = [
+    resolve(opts.workspaceDir, 'skills'),
+    resolve(opts.workspaceDir, '.mochi', 'skills'),
+  ];
   const degradedSkills: SkillHealthEntry[] = [];
+  const visitedPaths = new Set<string>();
   let totalSkills = 0;
-  if (existsSync(skillsDir)) {
-    let skillFiles: string[] = [];
-    try { skillFiles = readdirSync(skillsDir).filter((f) => f.endsWith('.md') || f.endsWith('.yaml') || f.endsWith('.yml')); } catch { /* unreadable */ }
-    totalSkills = skillFiles.length;
-    for (const file of skillFiles) {
-      const skillPath = resolve(skillsDir, file);
+
+  for (const sDir of candidateDirs) {
+    if (!existsSync(sDir)) continue;
+    const checkFile = (skillPath: string, name: string) => {
+      if (visitedPaths.has(skillPath)) return;
+      visitedPaths.add(skillPath);
+      totalSkills++;
       let raw = '';
       try { raw = readFileSync(skillPath, 'utf8'); } catch { raw = ''; }
       const size = (() => { try { return statSync(skillPath).size; } catch { return 0; } })();
       if (size === 0 || raw.trim().length === 0) {
-        degradedSkills.push({ name: file, status: 'empty', path: skillPath });
+        degradedSkills.push({ name, status: 'empty', path: skillPath });
       } else if (!raw.includes('name:') && !raw.startsWith('---')) {
-        degradedSkills.push({ name: file, status: 'missing-frontmatter', path: skillPath });
+        degradedSkills.push({ name, status: 'missing-frontmatter', path: skillPath });
       }
-    }
+    };
+
+    const walk = (dir: string) => {
+      let entries: string[] = [];
+      try { entries = readdirSync(dir); } catch { return; }
+      for (const entry of entries) {
+        if (entry.startsWith('.')) continue;
+        const full = resolve(dir, entry);
+        let st;
+        try { st = statSync(full); } catch { continue; }
+        if (st.isDirectory()) {
+          const nestedSkill = resolve(full, 'SKILL.md');
+          if (existsSync(nestedSkill)) {
+            checkFile(nestedSkill, entry);
+          } else {
+            walk(full);
+          }
+        } else if (entry.endsWith('.md') || entry.endsWith('.yaml') || entry.endsWith('.yml')) {
+          checkFile(full, entry);
+        }
+      }
+    };
+    walk(sDir);
   }
   const healthySkills = totalSkills - degradedSkills.length;
 

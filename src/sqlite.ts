@@ -37,10 +37,9 @@ async function detect(): Promise<{ ctor: DbCtor | null; source: SqliteSource }> 
   } catch {
     // fall through
   }
-  // 2) bun:sqlite (bun runtime + compiled binary). Export is `Database`.
   try {
-    // @ts-ignore - bun:sqlite only exists under bun; unknown to tsc
-    const mod = (await import('bun:sqlite')) as { Database?: DbCtor; DatabaseSync?: DbCtor };
+    // bun:sqlite only exists under bun; dynamic import avoids static resolution error
+    const mod = (await import('bun:sqlite' as string)) as { Database?: DbCtor; DatabaseSync?: DbCtor };
     const Ctor = mod.DatabaseSync ?? mod.Database;
     if (Ctor) {
       const probe = new Ctor(':memory:');
