@@ -2240,8 +2240,16 @@ Continue from 'Next:', do not redo completed progress.`,
         }
       }
       if (targets.length > 0 && targets.length <= 4) {
+        const lintable = targets.filter((t) => /\.(ts|tsx|js|jsx|mts|cts|py|json|go)$/i.test(t));
+        // Aider auto-fix pass: before diagnosing, let the project's own
+        // fixer clean mechanical issues (import order, unused vars where
+        // auto-fixable, formatting). Only runs when the fixer exists and the
+        // repo opted into the linter — bounded, best-effort, never blocks.
+        if (lintable.length > 0 && lintable.length <= 4) {
+          await this.autoLintFix(lintable);
+        }
         const diags = await Promise.all(
-          targets.filter((t) => /\.(ts|tsx|js|jsx|mts|cts|py|json|go)$/i.test(t)).map((t) => diagnoseFile(resolve(this.cwd, t), this.cwd)),
+          lintable.map((t) => diagnoseFile(resolve(this.cwd, t), this.cwd)),
         );
         diagNote = renderDiagnostics(diags);
       }
@@ -2825,6 +2833,33 @@ Continue from 'Next:', do not redo completed progress.`,
     };
     const { output, error } = await executeTool('shell', { command, timeout }, ctx, this.tools);
     return error ? `Error: ${error}\n${output}` : output;
+  }
+
+  /** Aider-style auto-lint-fix: run the project's own auto-fixer on edited
+   *  files BEFORE diagnostics are rendered, so mechanical lint issues
+   *  (import order, auto-fixable style) never reach the model as noise or
+   *  the verification gate as failures. Best-effort and quiet: the fixer is
+   *  only invoked when the repo explicitly opted into the linter (config
+   *  file present — see jsTsLint/pyRuff in repo.ts), commands are bounded
+   *  at 20s, and any failure is swallowed. Files are passed explicitly so
+   *  the fixer never touches anything the agent didn't edit. */
+  private async autoLintFix(files: string[]): Promise<void> {
+    try {
+      const repo = detectRepo(this.cwd);
+      if (!repo.lintCommand) return;
+      // Derive the fix command from the detected lint command. Only the
+      // known auto-fixable runners participate; others (e.g. `mvn`) skipped.
+      const base = repo.lintCommand;
+      let fixCmd: string | undefined;
+      if (base.includes('eslint')) fixCmd = `${base} --fix`;
+      else if (base.includes('ruff')) fixCmd = `${base} --fix`;
+      else if (base.includes('biome')) fixCmd = `${base} --write`;
+      if (!fixCmd) return;
+      const quoted = files.map((f) => JSON.stringify(f)).join(' ');
+      await this.runShell(`${fixCmd} ${quoted}`, 20);
+    } catch {
+      /* auto-fix must never break the edit flow */
+    }
   }
 
   /** Self-review only pays off when the agent actually changed files this run.

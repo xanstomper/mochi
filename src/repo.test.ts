@@ -14,6 +14,37 @@ describe('detectRepo', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it('offers per-file lint only when the JS/TS repo opted in (aider lint-flow)', () => {
+    const mk = () => mkdtempSync(resolve(tmpdir(), 'mochi-repo-lint-'));
+    // eslint config present -> lint command detected
+    const withEslint = mk();
+    writeFileSync(resolve(withEslint, 'package.json'), '{}');
+    writeFileSync(resolve(withEslint, 'eslint.config.mjs'), 'export default [];\n');
+    const r1 = detectRepo(withEslint);
+    expect(r1.lintCommand).toContain('eslint');
+    rmSync(withEslint, { recursive: true, force: true });
+
+    // biome config present -> biome check
+    const withBiome = mk();
+    writeFileSync(resolve(withBiome, 'package.json'), '{}');
+    writeFileSync(resolve(withBiome, 'biome.json'), '{}');
+    expect(detectRepo(withBiome).lintCommand).toContain('biome');
+    rmSync(withBiome, { recursive: true, force: true });
+
+    // plain package.json, no lint config -> no lint command (never demand an
+    // unconfigured tool; package.json scripts still take priority elsewhere)
+    const bare = mk();
+    writeFileSync(resolve(bare, 'package.json'), '{}');
+    expect(detectRepo(bare).lintCommand).toBeUndefined();
+    rmSync(bare, { recursive: true, force: true });
+
+    // package.json with a lint script wins over config detection
+    const scripted = mk();
+    writeFileSync(resolve(scripted, 'package.json'), JSON.stringify({ scripts: { lint: 'eslint .' } }));
+    expect(detectRepo(scripted).lintCommand).toBe('npm run lint');
+    rmSync(scripted, { recursive: true, force: true });
+  });
+
   it('detects Go and Rust repos', () => {
     const go = mkdtempSync(resolve(tmpdir(), 'mochi-repo-go-'));
     writeFileSync(resolve(go, 'go.mod'), 'module example.com/x\n');

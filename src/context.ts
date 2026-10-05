@@ -184,6 +184,14 @@ export class ContextEngine {
   private config: MochiConfig;
   private userSkillsDir?: string;
   private lastSentTokens = 0;
+  /** File-freshness tracker (Cline fileContextTracker pattern): fingerprint
+   *  (size:mtime) of every file at the moment the agent read/edited it. When
+   *  the fingerprint no longer matches on-disk reality, the agent's mental
+   *  model of that file is STALE — it will plan edits against outdated
+   *  content. detectStaleFiles() diffs the snapshots against disk each turn
+   *  and the staleness warning is injected into the volatile state prompt. */
+  private fileSnapshots = new Map<string, string>();
+  private staleNotified = new Set<string>();
 
   constructor(config: MochiConfig, projectRoot: string, userSkillsDir?: string) {
     this.config = config;
@@ -509,6 +517,8 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
     const lines: string[] = [];
     const volatile = this.buildVolatilePrompt(task);
     if (volatile) lines.push(volatile);
+    const staleness = this.stalenessWarning();
+    if (staleness) lines.push(staleness);
     if (this.stuckSignal) lines.push(`WARNING (loop detected): ${this.stuckSignal}`);
     lines.push('## Current State');
     if (this.state.goal) lines.push(`Goal: ${this.state.goal}`);
@@ -603,9 +613,43 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
       const norm = normalizeToolArgs(canonical, args);
       const p = typeof norm.path === 'string' ? norm.path : '';
       if (!p) continue;
-      if (READ_TOOLS.has(canonical)) this.filesRead.add(p);
-      else this.filesEdited.add(p);
+      const abs = resolve(this.projectRoot, p);
+      if (READ_TOOLS.has(canonical)) {
+        this.filesRead.add(p);
+        this.fileSnapshots.set(p, fingerprint(abs));
+      } else {
+        this.filesEdited.add(p);
+        // An edit makes both the read snapshot and any PRIOR edit snapshot of
+        // this file current — record the post-edit state.
+        this.fileSnapshots.set(p, fingerprint(abs));
+        this.staleNotified.delete(p);
+      }
     }
+  }
+
+  /** Detect files whose on-disk fingerprint changed since the agent last read
+   *  or edited them. Returns paths whose content the agent may be mis-modeling.
+   *  Each stale file is reported only once per change (no repeated nagging for
+   *  the same external edit); a re-read or re-edit re-arms the alert. */
+  detectStaleFiles(): string[] {
+    const stale: string[] = [];
+    for (const [p, snap] of this.fileSnapshots) {
+      if (!snap) continue; // file absent at snapshot time; skip
+      const current = fingerprint(resolve(this.projectRoot, p));
+      if (current && current !== snap && !this.staleNotified.has(p)) {
+        stale.push(p);
+        this.staleNotified.add(p);
+      }
+    }
+    return stale;
+  }
+
+  /** Volatile-tier staleness warning for buildStatePrompt(). Empty when every
+   *  tracked file still matches its snapshot. */
+  stalenessWarning(): string {
+    const stale = this.detectStaleFiles();
+    if (!stale.length) return '';
+    return `STALE FILE ALERT: the following files changed on disk since you last read/edited them — your cached understanding is outdated. Re-read before editing: ${stale.join(', ')}`;
   }
 
   /** Phase 4: record real provider usage so the compaction floor can trigger

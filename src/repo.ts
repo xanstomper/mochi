@@ -61,6 +61,36 @@ const javaCmd = (root: string, sub: string): string => {
   return `gradle ${sub}`;
 };
 
+/** jsTsLint (aider lint-flow port): a real per-file lint gate for JS/TS repos.
+ *  Like pyRuff, lint is only offered when the repo itself opted in — an
+ *  eslint/biome config file present means "this project cares about lint",
+ *  otherwise undefined keeps verify() from demanding a tool the project
+ *  never asked for. Prefers local binaries over global npx. */
+const jsTsLint = (root: string): string | undefined => {
+  try {
+    const hasEslint =
+      existsSync(resolve(root, 'eslint.config.js')) ||
+      existsSync(resolve(root, 'eslint.config.mjs')) ||
+      existsSync(resolve(root, 'eslint.config.cjs')) ||
+      existsSync(resolve(root, '.eslintrc.json')) ||
+      existsSync(resolve(root, '.eslintrc.js')) ||
+      existsSync(resolve(root, '.eslintrc.yml')) ||
+      existsSync(resolve(root, '.eslintrc.yaml'));
+    if (hasEslint) {
+      // Local binary when installed (fast, version-locked); npx fallback.
+      if (existsSync(resolve(root, 'node_modules', '.bin', 'eslint'))) return 'npx --no-install eslint';
+      return 'npx eslint';
+    }
+    if (existsSync(resolve(root, 'biome.json')) || existsSync(resolve(root, 'biome.jsonc'))) {
+      if (existsSync(resolve(root, 'node_modules', '.bin', 'biome'))) return 'npx --no-install biome check';
+      return 'npx @biomejs/biome check';
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 function pickExisting(root: string, paths: string[]): string[] {
   for (const p of paths) {
     if (existsSync(resolve(root, p))) return [p];
@@ -79,6 +109,7 @@ const LANG_SPECS: LangSpec[] = [
   {
     id: 'ts',
     markers: ['tsconfig.json'],
+    lint: jsTsLint,
     hint: 'This is a TypeScript repo. Prefer the package.json scripts (test, build, lint, typecheck) with the detected package manager.',
   },
   {
@@ -213,6 +244,7 @@ const LANG_SPECS: LangSpec[] = [
   {
     id: 'js',
     markers: ['package.json'],
+    lint: jsTsLint,
     hint: 'JavaScript/Node repo. Use the package.json scripts (test/build/lint) with the detected package manager.',
   },
 ];
@@ -275,11 +307,16 @@ export function detectRepo(root: string): RepoInfo {
   }
 
   // Language defaults for non-package.json repos.
+  // Spec-level lint also applies to JS/TS repos when package.json defines no
+  // lint script but the repo opted in via an eslint/biome config (aider
+  // lint-flow). Runs AFTER the package.json block so scripts take priority.
   if (language && language !== 'js' && language !== 'ts') {
     if (!buildCommand) buildCommand = resolveFn(spec!.build, root);
     if (!testCommand) testCommand = resolveFn(spec!.test, root);
     if (!lintCommand) lintCommand = resolveFn(spec!.lint, root);
     if (!typecheckCommand) typecheckCommand = resolveFn(spec!.typecheck, root);
+  } else if (language && !lintCommand) {
+    lintCommand = resolveFn(spec!.lint, root);
   }
 
   const importantDirs: string[] = [];
