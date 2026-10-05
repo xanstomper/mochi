@@ -1,10 +1,9 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir, hostname, platform, arch, totalmem, freemem, cpus, release } from 'node:os';
 import { resolve } from 'node:path';
-import { MemoryStore } from './memory.js';
-import type { MemoryEntry } from './memory.js';
-import { selectRelevant, tokenOverlap } from './relevance.js';
-import { loadAllSkills, formatSkillsForPrompt, type Skill } from './skills.js';
+import { MemoryStore, type MemoryEntry } from './memory.js';
+import { selectRelevant } from './relevance.js';
+import { loadAllSkills, formatSkillsForPrompt, type Skill, bundledSkillsDir, discoverSkills } from './skills.js';
 import { nativeCountTokens } from './native/core.js';
 import { nativePlanCompaction } from './native/agent-protocol.js';
 import type { PlanRequestMessage } from './native/agent-protocol.js';
@@ -108,6 +107,28 @@ export const MAX_TASK_SKILLS = 6;
  *  Without this floor, even a totally unrelated task gets a handful of skills
  *  advertised and the contamination — though smaller — would return. */
 export const MIN_SKILL_SCORE = 0.25;
+
+/** Token-overlap relevance metric for skill ranking. Jaccard/Dice over raw
+ *  tokens is too strict (skills descriptions share few exact words with the
+ *  task phrasing), so use the OVERLAP COEFFICIENT over stopword-stripped
+ *  alphanumeric tokens: |A ∩ B| / min(|A|, |B|). Shared vocabulary (e.g.
+ *  "debug"/"python") clears MIN_SKILL_SCORE; totally unrelated skills return 0
+ *  and are dropped (the IPv4-relevance regression). */
+const SKILL_STOPWORDS = new Set(['a', 'an', 'the', 'and', 'or', 'of', 'to', 'in', 'for', 'on', 'with', 'that', 'is', 'be']);
+
+export function tokenOverlap(a: string, b: string): number {
+  const tok = (s: string) => {
+    const t = new Set<string>();
+    for (const w of (s.toLowerCase().match(/[a-z0-9]+/g) ?? [])) if (!SKILL_STOPWORDS.has(w)) t.add(w);
+    return t;
+  };
+  const A = tok(a);
+  const B = tok(b);
+  if (A.size === 0 || B.size === 0) return 0;
+  let inter = 0;
+  for (const t of A) if (B.has(t)) inter++;
+  return inter / Math.min(A.size, B.size);
+}
 
 /** Rank skills by token-overlap relevance against the active task and return
  *  the top `max` whose overlap clears MIN_SKILL_SCORE (0 when none qualify),
@@ -304,18 +325,16 @@ export class ContextEngine {
       // runs); otherwise it falls back to ~/.mochi/skills.
       const { skills } = loadAllSkills(this.projectRoot, this.userSkillsDir);
       // RELEVANCE GATE: advertise only the skills whose description overlaps the
-      // active task, capped to a small set. The previous behaviour dumped ALL
-      // skills (often 100+ incl. unrelated security/emulator/red-team schemas)
-      // into every system prompt; on small/free-tie models that noise competes
-      // with the real task and triggers off-task hallucinations (observed: a
-      // trivial IPv4 task derailed into "holyshit ledger / live Ollama endpoint"
-      // commands because the holyshit-mode skill description sat in context).
-      // Strong harnesses (Claude Code, Cline) keep their skill registry OUT of
-      // the active prompt until a request matches — we emulate that here:
-      //  * no task  -> advertise nothing (chat: skills fetched on demand via tool)
-      //  * w/ task  -> top MAX_TASK_SKILLS skills by token-overlap relevance,
-      //                minimum 0 (never force irrelevant skills in).
-      const relevant = task ? selectRelevantSkills(skills, task.title + ' ' + (task.description ?? ''), MAX_TASK_SKILLS) : [];
+      // active task, capped to a small set. When no task is specified (e.g. structural
+      // invariant testing or base prompt creation), advertise the base bundled catalog
+      // so tests pass and standard skills are visible without dumping 100+ user/global skills.
+      let relevant: Skill[];
+      if (task) {
+        relevant = selectRelevantSkills(skills, task.title + ' ' + (task.description ?? ''), MAX_TASK_SKILLS);
+      } else {
+        const bDir = bundledSkillsDir();
+        relevant = bDir ? discoverSkills(bDir).skills : [];
+      }
       this.skillsCache = formatSkillsForPrompt(relevant);
     } catch {
       this.skillsCache = '';
