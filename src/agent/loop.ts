@@ -2118,7 +2118,11 @@ Continue from 'Next:', do not redo completed progress.`,
             message: '[budget] exhausted — finishing with work completed so far.',
           });
           if (this.activeTask) {
-            await this.finish(this.activeTask, this.fileChanged, 'Budget exhausted — finished with the work completed so far.', 'budget');
+            try {
+              const activeGoal = this.context.state.goal || this.activeTask.title;
+              this.workspace.saveCheckpoint(activeGoal, `Task paused: budget exhausted at tool ${toolName}.\nObjective: ${this.activeTask.title}\nFiles touched: ${this.context.state.filesModified.join(', ') || 'none'}\nNext: Run "mochi resume" with an increased budget.`);
+            } catch { /* best effort */ }
+            await this.finish(this.activeTask, this.fileChanged, 'Budget exhausted — work checkpointed. Resume with "mochi resume".', 'budget');
           }
         }
         return;

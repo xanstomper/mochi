@@ -247,11 +247,13 @@ export class ContextEngine {
 
       if (text.length > 5000) {
         const lines = text.split('\n');
-        if (lines.length > 60) {
-          const headLines = lines.slice(0, 40);
-          const tailLines = lines.slice(-20);
-          const omitted = lines.length - 60;
-          const folded = `${headLines.join('\n')}\n\n… [mochi: ${omitted} lines omitted to conserve tokens — use offset/limit or outline to inspect more] …\n\n${tailLines.join('\n')}`;
+        if (lines.length > 60 || text.length > 12000) {
+          const keepHead = lines.length > 60 ? 40 : Math.max(1, Math.min(20, Math.floor(lines.length / 2)));
+          const keepTail = lines.length > 60 ? 20 : Math.max(1, Math.min(10, Math.floor(lines.length / 4)));
+          const headLines = lines.slice(0, keepHead);
+          const tailLines = lines.slice(-keepTail);
+          const omitted = lines.length - keepHead - keepTail;
+          const folded = `${headLines.join('\n')}\n\n… [mochi: ${omitted > 0 ? `${omitted} lines ` : ''}output folded (${text.length.toLocaleString('en-US')} chars) to conserve context tokens — narrow the query or use offset/limit] …\n\n${tailLines.join('\n')}`;
           this.messages.push({ ...message, content: folded });
           return;
         }
