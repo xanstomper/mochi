@@ -31,8 +31,22 @@ export async function status(cwd: string): Promise<string> {
 }
 
 export async function diff(cwd: string): Promise<string> {
-  if (!(await isRepo(cwd))) return '';
-  return run(cwd, ['diff']);
+  if (!(await isRepo(cwd))) return 'Not a git repository.';
+  let stat = '';
+  let fullDiff = '';
+  try {
+    stat = await run(cwd, ['diff', 'HEAD', '--stat']);
+    fullDiff = await run(cwd, ['diff', 'HEAD', '--unified=3']);
+  } catch {
+    stat = await run(cwd, ['diff', '--stat']).catch(() => '');
+    fullDiff = await run(cwd, ['diff', '--unified=3']).catch(() => '');
+  }
+  if (!fullDiff && !stat) {
+    const s = await status(cwd);
+    if (!s || s === 'Not a git repository') return 'No pending git changes in working tree.';
+    return `No modified line diffs detected, but untracked files present:\n${s}`;
+  }
+  return `### Pending Diff & Proposal Stats\n${stat}\n\n${fullDiff}`;
 }
 
 export async function log(cwd: string, n = 10): Promise<string> {
