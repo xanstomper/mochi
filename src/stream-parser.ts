@@ -20,6 +20,8 @@ export class StreamParser {
   private finished = false;
   private parseCount = 0;
   private bytesConsumed = 0;
+  private seenChunkHashes = new Set<string>();
+  private lastRawData = '';
 
   constructor(messageId: string) {
     this.messageId = messageId;
@@ -78,6 +80,20 @@ export class StreamParser {
     } catch {
       return 'continue';
     }
+
+    // Per-stream deduplication: drop duplicated chunks from reconnecting proxies or retry buffers
+    if (parsed.id) {
+      const eventKey = `${parsed.id}:${data}`;
+      if (this.seenChunkHashes.has(eventKey)) return 'continue';
+      this.seenChunkHashes.add(eventKey);
+      if (this.seenChunkHashes.size > 2000) {
+        const oldest = this.seenChunkHashes.values().next().value;
+        if (oldest) this.seenChunkHashes.delete(oldest);
+      }
+    } else if (data === this.lastRawData && data.length > 25) {
+      return 'continue';
+    }
+    this.lastRawData = data;
 
     const choice = parsed.choices?.[0];
     const delta = choice?.delta ?? {};

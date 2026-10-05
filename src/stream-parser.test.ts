@@ -61,4 +61,22 @@ describe('StreamParser', () => {
     expect(events.some((e) => e.type === 'usage' && (e as any).totalTokens === 15)).toBe(true);
     expect(events.some((e) => e.type === 'finish' && (e as any).reason === 'tool_calls')).toBe(true);
   });
+
+  it('deduplicates re-sent identical SSE chunks without duplicating content', () => {
+    const parser = new StreamParser('m2');
+    const chunk1 = sse({ id: 'evt-1', choices: [{ delta: { content: 'chunk one ' } }] });
+    const chunk2 = sse({ id: 'evt-2', choices: [{ delta: { content: 'chunk two ' } }] });
+    const events = [
+      ...parser.write(chunk1),
+      ...parser.write(chunk1), // re-sent duplicate
+      ...parser.write(chunk2),
+      ...parser.write(chunk2), // re-sent duplicate
+      ...parser.end(),
+    ];
+    const text = events
+      .filter((e) => e.type === 'text-delta')
+      .map((e) => (e as any).text)
+      .join('');
+    expect(text).toBe('chunk one chunk two ');
+  });
 });

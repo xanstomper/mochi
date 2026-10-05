@@ -340,6 +340,8 @@ export class Agent {
   /** Bounded retry budget for transient transport aborts when no fallback
    *  model remains (reset on any successful model output). */
   private transientAbortRetries = 0;
+  private rateLimitRetries = 0;
+  private cooldownRetries = 0;
   /** Phase 5 (VNext): stuck-signal counters surfaced in the volatile state
    *  prompt so the model can see its own loop pattern and break it. */
   private nudgeInjections = 0;
@@ -671,7 +673,11 @@ Continue from 'Next:', do not redo completed progress.`,
         }
       } catch { /* background registry unavailable; skip */ }
       if (this.abortSignal?.aborted) {
-        return this.finish(task, false, 'Aborted by user', 'aborted');
+        try {
+          const activeGoal = this.context.state.goal || task.title;
+          this.workspace.saveCheckpoint(activeGoal, `Task aborted by caller at iteration ${i}.\nObjective: ${task.title}\nFiles touched: ${this.context.state.filesModified.join(', ') || 'none'}\nNext: Run "mochi resume" to continue.`);
+        } catch { /* best effort */ }
+        return this.finish(task, false, `Run aborted by caller. Resume anytime with "mochi resume".`, 'aborted');
       }
       if (performance.now() - this.startTime > runtimeLimit) {
         return this.finish(task, false, 'Runtime limit exceeded', 'runtime_limit');
@@ -679,7 +685,11 @@ Continue from 'Next:', do not redo completed progress.`,
       if (this.budget) {
         this.budget.recordAgentStart();
         if (!this.budget.canMakeModelCall()) {
-          return this.finish(task, false, 'Budget exhausted before model call', 'budget');
+          try {
+            const activeGoal = this.context.state.goal || task.title;
+            this.workspace.saveCheckpoint(activeGoal, `Task paused: budget exhausted before model call at iteration ${i}.\nObjective: ${task.title}\nFiles touched: ${this.context.state.filesModified.join(', ') || 'none'}\nNext: Run "mochi resume" with an increased budget.`);
+          } catch { /* best effort */ }
+          return this.finish(task, false, 'Budget exhausted before model call. Work checkpointed — resume with "mochi resume".', 'budget');
         }
         this.budget.recordModelCall();
       }
