@@ -439,17 +439,13 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       case 'assistant': {
         // Terminal prose — live markdown rendering (bold, inline code,
         // headings, bullets, code blocks), ANSI-wrapped to viewport width.
-        // The renderer already produces its own 2-space gutter for bullets
-        // and code blocks; we only add a leading 2-space gutter to plain
-        // paragraph lines to keep grid alignment with the rest of the
-        // transcript (user, tool, error, etc.).
-        const mdRows = renderMarkdown(cleanText);
+        // The renderer is WIDTH-AWARE now (Cline-grade): it wraps at the
+        // exact transcript width and emits hanging-indented final rows, so
+        // the downstream pass-through must NOT re-wrap (a second wrap would
+        // destroy the continuation-line alignment under list markers).
+        const mdRows = renderMarkdown(cleanText, Math.max(20, maxWidth - 2));
         for (const r of mdRows) {
-          const startsWithGutter = r.startsWith('  ') || r.startsWith('│ ') || r.startsWith('  ─');
-          const prefixed = startsWithGutter ? r : `  ${r}`;
-          for (const w of wrapAnsi(prefixed, Math.max(20, maxWidth - 2))) {
-            rows.push(w);
-          }
+          rows.push(r);
         }
         break;
       }

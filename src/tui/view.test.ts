@@ -475,14 +475,46 @@ describe('renderMarkdown', () => {
     expect(plain.every((l) => !l.includes('## Next steps'))).toBe(true);
   });
 
-  it('renders bullets as auto-incrementing orange numbers (no • glyphs)', () => {
-    const rows = m.renderMarkdown('- one\n- two\n\n```ts\nconst x = 1;\n```\n');
+  it('renders bullets as cyan • glyphs and keeps ordered lists numbered', () => {
+    const rows = m.renderMarkdown('- one\n- two\n\n1. first\n2. second\n\n```ts\nconst x = 1;\n```\n');
     const plain = rows.map((r) => r.replace(/\x1b\[[0-9;]*m/g, ''));
-    // bullets get the gutter
-    expect(plain.some((l) => l.startsWith('  1. one'))).toBe(true);
-    expect(plain.some((l) => l.startsWith('  2. two'))).toBe(true);
-    // no blue bullet glyph anywhere
-    expect(plain.some((l) => l.includes('•'))).toBe(false);
+    // Unordered bullets get the cyan • glyph on the 2-space grid (distinct
+    // from ordered lists — the old all-numbers look was confusing).
+    expect(plain.some((l) => l.trimStart().startsWith('• one'))).toBe(true);
+    expect(plain.some((l) => l.trimStart().startsWith('• two'))).toBe(true);
+    // Ordered lists keep orange numbers on the same grid.
+    expect(plain.some((l) => l.trimStart().startsWith('1. first'))).toBe(true);
+    expect(plain.some((l) => l.trimStart().startsWith('2. second'))).toBe(true);
+    // Nested bullet indents one level deeper.
+    const nested = m.renderMarkdown('- a\n  - b\n', 80).map((r) => r.replace(/\x1b\[[0-9;]*m/g, ''));
+    const aRow = nested.find((l) => l.includes('a'));
+    const bRow = nested.find((l) => l.includes('b'));
+    expect((bRow?.indexOf('•') ?? 99)).toBeGreaterThan((aRow?.indexOf('•') ?? 0));
+  });
+
+  it('wraps long paragraphs with hanging indents and no overflow', () => {
+    const rows = m.renderMarkdown('- one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen', 50);
+    const plain = rows.map((r) => r.replace(/\x1b\[[0-9;]*m/g, ''));
+    // First row carries the marker; the continuation aligns under the text
+    // (2-space hang past the marker column), and no row exceeds the width.
+    for (const l of plain) expect([...l].length).toBeLessThanOrEqual(50);
+    const cont = plain[1] ?? '';
+    expect(cont).not.toBe('');
+    expect(cont.startsWith('    ')).toBe(true); // 2 (indent) + 2 (hang)
+  });
+
+  it('renders links as clean label → url (no raw [..](..) sigils)', () => {
+    const rows = m.renderMarkdown('See [the docs](https://example.com/rfc) for details.', 80);
+    const plain = rows.map((r) => r.replace(/\x1b\[[0-9;]*m/g, '')).join('\n');
+    expect(plain).toContain('the docs → https://example.com/rfc');
+    expect(plain).not.toContain('[the docs](https://example.com/rfc)');
+  });
+
+  it('renders blockquotes with a left bar on every line', () => {
+    const rows = m.renderMarkdown('> caution line\n', 80);
+    const plain = rows.map((r) => r.replace(/\x1b\[[0-9;]*m/g, '')).join('\n');
+    expect(plain).toContain('│');
+    expect(plain).toContain('caution line');
   });
 
   it('collapses blank lines (paragraphs merge, no double blanks)', () => {

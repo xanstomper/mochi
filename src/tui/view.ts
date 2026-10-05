@@ -19,6 +19,7 @@
 // Both T and R are reassigned in place by setTheme() so callers can read
 // them without re-importing.
 import type { LineKind } from './state.js';
+import { wrap } from './wrap.js'; // visibleLen is local (line ~84)
 
 import {
   THEMES, getTheme, getAllThemes, getCurrentTheme, applyTheme, themeSwatch,
@@ -467,26 +468,31 @@ export function accentToolPrefix(text: string): string {
 }
 
 export function formatInlineMarkdown(text: string): string {
-  // Inline markdown: bold, inline code, italic — emit ONE clean SGR per
-  // token so a downstream ANSI-aware wrap never breaks colors mid-line.
-  // Replacements work in priority order: code first (so `**foo**` inside
-  // backticks isn't re-bolded), then bold, then italic.
+  // Inline markdown: code, links, bold, italic — emit ONE clean SGR per token
+  // so a downstream ANSI-aware wrap never breaks colors mid-line. Priority
+  // order matters: code first (so `**foo**` inside backticks isn't re-bulded),
+  // then links, then bold, then italic. Code AND links share one placeholder
+  // stash (null-byte tokens) so neither is re-processed by later passes.
   const BASE = R.assistantText;
-  // 1. Inline code: protect contents from later replacements by stashing
-  // them in a token map, then restore the colored token at the end.
-  const codeTokens: string[] = [];
-  const codePlaceholder = (raw: string) => {
-    const token = `${R.codeType}${T.bold}${raw}${T.reset}${BASE}`;
-    codeTokens.push(token);
-    return ` CODE${codeTokens.length - 1} `;
+  const stash: string[] = [];
+  const stashToken = (rendered: string): string => {
+    stash.push(rendered);
+    return `\u0000T${stash.length - 1}\u0000`;
   };
-  let s = text.replace(/`([^`\n]+)`/g, (_m, inner) => codePlaceholder(String(inner)));
-  // 2. Bold
+  // 1. Inline code → colored token (protected from later passes).
+  let s = text.replace(/`([^`\n]+)`/g, (_m, inner: string) =>
+    stashToken(`${R.codeType}${T.bold}${inner}${T.reset}${BASE}`));
+  // 2. Links [label](url) → underlined label + dimmed url. The `[..](..)`
+  //    sigils never print (Cline-style clean label, URL kept beside it).
+  s = s.replace(/\[([^\]\n]+)\]\(([^)\n]+)\)/g, (_m, label: string, url: string) =>
+    stashToken(`${R.mdLink}${T.underline}${label}${T.reset}${T.grayDark} → ${url}${T.reset}${BASE}`));
+  // 3. Bold.
   s = s.replace(/\*\*([^*\n]+)\*\*/g, `${T.bold}${R.mdBold}$1${T.reset}${BASE}`);
-  // 3. Italic (single *…*, not preceded/followed by *)
-  s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, (_m, pre, inner) => `${pre}${T.italic}${R.mdItalic}${inner}${T.reset}${BASE}`);
-  // 4. Restore code tokens
-  s = s.replace(/ CODE(\d+) /g, (_m, i) => codeTokens[Number(i)] ?? '');
+  // 4. Italic (single *…*, not adjacent to another *).
+  s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, (_m, pre: string, inner: string) =>
+    `${pre}${T.italic}${R.mdItalic}${inner}${T.reset}${BASE}`);
+  // 5. Restore stashed tokens.
+  s = s.replace(/\u0000T(\d+)\u0000/g, (_m, i: string) => stash[Number(i)] ?? '');
   // Wrap with assistant foreground + reset so a downstream wrap that
   // splits the line lands back in the base color without bleeding.
   return `${BASE}${s}${T.reset}`;
@@ -511,113 +517,156 @@ function highlightCodeLine(line: string): string {
 }
 
 /**
- * Compact terminal markdown renderer. Produces tight Cline/Claude-style
- * output: paragraphs collapsed to one logical line each, no extra blank
- * between sentences, headings stripped of the `##` sigil, bullets on a
- * consistent 2-space indent, code fences without box borders, and a
- * unified color baseline so wrap-and-resume keeps the right role color.
+ * Cline-grade terminal markdown renderer ("same as Cline but better"):
+ *  - headings: bold colored text + a hairline that MATCHES the text length
+ *  - unordered bullets: cyan `•` glyphs (distinct from ordered lists)
+ *  - ordered lists: orange auto-numbers
+ *  - NESTED lists: 2-space indent per level, parent-colored markers
+ *  - HANGING INDENTS: wrapped continuation lines align under the text,
+ *    not under the marker (the Cline signature look)
+ *  - width-aware wrapping at `width` (defaults to the terminal) so the
+ *    renderer itself produces final rows — no double-wrap drift
+ *  - blockquotes with a colored left bar on every continuation line
+ *  - code fences with a language tag + highlighted lines, indented
  */
-export function renderMarkdown(text: string): string[] {
+export function renderMarkdown(text: string, width?: string | number): string[] {
+  const termW = typeof width === 'number' ? width : (process.stdout.columns || 100);
+  const W = Math.max(30, Math.min(Number(termW) || 100, 200));
   const rawLines = text.split('\n');
   const out: string[] = [];
   let inCodeBlock = false;
   let codeBlockLang = '';
   let paragraph: string[] = [];
-  let bulletNum = 0; // auto-number for consecutive "-"/*"/+" bullets
+
+  // Emit one wrapped paragraph with a hanging indent: continuation rows pad
+  // to `hang` visible columns so they align under the text, not the marker.
+  const emitWrapped = (content: string, indent: number, hang: number, styled: (s: string) => string): void => {
+    const avail = Math.max(12, W - 2 - indent - 2);
+    const wrapped = wrap(content, avail);
+    wrapped.forEach((row, i) => {
+      const pad = indent + (i > 0 ? hang : 0);
+      // Trim leading space on continuation rows: wrap() keeps the inter-word
+      // space that lands at the split boundary, which printed as a stray
+      // leading space on every continuation line.
+      const body = i > 0 ? row.replace(/^\s+/, '') : row;
+      out.push(`${' '.repeat(pad)}${styled(body)}`);
+    });
+  };
 
   const flushParagraph = () => {
     if (!paragraph.length) return;
-    // Join soft-wrapped source lines into one paragraph, collapse runs
-    // of whitespace, then re-emit as a single colored line. The TUI's
-    // downstream wrapAnsi() handles viewport-width rewrap without any
-    // extra blank rows between sentences.
     const joined = paragraph.join(' ').replace(/\s+/g, ' ').trim();
     paragraph = [];
     if (!joined) return;
-    bulletNum = 0; // a paragraph break restarts bullet numbering
-    out.push(formatInlineMarkdown(joined));
+    emitWrapped(joined, 0, 0, formatInlineMarkdown);
   };
+
+  // List state: nesting via leading-space depth; unordered bullets keep their
+  // own glyph; ordered lists number within their depth.
+  const bulletStack: Array<{ ordered: boolean; n: number }> = [];
 
   for (let i = 0; i < rawLines.length; i++) {
     const raw = rawLines[i];
     const trimmed = raw.trim();
 
-    // Fenced code blocks: tight list of highlighted rows, no box border.
-    // The opening fence is the only "header" row; the closing fence is
-    // a single subtle hairline so the user can see the block end.
+    // Fenced code blocks: tight list of highlighted rows with a language tag.
     if (trimmed.startsWith('```')) {
       flushParagraph();
+      bulletStack.length = 0;
       if (!inCodeBlock) {
         inCodeBlock = true;
         codeBlockLang = trimmed.slice(3).trim();
         const tag = codeBlockLang ? `${R.codeType}${codeBlockLang}${T.reset}` : `${T.grayDark}code${T.reset}`;
-        out.push(`${T.grayDark}  ─ ${tag}${T.reset}`);
+        out.push(`  ${T.grayDark}── ${tag} ${T.grayDark}──${T.reset}`);
       } else {
         inCodeBlock = false;
         codeBlockLang = '';
-        out.push(`${T.grayDark}  ─${T.reset}`);
+        out.push(`  ${T.grayDark}──${T.reset}`);
       }
       continue;
     }
 
     if (inCodeBlock) {
-      // 2-space indent matches everything else on the transcript grid.
       out.push(`  ${highlightCodeLine(raw)}`);
       continue;
     }
 
-    // Blank line → paragraph boundary.
+    // Blank line → paragraph boundary + list reset.
     if (!trimmed) {
       flushParagraph();
+      bulletStack.length = 0;
       continue;
     }
 
-    // Markdown headers — strip the `##`/`#` sigil so the rendered output
-    // does NOT print it literally (the prior version prefixed the heading
-    // text with "## " again, producing "## ## Next steps" in the
-    // transcript). The visual hierarchy comes from color + bold, plus
-    // a tight hairline below the heading.
+    // Headers (##/#/###): strip sigil, bold + colored, hairline matches text.
     const hMatch = /^(#{1,3})\s+(.*)$/.exec(trimmed);
     if (hMatch) {
       flushParagraph();
+      bulletStack.length = 0;
       const headingText = hMatch[2];
       out.push(`${R.mdHeading}${T.bold}${headingText}${T.reset}`);
-      out.push(`${R.mdHeading}  ${'─'.repeat(Math.max(8, Math.min(40, headingText.length * 2)))}${T.reset}`);
+      out.push(`${R.mdHeading}${'─'.repeat(Math.max(8, Math.min(40, visibleLen(headingText))))}${T.reset}`);
       continue;
     }
 
     // Horizontal divider.
-    if (/^(\-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
       flushParagraph();
-      out.push(`${T.grayDark}${'─'.repeat(40)}${T.reset}`);
+      bulletStack.length = 0;
+      out.push(`${T.grayDark}${'─'.repeat(Math.min(40, W - 4))}${T.reset}`);
       continue;
     }
 
-    // Blockquote.
+    // Blockquote: colored left bar on EVERY line (Cline-style vertical rule).
     if (trimmed.startsWith('> ') || trimmed === '>') {
       flushParagraph();
-      out.push(`${T.grayDark}│ ${T.reset}${formatInlineMarkdown(trimmed.replace(/^>\s?/, ''))}`);
+      bulletStack.length = 0;
+      const body = trimmed.replace(/^>\s?/, '');
+      for (const l of wrap(body, Math.max(12, W - 8))) {
+        out.push(`  ${SEMANTIC_QUOTE}│ ${T.reset}${formatInlineMarkdown(l)}`);
+      }
       continue;
     }
 
-    // Unordered bullet — rendered as an orange auto-number on the same
-    // 2-space grid as numbered lists (no blue bullet glyphs; lists always
-    // number, matching the orange numbered-list treatment).
-    if (/^[\*\-\+]\s+/.test(trimmed)) {
+    // Unordered bullet: cyan • glyph, NESTED via leading-space depth, with
+    // hanging indent so wrapped rows align under the text.
+    const uMatch = /^(\s*)([•\-\*\+])\s+(.*)$/.exec(raw);
+    if (uMatch) {
       flushParagraph();
-      bulletNum += 1;
-      const content = trimmed.replace(/^[\*\-\+]\s+/, '');
-      out.push(`${R.codeNumber}  ${bulletNum}.${T.reset} ${formatInlineMarkdown(content)}`);
+      const depth = Math.min(3, Math.floor(uMatch[1].length / 2));
+      bulletStack.length = depth; // deeper level starts a fresh sub-list
+      bulletStack.push({ ordered: false, n: 0 });
+      const indent = 2 + depth * 2;
+      emitWrapped(uMatch[3], indent, 2, formatInlineMarkdown);
+      // Prefix the first row with the glyph (after wrap so the indent math
+      // stays exact).
+      const first = out.length - wrappedCount(uMatch[3], W - 2 - indent - 2);
+      out[first] = out[first].replace(/^(\s*)/, `$1${R.codeType}•${T.reset} `);
       continue;
     }
-    bulletNum = 0;
-    // Numbered list — same 2-space grid, orange numbers.
-    const numMatch = trimmed.match(/^(\d+)\.\s+(.*)$/);
+
+    // Numbered list: orange numbers, per-depth counter, hanging indent.
+    const numMatch = /^(\s*)(\d+)\.\s+(.*)$/.exec(raw);
     if (numMatch) {
       flushParagraph();
-      out.push(`${R.codeNumber}  ${numMatch[1]}.${T.reset} ${formatInlineMarkdown(numMatch[2])}`);
+      const depth = Math.min(3, Math.floor(numMatch[1].length / 2));
+      const parent = bulletStack[depth - 1];
+      if (!bulletStack[depth] || bulletStack[depth].ordered !== true) {
+        bulletStack.length = depth;
+        bulletStack.push({ ordered: true, n: 0 });
+      }
+      void parent;
+      bulletStack[depth].n += 1;
+      const indent = 2 + depth * 2;
+      const marker = `${R.codeNumber}${bulletStack[depth].n}.${T.reset}`;
+      // Same grid as bullets (indent), hang 3 so continuation aligns under
+      // the number's text column — markers never outdent the list.
+      emitWrapped(numMatch[3], indent, 3, formatInlineMarkdown);
+      const first = out.length - wrappedCount(numMatch[3], W - 2 - indent - 5);
+      out[first] = out[first].replace(/^(\s*)/, `$1${marker} `);
       continue;
     }
+    if (!/^\s/.test(raw)) bulletStack.length = 0;
 
     // Standard paragraph: accumulate and emit on next blank / EOF.
     paragraph.push(raw);
@@ -625,6 +674,14 @@ export function renderMarkdown(text: string): string[] {
   flushParagraph();
   return out;
 }
+
+/** Count rows wrap() produces for a plain string at a width (helper for
+ *  retroactive marker insertion — keeps wrap and marker math in one place). */
+function wrappedCount(text: string, width: number): number {
+  return wrap(text, Math.max(4, width)).length;
+}
+
+const SEMANTIC_QUOTE = '\x1b[38;2;150;150;165m';
 
 /** Render one transcript entry with mochi color coordination. */
 export function renderEntry(entry: RenderEntry, expandTools = false): string[] {
