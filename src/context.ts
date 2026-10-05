@@ -30,7 +30,17 @@ const CANDIDATE_RULES = ['MOCHI.md', 'mochi.md', 'AGENTS.md', 'CLAUDE.md', '.cur
  * machine with local access, plus one CPU/mem line so it can reason about
  * expensive-but-feasible operations without a system_info round-trip.
  */
+const machineBlockCache = new Map<string, string>();
+
+export function clearMachineBlockCache(): void {
+  machineBlockCache.clear();
+}
+
 export function machineAccessBlock(projectRoot?: string): string {
+  const rootStr = projectRoot || process.cwd();
+  const cached = machineBlockCache.get(rootStr);
+  if (cached) return cached;
+
   const os = (() => {
     try { return `${platform()} ${release()} (${arch()})`; } catch { return `${platform()} (${arch()})`; }
   })();
@@ -49,8 +59,7 @@ export function machineAccessBlock(projectRoot?: string): string {
     } catch { return 'unknown'; }
   })();
   const host = (() => { try { return hostname(); } catch { return ''; } })();
-  const rootStr = projectRoot || process.cwd();
-  return [
+  const block = [
     '# Environment & Active Workspace Containment',
     `You are running locally on the user's machine${host ? ` (host \`${host}\`)` : ''}.`,
     `- OS: ${os}`,
@@ -69,7 +78,10 @@ export function machineAccessBlock(projectRoot?: string): string {
     'You have real, local control of this workspace: read/edit files, run builds/tests, install packages, and use git.',
     '',
     formatEnvironmentBlock(),
-  ].filter(Boolean).join('\n');
+  ];
+  const blockStr = block.filter(Boolean).join('\n');
+  machineBlockCache.set(rootStr, blockStr);
+  return blockStr;
 }
 
 // Cost-effective change detection: skip a file entirely when absent; otherwise

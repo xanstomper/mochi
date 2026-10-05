@@ -7,7 +7,7 @@
 // binary isn't built; run scripts/tui-smoke.sh manually for the full report.
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -19,6 +19,7 @@ const scriptBin = ['/usr/bin/script', '/bin/script'].find((p) => existsSync(p));
 describe.skipIf(!scriptBin || !existsSync(bin))('TUI PTY visual smoke', () => {
   it('splash, composer, and dropdown render over a real PTY', () => {
     const logPath = resolve(root, '.mochi-audit', 'tui-smoke', 'vitest-typescript.log');
+    mkdirSync(dirname(logPath), { recursive: true });
     try {
       const inner = `MOCHI_SKIP_AUTOBUILD=1 TERM=xterm-256color timeout 10 '${bin}'`;
       execFileSync(scriptBin as string, ['-qec', inner, logPath], {
