@@ -31,6 +31,9 @@ describe('classifyTaskKind', () => {
     expect(classifyTaskKind({ title: 'whats can u do', description: 'whats can u do' })).toBe('chat');
     expect(classifyTaskKind({ title: 'you there?', description: 'you there?' })).toBe('chat');
     expect(classifyTaskKind({ title: 'wassup', description: 'wassup' })).toBe('chat');
+    expect(classifyTaskKind({ title: 'what issues does mochi have if it has any', description: 'what issues does mochi have if it has any', role: 'coder' as any })).toBe('chat');
+    expect(classifyTaskKind({ title: 'so its still better than ever rn', description: 'so its still better than ever rn', role: 'coder' as any })).toBe('chat');
+    expect(classifyTaskKind({ title: 'is mochi a single runtime', description: 'is mochi a single runtime', role: 'coder' as any })).toBe('chat');
   });
   it('still routes short action messages to implement', () => {
     expect(classifyTaskKind({ title: 'Code a calculator.', description: 'Code a calculator.' })).toBe('implement');

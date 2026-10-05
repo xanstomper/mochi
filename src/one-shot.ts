@@ -21,9 +21,10 @@ export type OneShotKind =
 
 // Verbs & phrasings that strongly indicate "just tell me / explain", no edits.
 const ANSWER_MARKERS = [
-  'explain', 'what does', 'what is', 'what are', 'how does', 'why', 'describe',
+  'explain', 'what does', 'what is', 'what are', 'what issues', 'what problems',
+  'how does', 'how is', 'how are', 'why', 'describe',
   'summarize', 'define', 'list the', 'tell me', 'steps to', 'tutorial', 'meaning',
-  'difference between', 'compare', 'when should',
+  'difference between', 'compare', 'when should', 'is it', 'is mochi', 'are you', 'can you',
 ];
 
 // Short direct-utterance commands ("say hello", "reply in 3 words", "return the
@@ -64,7 +65,8 @@ export function classifyOneShot(input: ClassifyInput): { kind: OneShotKind; sugg
   // Trivial short utterance commands ("say hello", "reply in 3 words") are also
   // one-shot when the objective is compact and clean of work intent.
   const isShortUtterance = text.length < 90 && UTTERANCE_MARKERS.some((m) => text.includes(m));
-  const answered = hasAnswer || isShortUtterance;
+  const isCasualChat = text.split(/\s+/).length <= 16 && /^(so\b|hey\b|hi\b|hello\b|yo\b|nice\b|thanks\b|cool\b|ok\b|okay\b|what\b|why\b|how\b|who\b|is\b|are\b|can\b|does\b|do\b)/i.test(text);
+  const answered = hasAnswer || isShortUtterance || isCasualChat;
   if (!answered) return { kind: 'not_one_shot' as const, suggests: null };
 
   // 'summarize' may still need a read; route it as a short, single-read task.

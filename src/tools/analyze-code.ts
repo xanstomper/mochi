@@ -40,8 +40,8 @@ export const analyzeCodeTool: Tool = {
         const lines = content.split('\n').length;
         stats.lines += lines;
 
-        // Count functions/methods (simple heuristic)
-        const fnMatches = content.match(/\b(function|async function|=>\s*[({]?|[)])?\b/g);
+        // Count functions/methods (clean heuristic)
+        const fnMatches = content.match(/\b(?:function\b|async\s+function\b|=>)/g);
         stats.functions += fnMatches ? fnMatches.length : 0;
 
         // Count classes

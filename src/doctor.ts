@@ -66,7 +66,9 @@ export async function doctorReport(opts: {
     problems,
   };
 
-  if (!opts.apiKey) problems.push('No API key configured for the active provider.');
+  if (!opts.apiKey && opts.provider !== 'ollama' && opts.provider !== 'llamacpp') {
+    problems.push('No API key configured for the active provider.');
+  }
   if (!sqlite) problems.push('No SQLite driver (need Node >= 22.5 or the bun binary) — sessions, code index, and search are off.');
   if (!opts.model) problems.push('No model selected for the active provider.');
   if (cronJobs > 0 && !opts.daemon?.running) problems.push(`${cronJobs} scheduled job(s) configured but the daemon is not running — they will not fire.`);

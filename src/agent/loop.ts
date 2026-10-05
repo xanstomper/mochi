@@ -481,7 +481,7 @@ Continue from 'Next:', do not redo completed progress.`,
       }
     } catch { /* best-effort */ }
 
-    const taskKind = this.taskKind = classifyTaskKind(task);
+    let taskKind = this.taskKind = classifyTaskKind(task);
     const repo = detectRepo(this.cwd);
     // Harness-v2 perf (FREEZE FIX 2026-08-22): warm codegraph grammars and the
     // Chameleon scaffold strictly in the BACKGROUND - fire-and-forget, never
@@ -509,8 +509,30 @@ Continue from 'Next:', do not redo completed progress.`,
         ))
         .catch(() => {});
     }
+    // One-shot fast path: for high-confidence answer/summarize tasks, bias the
+    // model to resolve in a single direct turn instead of spending tokens on
+    // needless tool round-trips. Verification is still run before "done" is
+    // accepted, so an answer is never trusted without evidence when edits happened.
+    const oneShot = classifyOneShot({
+      title: task.title,
+      description: task.description,
+      acceptanceCriteria: task.acceptanceCriteria ?? [],
+      verificationCommand: task.verificationCommand,
+    });
+    if (oneShot.kind === 'answer') {
+      taskKind = this.taskKind = 'chat';
+    }
+
     if (taskKind !== 'chat') {
-      const gitStatus = await this.runShell('git status --short');
+      const isHome = this.cwd === (await import('node:os')).homedir();
+      let gitStatus = '';
+      if (!isHome) {
+        const rawStatus = await this.runShell('git status --short');
+        const statusLines = rawStatus.split('\n');
+        gitStatus = statusLines.length > 50
+          ? statusLines.slice(0, 50).join('\n') + `\n... (${statusLines.length - 50} more changes truncated)`
+          : rawStatus;
+      }
       const langHint = languageHint(repo);
       let scopeOutline = '';
       if (task.fileScope && task.fileScope.length > 0) {
@@ -535,24 +557,14 @@ Continue from 'Next:', do not redo completed progress.`,
       }
       this.context.addMessage({
         role: 'system',
-        content: `Preflight: repo=${repo.language ?? 'unknown'}, git status:\n${gitStatus}${langHint ? '\n\n' + langHint : ''}${scopeOutline}`,
+        content: `Preflight: repo=${repo.language ?? 'unknown'}${gitStatus ? ', git status:\n' + gitStatus : ''}${langHint ? '\n\n' + langHint : ''}${scopeOutline}`,
       });
     }
 
     const maxIterations = this.config.safety.maxIterations;
     const runtimeLimit = this.config.safety.maxRuntimeMinutes * 60 * 1000;
 
-    // One-shot fast path: for high-confidence answer/summarize tasks, bias the
-    // model to resolve in a single direct turn instead of spending tokens on
-    // needless tool round-trips. Verification is still run before "done" is
-    // accepted, so an answer is never trusted without evidence when edits happened.
-    const oneShot = classifyOneShot({
-      title: task.title,
-      description: task.description,
-      acceptanceCriteria: task.acceptanceCriteria ?? [],
-      verificationCommand: task.verificationCommand,
-    });
-    if (oneShot.suggests && !this.planMode && taskKind !== 'chat') {
+    if (oneShot.suggests && !this.planMode) {
       this.context.addMessage({ role: 'system', content: oneShot.suggests });
     }
 
@@ -697,7 +709,7 @@ Continue from 'Next:', do not redo completed progress.`,
         this.context.addMessage({ role: 'system', content: pulse.message });
       }
 
-      const packet = this.context.buildPacket(this.toolDefs, task, taskKind === 'chat' ? undefined : repo);
+      const packet = this.context.buildPacket(this.toolDefs, task, repo);
       // Large-rewrite protocol: for substantive coding work (not chat), inject a
       // one-time discipline directive on the first iteration. This is the
       // Cline/Codex harness shape — plan first, track with todo, check blast
@@ -1189,15 +1201,15 @@ Continue from 'Next:', do not redo completed progress.`,
           }
           return this.finish(task, false, 'The model repeatedly restreamed the same block and could not produce a clean answer. Try again or switch models.', 'model_error');
         }
-        // Don't add the looped content to the transcript — it's garbage.
-        // Instead, add a clean system message nudging the model.
-        this.context.addMessage({
-          role: 'assistant',
-          content: truncatedContent || '(looped output truncated)',
-        });
+        if (truncatedContent) {
+          this.context.addMessage({
+            role: 'assistant',
+            content: truncatedContent,
+          });
+        }
         this.context.addMessage({
           role: 'system',
-          content: 'Your previous response looped and repeated the same text. STOP repeating. Give a SHORT, DIRECT answer now. Do NOT repeat any previous text. If you need to write code, use the write or edit tool. Do NOT output the code as prose.',
+          content: 'Focus directly on answering the user’s request concisely. Do not repeat previous thoughts or text. Deliver your direct answer now.',
         });
         this.events.emit({ type: 'agent:log', agentId: this.id, message: `[stream-loop] truncated looped response` });
         continue;
@@ -1387,12 +1399,17 @@ Continue from 'Next:', do not redo completed progress.`,
             }
           }
         }
-        // Chat-task hard tool cap: a chat prompt (hello, Q&A, summarise) has no
-        // repo and should not run 12+ exploration tool rounds. Cut it off fast.
+        // Chat-task tool cap: a chat prompt (hello, Q&A, explain) should answer
+        // directly once context is gathered rather than running unbounded exploratory rounds.
         if (taskKind === 'chat') {
           this.chatToolRounds++;
-          if (this.chatToolRounds >= 4) {
-            return this.finish(task, false, 'Stopped — chat tasks should not require repeated tool calls (loop guard).', 'tool_loop');
+          if (this.chatToolRounds === 3) {
+            this.context.addMessage({
+              role: 'system',
+              content: 'You have gathered sufficient context for this chat query. Synthesize your findings and provide your direct answer now without making any further tool calls.',
+            });
+          } else if (this.chatToolRounds >= 5) {
+            return this.finish(task, true, 'Synthesized answer for chat query.', 'completed');
           }
         }
         // Global tool-call ceiling: was 40, raised to 200 because large multi-file
@@ -2748,19 +2765,17 @@ Continue from 'Next:', do not redo completed progress.`,
     if (doc.warnings.length) lines.push(head('Warnings', doc.warnings));
     if (doc.next.length) lines.push(head('Next', doc.next));
     if (metrics.length) lines.push(`Metrics: ${metrics.map((m) => `${m.label} ${m.value}`).join(', ')}`);
+    const cleanSuccess = status === 'complete' && doc.failures.length === 0;
     const prompt = [
       'Write a concise summary of this coding run the way an excellent senior engineer',
       'would, in the voice Claude Code/Cline use at the end of a task. Requirements:',
       '1. A short bold headline phrased as a clear result, not filler greeting.',
-      '2. Follow the structure: what got done/fixed and enforced; the honest headline',
-      '   (what did NOT work / is still blocked, stated plainly, no dressing up); what',
-      '   the blocker actually looks like (1-2 concrete facts); anything the next',
-      '   person should know (risks, misattributions, undone work); the recommended',
-      '   next step. Skip a section only if it truly has nothing.',
-      '3. Use short sentences and the user\'s terminology. Be direct and honest —',
-      '   explicitly call out failures and uncertain results rather than spinning them.',
+      cleanSuccess
+        ? '2. Emphasize what got done, verified, and enforced. Because the run succeeded cleanly with all checks passing, state clearly that there are no blockers or active issues.'
+        : '2. Follow the structure: what got done; what did not work or is still blocked (using only the real failures/warnings listed above); recommended next step.',
+      '3. Use short sentences and the user\'s terminology. Be direct and honest.',
       '4. Keep it tight: 4-9 lines. Use markdown **bold** on the key clause of each',
-      '   line only. Never invent facts or numbers — use ONLY the provided data.',
+      '   line only. Never invent facts, numbers, or imaginary bugs — use ONLY the provided data.',
       '',
       lines.join('\n'),
     ].join('\n');

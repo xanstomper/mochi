@@ -50,6 +50,20 @@ describe('one-shot fast-path classifier', () => {
     });
     expect(r.kind).toBe('answer');
     expect(r.suggests).toContain('one turn');
+
+    const r2 = classifyOneShot({
+      title: 'what issues does mochi have if it has any',
+      description: 'what issues does mochi have if it has any',
+      acceptanceCriteria: [],
+    });
+    expect(r2.kind).toBe('answer');
+
+    const r3 = classifyOneShot({
+      title: 'so its still better than ever rn',
+      description: 'so its still better than ever rn',
+      acceptanceCriteria: [],
+    });
+    expect(r3.kind).toBe('answer');
   });
 
   it('does not route a real coding command that mentions creating a file', () => {

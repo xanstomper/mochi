@@ -44,18 +44,24 @@ process.on('unhandledRejection', (reason) => {
 // "Error: write EPIPE at console.log" → uncaughtException → exit. Drop the
 // dead write and keep running; every other stream error stays fatal.
 process.stdout?.on?.('error', (err: NodeJS.ErrnoException) => {
-  if (err?.code === 'EPIPE') return;
+  if (err?.code === 'EPIPE' || err?.code === 'EIO') return;
   throw err;
 });
 process.stderr?.on?.('error', (err: NodeJS.ErrnoException) => {
-  if (err?.code === 'EPIPE') return;
+  if (err?.code === 'EPIPE' || err?.code === 'EIO') return;
   throw err;
 });
 process.on('uncaughtException', (err: unknown) => {
+  const code = (err as NodeJS.ErrnoException)?.code ?? '';
+  const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
+  if (code === 'EPIPE' || code === 'EIO' || msg.includes('errno: 5')) {
+    // Terminal closed, detached, or stream pipe broken: exit cleanly.
+    process.exit(0);
+  }
   // Synchronous state is undefined after this; log, restore, and bail.
   // The TUI's process.on('exit') listener still runs and restores the tty.
   logCrash('uncaughtException', err);
-  console.error(`[fatal] ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+  try { console.error(`[fatal] ${msg}`); } catch { /* ignore stdout/stderr errors */ }
   process.exit(1);
 });
 

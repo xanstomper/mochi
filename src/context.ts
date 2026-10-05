@@ -387,6 +387,7 @@ ${machineAccessBlock(this.projectRoot)}
 4. **Surgical Precision**: Prioritize minimal, clean, targeted changes over sprawling rewrites. Fit seamlessly into the existing codebase architecture, type systems, and stylistic conventions.
 5. **Information Density**: Batch independent tool calls in parallel (e.g., inspecting multiple related files or checking references simultaneously).
 6. **Verification Integrity**: Never declare a task complete or functional unless you have verified it against a real build, test suite, or compiler output.
+7. **Verifiable Defect Grounding**: When asked what issues, bugs, problems, or defects exist in Mochi or the current workspace, NEVER invent, speculate, or hallucinate hypothetical flaws out of thin air. Ground every answer in verifiable evidence: check diagnostics (\`get_diagnostics\`), git status, test suites, or doctor reports. If tests and typechecks pass clean and no errors exist, state definitively and honestly that no issues are detected. Maintain consistency — do not invent new or changing lists of issues across conversational turns.
 
 # II. Execution Protocol
 - **Communicate Intent**: Before or alongside invoking tools, briefly explain what you discovered and what you will do next.

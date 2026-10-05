@@ -794,7 +794,9 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     } catch (e) {
       renderQueued = false;
       const msg = e instanceof Error ? `${e.message}\n${e.stack ?? ''}` : String(e);
-      process.stdout.write(`${RESET}${SHOW}\r\n${T.error}[render error] ${msg}${RESET}\r\n${HIDE}`);
+      try {
+        process.stdout.write(`${RESET}${SHOW}\r\n${T.error}[render error] ${msg}${RESET}\r\n${HIDE}`);
+      } catch { /* EIO/EPIPE */ }
       // Back off: only resume renders from a real event (typing, resize), not
       // from an automatic retry, so a persistent bug can't wedge the loop.
       renderPaused = true;
@@ -2836,9 +2838,11 @@ if (line === '/branch') { await run(async () => (await import('../git.js')).stat
     // Without ?1002 a drag produces only a press+release pair — the user
     // sees no inline highlight, and copy() returns the single character
     // that was clicked. That's the "highlight doesn't work" bug.
-    process.stdout.write(ALT_ENTER + NO_AUTOWRAP + HIDE + '\x1b[?1000h\x1b[?1002h\x1b[?1006h' + BRACKET_PASTE_ON);
-    process.stdin.setRawMode?.(true);
-    process.stdin.resume();
+    try {
+      process.stdout.write(ALT_ENTER + NO_AUTOWRAP + HIDE + '\x1b[?1000h\x1b[?1002h\x1b[?1006h' + BRACKET_PASTE_ON);
+    } catch { /* EPIPE or dead tty */ }
+    try { process.stdin.setRawMode?.(true); } catch { /* not a tty / errno 5 */ }
+    try { process.stdin.resume(); } catch { /* ignore */ }
     const keyListener = (buf: Buffer) => onKey(buf);
     process.stdin.on('data', keyListener);
     const resizeListener = () => {
