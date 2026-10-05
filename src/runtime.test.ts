@@ -164,4 +164,18 @@ describe('Runtime abort + interrupt', () => {
     expect(rt.getReasoning()).toBe('medium');
     rmSync(rt.cwd, { recursive: true, force: true });
   });
+
+  it('autoImprove stops early on semantic convergence instead of looping indefinitely', async () => {
+    const rt = Runtime.create({ cwd: makeRepo() });
+    let promptCallCount = 0;
+    rt.runPrompt = async () => {
+      promptCallCount++;
+      return 'All tasks completed cleanly. All tests pass with no remaining issues.';
+    };
+    const res = await rt.autoImprove('Optimize performance', 10);
+    expect(promptCallCount).toBeLessThan(10);
+    expect(res.summaries.length).toBeLessThan(10);
+    expect(res.finalSummary).toContain('All tasks completed cleanly');
+    rmSync(rt.cwd, { recursive: true, force: true });
+  });
 });

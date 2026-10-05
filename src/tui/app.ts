@@ -1701,6 +1701,7 @@ if (line === '/branch') { await run(async () => (await import('../git.js')).stat
       state.autoImproveAbort = false;
       await run(async () => {
         let lastSummary = '';
+        let consecutiveStagnant = 0;
         const total = passes;
         for (let i = 0; i < total; i++) {
           if (state.autoImproveAbort) break;
@@ -1709,10 +1710,35 @@ if (line === '/branch') { await run(async () => (await import('../git.js')).stat
             : `${line}\n\n---\n[Auto-improve pass ${i + 1}/${total}]`;
           push('system', `◇ auto-improve  pass ${i + 1}/${total}`);
           const pass = await runtime.runPrompt(iterPrompt);
-          lastSummary = pass;
           push('assistant', pass);
+
+          if (lastSummary) {
+            const isIdentical = pass.trim() === lastSummary.trim();
+            const declaredDone = /(no\s+(further|remaining)\s+(issues|changes|improvements)|all\s+tests\s+pass|nothing\s+(left|further)\s+to\s+(fix|do|refine)|already\s+(complete|optimal|verified))/i.test(pass);
+            const wordsA = new Set(lastSummary.toLowerCase().split(/\s+/).filter((w) => w.length > 2));
+            const wordsB = new Set(pass.toLowerCase().split(/\s+/).filter((w) => w.length > 2));
+            let intersection = 0;
+            for (const w of wordsA) if (wordsB.has(w)) intersection++;
+            const union = new Set([...wordsA, ...wordsB]).size;
+            const similarity = union > 0 ? intersection / union : 0;
+
+            if (isIdentical || declaredDone) {
+              consecutiveStagnant += 2;
+            } else if (similarity >= 0.88) {
+              consecutiveStagnant += 1;
+            } else {
+              consecutiveStagnant = 0;
+            }
+
+            if (consecutiveStagnant >= 2) {
+              lastSummary = pass;
+              push('system', `✓ auto-improve converged at pass ${i + 1}/${total} (no further changes needed)`);
+              break;
+            }
+          }
+          lastSummary = pass;
         }
-        push('system', `✓ auto-improve complete: ${total} passes`);
+        push('system', `✓ auto-improve complete: ${total} passes max`);
         return lastSummary;
       }, false);
     } else {

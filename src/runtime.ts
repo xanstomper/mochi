@@ -273,6 +273,7 @@ export class Runtime {
     const sessionId = opts?.sessionId ?? this.activeSessionId;
     try {
       let priorSummary = '';
+      let consecutiveStagnant = 0;
       for (let i = 0; i < boundedRuns; i++) {
         if (opts?.signal?.aborted) break;
         const iterPrompt = priorSummary && priorSummary.trim()
@@ -280,13 +281,42 @@ export class Runtime {
           : `${prompt}\n\n---\n[Auto-improve pass ${i + 1}/${boundedRuns}]\n\nProduce the strongest first pass you can. Subsequent passes will refine.`;
         const summary = await this.runPrompt(iterPrompt, { sessionId });
         summaries.push(summary);
-        if (summary) priorSummary = summary;
-        opts?.onProgress?.(i + 1, priorSummary);
+        opts?.onProgress?.(i + 1, summary);
         this.events.emit({
           type: 'agent:log',
           agentId: 'auto-improve',
           message: `[auto-improve] pass ${i + 1}/${boundedRuns} complete (${summary.length} chars)`,
         } as any);
+
+        if (priorSummary) {
+          const isIdentical = summary.trim() === priorSummary.trim();
+          const declaredDone = /(no\s+(further|remaining)\s+(issues|changes|improvements)|all\s+tests\s+pass|nothing\s+(left|further)\s+to\s+(fix|do|refine)|already\s+(complete|optimal|verified))/i.test(summary);
+          const wordsA = new Set(priorSummary.toLowerCase().split(/\s+/).filter((w) => w.length > 2));
+          const wordsB = new Set(summary.toLowerCase().split(/\s+/).filter((w) => w.length > 2));
+          let intersection = 0;
+          for (const w of wordsA) if (wordsB.has(w)) intersection++;
+          const union = new Set([...wordsA, ...wordsB]).size;
+          const similarity = union > 0 ? intersection / union : 0;
+
+          if (isIdentical || declaredDone) {
+            consecutiveStagnant += 2;
+          } else if (similarity >= 0.88) {
+            consecutiveStagnant += 1;
+          } else {
+            consecutiveStagnant = 0;
+          }
+
+          if (consecutiveStagnant >= 2) {
+            this.events.emit({
+              type: 'agent:log',
+              agentId: 'auto-improve',
+              message: `[auto-improve] early convergence reached at pass ${i + 1}/${boundedRuns}: no further work or improvements detected.`,
+            } as any);
+            priorSummary = summary;
+            break;
+          }
+        }
+        if (summary) priorSummary = summary;
       }
     } finally {
       if (cap < 50) (this.config.safety as { maxIterations: number }).maxIterations = cap;
