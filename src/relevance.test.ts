@@ -44,4 +44,15 @@ describe('relevance-scoped memory retrieval', () => {
     expect(tokenOverlap('cache', 'cache')).toBe(1);
     expect(tokenOverlap('cache', 'unrelated')).toBe(0);
   });
+
+  it('paraphrase clusters match across wording (semantic recall)', () => {
+    // "login crash" vs "auth failure" — zero literal keyword overlap.
+    expect(tokenOverlap('login crash', 'signin')).toBeGreaterThan(0);
+    expect(scoreEntry('login crash', 'auth failure diagnosis', 'fixes authentication errors')).toBeGreaterThan(0.2);
+  });
+
+  it('light stemming matches inflections', () => {
+    expect(tokenOverlap('crashing tests', 'crash test')).toBe(1);
+    expect(tokenOverlap('installed packages', 'install package')).toBe(1);
+  });
 });

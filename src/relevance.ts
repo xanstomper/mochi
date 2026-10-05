@@ -10,6 +10,53 @@ const STOPWORDS = new Set([
   'been', 'this', 'that', 'these', 'those', 'it', 'its', 'not', 'do', 'does', 'did',
 ]);
 
+/**
+ * Paraphrase clusters (lightweight semantic recall): each group maps its
+ * members to a canonical token so "login crash" matches "auth failure" —
+ * the common paraphrase classes that defeat pure keyword overlap. Chosen
+ * over an embedding index deliberately: dependency-free, deterministic,
+ * sub-millisecond, and the skill corpus (dozens of entries) doesn't need
+ * dense retrieval. When the corpus grows past ~500 entries, swap this for
+ * a real embedding index — the interface (tokenize) stays identical.
+ */
+const SYNONYM_CLUSTERS: string[][] = [
+  ['login', 'signin', 'sign-in', 'auth', 'authentication', 'authn', 'oauth', 'session', 'credential'],
+  ['crash', 'freeze', 'hang', 'stuck', 'deadlock', 'unresponsive', 'wedged'],
+  ['bug', 'defect', 'error', 'failure', 'fault', 'issue', 'broken'],
+  ['install', 'setup', 'set-up', 'bootstrap', 'provision'],
+  ['delete', 'remove', 'destroy', 'uninstall', 'drop'],
+  ['fast', 'quick', 'speed', 'performance', 'perf', 'latency'],
+  ['fix', 'repair', 'patch', 'resolve', 'correct'],
+  ['search', 'find', 'locate', 'query', 'grep', 'lookup'],
+  ['test', 'spec', 'unittest', 'unit-test'],
+  ['config', 'configuration', 'settings', 'preferences', 'options'],
+  ['memory', 'ram', 'mem'],
+  ['disk', 'storage', 'drive', 'ssd', 'hdd'],
+  ['network', 'net', 'connection', 'connectivity'],
+  ['ui', 'interface', 'gui', 'frontend', 'front-end', 'display', 'render'],
+  ['api', 'endpoint', 'route'],
+];
+
+/** canonical → Set(member) lookup built once at module load. */
+const CANON: Map<string, string> = (() => {
+  const m = new Map<string, string>();
+  for (const cluster of SYNONYM_CLUSTERS) {
+    const canon = cluster[0];
+    for (const word of cluster) m.set(word, canon);
+  }
+  return m;
+})();
+
+/** Very light suffix stemmer: strips common English inflections so
+ *  "crashes" matches "crash", "testing" matches "test". 3 rules only —
+ *  deliberately conservative to avoid over-stemming short tokens. */
+function stem(t: string): string {
+  if (t.length > 4 && t.endsWith('ing')) return t.slice(0, -3);
+  if (t.length > 4 && t.endsWith('ed')) return t.slice(0, -2);
+  if (t.length > 3 && t.endsWith('s') && !t.endsWith('ss')) return t.slice(0, -1);
+  return t;
+}
+
 function tokenize(text: string): string[] {
   const expanded = text
     .replace(/([a-z])([A-Z])/g, '$1 $2')
@@ -18,7 +65,9 @@ function tokenize(text: string): string[] {
   return expanded
     .split(/\s+/)
     .map((t) => t.trim())
-    .filter((t) => t.length > 1 && !STOPWORDS.has(t));
+    .filter((t) => t.length > 1 && !STOPWORDS.has(t))
+    .map((t) => stem(t))
+    .map((t) => CANON.get(t) ?? t);
 }
 
 /** Proportional overlap of query tokens against candidate tokens. 0..1. */
