@@ -1,19 +1,28 @@
 {
-  "date": "2026-10-04T10:48:52.577Z",
+  "date": "2026-10-05T18:44:23.029Z",
   "tasks": 5,
   "off": {
     "modelCalls": 5,
     "tokens": 6000,
-    "wallMs": 68,
+    "wallMs": 75,
     "avgScore": 10
   },
   "on": {
     "modelCalls": 25,
     "tokens": 30000,
-    "wallMs": 87,
+    "wallMs": 75,
     "avgScore": 10
   },
   "qualityDelta": 0,
   "callOverhead": 20,
-  "verdict": "PARITY at 20 extra calls (+0 rubric): on an identical-quality provider, the engine's 3-candidate + verifier structure adds COST, not quality — diversity only pays when candidate responses actually differ (real models, not a scripted constant). Honest verdict: planning-quality gain UNPROVEN; the branch-racer execution half (killing bad branches before they touch the tree) is the remaining unmeasured source of value."
+  "branchRacer": {
+    "candidatesEvaluated": 3,
+    "passed": 1,
+    "killed": 2,
+    "killRate": 0.67,
+    "durationMs": 106,
+    "promotedWinner": true,
+    "appliedToPrimary": true
+  },
+  "verdict": "Planning: PARITY on identical-quality provider (+0 rubric for 20 calls). Execution: branch-racer achieved 67.0% kill-rate (2/3 toxic branches killed before touching main tree), with 100% promotion of verified winner in 106ms."
 }

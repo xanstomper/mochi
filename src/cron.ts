@@ -118,12 +118,15 @@ function saveJobs(dir: string, jobs: CronJob[]): void {
 
 /** Add a recurring job; returns its id or a validation error. */
 export function addJob(dir: string, prompt: string, schedule: string, notify?: string): { id?: string; error?: string } {
+  if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
+    return { id: undefined, error: 'Job prompt must be a non-empty string.' };
+  }
   const n = nextRunFor(schedule);
   if (n === null) return { id: undefined, error: `Unparseable schedule "${schedule}". Use "every 30m" or a 5-field cron like "0 9 * * 1-5".` };
   const jobs = loadJobs(dir);
   const job: CronJob = {
     id: randomUUID().slice(0, 8),
-    prompt,
+    prompt: prompt.trim(),
     schedule,
     lastRun: null,
     nextRun: n,
@@ -154,10 +157,14 @@ export async function notifyJobResult(job: CronJob, summary: string): Promise<vo
         });
         return res.ok;
       }
-      // shell command: pass the summary through stdin + an env var
+      // shell command: pass the summary through stdin + an env var with bounded timeout & buffer
       const { execFile } = await import('node:child_process');
       return await new Promise<boolean>((resolve2) => {
-        execFile('sh', ['-c', target], { env: { ...process.env, MOCHI_JOB_SUMMARY: summaryLine } }, (err, _stdout, _stderr) => {
+        execFile('sh', ['-c', target], {
+          env: { ...process.env, MOCHI_JOB_SUMMARY: summaryLine },
+          timeout: 15_000,
+          maxBuffer: 1024 * 1024,
+        }, (err, _stdout, _stderr) => {
           resolve2(!err);
         });
       });
