@@ -68,12 +68,19 @@ import { compactSession, compactToPrompt } from '../summary/compact.js';
 
 export function stripThinkTags(text: string): string {
   if (!text) return '';
+  // Strip an unclosed LEADING think block (open `` / ` thinking ` with no
+  // closer) to end-of-string in JS FIRST, so the intent holds regardless of
+  // whether the native addon is loaded (the native Rust stripThinkTags keeps
+  // such leading tags, leaking reasoning tokens into context).
+  const lead = text.trimStart();
+  if (/^\s*`\s*think[^\n]*$/i.test(lead) && !lead.includes('</think>')) return '';
+  if (/^\s*think[^\n]*$/i.test(lead) && !lead.includes('</think>')) return '';
   const nat = nativeStripThinkTags(text);
   if (nat !== null) return nat;
   return text
-    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/`think[\s\S]*?<\/think>/gi, '')
     .replace(/<thought>[\s\S]*?<\/thought>/gi, '')
-    .replace(/^<think>[\s\S]*$/gi, '')
+    .replace(/^\s*`\s*think[\s\S]*$/gi, '')
     .replace(/^<thought>[\s\S]*$/gi, '')
     .trim();
 }
