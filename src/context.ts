@@ -3,8 +3,8 @@ import { homedir, hostname, platform, arch, totalmem, freemem, cpus, release } f
 import { resolve } from 'node:path';
 import { MemoryStore } from './memory.js';
 import type { MemoryEntry } from './memory.js';
-import { selectRelevant } from './relevance.js';
-import { loadAllSkills, formatSkillsForPrompt } from './skills.js';
+import { selectRelevant, tokenOverlap } from './relevance.js';
+import { loadAllSkills, formatSkillsForPrompt, type Skill } from './skills.js';
 import { nativeCountTokens } from './native/core.js';
 import { nativePlanCompaction } from './native/agent-protocol.js';
 import type { PlanRequestMessage } from './native/agent-protocol.js';
@@ -96,6 +96,33 @@ export function approxTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
+/** Max skills to advertise in the system prompt for a given task. Keeping this
+ *  small prevents the 100+ skill inventory (incl. unrelated security/emulator/
+ *  red-team schemas) from diluting focus on free-tier / flash models. */
+export const MAX_TASK_SKILLS = 6;
+
+/** Minimum token-overlap score for a skill to be considered relevant. A task
+ *  that only shares a generic token ("function", "code", "pure") with many
+ *  unrelated skills lands at the noise floor (~0.10); only a genuinely matching
+ *  description clears this bar (observed: real matches ~0.30+, noise ~0.10).
+ *  Without this floor, even a totally unrelated task gets a handful of skills
+ *  advertised and the contamination — though smaller — would return. */
+export const MIN_SKILL_SCORE = 0.25;
+
+/** Rank skills by token-overlap relevance against the active task and return
+ *  the top `max` whose overlap clears MIN_SKILL_SCORE (0 when none qualify),
+ *  preserving stable source order for ties. Strong harnesses only surface
+ *  skills whose description matches the request; this reproduces that so the
+ *  model is not shown an off-topic skill registry it can hallucinate from. */
+export function selectRelevantSkills(skills: Skill[], taskText: string, max: number): Skill[] {
+  if (!taskText.trim()) return [];
+  const scored = skills
+    .map((s) => ({ s, score: tokenOverlap(taskText, `${s.name} ${s.description}`) }))
+    .filter((e) => e.score >= MIN_SKILL_SCORE)
+    .sort((a, b) => b.score - a.score || skills.indexOf(a.s) - skills.indexOf(b.s));
+  return scored.slice(0, max).map((e) => e.s);
+}
+
 export interface ContextState {
   goal?: string;
   completedTasks: string[];
@@ -129,9 +156,11 @@ export class ContextEngine {
   private memoryQuery = '';
   private skillsCache = '';
   private skillsFingerprint = '';
+  private skillsTaskFingerprint = '';
   private skillsInitialized = false;
   private config: MochiConfig;
   private userSkillsDir?: string;
+  private lastSentTokens = 0;
 
   constructor(config: MochiConfig, projectRoot: string, userSkillsDir?: string) {
     this.config = config;
@@ -257,18 +286,37 @@ export class ContextEngine {
    *  deliberately NOT walked synchronously (a large home tree would block the event
    *  loop during prompt build); user skills are still reachable on demand via the
    *  `skill` tool. */
-  private skills(): string {
+  private skills(task?: Task): string {
     const skillsDir = resolve(this.projectRoot, '.mochi', 'skills');
     const fp = fingerprint(skillsDir);
-    if (this.skillsInitialized && fp === this.skillsFingerprint) return this.skillsCache;
+    // The relevance gate makes the rendered block depend on the ACTIVE TASK, so
+    // the cache must key on the task fingerprint too — otherwise the first call
+    // (often a no-task chat) caches an empty block and poisons every later task
+    // call with a stale, empty skills advertisement.
+    const taskFp = task ? `${task.title} ${task.description ?? ''}`.trim() : '';
+    if (this.skillsInitialized && fp === this.skillsFingerprint && taskFp === this.skillsTaskFingerprint) return this.skillsCache;
     try {
       this.skillsInitialized = true;
       this.skillsFingerprint = fp;
+      this.skillsTaskFingerprint = taskFp;
       // Project + bundled + user(optional). The user dir is explicit when a
       // caller injects it (tests isolate it to stay hermetic across parallel
       // runs); otherwise it falls back to ~/.mochi/skills.
       const { skills } = loadAllSkills(this.projectRoot, this.userSkillsDir);
-      this.skillsCache = formatSkillsForPrompt(skills);
+      // RELEVANCE GATE: advertise only the skills whose description overlaps the
+      // active task, capped to a small set. The previous behaviour dumped ALL
+      // skills (often 100+ incl. unrelated security/emulator/red-team schemas)
+      // into every system prompt; on small/free-tie models that noise competes
+      // with the real task and triggers off-task hallucinations (observed: a
+      // trivial IPv4 task derailed into "holyshit ledger / live Ollama endpoint"
+      // commands because the holyshit-mode skill description sat in context).
+      // Strong harnesses (Claude Code, Cline) keep their skill registry OUT of
+      // the active prompt until a request matches — we emulate that here:
+      //  * no task  -> advertise nothing (chat: skills fetched on demand via tool)
+      //  * w/ task  -> top MAX_TASK_SKILLS skills by token-overlap relevance,
+      //                minimum 0 (never force irrelevant skills in).
+      const relevant = task ? selectRelevantSkills(skills, task.title + ' ' + (task.description ?? ''), MAX_TASK_SKILLS) : [];
+      this.skillsCache = formatSkillsForPrompt(relevant);
     } catch {
       this.skillsCache = '';
     }
@@ -323,7 +371,7 @@ ${this.toolGuidelines(tools)}
 - **Insightful & Professional**: Provide clear technical insights without unnecessary fluff, but always communicate your plans, findings, and outcomes.
 - **Clean Markdown Formatting**: Use concise GitHub-flavored markdown with code snippets, paths, and clear bullet points where helpful.
 
-${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}${contractSection(this.projectRoot)}${memoryDigest()}${feedbackDigest()}${detectCircle(this.messages).stopDirective}
+${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task)}${contractSection(this.projectRoot)}${memoryDigest()}${feedbackDigest()}${detectCircle(this.messages).stopDirective}
 `.trim();
   }
 
@@ -468,6 +516,7 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}${contractSection(this.pr
     if (statePrompt) messages.push({ role: 'system', content: statePrompt });
 
     const used = this.budget - remaining;
+    this.lastSentTokens = used;
     return { messages, systemPrompt: baseSystemPrompt, usedTokens: used, budgetTokens: this.budget };
   }
 
@@ -522,12 +571,15 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}${contractSection(this.pr
     }
   }
 
-  /** Best available transcript-size signal: real usage when the provider
-   *  reports it, else the chars/3.8 estimate. Used for the compaction floor. */
+  /** Best available transcript-size signal: provider-reported usage is ground
+   *  truth when present; otherwise fall back to the real packet size built by
+   *  the last buildPacket() call (system prompt + tools + history — the naive
+   *  estimate excludes those); last resort the chars/3.8 estimate. Used for the
+   *  compaction floor. */
   effectiveContextTokens(): number {
-    // The reported promptTokens include the system prompt + tools, which the
-    // estimate excludes; add a modest offset so the two scales are comparable.
-    return this.lastReportedPromptTokens ?? this.estimateTokens() + 1500;
+    if (this.lastReportedPromptTokens != null) return this.lastReportedPromptTokens;
+    if (this.lastSentTokens > 0) return this.lastSentTokens;
+    return this.estimateTokens() + 1500;
   }
 
   private stateLedger(): string {
@@ -620,11 +672,16 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills()}${contractSection(this.pr
     // caller produced an LLM checkpoint (Goal/Progress/Decisions), it leads the
     // ledger so semantic continuity survives compaction.
     const ledger = this.stateLedger();
-    // Phase 2: file-op carryover — the read/edited sets outlive the dropped
-    // messages. Post-compaction turns must not re-read known files.
     const fileOps: string[] = [];
-    if (this.filesRead.size) fileOps.push(`Files already read (do not re-read unless changed): ${[...this.filesRead].slice(-30).join(', ')}`);
+    // Phase 2: file-op carryover — the read/edited sets outlive the dropped
+    // messages. Post-compaction turns must not be left stranded without code.
+    // NOTE (2026-10-05): the read tool results (which held the actual file
+    // CONTENT) were just dropped by compaction, so telling the model "do not
+    // re-read" would strand it with filenames but no code. Reframe: preserve
+    // the high-value file paths but INVITE reload (the read cache makes it
+    // cheap), so repo context survives compaction instead of being forbidden.
     if (this.filesEdited.size) fileOps.push(`Files already edited in this session: ${[...this.filesEdited].slice(-30).join(', ')}`);
+    if (this.filesRead.size) fileOps.push(`Files previously read (their contents were compacted away; re-read the ones relevant to the current step): ${[...this.filesRead].slice(-30).join(', ')}`);
     const body = [checkpoint?.trim(), ledger, fileOps.join('\n'), facts.length ? 'Session facts:\n' + facts.join('\n') : ''].filter(Boolean).join('\n');
     if (body.trim()) this.messages.unshift({ role: 'system', content: `Earlier in this session (compacted):\n${body}` });
   }

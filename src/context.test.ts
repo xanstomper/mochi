@@ -64,13 +64,29 @@ describe('ContextEngine project-rule + memory caching', () => {
     expect(after).toBeGreaterThan(0);
   });
 
-  it('advertises available skills in system prompt', () => {
+  it('advertises only task-relevant skills (relevance gate), not the full registry', () => {
     const dir = mkdtempSync(join(tmpdir(), 'mochi-ctx-'));
     const engine = makeEngine(dir);
-    const p = engine.buildPacket(NO_TOOLS);
-    expect(p.systemPrompt).toContain('<available_skills>');
-    expect(p.systemPrompt).toContain('tdd-workflow');
-    expect(p.systemPrompt).toContain('git-wizard');
+    const task = (title: string, description = '') => ({
+      id: 't', title, description, role: 'coder' as const, status: 'pending' as const, priority: 1,
+      dependencies: [], fileScope: [], acceptanceCriteria: [], attempts: [],
+    });
+
+    // No task present -> advertise nothing (skills fetched on demand via the tool).
+    const noTask = engine.buildPacket(NO_TOOLS);
+    expect(noTask.systemPrompt).not.toContain('<available_skills>');
+
+    // Task relevant to a bundled skill -> that skill is advertised.
+    const tddPacket = engine.buildPacket(NO_TOOLS, task('add tests for the login flow', 'establish a test suite and fix flaky specs'));
+    expect(tddPacket.systemPrompt).toContain('tdd-workflow');
+
+    // Task relevant to git-wizard -> git-wizard advertised.
+    const gitPacket = engine.buildPacket(NO_TOOLS, task('resolve the merge conflict', 'rebase branch and restructure commits'));
+    expect(gitPacket.systemPrompt).toContain('git-wizard');
+
+    // Unrelated task -> no skills advertised (the IPv4-derailment regression).
+    const ipv4Packet = engine.buildPacket(NO_TOOLS, task('write isValidIpv4 function', 'dotted quad validation, pure, no deps'));
+    expect(ipv4Packet.systemPrompt).not.toContain('<available_skills>');
   });
 });
 
