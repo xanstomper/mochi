@@ -501,10 +501,18 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         break;
       }
       case 'thought': {
-        // Hidden reasoning — plain dim italic, no glyph spam.
+        // Hidden reasoning — Cline-style: compact, never a wall of italic
+        // prose. A long thinking block collapses to its first row + an
+        // ellipsis marker; the model's monologue must not dominate the
+        // transcript (screenshot feedback 2026-10-04).
+        const THINK_MAX_ROWS = 3;
         const wrapped = wrap(cleanText, Math.max(10, maxWidth - 4));
-        for (const w of wrapped) {
+        const shown = wrapped.slice(0, THINK_MAX_ROWS);
+        for (const w of shown) {
           rows.push(`  ${T.dim}${T.italic}${R.thoughtText}${w}${T.reset}`);
+        }
+        if (wrapped.length > THINK_MAX_ROWS) {
+          rows.push(`  ${T.grayDark}… thinking (${wrapped.length - THINK_MAX_ROWS} more rows hidden — full text in /history)${T.reset}`);
         }
         break;
       }
@@ -899,8 +907,12 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       const ctx = gradientContextBar(state.inTokens + state.outTokens, runtime.config.safety.contextBudgetTokens, 12, state.busy ? state.spinner + 1 : 0);
       const cache = gradientCacheBar(cacheRate, 10, state.busy ? state.spinner + 1 : 0);
       const fmt = (n: number) => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
-      const cachePctText = cacheRate > 0 ? ` ${T.gray}(${Math.round(cacheRate * 100)}%)${T.reset}` : '';
-      const barsRowFull = ` ${T.gray}in${T.reset} ${T.cyan}${fmt(state.inTokens)}${T.reset} ${T.gray}out${T.reset} ${T.orange}${fmt(state.outTokens)}${T.reset}  ${ctx.text} ${T.gray}${Math.round(ctx.pct * 100)}%${T.reset}  ${T.gray}cache${T.reset} ${cache.text} ${T.lime}${fmt(state.cacheTokens)}${T.reset}${cachePctText}`;
+      // Cache segment only when there IS cache — an empty `cache ───────── 0`
+      // track at rest reads as a broken gauge (screenshot artifact, 2026-10-04).
+      const cacheSeg = state.cacheTokens > 0
+        ? `  ${T.gray}cache${T.reset} ${cache.text} ${T.lime}${fmt(state.cacheTokens)}${T.reset} ${T.gray}(${Math.round(cacheRate * 100)}%)${T.reset}`
+        : '';
+      const barsRowFull = ` ${T.gray}in${T.reset} ${T.cyan}${fmt(state.inTokens)}${T.reset} ${T.gray}out${T.reset} ${T.orange}${fmt(state.outTokens)}${T.reset}  ${ctx.text} ${T.gray}${Math.round(ctx.pct * 100)}%${T.reset}${cacheSeg}`;
       // Clamp: this row had no width budget and hard-wrapped in windowed mode.
       const barsRow = visibleLen(barsRowFull) > w ? ellipsize(barsRowFull, w) : barsRowFull;
       
