@@ -118,14 +118,15 @@ export function renderSummary(doc: SummaryDocument, width = 80): string[] {
 }
 
 /** Cline-voice narrative lead rendered through the markdown renderer (bold,
- *  inline code, etc.), then hard-wrapped to the card's content width so no
- *  row ever overflows the box (the width-harness invariant). */
+ *  inline code, etc.), hard-wrapped to the card's content width so no row ever
+ *  overflows the box (the width-harness invariant). ANSI-aware: styling is
+ *  KEPT (a plain-text strip used to drop the bold headlines entirely). */
 function narrativeRows(text: string, innerW: number): string[] {
   const out: string[] = [];
   for (const l of renderMarkdown(text, innerW - 2)) {
-    const row = stripAnsi(l);
-    if (row === '') continue;
-    out.push(`${' '.repeat(Math.max(0, row.length - visibleLen(row)))}${row}`);
+    if (stripAnsi(l).trim() === '') continue;
+    const row = visibleLen(l) > innerW - 2 ? `${truncate(l, innerW - 3)}…` : l;
+    out.push(row);
   }
   return out;
 }
