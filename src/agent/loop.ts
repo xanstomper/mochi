@@ -2083,22 +2083,22 @@ Continue from 'Next:', do not redo completed progress.`,
       this.vetoToolCall(tc, `You have already called ${toolName} with these exact arguments ${this.toolSigRepeat} times in a row. The result will not change. Do NOT call it again — use the result you already have and proceed to the next step of the task.`);
       return;
     }
-    // Fuzzy read-spam guard: exact-match above misses the observed cycling
-    // pattern (the same FILE read again a few calls later, args slightly
-    // different or interleaved with other reads). Track read-target frequency;
-    // re-reading the same path 4+ times in one run means the model is not
-    // retaining context — point it at what it already read.
-    if (toolName === 'read' || toolName === 'glob' || toolName === 'search') {
-      const target = String(((): string => {
-        try { const a = JSON.parse(tc.function.arguments ?? '{}'); return String(a.path ?? a.pattern ?? a.query ?? ''); } catch { return ''; }
+    // Fuzzy spam guard (windowed, per tool+target): the exact-match guard
+    // above misses two observed live patterns — (a) cycling the same FILE
+    // read with interleaved other calls, and (b) re-announcing the same todo
+    // action 2x in a row across many rounds (14 todo calls / 7 distinct args
+    // in one self-improve trace). Track counts per tool+target for the whole
+    // run; over-frequency gets vetoed with a move-on directive.
+    if (toolName === 'read' || toolName === 'glob' || toolName === 'search' || toolName === 'todo') {
+      const target = toolName + ':' + String(((): string => {
+        try { const a = JSON.parse(tc.function.arguments ?? '{}'); return String(a.path ?? a.pattern ?? a.query ?? ((a.action ? a.action + ':' : '') + (a.title ?? ''))); } catch { return tc.function.arguments ?? ''; }
       })());
-      if (target) {
-        const n = (this.readTargetCounts.get(target) ?? 0) + 1;
-        this.readTargetCounts.set(target, n);
-        if (n >= 4) {
-          this.vetoToolCall(tc, `You have read "${target}" ${n} times this run. The content has not changed. Stop re-reading — recall what you already have (or use session_recall) and continue the task.`);
-          return;
-        }
+      const n = (this.readTargetCounts.get(target) ?? 0) + 1;
+      this.readTargetCounts.set(target, n);
+      if (n >= 4) {
+        const verb = toolName === 'todo' ? 're-announced' : 'read';
+        this.vetoToolCall(tc, `You have ${verb} "${target}" ${n} times this run. Repeating it will not change anything. Use what you already have and continue the task.`);
+        return;
       }
     }
     if (this.budget) {

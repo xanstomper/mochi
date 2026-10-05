@@ -158,6 +158,7 @@ function loadAuthoredToolsSafe(projectDir: string): Map<string, Tool> {
 export const TOOL_ALIASES: Record<string, string> = {
   // Shell / command execution
   run_command: 'shell',
+  run_cmd: 'shell', // models pick this name from skill/training data; it must resolve
   execute_command: 'shell',
   bash: 'shell',
   terminal: 'shell',
