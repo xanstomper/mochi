@@ -21,6 +21,7 @@ const SKIP_DIRS = new Set([
   '.git', 'node_modules', '.mochi', '.cache', '.cargo', '.rustup', '.wine',
   '.arduino15', '.android', '__pycache__', '.venv', 'venv', 'target', 'dist',
   'build', 'out', '.next', '.gradle', '.m2', '.ivy2', '.stack', '.cabal',
+  '.npm-global', '.hermes', '.gemini', '.local', '.config',
 ]);
 
 function matches(pattern: string, parts: string[]): boolean {

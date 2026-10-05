@@ -264,4 +264,20 @@ describe('duplicate tool:called guard (dual-emitter dedupe)', () => {
     expect(joined).toContain('files');
     expect(joined).toContain('WHAT CHANGED');
   });
+
+  it('stores fullContent in TuiLine for uncompressed inspector', () => {
+    const s = createTuiState();
+    const fullText = 'line 1\nline 2\nline 3\nline 4\nline 5\nline 6';
+    pushLine(s, 'thought', 'line 1…', fullText);
+    const last = s.lines[s.lines.length - 1];
+    expect(last.fullContent).toBe(fullText);
+
+    reduceEvent(s, ev({
+      type: 'tool:completed',
+      tool: 'read',
+      result: { toolCallId: 't1', name: 'read', output: 'file contents 12345', durationMs: 10 },
+    }));
+    const toolLine = s.lines[s.lines.length - 1];
+    expect(toolLine.fullContent).toBe('file contents 12345');
+  });
 });

@@ -293,45 +293,115 @@ function modeColor(mode: string): string {
 
 /** Row 1: model + [REASON: LEVEL] + [mode] + context … ○ Plan ● Act (Tab) */
 export function statusBarRow1(m: StatusBarModel, width: number): string {
+  const fullToggle = `${m.mode === 'plan' ? `${T.plan}● Plan` : `${T.grayDark}○ Plan`}${T.reset} ${m.mode === 'act' ? `${T.act}● Act` : `${T.grayDark}○ Act`}${T.reset} ${T.grayDark}(Tab)${T.reset}`;
+  const compactToggle = `${m.mode === 'plan' ? `${T.plan}● Plan` : `${T.act}● Act`}${T.reset} ${T.grayDark}(Tab)${T.reset}`;
+  const miniToggle = `${m.mode === 'plan' ? `${T.plan}● P` : `${T.act}● A`}${T.reset}`;
+
+  const toggle = width >= 78 ? fullToggle : width >= 56 ? compactToggle : miniToggle;
+  const toggleLen = visibleLen(toggle);
+
+  const reasoningBadge = m.reasoningLevel
+    ? width >= 70
+      ? ` ${(R.reasonBadge as any)[m.reasoningLevel] ?? R.reasoningBadge}${T.bold}[REASON: ${m.reasoningLevel.toUpperCase()}]${T.reset}`
+      : width >= 48
+        ? ` ${(R.reasonBadge as any)[m.reasoningLevel] ?? R.reasoningBadge}${T.bold}[${m.reasoningLevel.toUpperCase()}]${T.reset}`
+        : ''
+    : '';
+
+  const modeBadge = m.agentMode && m.agentMode !== 'normal'
+    ? width >= 48
+      ? ` ${modeColor(m.agentMode)}${T.bold}[${m.agentMode.toUpperCase()}]${T.reset}`
+      : ` ${modeColor(m.agentMode)}${T.bold}[${m.agentMode[0].toUpperCase()}]${T.reset}`
+    : '';
+
   const bar = m.maxInputTokens ? contextBar(m.totalTokens, m.maxInputTokens) : undefined;
   const usage = usageText(m.totalTokens, m.totalCost);
-  const barText = bar
-    ? ` ${T.fg}${bar.filled}${T.grayDark}${bar.empty}${T.reset} ${T.gray}${usage}${T.reset}`
-    : ` ${T.gray}${usage}${T.reset}`;
-  const toggle = `${m.mode === 'plan' ? `${T.plan}● Plan` : `${T.grayDark}○ Plan`}${T.reset} ${m.mode === 'act' ? `${T.act}● Act` : `${T.grayDark}○ Act`}${T.reset} ${T.grayDark}(Tab)${T.reset}`;
-  const reasoningBadge = m.reasoningLevel
-    ? ` ${(R.reasonBadge as any)[m.reasoningLevel] ?? R.reasoningBadge}${T.bold}[REASON: ${m.reasoningLevel.toUpperCase()}]${T.reset}`
-    : '';
-  const modeBadge = m.agentMode && m.agentMode !== 'normal'
-    ? ` ${modeColor(m.agentMode)}${T.bold}[${m.agentMode.toUpperCase()}]${T.reset}`
-    : '';
-  const left = `${T.fg}${T.bold}${ellipsize(m.modelId, 28)}${T.reset}${reasoningBadge}${modeBadge}${barText}`;
-  const extra = m.extra?.length ? ` ${T.grayDark}· ${m.extra.join(' · ')}${T.reset}` : '';
-  const leftAll = left + extra;
-  const leftLen = visibleLen(leftAll);
-  const toggleLen = visibleLen(toggle);
-  if (leftLen + toggleLen + 1 <= width) {
-    return padEnd(`${leftAll}${' '.repeat(Math.max(1, width - leftLen - toggleLen))}${toggle}`, width);
+
+  let barText = '';
+  if (width >= 82) {
+    barText = bar
+      ? ` ${T.fg}${bar.filled}${T.grayDark}${bar.empty}${T.reset} ${T.gray}${usage}${T.reset}`
+      : ` ${T.gray}${usage}${T.reset}`;
+  } else if (width >= 62) {
+    const shortUsage = m.totalTokens >= 1000 ? `${(m.totalTokens / 1000).toFixed(1)}k tok` : `${m.totalTokens} tok`;
+    barText = bar
+      ? ` ${T.fg}${bar.filled.slice(0, 4)}${T.grayDark}${bar.empty.slice(0, 4)}${T.reset} ${T.gray}${shortUsage}${T.reset}`
+      : ` ${T.gray}${shortUsage}${T.reset}`;
+  } else if (width >= 46) {
+    const shortTokens = m.totalTokens >= 1000 ? `${(m.totalTokens / 1000).toFixed(1)}k` : `${m.totalTokens}`;
+    barText = ` ${T.gray}${shortTokens}${T.reset}`;
   }
-  // Too narrow: keep the toggle, shrink the model label instead.
-  const reasonLen = visibleLen(reasoningBadge);
-  const modelMax = Math.max(6, width - toggleLen - reasonLen - 3);
-  const modelOnly = `${T.fg}${T.bold}${ellipsize(m.modelId, modelMax)}${T.reset}${reasoningBadge}`;
-  return padEnd(`${modelOnly}${' '.repeat(Math.max(1, width - visibleLen(modelOnly) - toggleLen))}${toggle}`, width);
+
+  const extra = m.extra?.length && width >= 90 ? ` ${T.grayDark}· ${m.extra.join(' · ')}${T.reset}` : '';
+
+  const fixedLen = visibleLen(reasoningBadge) + visibleLen(modeBadge) + visibleLen(barText) + visibleLen(extra) + toggleLen + 2;
+  const availForModel = Math.max(4, width - fixedLen);
+  const modelMax = Math.min(28, availForModel);
+  const modelText = `${T.fg}${T.bold}${ellipsize(m.modelId, modelMax)}${T.reset}`;
+
+  let left = `${modelText}${reasoningBadge}${modeBadge}${barText}${extra}`;
+  if (visibleLen(left) + toggleLen + 1 > width) {
+    left = `${modelText}${modeBadge}${extra}`;
+    if (visibleLen(left) + toggleLen + 1 > width) {
+      left = `${modelText}`;
+    }
+  }
+
+  const leftLen = visibleLen(left);
+  const pad = Math.max(1, width - leftLen - toggleLen);
+  const combined = `${left}${' '.repeat(pad)}${toggle}`;
+  return visibleLen(combined) > width
+    ? `${ellipsize(left, Math.max(3, width - toggleLen - 1))} ${toggle}`
+    : padEnd(combined, width);
 }
 
 /** Row 2: workspace (branch) | auto-approve | N files +X -Y */
 export function statusBarRow2(m: StatusBarModel, width: number): string {
   const hasDiff = m.gitDiff && m.gitDiff.files > 0;
-  const suffix = hasDiff
-    ? ` ${T.grayDark}|${T.reset} ${T.gray}${m.gitDiff!.files} file${m.gitDiff!.files !== 1 ? 's' : ''}${T.reset} ${T.success}+${m.gitDiff!.additions}${T.reset} ${T.error}-${m.gitDiff!.deletions}${T.reset}`
-    : '';
-  const autoApproveText = m.autoApprove
-    ? `${T.success}Auto improve: ON${T.reset} ${T.grayDark}(Shift+Tab to toggle)${T.reset}`
-    : `${T.gray}Auto improve: OFF${T.reset} ${T.grayDark}(Shift+Tab to toggle)${T.reset}`;
+  const fmtDiff = (n: number) => n >= 1_000_000 ? (n / 1_000_000).toFixed(1) + 'm' : n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
+  
+  let suffix = '';
+  if (hasDiff) {
+    if (width >= 82) {
+      suffix = ` ${T.grayDark}|${T.reset} ${T.gray}${m.gitDiff!.files} file${m.gitDiff!.files !== 1 ? 's' : ''}${T.reset} ${T.success}+${m.gitDiff!.additions}${T.reset} ${T.error}-${m.gitDiff!.deletions}${T.reset}`;
+    } else if (width >= 62) {
+      suffix = ` ${T.grayDark}|${T.reset} ${T.gray}${m.gitDiff!.files}f${T.reset} ${T.success}+${fmtDiff(m.gitDiff!.additions)}${T.reset} ${T.error}-${fmtDiff(m.gitDiff!.deletions)}${T.reset}`;
+    } else if (width >= 46) {
+      suffix = ` ${T.grayDark}|${T.reset} ${T.success}+${fmtDiff(m.gitDiff!.additions)}${T.reset} ${T.error}-${fmtDiff(m.gitDiff!.deletions)}${T.reset}`;
+    } else {
+      suffix = ` ${T.success}+${fmtDiff(m.gitDiff!.additions)}${T.reset}`;
+    }
+  }
+
+  let autoApproveText = '';
+  if (width >= 88) {
+    autoApproveText = m.autoApprove
+      ? `${T.success}Auto improve: ON${T.reset} ${T.grayDark}(Shift+Tab to toggle)${T.reset}`
+      : `${T.gray}Auto improve: OFF${T.reset} ${T.grayDark}(Shift+Tab to toggle)${T.reset}`;
+  } else if (width >= 65) {
+    autoApproveText = m.autoApprove
+      ? `${T.success}Auto: ON${T.reset} ${T.grayDark}(Shift+Tab)${T.reset}`
+      : `${T.gray}Auto: OFF${T.reset} ${T.grayDark}(Shift+Tab)${T.reset}`;
+  } else if (width >= 48) {
+    autoApproveText = m.autoApprove
+      ? `${T.success}Auto: ON${T.reset}`
+      : `${T.gray}Auto: OFF${T.reset}`;
+  }
+
+  const middle = autoApproveText ? ` ${T.grayDark}·${T.reset} ${autoApproveText}` : '';
   const path = m.workspaceName + (m.gitBranch ? ` (${m.gitBranch})` : '');
-  const middle = ` ${T.grayDark}·${T.reset} ${autoApproveText}`;
-  return padEnd(`${T.fg}${ellipsize(path, Math.max(5, width - visibleLen(suffix) - visibleLen(middle) - 1))}${T.reset}${middle}${suffix}`, width);
+  const pathAvail = Math.max(4, width - visibleLen(middle) - visibleLen(suffix) - 1);
+  let shownPath = ellipsize(path, pathAvail);
+  let activeMiddle = middle;
+
+  if (visibleLen(shownPath) + visibleLen(activeMiddle) + visibleLen(suffix) > width) {
+    activeMiddle = '';
+    const newPathAvail = Math.max(4, width - visibleLen(suffix) - 1);
+    shownPath = ellipsize(path, newPathAvail);
+  }
+
+  const combined = `${T.fg}${shownPath}${T.reset}${activeMiddle}${suffix}`;
+  return padEnd(visibleLen(combined) > width ? ellipsize(combined, width) : combined, width);
 }
 
 // ---- Transcript entries ----------------------------------------------------
@@ -1027,10 +1097,14 @@ export function composerBottomRule(width: number): string {
  *  auto-approve row (user request). Previously lived inside the bottom
  *  border, where it clipped when the input wrapped to the last row. */
 export function composerHintRow(hint: string, width: number): string {
-  // Clamp to terminal width: the fixed hint text hard-wrapped in windowed
-  // mode (50 visible cols vs a 26-46 col pane), smearing the status area.
-  const vis = visibleLen(hint);
-  const shown = vis > width ? ellipsize(hint, width) : hint;
+  let text = hint;
+  if (width < 52 && width >= 38) {
+    text = ' ⏎ send · Tab mode · ESC stop · / cmds';
+  } else if (width < 38) {
+    text = ' ⏎ send · ESC stop';
+  }
+  const vis = visibleLen(text);
+  const shown = vis > width ? ellipsize(text, width) : text;
   return `${T.grayDark}${shown}${T.reset}`;
 }
 

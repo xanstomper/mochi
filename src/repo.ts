@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import type { RepoInfo } from './types.js';
 
@@ -302,13 +303,18 @@ export function detectRepo(root: string): RepoInfo {
 }
 
 export function findProjectRoot(cwd: string): string {
+  const home = homedir();
   let dir = cwd;
-  while (dir !== '/') {
+  while (dir !== '/' && dir !== home) {
     if (existsSync(resolve(dir, '.git'))) return dir;
     if (detectLang(dir)) return dir;
     const parent = resolve(dir, '..');
     if (parent === dir) break;
     dir = parent;
+  }
+  if (cwd !== home) {
+    if (existsSync(resolve(cwd, '.git'))) return cwd;
+    if (detectLang(cwd)) return cwd;
   }
   return cwd;
 }

@@ -30,7 +30,7 @@ const CANDIDATE_RULES = ['MOCHI.md', 'mochi.md', 'AGENTS.md', 'CLAUDE.md', '.cur
  * machine with local access, plus one CPU/mem line so it can reason about
  * expensive-but-feasible operations without a system_info round-trip.
  */
-export function machineAccessBlock(): string {
+export function machineAccessBlock(projectRoot?: string): string {
   const os = (() => {
     try { return `${platform()} ${release()} (${arch()})`; } catch { return `${platform()} (${arch()})`; }
   })();
@@ -49,23 +49,24 @@ export function machineAccessBlock(): string {
     } catch { return 'unknown'; }
   })();
   const host = (() => { try { return hostname(); } catch { return ''; } })();
+  const rootStr = projectRoot || process.cwd();
   return [
-    '# Environment & Machine Access',
+    '# Environment & Active Workspace Containment',
     `You are running locally on the user's machine${host ? ` (host \`${host}\`)` : ''}.`,
     `- OS: ${os}`,
     `- CPU: ${cpu} | Memory: ${mem}`,
-    `- Home: ${homedir()}`,
+    `- Active Project Workspace: ${rootStr}`,
+    `- Active Working Directory: ${process.cwd()}`,
     '',
-    'You have real, local control of this machine: read/write any file, execute',
-    'shell commands, run builds/tests, install packages, use git, spawn background',
-    'processes, and call the network — subject only to the configured permission',
-    'policy (planMode/ask mode may veto mutating actions). Nothing is simulated or',
-    'restricted to a mock sandbox unless the permission layer says so.',
+    '## Workspace Scope & Containment Directives (STRICT)',
+    `1. STRICT WORKSPACE BOUNDARY: You are assigned strictly to the active project at \`${rootStr}\`.`,
+    '2. NEVER WANDER: Never inspect, read, search, glob, edit, or modify files in other projects, sibling directories, or unrelated repositories in the user\'s home directory.',
+    '3. STAY ON TASK: Maintain 100% laser focus on the user\'s explicit request. Do not drift into unsolicited tangents, side quests, or unprompted refactoring.',
+    '4. DEEP REASONING & ROOT-CAUSE ANALYSIS: Model execution flows, trace contracts, and evaluate edge cases (null/undefined, boundary values, async order, type safety) before writing code.',
+    '5. SURGICAL PRECISION: Use `edit` or `patch` for clean, targeted modifications. Fit seamlessly into existing code conventions.',
+    '6. VERIFICATION INTEGRITY: Never declare a task complete without verifying changes with a real build, test runner, or compiler output.',
     '',
-    'You are NOT limited to the current task\'s files. Use `search`, `glob`,',
-    '`codegraph`, and `sql_codebase_query` to inspect ANY file in the repo, and',
-    '`session_recall` to pull context from past sessions before a task. Treat the',
-    'whole workspace as your working area; verify your changes against real tooling.',
+    'You have real, local control of this workspace: read/edit files, run builds/tests, install packages, and use git.',
     '',
     formatEnvironmentBlock(),
   ].filter(Boolean).join('\n');
@@ -377,7 +378,7 @@ Repository Context:
 
     return `You are Mochi, an advanced agentic software engineering assistant. You pair-program with the user to solve engineering tasks with high precision, clear explanations, and rigorous verification.
 
-${machineAccessBlock()}
+${machineAccessBlock(this.projectRoot)}
 
 # I. Core Directives
 1. **Explain What & Why**: Like top AI coding agents (Antigravity, Claude Code, Cline), always explain your analysis, strategy, and reasoning clearly to the user. When performing actions (e.g. searching, reading files, editing code, running commands, or refactoring), briefly explain *what* you are doing and *why* so the user understands the exact progress being made.

@@ -8,6 +8,17 @@ export type LineKind = 'user' | 'assistant' | 'system' | 'error' | 'tool' | 'tas
 export interface TuiLine {
   kind: LineKind;
   text: string;
+  fullContent?: string;
+  metadata?: {
+    tool?: string;
+    args?: unknown;
+    output?: string;
+    filePath?: string;
+    title?: string;
+    isCode?: boolean;
+    isTruncated?: boolean;
+    hiddenRows?: number;
+  };
 }
 
 export interface TuiTask {
@@ -167,7 +178,13 @@ export function formatToolCompleted(tool: string, result?: { output?: string; er
   return `[OK] ${tool} completed${dur}`;
 }
 
-export function pushLine(state: TuiState, kind: LineKind, text: string): void {
+export function pushLine(
+  state: TuiState,
+  kind: LineKind,
+  text: string,
+  fullContent?: string,
+  metadata?: TuiLine['metadata'],
+): void {
   // Collapse consecutive tool cards of the SAME tool family while streaming
   // (live tools update in place instead of stacking one line per call).
   // Card text is ANSI-wrapped, so identity comes from the tool WORD somewhere
@@ -181,10 +198,12 @@ export function pushLine(state: TuiState, kind: LineKind, text: string): void {
     const prevFamily = toolFamily(prev.text);
     if (prevFamily !== '' && prevFamily === toolFamily(text)) {
       prev.text = text;
+      if (fullContent !== undefined) prev.fullContent = fullContent;
+      if (metadata !== undefined) prev.metadata = metadata;
       return;
     }
   }
-  state.lines.push({ kind, text });
+  state.lines.push({ kind, text, fullContent, metadata });
   trimTranscript(state);
 }
 
@@ -314,6 +333,16 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
         args,
         event.result as any,
       );
+      const fullOut = typeof (event.result as any)?.output === 'string'
+        ? (event.result as any).output
+        : typeof (event.result as any)?.error === 'string'
+        ? (event.result as any).error
+        : undefined;
+      const meta = {
+        tool: String(event.tool ?? ''),
+        args,
+        output: fullOut,
+      };
       // Capture the pending card's ABSOLUTE line id BEFORE cleaning up the
       // maps. The old code deleted the key first and only then read it back,
       // so indexed replacement was dead code and every completion fell
@@ -330,6 +359,8 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
       const rel = pendingAbs !== undefined ? toRelLine(state, pendingAbs) : undefined;
       if (rel !== undefined && state.lines[rel]?.kind === 'tool') {
         state.lines[rel].text = formatted;
+        state.lines[rel].fullContent = fullOut;
+        state.lines[rel].metadata = meta;
       } else {
         // Promote: the matching tool:called may have been trimmed from the
         // head of the buffer (limit reached) or never recorded because the
@@ -337,8 +368,10 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
         const last = state.lines[state.lines.length - 1];
         if (last && last.kind === 'tool') {
           last.text = formatted;
+          last.fullContent = fullOut;
+          last.metadata = meta;
         } else {
-          pushLine(state, 'tool', formatted);
+          pushLine(state, 'tool', formatted, fullOut, meta);
         }
       }
       return true;
@@ -383,16 +416,14 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
       if (!content) return false;
       const last = state.lines[state.lines.length - 1];
       if (last && last.kind === 'thought') {
-        // Reasoning streams token-by-token into one 'thought' line. Without a
-        // cap (unlike assistant text above) it grew unboundedly, and since
-        // every render re-wraps the actively-streaming line this made per-frame
-        // work grow each frame — quadratic, a hard freeze during long
-        // reasoning. Roll past-cap content into a fresh line so re-wrap cost
-        // stays bounded (visually identical: thoughts flow continuously).
-        if (last.text.length > STREAM_LINE_CAP) pushLine(state, 'thought', content);
-        else last.text += content;
+        if (last.text.length > STREAM_LINE_CAP) {
+          pushLine(state, 'thought', content, content);
+        } else {
+          last.text += content;
+          last.fullContent = (last.fullContent ?? '') + content;
+        }
       } else {
-        pushLine(state, 'thought', content);
+        pushLine(state, 'thought', content, content);
       }
       state.chatVer++;
       return true;

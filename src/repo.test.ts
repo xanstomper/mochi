@@ -60,6 +60,12 @@ describe('detectRepo', () => {
     expect(findProjectRoot(nested)).toBe(base);
     rmSync(base, { recursive: true, force: true });
   });
+
+  it('stops climbing at homedir() and does not treat home as project root for non-repo subdirs', () => {
+    const home = require('node:os').homedir();
+    // Running directly in home returns home without climbing
+    expect(findProjectRoot(home)).toBe(home);
+  });
 });
 
 describe('languageHint', () => {

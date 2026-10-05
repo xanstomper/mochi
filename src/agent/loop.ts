@@ -209,23 +209,18 @@ export function isComplexRewritingTask(title: string, description = ''): boolean
     || /\b(?:files?|modules?|components?|packages?|services?|plugins?|drivers?)\b/.test(s);
 }
 
-/** Multi-session project continuity: injected once (inside a git repo) so a new
- *  session on the same project resumes with prior context instead of a blank
- *  slate. The durable project memory + session_recall + open todos already
- *  persist this project's state — this directive makes the model warm up with
- *  them before editing, the Cline/Claude Code multi-session edge. */
-const MULTI_SESSION_RESUME_PROTOCOL = [
-  'This project has prior work recorded across sessions. Before editing, quickly',
-  'orient yourself in it. On your FIRST tool call, run BOTH:',
-  '1. memory action="read" — the durable project memory (decisions, architecture,',
-  '   conventions, known failures). These are the project\'s ground truth.',
-  '2. todo action="list" — any open (non-done) tasks from a previous session are',
-  '   likely incomplete work you should pick up or consciously mark done.',
-  '3. session_recall action="list" then session_recall action="get" for the most',
-  '   recent session, so you know exactly where the last session left off.',
-  'Then act on the current task with that continuity: respect prior decisions',
-  'and conventions; do not undo or re-decide things the memory already settled;',
-  'continue unfinished work rather than restarting it.',
+/** Task Focus & Cognitive Discipline Protocol: injected once for substantive engineering
+ *  work so the model maintains 100% laser focus on the user's objective, avoids wandering
+ *  into sibling projects or unrelated session stores, reasons deeply before coding, and
+ *  rigorously verifies its changes. */
+export const TASK_FOCUS_PROTOCOL = [
+  '# TASK FOCUS & COGNITIVE CODING PROTOCOL',
+  'You are executing an engineering task directly within this workspace.',
+  '1. DIRECT TARGETING: Focus immediately on the specific files, symbols, and code required for this task. Do NOT make unprompted exploratory calls into unrelated directories or other projects, and do NOT pull unrelated session histories.',
+  '2. DEEP REASONING FIRST: Trace the code execution paths, verify type definitions, and understand boundary conditions (null/undefined, off-by-one, type contracts) before modifying code. Use the `think` tool for non-trivial logic.',
+  '3. SURGICAL PRECISION: Prefer `edit` or `patch` for targeted, minimal changes. Fit seamlessly into existing code styles and types. Never leave lazy placeholders or half-implemented stubs.',
+  '4. RIGOROUS VERIFICATION: Verify your changes immediately by running the project test suite or compiler (`shell` or `verify`). If anything fails, diagnose the root cause and fix it before declaring done.',
+  '5. STRICT CONTAINMENT: Confine 100% of your actions to the user\'s explicit objective within this project workspace.',
   '',
 ].join('\n');
 
@@ -581,9 +576,9 @@ Continue from 'Next:', do not redo completed progress.`,
       const allowCompiler = Boolean(
         process.env.MOCHI_PROMPT_COMPILER === '1' ||
         this.config.mode === 'spec' ||
-        (this.config.reasoning === 'max' && !process.env.VITEST)
+        !process.env.VITEST
       );
-      if (allowCompiler && (resolvedTier === 'high' || resolvedTier === 'max')) {
+      if (allowCompiler && (resolvedTier === 'high' || resolvedTier === 'max' || resolvedTier === 'medium')) {
         try {
           const { promptCompiler } = await import('../prompt/prompt-compiler.js');
           const { detectRepo: detectRepoForCompiler } = await import('../repo.js');
@@ -723,14 +718,14 @@ Continue from 'Next:', do not redo completed progress.`,
       // session from a blank slate (the Cline/Claude Code multi-session edge).
       if (taskKind !== 'chat' && repo && !this.resumeProtocolInjected) {
         this.resumeProtocolInjected = true;
-        this.context.addMessage({ role: 'system', content: MULTI_SESSION_RESUME_PROTOCOL });
+        this.context.addMessage({ role: 'system', content: TASK_FOCUS_PROTOCOL });
       }
       // Anti-loop: if gathering context extensively without editing, nudge the appropriate action.
       if (!this.contextCutoffNudged && !this.fileChanged && !this.planMode) {
-        if (taskKind === 'chat' && this.toolCallsTotal >= 20) {
+        if (taskKind === 'chat' && this.toolCallsTotal >= 10) {
           this.contextCutoffNudged = true;
           this.context.addMessage({ role: 'system', content: 'You have gathered sufficient context. Provide your answer directly now.' });
-        } else if ((taskKind === 'implement' || taskKind === 'fix' || taskKind === 'refactor') && this.toolCallsTotal >= 30) {
+        } else if ((taskKind === 'implement' || taskKind === 'fix' || taskKind === 'refactor') && this.toolCallsTotal >= 14) {
           this.contextCutoffNudged = true;
           this.context.addMessage({ role: 'system', content: 'You have gathered substantial context. Please proceed with making the necessary changes using edit/write tools.' });
         }

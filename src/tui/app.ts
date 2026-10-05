@@ -46,6 +46,8 @@ const HIDE = '\x1b[?25l';
 const SHOW = '\x1b[?25h';
 const ALT_ENTER = '\x1b[?1049h';
 const ALT_EXIT = '\x1b[?1049l';
+const NO_AUTOWRAP = '\x1b[?7l';
+const AUTOWRAP = '\x1b[?7h';
 const BRACKET_PASTE_ON = '\x1b[?2004h';
 const BRACKET_PASTE_OFF = '\x1b[?2004l';
 const RESET = '\x1b[0m';
@@ -55,6 +57,17 @@ type LineKind = 'user' | 'assistant' | 'system' | 'error' | 'tool' | 'task' | 'g
 interface Line {
   kind: LineKind;
   text: string;
+  fullContent?: string;
+  metadata?: {
+    tool?: string;
+    args?: unknown;
+    output?: string;
+    filePath?: string;
+    title?: string;
+    isCode?: boolean;
+    isTruncated?: boolean;
+    hiddenRows?: number;
+  };
 }
 
 interface TaskView {
@@ -66,6 +79,7 @@ interface TaskView {
 
 const COMMANDS = [
   { name: '/help', hint: 'Show commands' },
+  { name: '/expand', hint: 'Inspect uncompressed code, hidden reasoning & tool output (or press Ctrl+O)' },
   { name: '/clear', hint: 'Clear transcript' },
   { name: '/copy', hint: 'Copy last assistant message to clipboard (works without mouse)' },
   { name: '/model', hint: 'Select AI model provider & model' },
@@ -197,6 +211,11 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     pasting: false,
     /** set true to abort the current auto-improve loop. */
     autoImproveAbort: false,
+    /** Uncompressed Inspector Pager (Ctrl+O) state */
+    inspectorActive: false,
+    inspectorTitle: '',
+    inspectorLines: [] as string[],
+    inspectorScroll: 0,
   };
 
   let pendingResolver: ((v: string) => void) | undefined;
@@ -225,11 +244,11 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   const width = () => process.stdout.columns || 100;
   const height = () => process.stdout.rows || 34;
 
-  const push = (kind: LineKind, text: string) => {
+  const push = (kind: LineKind, text: string, fullContent?: string, metadata?: Line['metadata']) => {
     // Splash stays visible until user sends a message
     const last = state.lines[state.lines.length - 1];
     if (last && last.kind === kind && last.text === text) return;
-    state.lines.push({ kind, text });
+    state.lines.push({ kind, text, fullContent, metadata });
     state.chatVer++;
     trimTranscript(state);
     if (!state.userScrolled) state.scroll = 0;
@@ -455,8 +474,9 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         // renderSummary already wrapped to terminal width, so windowed
         // mode gets identical layout to fullscreen. Only the intentional
         // blank separators inside the card survive (no per-row blanks).
+        // For older cards rendered before a window shrink, clamp to maxWidth.
         for (const src of line.text.split('\n')) {
-          rows.push(src);
+          rows.push(visibleLen(src) > maxWidth ? ellipsize(src, maxWidth) : src);
         }
         break;
       }
@@ -512,7 +532,8 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
           rows.push(`  ${T.dim}${T.italic}${R.thoughtText}${w}${T.reset}`);
         }
         if (wrapped.length > THINK_MAX_ROWS) {
-          rows.push(`  ${T.grayDark}… thinking (${wrapped.length - THINK_MAX_ROWS} more rows hidden — full text in /history)${T.reset}`);
+          const hint = `  ${T.grayDark}… thinking (${wrapped.length - THINK_MAX_ROWS} more rows hidden — Ctrl+O to expand)${T.reset}`;
+          rows.push(visibleLen(hint) > maxWidth ? ellipsize(hint, maxWidth) : hint);
         }
         break;
       }
@@ -811,7 +832,10 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     const rawRows = state.input ? wrap(state.input, innerW) : [''];
     
     // Composer expands as user types, up to 1/3 of screen height
-    const composerBoxRows = Math.min(Math.max(4, Math.floor(h / 3)), rawRows.length + 2);
+    // In short windowed mode (h < 24), use 3 rows (top border, 1 input line, bottom)
+    // when input is 1 line, or 4 rows if input is multiline, up to 1/3 h
+    const minComposer = h < 24 ? (rawRows.length > 1 ? 4 : 3) : 4;
+    const composerBoxRows = Math.min(Math.max(minComposer, Math.floor(h / 3)), rawRows.length + 2);
     const composerRows = composerBoxRows;
     
     // Bottom consists of composer, status bars, and auto-approve row
@@ -835,18 +859,21 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       for (let i = 0; i < splash.length && i < contentH; i++) {
         // Apply selection to splash rows too so drag-select works from the
         // very first frame (before any chat lines exist).
-        rows[top + i] = lead + applySelection(splash[i], top + i, indent);
+        const rendered = lead + applySelection(splash[i], top + i, indent);
+        rows[top + i] = visibleLen(rendered) > w ? ellipsize(rendered, w) : rendered;
       }
     } else {
       for (let i = 0; i < availableH && i < contentH; i++) {
         const r = i;
-        rows[r] = lead + applySelection(visible[i] ?? '', r, indent);
+        const rendered = lead + applySelection(visible[i] ?? '', r, indent);
+        rows[r] = visibleLen(rendered) > w ? ellipsize(rendered, w) : rendered;
       }
     }
 
     if (state.busy) {
       const r = Math.max(0, contentH - 1);
-      rows[r] = '  ' + thinkingLine(state.spinner, state.currentTool || state.currentTask || '');
+      const busyStr = '  ' + thinkingLine(state.spinner, state.currentTool || state.currentTask || '');
+      rows[r] = visibleLen(busyStr) > w ? ellipsize(busyStr, w) : busyStr;
     }
 
     // autocomplete dropdown floats above the status bar, centered on screen
@@ -904,15 +931,23 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     if (statusRows === 3) {
       const promptTotal = state.inTokens + state.cacheTokens;
       const cacheRate = promptTotal > 0 ? Math.min(1, state.cacheTokens / promptTotal) : 0;
-      const ctx = gradientContextBar(state.inTokens + state.outTokens, runtime.config.safety.contextBudgetTokens, 12, state.busy ? state.spinner + 1 : 0);
-      const cache = gradientCacheBar(cacheRate, 10, state.busy ? state.spinner + 1 : 0);
+      const ctxLen = w >= 80 ? 12 : (w >= 60 ? 8 : 5);
+      const cacheLen = w >= 80 ? 10 : (w >= 60 ? 6 : 4);
+      const ctx = gradientContextBar(state.inTokens + state.outTokens, runtime.config.safety.contextBudgetTokens, ctxLen, state.busy ? state.spinner + 1 : 0);
+      const cache = gradientCacheBar(cacheRate, cacheLen, state.busy ? state.spinner + 1 : 0);
       const fmt = (n: number) => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
       // Cache segment only when there IS cache — an empty `cache ───────── 0`
       // track at rest reads as a broken gauge (screenshot artifact, 2026-10-04).
-      const cacheSeg = state.cacheTokens > 0
-        ? `  ${T.gray}cache${T.reset} ${cache.text} ${T.lime}${fmt(state.cacheTokens)}${T.reset} ${T.gray}(${Math.round(cacheRate * 100)}%)${T.reset}`
-        : '';
-      const barsRowFull = ` ${T.gray}in${T.reset} ${T.cyan}${fmt(state.inTokens)}${T.reset} ${T.gray}out${T.reset} ${T.orange}${fmt(state.outTokens)}${T.reset}  ${ctx.text} ${T.gray}${Math.round(ctx.pct * 100)}%${T.reset}${cacheSeg}`;
+      let cacheSeg = '';
+      if (state.cacheTokens > 0) {
+        cacheSeg = w >= 70
+          ? `  ${T.gray}cache${T.reset} ${cache.text} ${T.lime}${fmt(state.cacheTokens)}${T.reset} ${T.gray}(${Math.round(cacheRate * 100)}%)${T.reset}`
+          : `  ${T.gray}cache${T.reset} ${T.lime}${fmt(state.cacheTokens)}${T.reset}`;
+      }
+      let barsRowFull = ` ${T.gray}in${T.reset} ${T.cyan}${fmt(state.inTokens)}${T.reset} ${T.gray}out${T.reset} ${T.orange}${fmt(state.outTokens)}${T.reset}  ${ctx.text} ${T.gray}${Math.round(ctx.pct * 100)}%${T.reset}${cacheSeg}`;
+      if (w < 55) {
+        barsRowFull = ` ${T.gray}in${T.reset} ${T.cyan}${fmt(state.inTokens)}${T.reset} ${T.gray}out${T.reset} ${T.orange}${fmt(state.outTokens)}${T.reset}  ${ctx.text}`;
+      }
       // Clamp: this row had no width budget and hard-wrapped in windowed mode.
       const barsRow = visibleLen(barsRowFull) > w ? ellipsize(barsRowFull, w) : barsRowFull;
       
@@ -949,7 +984,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       const maxVisibleItems = Math.min(totalItems, Math.max(5, h - 8));
       const menuH = maxVisibleItems + 3;
       const menuTop = Math.max(1, Math.floor((h - menuH) / 2));
-      const menuW = Math.min(Math.max(68, Math.floor(w * 0.76)), w - 4);
+      const menuW = Math.min(Math.max(28, Math.floor(w * 0.76)), Math.max(10, w - 4));
       const mLeft = Math.max(0, Math.floor((w - menuW) / 2));
       const pad = ' '.repeat(mLeft);
 
@@ -960,16 +995,14 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       }
 
       // Title bar: ╭── Title [count] ──────────────────────────╮
-      // Width accounting: 1('╭') + 1(rule) + title + badge + ruleWidth + 1('╮')
-      // must equal menuW exactly — the original `menuW - 2` double-counted the
-      // leading '─' that follows '╭', making the top border 1 cell longer than
-      // the body/footer (ragged top-right corner).
-      const titleText = ` ${state.menuTitle} `;
       const countBadge = totalItems > 1 ? ` [${state.menuSelected + 1}/${totalItems}] ` : ' ';
+      const maxTitleLen = Math.max(6, menuW - 5 - visibleLen(countBadge));
+      const cleanTitle = visibleLen(state.menuTitle) > maxTitleLen ? ellipsize(state.menuTitle, maxTitleLen) : state.menuTitle;
+      const titleText = ` ${cleanTitle} `;
       const ruleWidth = Math.max(0, menuW - 3 - visibleLen(titleText) - visibleLen(countBadge));
       rows[menuTop] = pad + T.rule + '╭─' + T.reset + T.bold + titleText + T.reset + T.grayDark + countBadge + T.reset + T.rule + '─'.repeat(ruleWidth) + '╮' + T.reset;
 
-      const innerW = menuW - 4;
+      const innerW = Math.max(4, menuW - 4);
       for (let i = 0; i < maxVisibleItems; i++) {
         const itemIdx = scrollOffset + i;
         const r = menuTop + 1 + i;
@@ -981,7 +1014,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         const pointer = sel ? `${T.act}${T.bold}❯${T.reset} ` : '  ';
         const activeDot = mark && !rawItem.includes('[ACTIVE]') ? `${T.lime}● ${T.reset}` : '';
         const prefix = pointer + activeDot;
-        const availForItem = Math.max(10, innerW - visibleLen(prefix));
+        const availForItem = Math.max(4, innerW - visibleLen(prefix));
 
         let formattedItem = rawItem;
         if (visibleLen(rawItem) > availForItem) {
@@ -996,11 +1029,64 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       }
 
       // Footer bar: ╰── ↑/↓ scroll · ⏎ select · esc cancel ─────╯
-      const footerHint = ' ↑/↓ scroll · ⏎ select · esc cancel ';
+      let footerHint = ' ↑/↓ scroll · ⏎ select · esc cancel ';
+      if (menuW < visibleLen(footerHint) + 4) {
+        footerHint = ' ⏎ sel · esc ';
+      }
       const footerRule = Math.max(0, menuW - 2 - visibleLen(footerHint));
       const rLeft = Math.floor(footerRule / 2);
       const rRight = Math.max(0, footerRule - rLeft);
       rows[menuTop + 1 + maxVisibleItems] = pad + T.rule + '╰' + '─'.repeat(rLeft) + T.reset + T.grayDark + footerHint + T.reset + T.rule + '─'.repeat(rRight) + '╯' + T.reset;
+    }
+
+    // ---- Uncompressed Inspector Pager Overlay (Ctrl+O) ----
+    if (state.inspectorActive) {
+      const inspW = Math.max(20, Math.min(w - 2, 140));
+      const inspLeft = Math.max(0, Math.floor((w - inspW) / 2));
+      const pad = ' '.repeat(inspLeft);
+      const innerW = Math.max(6, inspW - 4);
+      const totalLines = state.inspectorLines.length;
+      const visH = Math.max(5, h - 4);
+      const maxScroll = Math.max(0, totalLines - visH);
+      state.inspectorScroll = Math.max(0, Math.min(maxScroll, state.inspectorScroll));
+
+      // Blank out all rows
+      for (let i = 0; i < h; i++) rows[i] = '';
+
+      // Title bar: ╭── 🔍 [title] [Line 1–30 of 120] ───────────────╮
+      const rangeBadge = ` [Line ${totalLines === 0 ? 0 : state.inspectorScroll + 1}–${Math.min(totalLines, state.inspectorScroll + visH)} of ${totalLines}] `;
+      const maxInspTitle = Math.max(4, innerW - visibleLen(rangeBadge) - 8);
+      const titleStr = ` 🔍 ${ellipsize(state.inspectorTitle, maxInspTitle)} `;
+      const topRuleW = Math.max(0, inspW - 3 - visibleLen(titleStr) - visibleLen(rangeBadge));
+      rows[0] = pad + T.cyan + '╭─' + T.reset + T.bold + titleStr + T.reset + T.grayDark + rangeBadge + T.reset + T.cyan + '─'.repeat(topRuleW) + '╮' + T.reset;
+
+      // Body lines with line numbers: │  12 │ line text                                  │
+      const lineNumWidth = Math.max(3, String(totalLines).length);
+      for (let i = 0; i < visH; i++) {
+        const lineIdx = state.inspectorScroll + i;
+        const r = 1 + i;
+        if (r >= h - 1) break;
+        if (lineIdx < totalLines) {
+          const numStr = `${T.grayDark}${String(lineIdx + 1).padStart(lineNumWidth, ' ')} │${T.reset} `;
+          const rawLine = state.inspectorLines[lineIdx];
+          const availTextW = Math.max(4, innerW - lineNumWidth - 3);
+          const truncatedLine = visibleLen(rawLine) > availTextW ? ellipsize(rawLine, availTextW) : rawLine;
+          const trail = Math.max(0, availTextW - visibleLen(truncatedLine));
+          rows[r] = pad + T.cyan + '│' + T.reset + ' ' + numStr + truncatedLine + ' '.repeat(trail) + ' ' + T.cyan + '│' + T.reset;
+        } else {
+          rows[r] = pad + T.cyan + '│' + T.reset + ' '.repeat(innerW + 2) + T.cyan + '│' + T.reset;
+        }
+      }
+
+      // Footer bar: ╰── ↑/↓ scroll · PgUp/PgDn · Home/End · [C]opy · [ESC/Q/Enter] Close ──╯
+      let footerHint = ' ↑/↓/PgUp/PgDn scroll · c copy · esc/q/enter close ';
+      if (inspW < visibleLen(footerHint) + 4) {
+        footerHint = ' c copy · esc close ';
+      }
+      const footerRule = Math.max(0, inspW - 2 - visibleLen(footerHint));
+      const fLeft = Math.floor(footerRule / 2);
+      const fRight = Math.max(0, footerRule - fLeft);
+      rows[1 + visH] = pad + T.cyan + '╰' + '─'.repeat(fLeft) + T.reset + T.grayDark + footerHint + T.reset + T.cyan + '─'.repeat(fRight) + '╯' + T.reset;
     }
 
     let out = HIDE;
@@ -1009,7 +1095,13 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       lastFrame = [];
     }
     for (let i = 0; i < h; i++) {
-      const line = rows[i] ?? '';
+      let line = rows[i] ?? '';
+      // Strict boundary clamp to prevent terminal auto-wrap on the right edge or bottom-right corner.
+      // For the very last row of the screen, clamp to Math.max(1, w - 1) to avoid bottom-corner wrap scroll.
+      const maxCol = i === h - 1 ? Math.max(1, w - 1) : w;
+      if (visibleLen(line) > maxCol) {
+        line = ellipsize(line, maxCol);
+      }
       if (line !== lastFrame[i]) {
         out += '\x1b[' + (i + 1) + ';1H' + line + '\x1b[K';
       }
@@ -1023,8 +1115,12 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     const cursorVisualRow = Math.max(0, beforeLines.length - 1);
     const firstVisibleRow = Math.max(0, rawRows.length - shownRows.length);
     const cursorRow = cTop + 1 + Math.max(0, cursorVisualRow - firstVisibleRow);
-    const cursorCol = 4 + (beforeLines.length ? visibleLen(beforeLines[beforeLines.length - 1]) : 0);
-    out += '\x1b[' + (cursorRow + 1) + ';' + (cursorCol + 1) + 'H' + SHOW;
+    const cursorCol = Math.min(Math.max(1, w - 1), 4 + (beforeLines.length ? visibleLen(beforeLines[beforeLines.length - 1]) : 0));
+    if (state.inspectorActive) {
+      out += '\x1b[' + h + ';1H' + HIDE;
+    } else {
+      out += '\x1b[' + (cursorRow + 1) + ';' + (cursorCol + 1) + 'H' + SHOW;
+    }
     safeWrite(out);
     lastFrame = rows.slice();
     lastW = w;
@@ -1364,6 +1460,10 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     }
     if (line === '/history' || line === '/sessions' || line === '/resume') {
       await historySessionMenu();
+      return;
+    }
+    if (line === '/expand' || line === '/inspector' || line === '/out' || line === '/output' || line === '/o') {
+      await openUncompressedInspectorMenu();
       return;
     }
     if (line === '/rename' || line.startsWith('/rename ')) {
@@ -1973,6 +2073,146 @@ if (line === '/branch') { await run(async () => (await import('../git.js')).stat
     }
   }
 
+  function openUncompressedViewer(title: string, fullContent: string) {
+    state.inspectorActive = true;
+    state.inspectorTitle = title;
+    state.inspectorLines = fullContent.replace(/\r\n/g, '\n').split('\n');
+    state.inspectorScroll = 0;
+    lastFrame = [];
+    scheduleRender();
+  }
+
+  function closeUncompressedViewer() {
+    if (!state.inspectorActive) return;
+    state.inspectorActive = false;
+    state.inspectorLines = [];
+    state.inspectorTitle = '';
+    state.inspectorScroll = 0;
+    lastFrame = [];
+    scheduleRender();
+  }
+
+  async function openUncompressedInspectorMenu() {
+    interface InspectableItem {
+      title: string;
+      label: string;
+      kind: 'thought' | 'code' | 'tool' | 'response' | 'all';
+      content: string;
+      lineCount: number;
+      charCount: number;
+    }
+
+    const items: InspectableItem[] = [];
+
+    // Scan all lines in state.lines
+    for (let i = 0; i < state.lines.length; i++) {
+      const line = state.lines[i];
+      if (!line) continue;
+
+      if (line.kind === 'thought' && line.text.trim()) {
+        const content = line.fullContent || line.text;
+        const contentLines = content.split('\n');
+        const firstLine = contentLines[0]?.trim().slice(0, 42) || 'Thinking trace';
+        items.push({
+          title: `Reasoning (${contentLines.length} lines, ${content.length} chars)`,
+          label: `${T.violet}[THOUGHT]${T.reset} ${firstLine}…  ${T.grayDark}${contentLines.length}L · ${content.length}c${T.reset}`,
+          kind: 'thought',
+          content,
+          lineCount: contentLines.length,
+          charCount: content.length,
+        });
+      }
+
+      if (line.kind === 'tool') {
+        const full = line.fullContent || (line.metadata as any)?.output || line.text;
+        const toolName = (line.metadata as any)?.tool || 'tool';
+        const contentLines = full.split('\n');
+        const rawArgs = (line.metadata as any)?.args;
+        const argSummary = typeof rawArgs === 'object' && rawArgs
+          ? String((rawArgs as any).command || (rawArgs as any).path || (rawArgs as any).query || '')
+          : '';
+        items.push({
+          title: `Tool: ${toolName} ${argSummary} (${contentLines.length} lines)`,
+          label: `${T.orange}[TOOL]${T.reset} ${toolName}: ${argSummary ? argSummary.slice(0, 35) : 'Output'}  ${T.grayDark}${contentLines.length}L · ${full.length}c${T.reset}`,
+          kind: 'tool',
+          content: full,
+          lineCount: contentLines.length,
+          charCount: full.length,
+        });
+      }
+
+      if (line.kind === 'assistant' && line.text.trim()) {
+        const content = line.fullContent || line.text;
+        // Check for fenced code blocks
+        const codeFences = [...content.matchAll(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g)];
+        if (codeFences.length > 0) {
+          for (let f = 0; f < codeFences.length; f++) {
+            const fence = codeFences[f];
+            const lang = fence[1] || 'code';
+            const codeBody = fence[2];
+            const codeLines = codeBody.split('\n');
+            const preview = codeLines[0]?.trim().slice(0, 38) || 'Code snippet';
+            items.push({
+              title: `Code Block [${lang}] (${codeLines.length} lines)`,
+              label: `${T.lime}[CODE:${lang}]${T.reset} ${preview}…  ${T.grayDark}${codeLines.length}L · ${codeBody.length}c${T.reset}`,
+              kind: 'code',
+              content: codeBody,
+              lineCount: codeLines.length,
+              charCount: codeBody.length,
+            });
+          }
+        } else {
+          const contentLines = content.split('\n');
+          if (contentLines.length > 3 || content.length > 200) {
+            const preview = contentLines[0]?.trim().slice(0, 42) || 'Assistant response';
+            items.push({
+              title: `Assistant Response (${contentLines.length} lines, ${content.length} chars)`,
+              label: `${T.cyan}[RESPONSE]${T.reset} ${preview}…  ${T.grayDark}${contentLines.length}L · ${content.length}c${T.reset}`,
+              kind: 'response',
+              content,
+              lineCount: contentLines.length,
+              charCount: content.length,
+            });
+          }
+        }
+      }
+    }
+
+    if (items.length === 0) {
+      push('system', 'ℹ️ No compressed or hidden text in the current session yet.');
+      scheduleRender();
+      return;
+    }
+
+    // Reverse chronological (newest first)
+    const reversed = items.slice().reverse();
+
+    // Option 0: Full uncompressed transcript
+    const allSessionLines = state.lines.map((l) => {
+      const prefix = `=== [${l.kind.toUpperCase()}] ===`;
+      const text = l.fullContent || l.text;
+      return `${prefix}\n${text}\n`;
+    }).join('\n');
+
+    const menuChoices: string[] = [
+      `${T.bold}${T.cyan}📜 [EXPAND ALL] Complete Uncompressed Session Transcript${T.reset}  ${T.grayDark}${state.lines.length} turns${T.reset}`,
+      ...reversed.map((it) => it.label),
+    ];
+
+    state.menuSelected = 0;
+    const choiceIdx = await openMenu('Uncompressed Code & Reasoning Inspector (Ctrl+O)', menuChoices);
+    if (choiceIdx < 0) return;
+
+    if (choiceIdx === 0) {
+      openUncompressedViewer('Complete Uncompressed Session Transcript', allSessionLines);
+    } else {
+      const selected = reversed[choiceIdx - 1];
+      if (selected) {
+        openUncompressedViewer(selected.title, selected.content);
+      }
+    }
+  }
+
   async function exportSession() {
     const file = await ask('Export path:');
     await run(async () => {
@@ -2032,7 +2272,7 @@ if (line === '/branch') { await run(async () => (await import('../git.js')).stat
     // left raw + cursor-hidden + alt-screen = permanently frozen. A failing
     // restore must never win over finishing the restore.
     try { process.stdin.setRawMode?.(false); } catch { /* dead tty */ }
-    try { process.stdout.write(`${RESET}${SHOW}${ALT_EXIT}`); } catch { /* EPIPE */ }
+    try { process.stdout.write(`${RESET}${SHOW}${AUTOWRAP}${ALT_EXIT}`); } catch { /* EPIPE */ }
     try { for (const fn of cleanupFns) fn(); } catch { /* cleanup must not block exit */ }
     try { process.exit(0); } catch { process.exitCode = 0; }
   }
@@ -2188,6 +2428,67 @@ if (line === '/branch') { await run(async () => (await import('../git.js')).stat
         continue;
       }
 
+      // 3.5. Inspector Pager navigation (Ctrl+O)
+      if (state.inspectorActive) {
+        if (rest.startsWith('\x1b[A') || s[i] === 'k') {
+          i += rest.startsWith('\x1b[A') ? 3 : 1;
+          state.inspectorScroll = Math.max(0, state.inspectorScroll - 1);
+          lastFrame = [];
+          scheduleRender();
+          continue;
+        }
+        if (rest.startsWith('\x1b[B') || s[i] === 'j') {
+          i += rest.startsWith('\x1b[B') ? 3 : 1;
+          state.inspectorScroll = Math.min(Math.max(0, state.inspectorLines.length - 1), state.inspectorScroll + 1);
+          lastFrame = [];
+          scheduleRender();
+          continue;
+        }
+        if (rest.startsWith('\x1b[5~')) {
+          i += 4;
+          state.inspectorScroll = Math.max(0, state.inspectorScroll - Math.max(1, height() - 6));
+          lastFrame = [];
+          scheduleRender();
+          continue;
+        }
+        if (rest.startsWith('\x1b[6~')) {
+          i += 4;
+          state.inspectorScroll = Math.min(Math.max(0, state.inspectorLines.length - 1), state.inspectorScroll + Math.max(1, height() - 6));
+          lastFrame = [];
+          scheduleRender();
+          continue;
+        }
+        if (rest.startsWith('\x1b[H') || s[i] === 'g') {
+          i += rest.startsWith('\x1b[H') ? 3 : 1;
+          state.inspectorScroll = 0;
+          lastFrame = [];
+          scheduleRender();
+          continue;
+        }
+        if (rest.startsWith('\x1b[F') || s[i] === 'G') {
+          i += rest.startsWith('\x1b[F') ? 3 : 1;
+          state.inspectorScroll = Math.max(0, state.inspectorLines.length - Math.max(1, height() - 6));
+          lastFrame = [];
+          scheduleRender();
+          continue;
+        }
+        if (s[i] === 'c' || s[i] === 'C') {
+          i++;
+          const fullText = state.inspectorLines.join('\n');
+          const via = copyToClipboard(fullText);
+          push('system', `Copied uncompressed content (${state.inspectorLines.length} lines, ${fullText.length} chars) to clipboard via ${via}.`);
+          closeUncompressedViewer();
+          continue;
+        }
+        if (s[i] === 'q' || s[i] === 'Q' || s[i] === '\x1b' || s[i] === '\r' || s[i] === '\n') {
+          i++;
+          closeUncompressedViewer();
+          continue;
+        }
+        i++;
+        continue;
+      }
+
       // 4. Menu mode navigation
       if (state.menuActive) {
         if (rest.startsWith('\x1b[A')) { i += 3; state.menuSelected = Math.max(0, state.menuSelected - 1); lastFrame = []; scheduleRender(); continue; }
@@ -2204,6 +2505,19 @@ if (line === '/branch') { await run(async () => (await import('../git.js')).stat
       }
 
       const c = s[i];
+
+      // Ctrl+O: Drop down uncompressed inspector menu
+      if (c === '\u000f') {
+        if (state.inspectorActive) {
+          closeUncompressedViewer();
+        } else if (state.menuActive) {
+          closeMenu(-1);
+        } else {
+          void openUncompressedInspectorMenu();
+        }
+        i++;
+        continue;
+      }
       if (c === '\r' || c === '\n') {
         if (state.dropActive) {
           const items = currentDropItems();
@@ -2522,7 +2836,7 @@ if (line === '/branch') { await run(async () => (await import('../git.js')).stat
     // Without ?1002 a drag produces only a press+release pair — the user
     // sees no inline highlight, and copy() returns the single character
     // that was clicked. That's the "highlight doesn't work" bug.
-    process.stdout.write(ALT_ENTER + HIDE + '\x1b[?1000h\x1b[?1002h\x1b[?1006h' + BRACKET_PASTE_ON);
+    process.stdout.write(ALT_ENTER + NO_AUTOWRAP + HIDE + '\x1b[?1000h\x1b[?1002h\x1b[?1006h' + BRACKET_PASTE_ON);
     process.stdin.setRawMode?.(true);
     process.stdin.resume();
     const keyListener = (buf: Buffer) => onKey(buf);
@@ -2542,7 +2856,7 @@ if (line === '/branch') { await run(async () => (await import('../git.js')).stat
       // skips the remaining resets and the terminal stays frozen.
       try { process.stdin.setRawMode?.(false); } catch { /* dead tty */ }
       try {
-        process.stdout.write(`${RESET}${SHOW}${ALT_EXIT}\x1b[?1000l\x1b[?1002l\x1b[?1006l` + BRACKET_PASTE_OFF);
+        process.stdout.write(`${RESET}${SHOW}${AUTOWRAP}${ALT_EXIT}\x1b[?1000l\x1b[?1002l\x1b[?1006l` + BRACKET_PASTE_OFF);
       } catch { /* EPIPE on a dead pane */ }
     };
     process.on('exit', exitListener);

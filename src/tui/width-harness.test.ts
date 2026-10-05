@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import { visibleLen, wrap } from './wrap.js';
 import { renderSummary, renderMetricStrip } from './summary-render.js';
-import { renderMarkdown } from './view.js';
+import { renderMarkdown, statusBarRow1, statusBarRow2, composerHintRow, composerRow, renderDropdown, type StatusBarModel } from './view.js';
 import type { SummaryDocument } from '../summary/engine.js';
 
 const WIDTHS = [26, 30, 40, 50, 56, 60, 70, 80, 90, 100, 110];
@@ -104,6 +104,51 @@ describe('render width harness (windowed-overflow guard)', () => {
       for (const row of rows) {
         expect(visibleLen(row), `width ${w}: table row overflow`)
           .toBeLessThanOrEqual(w);
+      }
+    }
+  });
+
+  it('statusBarRow1 and statusBarRow2 never exceed the given width at any terminal size', () => {
+    const model: StatusBarModel = {
+      modelId: 'opencode/deepseek-v4-flash-free',
+      totalTokens: 148112,
+      totalCost: 0.1192,
+      maxInputTokens: 200000,
+      mode: 'act',
+      agentMode: 'spec',
+      reasoningLevel: 'high',
+      workspaceName: 'jewboy420-workspace-very-long-project-name',
+      gitBranch: 'feature/windowed-mode-layout-polish',
+      gitDiff: { files: 12, additions: 1420, deletions: 830 },
+      autoApprove: true,
+      extra: ['⚡ 3 subagents', '92 tok/s'],
+    };
+
+    for (const w of WIDTHS) {
+      const r1 = statusBarRow1(model, w);
+      expect(visibleLen(r1), `width ${w}: statusBarRow1 overflow: ${JSON.stringify(r1)}`).toBeLessThanOrEqual(w);
+      // Toggle must always be preserved
+      expect(r1).toMatch(/● (Act|A)/);
+
+      const r2 = statusBarRow2(model, w);
+      expect(visibleLen(r2), `width ${w}: statusBarRow2 overflow: ${JSON.stringify(r2)}`).toBeLessThanOrEqual(w);
+    }
+  });
+
+  it('composer rows and dropdown never exceed the given width', () => {
+    for (const w of WIDTHS) {
+      const hint = composerHintRow(' ⏎ send · Tab plan/act · ESC stop · / for commands', w);
+      expect(visibleLen(hint), `width ${w}: composerHintRow overflow`).toBeLessThanOrEqual(w);
+
+      const cRow = composerRow('This is a test prompt that might be very long and exceed the terminal width by a lot', w);
+      expect(visibleLen(cRow), `width ${w}: composerRow overflow`).toBeLessThanOrEqual(w);
+
+      const dd = renderDropdown([
+        { name: '/help', hint: 'Show all commands and keyboard shortcuts' },
+        { name: '/mode', hint: 'Switch execution mode (spec/security/codemod)' },
+      ], 0, w);
+      for (const row of dd) {
+        expect(visibleLen(row), `width ${w}: dropdown row overflow`).toBeLessThanOrEqual(w);
       }
     }
   });

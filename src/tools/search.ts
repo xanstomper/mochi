@@ -71,7 +71,7 @@ async function ripgrep(cwd: string, query: string, glob?: string): Promise<strin
     if (glob) {
       args.push('-g', glob);
     } else {
-      args.push('-g', '!{dist,build,.next,coverage,node_modules,.cache}/**');
+      args.push('-g', '!{dist,build,.next,coverage,node_modules,.cache,.npm-global,.hermes,.gemini,.local,.config}/**');
     }
     const proc = spawn('rg', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
@@ -97,7 +97,7 @@ function* walkFiles(root: string, dir: string, budget: { seen: number; max: numb
   try { entries = readdirSync(dir); } catch { return; }
   for (const e of entries) {
     if (budget.seen >= budget.max) return;
-    if (['.git', 'node_modules', '.mochi', 'dist', 'build', '.next', '.turbo', 'coverage', '.cache'].includes(e)) continue;
+    if (['.git', 'node_modules', '.mochi', 'dist', 'build', '.next', '.turbo', 'coverage', '.cache', '.npm-global', '.hermes', '.gemini', '.local', '.config'].includes(e)) continue;
     const full = resolve(dir, e);
     let st: ReturnType<typeof statSync>;
     try { st = statSync(full); } catch { continue; }
