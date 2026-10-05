@@ -252,20 +252,24 @@ async function main() {
       const srcDir = rp(cliDirname(), '..', 'src');
       const newer = srcFileNewer(srcDir, distMtime);
       if (newer && !process.env.MOCHI_SKIP_AUTOBUILD) {
-        console.error('\x1b[38;2;163;230;53mmochi\x1b[0m sources changed — rebuilding dist…');
+        console.error('\x1b[38;2;163;230;53mmochi\x1b[0m sources changed — rebuilding dist (non-blocking)…');
         const { execFile } = await import('node:child_process');
         const repoRoot = rp(cliDirname(), '..');
         // Run the repo-local TypeScript compiler with the current node binary;
         // no npx (spawn-without-shell can't resolve it from an ESM process).
         const tscJs = rp(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc');
-        try {
-          await new Promise<void>((res, rej) => {
-            execFile(process.execPath, [tscJs, '-p', 'tsconfig.json'], { cwd: repoRoot, timeout: 180_000 }, (err) => (err ? rej(err) : res()));
-          });
-          console.error('\x1b[38;2;163;230;53mmochi\x1b[0m dist rebuilt.');
-        } catch (e) {
-          console.error(`[mochi] auto-rebuild failed (${e instanceof Error ? e.message.split('\n')[0] : 'unknown'}); running the previous build`);
-        }
+        // NON-BLOCKING rebuild: on an actively-developed repo src/*.ts is newer
+        // than dist almost every run, so a synchronous full `tsc` here would
+        // stall every invocation 60-100s (measured) before it does ANY work —
+        // which reads as "Mochi is slow" even for trivial one-shot queries.
+        // Fire-and-forget so the current command starts immediately; dist is
+        // refreshed for the NEXT run. If the compile fails we still run
+        // whatever dist is present rather than holding the user hostage.
+        const child = execFile(process.execPath, [tscJs, '-p', 'tsconfig.json'], { cwd: repoRoot, timeout: 240_000 }, (err) => {
+          if (err) console.error(`[mochi] background auto-rebuild failed (${err.message.split('\n')[0]}); previous build still in use`);
+          else console.error('\x1b[38;2;163;230;53mmochi\x1b[0m dist rebuilt (background).');
+        });
+        child.unref?.();
       }
     }
   } catch { /* best-effort freshness guard */ }
