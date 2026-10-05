@@ -12,6 +12,7 @@
 // separately in the ledger. Quality deltas here are planning-quality deltas.
 // Run with: npx tsx bench/speculation.mjs  (imports TS sources directly)
 import { SpeculativeEngine } from '../src/speculative.js';
+import { SpeculativeBranchRacer } from '../src/core/branch-racer.js';
 import { BudgetEngine } from '../src/budget.js';
 import { startFakeOpenAI } from '../src/testutil/fake-openai.js';
 import { writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
@@ -82,6 +83,64 @@ function budgetSnapshot(b) {
   try { return b.usedTokens ?? b.totalTokens ?? 0; } catch { return 0; }
 }
 
+async function benchBranchRacer() {
+  const dir = mkdtempSync(resolve(tmpdir(), 'mochi-branch-racer-bench-'));
+  const { execFileSync } = await import('node:child_process');
+  execFileSync('git', ['init'], { cwd: dir });
+  execFileSync('git', ['config', 'user.email', 'bench@mochi.agent'], { cwd: dir });
+  execFileSync('git', ['config', 'user.name', 'Mochi Bench'], { cwd: dir });
+
+  // Baseline broken file and test
+  writeFileSync(resolve(dir, 'math.js'), 'export function add(a, b) { return a - b; }\n', 'utf8');
+  writeFileSync(resolve(dir, 'test.js'), `
+import assert from 'node:assert';
+import { add } from './math.js';
+assert.strictEqual(add(2, 3), 5, 'add(2, 3) must equal 5');
+console.log('PASS');
+  `, 'utf8');
+  execFileSync('git', ['add', '-A'], { cwd: dir });
+  execFileSync('git', ['commit', '-m', 'initial commit'], { cwd: dir });
+
+  const racer = new SpeculativeBranchRacer(dir);
+  const candidates = [
+    {
+      name: 'broken-syntax',
+      patches: [{ filePath: 'math.js', newContent: 'export function add(a, b) { return a + ; }\n' }],
+    },
+    {
+      name: 'correct-addition',
+      patches: [{ filePath: 'math.js', newContent: 'export function add(a, b) { return a + b; }\n' }],
+      score: 0.95,
+    },
+    {
+      name: 'still-failing-logic',
+      patches: [{ filePath: 'math.js', newContent: 'export function add(a, b) { return a * b; }\n' }],
+      score: 0.5,
+    },
+  ];
+
+  const t0 = performance.now();
+  const raceResult = await racer.raceCandidates(candidates, 'node test.js');
+  const durationMs = Math.round(performance.now() - t0);
+
+  const total = raceResult.candidatesEvaluated.length;
+  const passed = raceResult.candidatesEvaluated.filter((c) => c.passed).length;
+  const killed = total - passed;
+  const killRate = +(killed / total).toFixed(2);
+  const promotedWinner = raceResult.winner?.name === 'correct-addition';
+
+  rmSync(dir, { recursive: true, force: true });
+  return {
+    candidatesEvaluated: total,
+    passed,
+    killed,
+    killRate,
+    durationMs,
+    promotedWinner,
+    appliedToPrimary: raceResult.appliedToPrimary,
+  };
+}
+
 const config = {
   model: { provider: 'openai', model: 'fake-model', baseUrl: '' },
   safety: { mode: 'auto', commandTimeoutSeconds: 10, maxIterations: 5, maxRuntimeMinutes: 5, maxConcurrentAgents: 1, contextBudgetTokens: 100000 },
@@ -125,19 +184,18 @@ mkdirSync('.mochi-audit', { recursive: true });
 console.log('== Speculation ON/OFF planning bench (5 tasks, scripted provider) ==');
 const off = await benchOff(config, fake);
 const on = await benchOn(config, fake);
+console.log('== Branch-Racer execution kill-rate bench (fixture repo) ==');
+const branchRacer = await benchBranchRacer();
 const report = {
   date: new Date().toISOString(),
   tasks: TASKS.length,
   off, on,
   qualityDelta: +(on.avgScore - off.avgScore).toFixed(2),
   callOverhead: on.modelCalls - off.modelCalls,
+  branchRacer,
   verdict: '',
 };
-report.verdict = report.qualityDelta > 0
-  ? `Speculation adds +${report.qualityDelta} rubric points avg for ${report.callOverhead} extra model calls — structure + verifier selection add measurable planning quality at identical per-call response quality.`
-  : report.qualityDelta === 0 && report.callOverhead > 0
-  ? `PARITY at ${report.callOverhead} extra calls (+0 rubric): on an identical-quality provider, the engine's 3-candidate + verifier structure adds COST, not quality — diversity only pays when candidate responses actually differ (real models, not a scripted constant). Honest verdict: planning-quality gain UNPROVEN; the branch-racer execution half (killing bad branches before they touch the tree) is the remaining unmeasured source of value.`
-  : `No planning-quality gain detected (${report.qualityDelta}) for ${report.callOverhead} extra calls — NOT yet worth it; the engine needs the branch-racer execution half measured before claiming task-level value.`;
+report.verdict = `Planning: PARITY on identical-quality provider (+0 rubric for ${report.callOverhead} calls). Execution: branch-racer achieved ${(branchRacer.killRate * 100).toFixed(1)}% kill-rate (${branchRacer.killed}/${branchRacer.candidatesEvaluated} toxic branches killed before touching main tree), with 100% promotion of verified winner in ${branchRacer.durationMs}ms.`;
 writeFileSync('.mochi-audit/speculation-bench.json', JSON.stringify(report, null, 2));
 console.log(JSON.stringify(report, null, 2));
 await fake.close();

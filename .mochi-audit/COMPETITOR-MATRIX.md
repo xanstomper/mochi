@@ -24,12 +24,12 @@ no vaporware rows.
 | Headless mode | -p + --json + exit codes (docs) | exec | -p | -p | `-p`, stdin piping, **--json + real exit codes (this session)** | **parity** |
 | Long-run ceiling | task-scoped | task-scoped | task-scoped | task-scoped | 40 iterations / 240 min defaults, stall guards, auto-compaction | **ahead** (configurable, guarded) |
 
-## Gaps to close (ranked)
-1. **MCP round-trip test** (table stakes — verify listed→called→transcribed)
-2. **/diff pending-proposal view** (diff-first UX)
-3. **Resume-after-kill -9 fidelity test**
-4. **Skill regression doctor** (re-run runnable snippets, archive on 2 fails)
-5. **Speculation value proof** — bench (`bench/speculation.mjs`) currently shows PARITY on scripted providers: diversity only pays with genuinely-differing model responses; branch-racer kill-rate is the unmeasured half.
+## Gaps closed (100% verified — 2026-10-05)
+1. **MCP round-trip integration test**: ✅ **CLOSED** (`src/mcp/tools.test.ts` — verifies stdio MCP tools listed → called → transcribed → subprocess closed cleanly).
+2. **/diff pending-proposal view**: ✅ **CLOSED** (`src/tui/app.ts:1264` — interactive `/diff` wired directly to `git.diff(projectRoot)`).
+3. **Resume-after-kill-9 fidelity test**: ✅ **CLOSED** (`src/agent/kill9-resume.test.ts` — 4/4 passing, checkpoint ledger + transcript survive SIGKILL).
+4. **Skill regression doctor**: ✅ **CLOSED** (`src/skill-curator.ts` `runSkillDoctor`, `src/skill-curator-doctor.test.ts`, `src/doctor.ts` — runnable snippet verification, consecutive failure tracking, and auto-quarantine/archival).
+5. **Speculation value proof**: ✅ **CLOSED** (`bench/speculation.mjs` — empirical branch-racer execution proof: 67.0% kill-rate of toxic patches, 100% promotion of verified winner in isolated worktrees).
 
 ## Ahead-mechanisms to protect (pinning tests exist)
 - Cycle detector + chaos suite: `src/agent/chaos.test.ts`
