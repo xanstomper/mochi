@@ -307,14 +307,14 @@ export class ContextEngine {
    *  deliberately NOT walked synchronously (a large home tree would block the event
    *  loop during prompt build); user skills are still reachable on demand via the
    *  `skill` tool. */
-  private skills(task?: Task): string {
+  private skills(task?: Task, tools?: ToolDefinition[]): string {
     const skillsDir = resolve(this.projectRoot, '.mochi', 'skills');
     const fp = fingerprint(skillsDir);
     // The relevance gate makes the rendered block depend on the ACTIVE TASK, so
     // the cache must key on the task fingerprint too — otherwise the first call
     // (often a no-task chat) caches an empty block and poisons every later task
     // call with a stale, empty skills advertisement.
-    const taskFp = task ? `${task.title} ${task.description ?? ''}`.trim() : '';
+    const taskFp = task ? `${task.title} ${task.description ?? ''}`.trim() : (tools && tools.length > 0 ? 'tools' : '');
     if (this.skillsInitialized && fp === this.skillsFingerprint && taskFp === this.skillsTaskFingerprint) return this.skillsCache;
     try {
       this.skillsInitialized = true;
@@ -325,15 +325,16 @@ export class ContextEngine {
       // runs); otherwise it falls back to ~/.mochi/skills.
       const { skills } = loadAllSkills(this.projectRoot, this.userSkillsDir);
       // RELEVANCE GATE: advertise only the skills whose description overlaps the
-      // active task, capped to a small set. When no task is specified (e.g. structural
-      // invariant testing or base prompt creation), advertise the base bundled catalog
-      // so tests pass and standard skills are visible without dumping 100+ user/global skills.
+      // active task, capped to a small set. When no task is specified, advertise
+      // nothing for no-tool runs (chat/bare) and bundled skills when tools are registered.
       let relevant: Skill[];
       if (task) {
         relevant = selectRelevantSkills(skills, task.title + ' ' + (task.description ?? ''), MAX_TASK_SKILLS);
-      } else {
+      } else if (tools && tools.length > 0) {
         const bDir = bundledSkillsDir();
         relevant = bDir ? discoverSkills(bDir).skills : [];
+      } else {
+        relevant = [];
       }
       this.skillsCache = formatSkillsForPrompt(relevant);
     } catch {
@@ -390,7 +391,7 @@ ${this.toolGuidelines(tools)}
 - **Insightful & Professional**: Provide clear technical insights without unnecessary fluff, but always communicate your plans, findings, and outcomes.
 - **Clean Markdown Formatting**: Use concise GitHub-flavored markdown with code snippets, paths, and clear bullet points where helpful.
 
-${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task)}${contractSection(this.projectRoot)}${memoryDigest()}${feedbackDigest()}${detectCircle(this.messages).stopDirective}
+${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSection(this.projectRoot)}${memoryDigest()}${feedbackDigest()}${detectCircle(this.messages).stopDirective}
 `.trim();
   }
 

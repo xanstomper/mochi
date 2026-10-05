@@ -18,6 +18,19 @@ function trimIndent(text: string): string {
   return lines.map((l) => l.slice(indent)).join('\n');
 }
 
+/**
+ * Strips line numbers like '   1 | ', '1 | ', '12: ', '  12: ' that models
+ * frequently copy directly from the `read` tool output into oldText/newText.
+ */
+export function stripLineNumberGutter(text: string): string {
+  const lines = text.split('\n');
+  const nonEmpty = lines.filter((l) => l.trim().length > 0);
+  if (nonEmpty.length === 0) return text;
+  const isNumbered = nonEmpty.every((l) => /^\s*\d+\s*[|:]\s?/.test(l));
+  if (!isNumbered) return text;
+  return lines.map((l) => l.replace(/^\s*\d+\s*[|:]\s?/, '')).join('\n');
+}
+
 export const editTool: Tool = {
   def: {
     name: 'edit',
@@ -40,17 +53,38 @@ export const editTool: Tool = {
     let content = readFileSync(fullPath, 'utf8');
     const original = content;
     let usedFuzzy = false;
+
+    // Auto-strip line numbers copied from `read` tool gutters (e.g. "   1 | ")
+    const strippedOld = stripLineNumberGutter(oldText);
+    if (strippedOld !== oldText) {
+      if (content.includes(strippedOld) || fuzzyFindUnique(content, strippedOld)) {
+        oldText = strippedOld;
+        newText = stripLineNumberGutter(newText);
+      }
+    }
+
     if (!content.includes(oldText)) {
       // Try without trailing newline differences
       oldText = oldText.replace(/\r\n/g, '\n');
       if (!content.includes(oldText)) {
-        // Fuzzy fallback: match after whitespace normalization (indentation,
-        // tabs-vs-spaces, trailing whitespace). Unique match only; ambiguity
-        // stays an error so we never edit the wrong occurrence silently.
-        const m = fuzzyFindUnique(content, oldText);
-        if (!m) throw new Error(`oldText not found in ${rawPath} (exact and fuzzy match failed)`);
-        content = content.slice(0, m.start) + newText + content.slice(m.end);
-        usedFuzzy = true;
+        // Try stripping line numbers again if only partly stripped
+        const unnumbered = stripLineNumberGutter(oldText);
+        if (content.includes(unnumbered)) {
+          oldText = unnumbered;
+          newText = stripLineNumberGutter(newText);
+        } else {
+          // Fuzzy fallback: match after whitespace normalization (indentation,
+          // tabs-vs-spaces, trailing whitespace). Unique match only; ambiguity
+          // stays an error so we never edit the wrong occurrence silently.
+          let m = fuzzyFindUnique(content, oldText);
+          if (!m && unnumbered !== oldText) {
+            m = fuzzyFindUnique(content, unnumbered);
+            if (m) newText = stripLineNumberGutter(newText);
+          }
+          if (!m) throw new Error(`oldText not found in ${rawPath} (exact and fuzzy match failed)`);
+          content = content.slice(0, m.start) + newText + content.slice(m.end);
+          usedFuzzy = true;
+        }
       }
     }
     if (!usedFuzzy) {

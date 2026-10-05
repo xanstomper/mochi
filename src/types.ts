@@ -49,6 +49,7 @@ export interface SafetyConfig {
   maxCostUsd?: number;
   maxToolCalls?: number;
   maxModelCalls?: number;
+  maxVerifyRetries?: number;
 }
 
 export type ReasoningLevel = 'low' | 'medium' | 'high' | 'max' | 'off' | 'auto';

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   randomSlug, binarySearch, binaryInsert, binaryInsertInPlace, sortableId, lazy,
-  getFilename, getDirectory, getFilenameTruncated, truncateMiddle,
+  getFilename, getDirectory, getFilenameTruncated, truncateMiddle, isValidIpv4,
 } from './util.js';
 
 describe('randomSlug (from OpenFable)', () => {
@@ -76,5 +76,43 @@ describe('path + truncate (from OpenFable)', () => {
     const t = truncateMiddle('header-middle-tail', 10);
     expect(t.startsWith('heade')).toBe(true);
     expect(t.endsWith('tail')).toBe(true);
+  });
+});
+
+describe('isValidIpv4', () => {
+  it('accepts canonical IPv4 addresses', () => {
+    expect(isValidIpv4('0.0.0.0')).toBe(true);
+    expect(isValidIpv4('255.255.255.255')).toBe(true);
+    expect(isValidIpv4('192.168.1.1')).toBe(true);
+    expect(isValidIpv4('1.2.3.4')).toBe(true);
+    expect(isValidIpv4('10.0.0.1')).toBe(true);
+  });
+
+  it('rejects leading zeros', () => {
+    expect(isValidIpv4('192.168.01.1')).toBe(false);
+    expect(isValidIpv4('01.2.3.4')).toBe(false);
+    expect(isValidIpv4('0.0.0.00')).toBe(false);
+  });
+
+  it('rejects out-of-range octets', () => {
+    expect(isValidIpv4('256.0.0.0')).toBe(false);
+    expect(isValidIpv4('192.168.1.256')).toBe(false);
+    expect(isValidIpv4('300.300.300.300')).toBe(false);
+  });
+
+  it('rejects malformed dotted strings', () => {
+    expect(isValidIpv4('192.168.1')).toBe(false);
+    expect(isValidIpv4('192.168.1.1.1')).toBe(false);
+    expect(isValidIpv4('192.168..1')).toBe(false);
+    expect(isValidIpv4('.192.168.1.1')).toBe(false);
+    expect(isValidIpv4('192.168.1.')).toBe(false);
+  });
+
+  it('rejects non-numeric and extra text', () => {
+    expect(isValidIpv4('a.b.c.d')).toBe(false);
+    expect(isValidIpv4('192.168.1.1/24')).toBe(false);
+    expect(isValidIpv4(' 192.168.1.1')).toBe(false);
+    expect(isValidIpv4('192.168.1.1 ')).toBe(false);
+    expect(isValidIpv4('')).toBe(false);
   });
 });

@@ -332,6 +332,8 @@ export class Agent {
   private planNudges = 0;
   private emptyResponseCount = 0;
   private selfReviewCount = 0;
+  private taskKind?: import('../taskkind.js').TaskKind;
+  private contextCutoffNudged = false;
   private lastCompletionAnswer = '';
   private sameAnswerStreak = 0;
   /** Bounded retry budget for transient transport aborts when no fallback
@@ -397,16 +399,16 @@ export class Agent {
    *  hard work gets the full budget (resolveAutoReasoning in taskkind.ts).
    *  Returns a literal tier in all other cases (off/low/medium/high/max). */
   private resolveReasoning(task: Task): 'off' | 'low' | 'medium' | 'high' | 'max' {
-    const raw = (this.config.reasoning || process.env.MOCHI_REASONING || 'max').trim().toLowerCase();
+    const raw = (this.config.reasoning || process.env.MOCHI_REASONING || 'auto').trim().toLowerCase();
     if (raw === 'auto') {
-      const kind = classifyTaskKind(task);
+      const kind = this.taskKind ?? classifyTaskKind(task);
       return resolveAutoReasoning(kind);
     }
     // Guard against any stray invalid value (config re-validates, but stay safe).
     if (raw === 'off' || raw === 'low' || raw === 'medium' || raw === 'high' || raw === 'max' || raw === 'extreme' || raw === 'deep' || raw === 'hard' || raw === 'easy') {
       return raw === 'extreme' || raw === 'deep' || raw === 'hard' ? 'max' : (raw === 'easy' ? 'low' : (raw as 'off' | 'low' | 'medium' | 'high' | 'max'));
     }
-    return 'max';
+    return 'medium';
   }
 
   async run(task: Task): Promise<AgentResult> {
@@ -478,7 +480,7 @@ Continue from 'Next:', do not redo completed progress.`,
       }
     } catch { /* best-effort */ }
 
-    const taskKind = classifyTaskKind(task);
+    const taskKind = this.taskKind = classifyTaskKind(task);
     const repo = detectRepo(this.cwd);
     // Harness-v2 perf (FREEZE FIX 2026-08-22): warm codegraph grammars and the
     // Chameleon scaffold strictly in the BACKGROUND - fire-and-forget, never
@@ -549,7 +551,12 @@ Continue from 'Next:', do not redo completed progress.`,
     if (taskKind !== 'chat' && !this.planMode && !this.compilerInjected) {
       this.compilerInjected = true;
       const resolvedTier = this.resolveReasoning(task);
-      if (resolvedTier === 'high' || resolvedTier === 'max') {
+      const allowCompiler = Boolean(
+        process.env.MOCHI_PROMPT_COMPILER === '1' ||
+        this.config.mode === 'spec' ||
+        (this.config.reasoning === 'max' && !process.env.VITEST)
+      );
+      if (allowCompiler && (resolvedTier === 'high' || resolvedTier === 'max')) {
         try {
           const { promptCompiler } = await import('../prompt/prompt-compiler.js');
           const { detectRepo: detectRepoForCompiler } = await import('../repo.js');
@@ -691,9 +698,15 @@ Continue from 'Next:', do not redo completed progress.`,
         this.resumeProtocolInjected = true;
         this.context.addMessage({ role: 'system', content: MULTI_SESSION_RESUME_PROTOCOL });
       }
-      // Anti-loop: if it's just gathering context (read/search) without editing, encourage an answer.
-      if (this.toolCallsTotal >= 12 && !this.fileChanged && !this.planMode) {
-        this.context.addMessage({ role: 'system', content: 'You have gathered sufficient context. Provide your answer directly now without further tool calls.' });
+      // Anti-loop: if gathering context extensively without editing, nudge the appropriate action.
+      if (!this.contextCutoffNudged && !this.fileChanged && !this.planMode) {
+        if (taskKind === 'chat' && this.toolCallsTotal >= 20) {
+          this.contextCutoffNudged = true;
+          this.context.addMessage({ role: 'system', content: 'You have gathered sufficient context. Provide your answer directly now.' });
+        } else if ((taskKind === 'implement' || taskKind === 'fix' || taskKind === 'refactor') && this.toolCallsTotal >= 30) {
+          this.contextCutoffNudged = true;
+          this.context.addMessage({ role: 'system', content: 'You have gathered substantial context. Please proceed with making the necessary changes using edit/write tools.' });
+        }
       }
       sm.enter('model-call');
       const activeProvider = this.pickProvider();
@@ -1476,12 +1489,12 @@ Continue from 'Next:', do not redo completed progress.`,
           : verification.summary;
         return this.finish(task, true, finalSummary, 'completed');
       }
-      if (this.verifyCount > 3) {
-        // Repeated verification failure: roll the repo back to the state before
-        // this agent's edits rather than leaving broken work on disk for the
-        // next task (or the user) to inherit.
+      const maxRetries = this.config.safety?.maxVerifyRetries ?? 6;
+      if (this.verifyCount > maxRetries) {
+        // Repeated verification failure: only roll back if gitDestructive permission is granted.
+        // Preserves user and agent work on disk by default so progress is never silently wiped.
         let rollbackNote = '';
-        if (this.preEditCheckpoint) {
+        if (this.preEditCheckpoint && this.config.permissions.gitDestructive) {
           try {
             rollbackNote = '\n' + await gitRollback(this.cwd, this.preEditCheckpoint);
             this.events.emit({ type: 'agent:log', agentId: this.id, message: rollbackNote.trim() });
@@ -1489,6 +1502,8 @@ Continue from 'Next:', do not redo completed progress.`,
             rollbackNote = `\n(Rollback failed: ${err instanceof Error ? err.message : String(err)})`;
           }
           this.preEditCheckpoint = undefined;
+        } else if (this.preEditCheckpoint) {
+          rollbackNote = '\n(Work preserved on disk; gitDestructive permission is false)';
         }
         if (this.autopsy) {
           this.autopsy = finalizeAutopsy(this.workspace.dir, this.autopsy, { outcome: 'unresolved' });
@@ -2152,6 +2167,17 @@ Continue from 'Next:', do not redo completed progress.`,
   private sanitizeVerify(cmd: string): string { return sanitizeVerifyCommand(cmd); }
 
   private async verify(task: Task, repo: ReturnType<typeof detectRepo>): Promise<{ passed: boolean; summary: string }> {
+    if (this.profile?.verification === 'none') {
+      return { passed: true, summary: 'Verification skipped by profile.' };
+    }
+    const taskKind = this.taskKind ?? classifyTaskKind(task);
+    if (taskKind === 'chat' || taskKind === 'research' || taskKind === 'plan' || this.planMode) {
+      return { passed: true, summary: `No verification required for ${taskKind} task.` };
+    }
+    if (!this.fileChanged && !task.verificationCommand) {
+      return { passed: true, summary: 'No changes made to verify.' };
+    }
+
     const checks: string[] = [];
     // Run verification commands from the task's fileScope directory when it
     // is consistent. This lets the model write commands like `npx vitest run`
@@ -2481,7 +2507,6 @@ Continue from 'Next:', do not redo completed progress.`,
     const changed = this.context['state'].filesModified ?? [];
     if (!changed.length) return;
     try {
-      const { MemoryStore } = require('../memory.js');
       const store = new MemoryStore(resolve(this.workspace.dir, '.mochi'));
       const body = `Completed "${task.title}". Files changed: ${changed.slice(0, 6).join(', ')}${changed.length > 6 ? ` (+${changed.length - 6} more)` : ''}.`;
       store.add({ kind: 'decision', title: `Completed: ${task.title}`.slice(0, 80), body, source: 'mochi-session' });
@@ -2708,10 +2733,10 @@ Continue from 'Next:', do not redo completed progress.`,
       // file) must NOT be treated as a blocking issue — doing so re-loops the
       // agent through gatherStream and re-streams the same answer to the TUI
       // ("spams the same message") until the self-review cap trips.
-      const mentionsFile = /\b[\w./-]+\.[a-zA-Z0-9]+:\d+/.test(text) || /\b(?:file|line|in)\b/.test(text);
+      const mentionsFile = /\b[\w./-]+\.[a-zA-Z0-9]+:\d+/.test(text) || /\b(?:file|line)\b/i.test(text);
       const neutralNoIssue =
         /^NO_ISSUE$/i.test(text) ||
-        /\b(?:no issue|no issues|no problems?|cannot identify|looks (?:correct|good|fine|clean|great|solid)|all good|lgtm|properly implemented|change looks good|diff is correct)\b/i.test(text) ||
+        /\b(?:no issue|no issues|no problems?|cannot identify|looks (?:correct|good|fine|clean|great|solid)|all good|lgtm|properly implemented|change looks good|diff is correct|looks fine|verified|correctly implemented)\b/i.test(text) ||
         (!mentionsFile && (/^(done|ok|okay|clean|nothing|no problems|no problem|fine|lgtm)\b/i.test(text) || text.length < 40));
 
       if (neutralNoIssue) {

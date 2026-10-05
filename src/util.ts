@@ -142,3 +142,41 @@ export function truncateMiddle(text: string, maxLength = 20): string {
   const end = Math.floor(available / 2);
   return text.slice(0, start) + '…' + text.slice(-end);
 }
+
+/**
+ * Validate a dotted-quad IPv4 address string.
+ *
+ * Returns true only for canonical IPv4 addresses: four decimal octets
+ * separated by single dots, each octet in [0, 255], with no leading zeros
+ * (except the literal "0"). Rejects empty strings, non-numeric characters,
+ * extra dots, missing octets, out-of-range values, and CIDR notation.
+ *
+ * Pure function, zero dependencies, no classes.
+ */
+export function isValidIpv4(s: string): boolean {
+  if (typeof s !== 'string') return false;
+  let octetStart = 0;
+  let octetCount = 0;
+  const len = s.length;
+
+  for (let i = 0; i <= len; i++) {
+    const ch = i < len ? s[i] : '.';
+    if (ch === '.') {
+      if (octetCount === 4) return false; // too many dots
+      const part = s.slice(octetStart, i);
+      if (part.length === 0 || part.length > 3) return false;
+      if (part.length > 1 && part[0] === '0') return false; // leading zero
+      let value = 0;
+      for (let j = 0; j < part.length; j++) {
+        const c = part.charCodeAt(j);
+        if (c < 48 || c > 57) return false; // not '0'-'9'
+        value = value * 10 + (c - 48);
+      }
+      if (value > 255) return false;
+      octetCount++;
+      octetStart = i + 1;
+    }
+  }
+
+  return octetCount === 4 && octetStart === len + 1;
+}

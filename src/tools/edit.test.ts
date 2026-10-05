@@ -56,4 +56,26 @@ describe('edit tool', () => {
     expect(out).toContain('Edited');
     expect(readFileSync(resolve(dir, F), 'utf8')).toContain('z = 1;');
   });
+
+  it('tolerates line number gutters copied directly from read output', async () => {
+    seed('import os\nimport sys\n\ndef main():\n    print("hello")\n');
+    const out = String(await editTool.execute({
+      path: F,
+      oldText: '   4 | def main():\n   5 |     print("hello")',
+      newText: '   4 | def main():\n   5 |     print("world")',
+    }, ctx));
+    expect(out).toContain('Edited');
+    expect(readFileSync(resolve(dir, F), 'utf8')).toContain('print("world")');
+  });
+
+  it('tolerates colon line number gutters', async () => {
+    seed('const foo = "bar";\n');
+    const out = String(await editTool.execute({
+      path: F,
+      oldText: '1: const foo = "bar";',
+      newText: 'const foo = "baz";',
+    }, ctx));
+    expect(out).toContain('Edited');
+    expect(readFileSync(resolve(dir, F), 'utf8')).toContain('const foo = "baz";');
+  });
 });

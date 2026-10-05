@@ -82,6 +82,14 @@ export const ALL_TOOLS: Tool[] = [
   toolFactoryTool,
 ];
 
+export const ALL_TOOLS_MAP = new Map<string, Tool>(ALL_TOOLS.map((t) => [t.def.name, t]));
+
+/** Auxiliary tools that are fully executable if invoked, but excluded from the default advertised
+ *  schema to prevent prompt/JSON-schema bloat and reduce cognitive noise on models. */
+export const AUXILIARY_TOOL_NAMES = new Set([
+  'color', 'tui_builder', 'markdown', 'notes', 'timer', 'env', 'benchmark', 'compile_prompt',
+]);
+
 /**
  * Core tools that are ALWAYS included regardless of model tier. These are the
  * essential tools every agent needs. Extra/advanced tools are only sent to
@@ -89,7 +97,6 @@ export const ALL_TOOLS: Tool[] = [
  */
 const CORE_TOOL_NAMES = new Set([
   'read', 'write', 'edit', 'patch', 'replace_symbol', 'delete', 'shell', 'search', 'glob', 'outline', 'ast_slice',
-  'compile_prompt',
   'git', 'inspect', 'todo', 'skill', 'subagent', 'bg_task', 'fetch', 'web_search', 'web_crawl', 'think', 'chameleon', 'blast_radius', 'session_recall'
 ]);
 
@@ -136,6 +143,9 @@ export function buildTools(config: MochiConfig, allowed?: string[]): Map<string,
       name === 'skill_manage' ||
       name === 'tool_factory';
     if (allowed && !allowed.includes(name) && !alwaysInclude) continue;
+    // Keep default advertised schema clean and focused on engineering primitives.
+    // Auxiliary tools remain executable via ALL_TOOLS_MAP without cluttering the prompt.
+    if (!allowed && AUXILIARY_TOOL_NAMES.has(name) && !(config as any)?.enableAuxiliaryTools) continue;
     // For weak models, only include core tools to keep tool schema lean.
     if (weak && !CORE_TOOL_NAMES.has(name) && !alwaysInclude) continue;
     map.set(name, tool);
@@ -344,7 +354,7 @@ export async function executeTool(
   tools: Map<string, Tool>,
 ): Promise<{ output: string; error?: string; durationMs: number }> {
   const name = TOOL_ALIASES[rawName] || rawName;
-  const tool = tools.get(name);
+  const tool = tools.get(name) || ALL_TOOLS_MAP.get(name);
   if (!tool) return { output: '', error: `Unknown tool: ${rawName}`, durationMs: 0 };
 
   const args = normalizeToolArgs(name, rawArgs);
