@@ -34,6 +34,8 @@ export interface PermissionConfig {
   shell: boolean;
   network: boolean;
   gitDestructive: boolean;
+  admin?: boolean;
+  [key: string]: boolean | undefined;
 }
 
 export interface SafetyConfig {

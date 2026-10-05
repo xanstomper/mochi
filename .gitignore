@@ -9,3 +9,15 @@ native/mochi_core/target
 skills/skills.json
 __pycache__
 *.pyc
+
+# Secrets & credentials protection
+*.env
+*.env.*
+*.p12
+*token*
+*secret*
+*.pem
+*.key
+*.sqlite
+*.sqlite-journal
+*.sqlite3

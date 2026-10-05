@@ -34,6 +34,7 @@ const defaultConfig = (): MochiConfig => ({
     shell: true,
     network: true,
     gitDestructive: false,
+    admin: true,
   },
   telemetry: false,
   // Balanced default: "max" over-specifies heavy compute for the free/low-tier

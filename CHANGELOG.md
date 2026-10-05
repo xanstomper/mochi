@@ -1,6 +1,6 @@
 # Mochi Changelog
 
-## 0.11.0
+## 0.11.1
 
 - **Fixed the second, still-live hard freeze: `glob`'s unbounded synchronous directory walk.** The glob tool recursed with `readdirSync`/`statSync` over every directory under cwd with no depth, entry, or time budget (only `.git`/`node_modules`/`.mochi` skipped). Run from a broad root like `$HOME`, one innocuous `glob native/**/*.rs` ground through hundreds of thousands of stats, blocking the event loop for minutes: no timers, no input, no trace writes — the TUI froze mid-task and would not recover (frozen runs leave truncated traces ending mid-`tool:called`). The walker is now async (`fs.promises.readdir` with dirent types), hard-bounded (24 depth / 25k entries / 3s budget), skips heavyweight dirs (`.cache`, `.cargo`, `.rustup`, `.wine`, `.arduino15`, `target`, `dist`, …), and never follows symlinked directories (loop-proof). Budget exhaustion is surfaced honestly as a `(scan truncated …)` note instead of silent partial results.
 - **Fixed reasoning-stream loops not caught by repetition guard.** Reasoning chunks (`agent:reasoning`) streamed independently and bypassed the `streamBuf` phrase/repetition tracker used for message loops. They now feed that tracker directly, so a model looping the same reasoning block triggers `looped = true` and activates the existing failover/nudge mechanism instead of flooding the transcript with thousands of identical lines.

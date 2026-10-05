@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildMcpTools } from './tools.js';
 import type { EventBus } from '../events.js';
+import { Context } from '../context.js';
 
 // Same minimal stdio MCP server used by the client tests: initialize,
 // tools/list (one `uppercase` tool), tools/call. The integration test below
