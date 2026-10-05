@@ -1,5 +1,5 @@
 import { existsSync, statSync, readdirSync, readFileSync } from 'node:fs';
-import { resolve, relative } from 'node:path';
+import {resolve} from 'node:path';
 import type { Tool } from './types.js';
 
 // Analyze code complexity metrics for a project or file

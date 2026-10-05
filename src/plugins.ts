@@ -8,8 +8,7 @@
 // them up without code changes. TS automation hooks run via the plugin's own
 // `node`/`bun` commands; Lua via `lua` when the plugin declares it.
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, cpSync, readdirSync, statSync } from 'node:fs';
-import { resolve, join, basename } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import {resolve} from 'node:path';
 import type { HookConfig, HookName } from './hooks.js';
 
 export interface PluginManifest {

@@ -36,10 +36,10 @@ export type TeamPlan = {
 
 /** Assign a specialist role to each task, rotating through fallbacks when no
  *  hint matches, and guarantee at least one reviewer-shaped task at the end. */
-export function assignTeamRoles(goal: Goal, tasks: Task[]): Task[] {
+export function assignTeamRoles(_goal: Goal, tasks: Task[]): Task[] {
   const fallback: AgentRole[] = ['coder', 'tester', 'reviewer', 'researcher'];
   let fi = 0;
-  const assigned = tasks.map((t, i) => {
+  const assigned = tasks.map((t, _i) => {
     const text = `${t.title} ${t.description} ${(t.acceptanceCriteria ?? []).join(' ')}`;
     const hit = ROLE_HINTS.find(([re]) => re.test(text));
     const role: AgentRole = hit ? hit[1] : fallback[fi % fallback.length];

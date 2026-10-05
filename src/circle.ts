@@ -20,18 +20,6 @@ export interface CircleVerdict {
   stopDirective: string;
 }
 
-const PREFIX_PATTERNS = [
-  /^so[, ]/i,
-  /^honest answer/i,
-  /^more things/i,
-  /^here'?s? (the )?/i,
-  /^definitive/i,
-  /^final\b/i,
-  /^real task/i,
-  /^let me (re-?)?summar/i,
-  /^to recap/i,
-];
-
 const ESCALATION_PATTERNS = [
   /\bdefinitive\b/i,
   /\bfinal\b/i,

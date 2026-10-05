@@ -1019,7 +1019,7 @@ function wrappedCount(text: string, width: number): number {
 const SEMANTIC_QUOTE = '\x1b[38;2;150;150;165m';
 
 /** Render one transcript entry with mochi color coordination. */
-export function renderEntry(entry: RenderEntry, expandTools = false): string[] {
+export function renderEntry(entry: RenderEntry, _expandTools = false): string[] {
   const text = entry.text;
   if (!text.trim()) return [];
   // Coordinated visual language: every transcript line carries a 2-space

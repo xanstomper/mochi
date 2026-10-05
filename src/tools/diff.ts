@@ -19,7 +19,6 @@ function computeDiff(original: string, modified: string, labelA = 'a', labelB = 
     if (i < oldLines.length && j < newLines.length && oldLines[i] === newLines[j]) {
       i++; j++;
     } else {
-      const hunkStart = result.length;
       const ctxStart = Math.max(0, i - 3);
       result.push(`@@ -${ctxStart + 1} +${ctxStart + 1} @@`);
       // 3 lines of context before

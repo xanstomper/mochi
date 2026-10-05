@@ -1,7 +1,7 @@
 import { createProvider } from './model/router.js';
 import type { MochiConfig } from './types.js';
 import { BudgetEngine } from './budget.js';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import { resolve } from 'node:path';
 import { redact } from './security.js';
 

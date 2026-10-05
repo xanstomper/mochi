@@ -9,7 +9,6 @@ import { mutationGeneration } from './fs-signal.js';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 
-const MAX_TOTAL = 256_000;
 
 // Bounded kill for a hung search subprocess (rg / native bin). A search
 // against a huge/network-backed tree must never block the loop forever —
@@ -182,7 +181,7 @@ interface GroupResult {
   lines: MatchLine[]; // deduped lines to display
 }
 
-function groupMatches(cwd: string, raw: MatchLine[]): GroupResult[] {
+function groupMatches(_cwd: string, raw: MatchLine[]): GroupResult[] {
   const totals = new Map<string, number>();
   for (const m of raw) totals.set(m.path, (totals.get(m.path) ?? 0) + 1);
   const seen = new Set<string>();

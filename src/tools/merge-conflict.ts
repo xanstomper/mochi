@@ -91,7 +91,6 @@ export function resolveConflictsInContent(
   const lines = content.split('\n');
   const output: string[] = [];
 
-  let idx = 0;
   for (let i = 0; i < lines.length; i++) {
     const lineNum = i + 1;
     const currentBlock = blocks.find((b) => lineNum >= b.startLine && lineNum <= b.endLine);

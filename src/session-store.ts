@@ -61,12 +61,10 @@ CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at);
 /** One store per Mochi workspace (.mochi/sessions.sqlite). */
 export class SessionStore {
   private db: SqliteDb;
-  private dir: string;
   /** false when node:sqlite is unavailable; all reads return empty. */
   private available = true;
 
   constructor(dir: string) {
-    this.dir = dir;
     // Guard: on runtimes without node:sqlite (Node < 22.5) this is a no-op
     // store so callers never crash — every method safely returns empty.
     if (!hasSqlite()) {
@@ -167,7 +165,7 @@ export class SessionStore {
     ).get(id) as unknown as SessionRow | undefined;
   }
 
-  markCompleted(id: string, status: 'completed'): void {
+  markCompleted(id: string, _status: 'completed'): void {
     if (!this.available) return;
     this.db.prepare("UPDATE sessions SET status='completed', updated_at=? WHERE id=?").run(Date.now(), id);
   }

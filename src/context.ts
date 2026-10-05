@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { homedir, hostname, platform, arch, totalmem, freemem, cpus, release } from 'node:os';
+import {hostname, platform, arch, totalmem, freemem, cpus, release} from 'node:os';
 import { resolve } from 'node:path';
 import { MemoryStore, type MemoryEntry } from './memory.js';
 import { selectRelevant } from './relevance.js';
@@ -9,7 +9,7 @@ import { nativePlanCompaction } from './native/agent-protocol.js';
 import type { PlanRequestMessage } from './native/agent-protocol.js';
 import { classifyTaskKind, kindHint } from './taskkind.js';
 import type { ChatMessage, MochiConfig, RepoInfo, Task, ToolDefinition } from './types.js';
-import { isWeakModel, TOOL_ALIASES, normalizeToolArgs } from './tools/index.js';
+import {TOOL_ALIASES, normalizeToolArgs} from './tools/index.js';
 import { getCachedScaffold } from './cognitive/chameleon.js';
 import { isMode, modeInstruction } from './modes.js';
 import { loadRules, selectActiveRules } from './rules.js';
@@ -678,7 +678,6 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
   async compact(checkpoint?: string) {
     // Tier 1 (micro): drop everything but the recency window and distill small facts.
     if (this.messages.length <= 6) return;
-    const keep = 6;
 
     // VALID CUT POINTS (Pi insight): a tool result must stay attached to the
     // assistant message that requested it. planCutIndex() enforces that

@@ -2,7 +2,6 @@ import type { MochiEvent } from './types.js';
 
 /** Events noisy enough to coalesce when they arrive faster than consumers
  *  can render (Phase 6: high-rate streaming must not flood listeners). */
-const COALESCABLE = new Set<MochiEvent['type']>(['message:chunk', 'agent:reasoning', 'command:output']);
 
 export interface EventBusStats {
   published: number;
@@ -31,7 +30,6 @@ export class EventBus {
   /** Bounded replay buffer for the summary engine / diagnostics. */
   private history: MochiEvent[] = [];
   private readonly historyLimit: number;
-  private readonly coalesceWindowMs: number;
   private seq = 0;
   private _stats = { published: 0, coalesced: 0, handlerErrors: 0 };
   /** (type:agentId) -> newest event awaiting its coalesce window. */
@@ -39,7 +37,6 @@ export class EventBus {
 
   constructor(opts: { historyLimit?: number; coalesceWindowMs?: number } = {}) {
     this.historyLimit = opts.historyLimit ?? 5000;
-    this.coalesceWindowMs = opts.coalesceWindowMs ?? 50;
   }
 
   on<T extends MochiEvent['type']>(type: T, handler: (event: Extract<MochiEvent, { type: T }>) => void | Promise<void>) {

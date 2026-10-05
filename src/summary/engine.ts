@@ -136,7 +136,7 @@ export function dedupe(events: ClassifiedEvent[]): ClassifiedEvent[] {
 
 /** Build the structured summary from the event stream. Every metric is derived
  *  from real events; absent data omits the field (never fabricates). */
-export function summarize(events: readonly MochiEvent[], opts: { goal?: string } = {}): SummaryDocument {
+export function summarize(events: readonly MochiEvent[], _opts: { goal?: string } = {}): SummaryDocument {
   const classified = dedupe(events.map(classify));
   const doc: SummaryDocument = {
     status: 'complete',
@@ -165,7 +165,7 @@ export function summarize(events: readonly MochiEvent[], opts: { goal?: string }
   let firstTs: number | undefined;
   let lastTs: number | undefined;
 
-  for (const { event, category, priority } of classified) {
+  for (const { event, category: _category, priority } of classified) {
     const ts = (event as { timestamp?: number }).timestamp;
     if (ts) { firstTs ??= ts; lastTs = ts; }
 

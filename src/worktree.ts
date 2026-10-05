@@ -6,7 +6,7 @@
 
 import { execFileSync, execFile } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
-import { resolve, join } from 'node:path';
+import {join} from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 export interface WorktreeInfo {
@@ -40,7 +40,7 @@ export class WorktreeManager {
 
   constructor(
     private readonly repoRoot: string,
-    private readonly mochiDir: string,
+    mochiDir: string,
   ) {
     this.worktreeBase = join(mochiDir, 'worktrees');
   }

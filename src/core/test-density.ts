@@ -2,8 +2,6 @@
 // Audits the ratio of test code to production changes, identifies untested newly
 // introduced symbols, and generates actionable test templates to guarantee zero-bug delivery.
 
-import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { detectRepo } from '../repo.js';
 
 export interface TestDensityReport {

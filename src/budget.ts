@@ -151,7 +151,7 @@ export class BudgetEngine {
     return 'full';
   }
 
-  snapshot(model: string): BudgetSnapshot {
+  snapshot(_model: string): BudgetSnapshot {
     return {
       usedTokens: this.usedTokens,
       usedCostUsd: this.usedCostUsd,

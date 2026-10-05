@@ -2,8 +2,8 @@
 // Provides the --yolo / --dangerously-skip-permissions autonomous execution mode,
 // granular permission tiers, and audit logging.
 
-import { appendFileSync, mkdirSync, existsSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import {appendFileSync, mkdirSync} from 'node:fs';
+import {resolve} from 'node:path';
 import { classifyCommand, type CommandRisk } from './security.js';
 
 // ---------------------------------------------------------------------------

@@ -16,7 +16,7 @@ export class DualModelDispatcher {
   private frontierProvider: ReturnType<typeof createProvider>;
   private fastProvider: ReturnType<typeof createProvider>;
 
-  constructor(private config: ModelConfig) {
+  constructor(config: ModelConfig) {
     this.frontierProvider = createProvider(config, 'coding');
     this.fastProvider = createProvider(config, 'fast');
   }

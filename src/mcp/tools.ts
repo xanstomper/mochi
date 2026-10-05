@@ -30,7 +30,7 @@ function normalizeServerConfig(servers: Record<string, Partial<McpServerConfig>>
 
 export async function buildMcpTools(
   servers: Record<string, Partial<McpServerConfig>> | undefined,
-  log = (m: string) => void 0,
+  log = (_m: string) => void 0,
 ): Promise<McpToolMap> {
   const tools = new Map<string, Tool>();
   const errors: string[] = [];

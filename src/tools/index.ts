@@ -1,4 +1,4 @@
-import type { MochiConfig, ToolDefinition } from '../types.js';
+import type {MochiConfig} from '../types.js';
 import type { ToolContext, Tool } from './types.js';
 import { readTool } from './read.js';
 import { writeTool } from './write.js';
@@ -51,7 +51,7 @@ import { securityAuditTool } from './security-audit.js';
 import { skillManageTool } from '../skill-manager.js';
 import { astSliceTool } from './ast-slice.js';
 import { compilePromptTool } from './compile-prompt.js';
-import { toolFactoryTool, refreshAuthoredTools, RESERVED_TOOL_NAMES, loadAuthoredTools } from './tool-factory.js';
+import {toolFactoryTool, RESERVED_TOOL_NAMES, loadAuthoredTools} from './tool-factory.js';
 
 import { timerTool } from './timer.js';
 import { envTool } from './env.js';
@@ -98,16 +98,6 @@ export const AUXILIARY_TOOL_NAMES = new Set([
 const CORE_TOOL_NAMES = new Set([
   'read', 'write', 'edit', 'patch', 'replace_symbol', 'delete', 'shell', 'search', 'glob', 'outline', 'ast_slice',
   'git', 'inspect', 'todo', 'skill', 'subagent', 'bg_task', 'fetch', 'web_search', 'web_crawl', 'think', 'chameleon', 'blast_radius', 'session_recall'
-]);
-
-/** Extended tools included only when the model is not a known weak/free tier. */
-const EXTENDED_TOOL_NAMES = new Set([
-  'regex_replace', 'deepwiki', 'clipboard', 'sql_codebase_query',
-  'search_replace_multi', 'analyze_code', 'perf',
-  'web_search', 'get_diagnostics', 'create_directory', 'move_file', 'copy_file',
-  'git_blame', 'git_history', 'system_info', 'find_references', 'find_definitions',
-  'db_inspect', 'create_pr', 'type_hierarchy', 'chameleon', 'rename_symbol', 'repl',
-  'lint', 'format',
 ]);
 
 /** Detect whether a model name implies a weak/free-tier model that struggles

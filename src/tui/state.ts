@@ -453,7 +453,6 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
       const subId = String(event.agentId ?? event.id ?? '');
       if (subId) state.activeSubagents.delete(subId);
       const role = String(event.role ?? 'subagent');
-      const status = event.success ? 'succeeded' : 'failed';
       const summary = String(event.summary ?? '').slice(0, 100);
       pushLine(state, event.success ? 'system' : 'error', `${event.success ? '✓' : '×'} subagent  ${role}: ${summary}`);
       return true;

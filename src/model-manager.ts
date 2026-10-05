@@ -1,5 +1,5 @@
 import type { MochiConfig, ModelProfile } from './types.js';
-import { PROVIDERS, providerById, loadConfigFile, saveConfigFile, configFilePath } from './providers.js';
+import {PROVIDERS, providerById, loadConfigFile, saveConfigFile} from './providers.js';
 
 export interface ProviderSelection {
   provider: string;

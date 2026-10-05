@@ -1,6 +1,5 @@
 import { performance } from 'node:perf_hooks';
 import type { Tool } from './types.js';
-import { approxTokens } from '../context.js';
 
 // Performance monitoring and optimization helper for the agent runtime
 export const perfTool: Tool = {
@@ -19,8 +18,6 @@ export const perfTool: Tool = {
   },
   async execute(args, ctx) {
     const action = String(args.action ?? 'stats');
-    const target = args.target ? String(args.target) : undefined;
-    const iterations = Math.max(1, Math.min(100, Number(args.iterations ?? 1)));
 
     // Safe access to config values (may be undefined in test contexts)
     const safety = ctx.config.safety ?? {};

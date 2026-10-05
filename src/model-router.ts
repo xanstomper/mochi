@@ -12,11 +12,6 @@ import type { ModelConfig, ModelProfile } from './types.js';
 
 export type TaskTier = 'fast' | 'standard' | 'reasoning';
 
-interface RouterDecision {
-  config: ModelConfig;
-  model: string;
-  tier: TaskTier;
-}
 
 /** Classify a task by its description to select the right model tier. */
 export function classifyTaskTier(taskTitle: string, taskRole?: string): TaskTier {

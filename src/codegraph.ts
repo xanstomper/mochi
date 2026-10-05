@@ -2,7 +2,6 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { resolve, relative, dirname } from 'node:path';
-import { createHash } from 'node:crypto';
 import type * as ts from 'typescript';
 import { hasSqlite as driverAvailable, openDb, type SqliteDb } from './sqlite.js';
 import { mutationGeneration } from './tools/fs-signal.js';
@@ -158,7 +157,6 @@ export type ParserBackend = 'tsc' | 'tree-sitter';
 let _Parser: any = null;              // web-tree-sitter Parser class (post-init)
 const _languages = new Map<LanguageId, any>(); // LanguageId -> Parser.Language
 let _tsInitError = '';
-let _tsReady = false;
 
 // Grammar -> npm package / wasm filename. Package names match the npm
 // tree-sitter-<lang> WASM distributions.

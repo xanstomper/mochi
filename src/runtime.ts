@@ -1,7 +1,5 @@
-import { resolve } from 'node:path';
-import { existsSync, mkdirSync } from 'node:fs';
-import type { MochiConfig } from './types.js';
 import { loadConfig, loadProjectConfig, validateConfig } from './config.js';
+import type { MochiConfig } from './types.js';
 import { EventBus } from './events.js';
 import { Workspace } from './workspace.js';
 import { GoalEngine } from './goals/goal.js';
@@ -13,7 +11,7 @@ import { MemoryStore } from './memory.js';
 import { RetrievalEngine } from './retrieval.js';
 import { SpeculativeEngine, type SpeculativeResult } from './speculative.js';
 import { BudgetEngine } from './budget.js';
-import { setProvider, currentConfig, login as doLogin, selectProviderById, describeConfig, listModelsForProvider } from './model-manager.js';
+import {currentConfig, login as doLogin, selectProviderById, describeConfig, listModelsForProvider} from './model-manager.js';
 import { UsageStore } from './usage.js';
 import { buildTools } from './tools/index.js';
 import { applyMode, modeInstruction, MODE_IDS, isMode } from './modes.js';
@@ -32,7 +30,6 @@ export class Runtime {
   goals: GoalEngine;
   private hooks: HookManager;
   readonly usage: UsageStore;
-  private mode = 'normal';
   private abortController: AbortController;
   private abortSignal: AbortSignal;
   activeSessionId?: string;
@@ -144,7 +141,6 @@ export class Runtime {
   setMode(mode: string): string {
     if (!isMode(mode)) return `Unknown mode "${mode}". Modes: ${MODE_IDS.join(', ')}`;
     this.config = applyMode(this.config, mode);
-    this.mode = mode;
     return modeInstruction(mode) || 'normal';
   }
 
@@ -268,8 +264,6 @@ export class Runtime {
     if (cap < 50) (this.config.safety as { maxIterations: number }).maxIterations = 50;
     const startedAt = performance.now();
     const summaries: string[] = [];
-    let tokensUsed = 0;
-    let costUsd = 0;
     const sessionId = opts?.sessionId ?? this.activeSessionId;
     try {
       let priorSummary = '';

@@ -635,7 +635,6 @@ async function main() {
     return;
   }
   if (first === 'mode') {
-    const { MODE_IDS } = await import('./modes.js');
     const m = positional[1];
     if (!m) { console.log('Usage: mochi mode <normal|spec|security|codemod|chaos>'); return; }
     const out = runtime.setMode(m);
@@ -677,7 +676,7 @@ async function main() {
     }
   }
   if (first === 'skills') {
-    const { loadAllSkills, readSkillBody } = await import('./skills.js');
+    const {loadAllSkills} = await import('./skills.js');
     const sub = positional[1];
     if (sub === 'import' || sub === 'import-skills') {
       // mochi skills import <source> [--force] — alias handled inline so the
@@ -931,7 +930,7 @@ async function main() {
   }
   if (first === 'ask') {
     // Interactive clarification (spec 12-B): mochi ask "<title>" --choices "a;b;c" [--default a] [--recommended c]
-    const { askUserChoice, renderMenu } = await import('./clarify.js');
+    const {askUserChoice} = await import('./clarify.js');
     const title = positional.slice(1).join(' ');
     const choicesRaw = String(flags.choices ?? flags.options ?? '');
     if (!title || !choicesRaw) {
@@ -1084,7 +1083,7 @@ async function main() {
   }
   if (first === 'branch') {
     const { execFile } = await import('node:child_process');
-    execFile('git', ['branch', '--show-current'], { cwd }, (e, out) => console.log(String(out ?? '').trim() || 'no branch'));
+    execFile('git', ['branch', '--show-current'], { cwd }, (_e, out) => console.log(String(out ?? '').trim() || 'no branch'));
     return;
   }
   if (first === 'commit') {

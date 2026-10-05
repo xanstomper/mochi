@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Attempt, Task, TaskStatus, AgentRole } from '../types.js';
+import type {Attempt, Task, AgentRole} from '../types.js';
 
 export function createTask(
   title: string,

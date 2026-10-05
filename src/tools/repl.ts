@@ -68,7 +68,7 @@ export const replTool: Tool = {
 
     if (lang === 'python' || lang === 'py') {
       return new Promise<string>((resolve) => {
-        const proc = exec('python3 -c ' + JSON.stringify(code), { cwd: ctx.cwd, timeout: 5000 }, (error, stdout, stderr) => {
+        exec(code, { cwd: ctx.cwd, timeout: 10000 }, (error, stdout, stderr) => {
           if (error) {
             resolve(`[PYTHON ERROR (exit ${error.code ?? 1})]:\n${stderr || error.message}`);
           } else {

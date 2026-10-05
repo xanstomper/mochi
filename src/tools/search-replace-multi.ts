@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
+import {readFileSync, writeFileSync, readdirSync} from 'node:fs';
 import { resolve, relative } from 'node:path';
 import type { Tool } from './types.js';
 

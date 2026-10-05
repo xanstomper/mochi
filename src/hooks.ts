@@ -35,7 +35,7 @@ export interface HookResult {
 export class HookManager {
   private config: HookConfig = {};
 
-  constructor(private workspaceDir: string) {
+  constructor(workspaceDir: string) {
     const path = resolve(workspaceDir, 'hooks.json');
     if (!existsSync(path)) return;
     try {

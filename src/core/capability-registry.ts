@@ -199,7 +199,7 @@ export function toolToCapability(tool: Tool): Capability {
   };
 }
 
-export function createDefaultCapabilityRegistry(config: any, allowed?: string[]): CapabilityRegistry {
+export function createDefaultCapabilityRegistry(_config: any, allowed?: string[]): CapabilityRegistry {
   const registry = new CapabilityRegistry();
   for (const tool of ALL_TOOLS) {
     if (!allowed || allowed.includes(tool.def.name) || tool.def.name === 'todo' || tool.def.name === 'skill' || tool.def.name === 'subagent') {

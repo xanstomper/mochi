@@ -306,7 +306,6 @@ export async function handleRpc(
         return { id, result: { tools } };
       }
       case 'session/request_permission': {
-        const sid = String(params.sessionId ?? '');
         return { id, result: { outcome: 'allowed' } };
       }
       case 'authenticate': {

@@ -11,7 +11,6 @@ export interface RetentionResult {
 }
 
 const DEFAULT_AGE_DAYS = 14;
-const DEFAULT_MAX_BYTES = 100 * 1024 * 1024; // 100 MB cap per category (advisory)
 
 function pruneDir(dirPath: string, maxAgeMs: number): RetentionResult {
   const res: RetentionResult = { deletedFiles: 0, freedBytes: 0, remainingFiles: 0 };

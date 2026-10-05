@@ -157,7 +157,7 @@ export async function notifyJobResult(job: CronJob, summary: string): Promise<vo
       // shell command: pass the summary through stdin + an env var
       const { execFile } = await import('node:child_process');
       return await new Promise<boolean>((resolve2) => {
-        execFile('sh', ['-c', target], { env: { ...process.env, MOCHI_JOB_SUMMARY: summaryLine } }, (err, stdout, stderr) => {
+        execFile('sh', ['-c', target], { env: { ...process.env, MOCHI_JOB_SUMMARY: summaryLine } }, (err, _stdout, _stderr) => {
           resolve2(!err);
         });
       });

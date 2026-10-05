@@ -2,7 +2,7 @@
 // Scans project files and dependencies for credential leaks, command/SQL/code injections,
 // insecure file operations, and vulnerable packages.
 
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import {readFileSync, readdirSync} from 'node:fs';
 import { resolve, relative, extname } from 'node:path';
 import type { Tool } from './types.js';
 
@@ -195,7 +195,7 @@ export const securityAuditTool: Tool = {
     parameters: [],
     permission: 'read',
   },
-  async execute(args, ctx) {
+  async execute(_args, ctx) {
     const findings = runSecurityAudit(ctx.cwd);
     return formatSecurityReport(findings);
   },

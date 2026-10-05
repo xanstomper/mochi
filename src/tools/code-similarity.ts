@@ -2,7 +2,7 @@
 // Scans project files using tokenized n-gram Jaccard similarity and AST tokens
 // to locate duplicate logic, cloned implementations, or existing utility functions across the codebase.
 
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import {existsSync, readFileSync, readdirSync} from 'node:fs';
 import { resolve, extname, relative } from 'node:path';
 import type { Tool } from './types.js';
 

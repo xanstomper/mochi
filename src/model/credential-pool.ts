@@ -23,10 +23,6 @@ export interface PooledKey {
   key: string | null;
 }
 
-interface CredCounter {
-  used: number;
-  next: number;
-}
 
 // Per-(provider, poolId) round-robin cursor, so a warm provider keeps using
 // the same key unless it is revoked, while a cool/blocked key is skipped.
@@ -118,7 +114,7 @@ export function nextKey(provider: string, current?: string | null): PooledKey {
 }
 
 /** Mark a key failed so the pool rotates away from it for `cooldownMs`. */
-export function retireKey(provider: string, key: string | null, cooldownMs = 30_000): void {
+export function retireKey(_provider: string, key: string | null, cooldownMs = 30_000): void {
   if (!key) return;
   disabledUntil.set(keyHash(key), Date.now() + cooldownMs);
 }

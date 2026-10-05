@@ -3,7 +3,7 @@
 // "model tries again, hoping for the best". Paired with autopsy.ts (which
 // persists what was tried) and lessons.ts (which remembers what worked).
 
-import type { MochiConfig, ModelConfig } from './types.js';
+import type {ModelConfig} from './types.js';
 
 export type FailureKind =
   | 'syntax'        // compile/parse error

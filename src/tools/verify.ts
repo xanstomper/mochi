@@ -1,6 +1,4 @@
 import { spawn } from 'node:child_process';
-import { existsSync, statSync } from 'node:fs';
-import { resolve } from 'node:path';
 import type { Tool } from './types.js';
 import { detectRepo } from '../repo.js';
 

@@ -1,4 +1,4 @@
-import { sliceVisibleRange, highlightRange } from './selection.js';
+import {highlightRange} from './selection.js';
 import { execFile, spawn } from 'node:child_process';
 import { basename, resolve } from 'node:path';
 import { findProjectRoot } from '../repo.js';
@@ -26,7 +26,6 @@ import {
   SPLASH_TICKS,
   statusBarRow1,
   statusBarRow2,
-  renderEntry,
   renderMarkdown,
   renderDropdown,
 
@@ -36,9 +35,7 @@ import {
   composerBottomRule,
   composerHintRow,
   transcriptIndent,
-  turnRule,
   thinkingLine,
-  spinnerFrame,
   ellipsize,
 } from './view.js';
 
@@ -128,7 +125,6 @@ const COMMANDS = [
   { name: '/exit', hint: 'Quit Mochi CLI' },
 ];
 
-const SPINNER = ['◐', '◓', '◑', '◒'];
 
 export async function launchTui(runtime: Runtime, initialPrompt?: string): Promise<void> {
   const projectRoot = findProjectRoot(runtime.cwd);
@@ -219,9 +215,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   };
 
   let pendingResolver: ((v: string) => void) | undefined;
-  let pendingPrompt: string | undefined;
   let menuResolver: ((i: number) => void) | undefined;
-  let lastEscAt = 0;
   let lastCtrlCAt = 0;
 
   let schedulerTimer: NodeJS.Timeout | undefined;
@@ -308,10 +302,6 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     const get = (key: string) => {
       const r = args.match(new RegExp(`"${key}":\\s*"([^"]+)"`));
       return r?.[1];
-    };
-    const getRaw = (key: string) => {
-      const r = args.match(new RegExp(`"${key}":\\s*"([\\s\\S]*?)"(?:,|\\s*\\})`));
-      return r?.[1]?.replace(/\\n/g, ' ');
     };
     if (name === 'shell') return `shell: ${get('description') ?? get('command') ?? ''}`;
     if (name === 'read') return `read: ${get('path') ?? ''}`;
@@ -1269,7 +1259,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     }
     if (line === '/profiles') { await run(async () => runtime.profiles().map(p => `${p.name} (${p.role}) model=${p.defaultModel ?? 'coding'} verification=${p.verification ?? 'optional'}`).join('\n')); return; }
     if (line === '/memory') { await run(async () => runtime.memory() || 'No project memory yet.'); return; }
-    if (line === '/rules') { await run(async () => { const { loadRules, listRules } = await import('../contract.js'); const r = listRules(runtime.cwd); if (r.length === 0) return 'No MOCHI.md rules yet. Try: /rules add <rule>'; return r.map((x, i) => `${i + 1}. ${x}`).join('\n'); }); return; }
+    if (line === '/rules') {await run(async () => { const { listRules} = await import('../contract.js'); const r = listRules(runtime.cwd); if (r.length === 0) return 'No MOCHI.md rules yet. Try: /rules add <rule>'; return r.map((x, i) => `${i + 1}. ${x}`).join('\n'); }); return; }
     if (line.startsWith('/rules add ')) { await run(async () => { const { appendRule } = await import('../contract.js'); const rule = line.slice('/rules add '.length).trim(); if (!rule) return 'empty rule'; const r = appendRule(runtime.cwd, rule); return `appended → ${r.file}`; }); return; }
     if (line === '/facts') { await run(async () => { const { memoryDigest } = await import('../memory-store.js'); const d = memoryDigest(); return d || 'No durable facts yet.'; }); return; }
     if (line.startsWith('/fact ')) { await run(async () => { const { addFact } = await import('../memory-store.js'); const stmt = line.slice(6).trim(); if (!stmt) return 'usage: /fact <statement>'; addFact(stmt, 'fact', 'user'); return `remembered: ${stmt}`; }); return; }
@@ -1785,7 +1775,6 @@ if (line === '/branch') { await run(async () => (await import('../git.js')).stat
   function ask(question: string): Promise<string> {
     return new Promise((res) => {
       state.promptActive = true;
-      pendingPrompt = question;
       pendingResolver = res;
       state.input = '';
       state.cursor = 0;
@@ -1831,9 +1820,6 @@ if (line === '/branch') { await run(async () => (await import('../git.js')).stat
     scheduleRender();
   }
 
-  function isProviderId(s: string) {
-    return providerById(s) ? true : false;
-  }
 
   async function runShell(cmd: string) {
     if (!cmd) { push('error', 'No command given'); return; }
@@ -1852,7 +1838,6 @@ if (line === '/branch') { await run(async () => (await import('../git.js')).stat
       const repo = detectRepo(projectRoot);
       const cmd = extra ? `node --run ${extra} 2>/dev/null || ${repo.testCommand}` : (repo.testCommand ?? 'no test command detected');
       const { execFile } = await import('node:child_process');
-      const raw = cmd.includes(' || ') ? cmd.split(' || ')[0] : cmd;
       const resolved = cmd.includes(' || ') ? cmd : cmd;
       const out = await new Promise<string>((resolve) => execFile('sh', ['-c', resolved], { cwd: projectRoot, maxBuffer: 4 * 1024 * 1024 }, (e, stdout, stderr) => {
         resolve((e ? `exit code: ${(e as any).code ?? 1}\n` : 'exit code: 0\n') + String(stdout ?? '').slice(0, 6000) + String(stderr ?? '').slice(0, 3000));
@@ -2588,7 +2573,6 @@ if (line === '/branch') { await run(async () => (await import('../git.js')).stat
             pendingResolver(text.trim());
             pendingResolver = undefined;
             state.promptActive = false;
-            pendingPrompt = undefined;
             state.input = '';
             state.cursor = 0;
           } else {
@@ -2618,7 +2602,6 @@ if (line === '/branch') { await run(async () => (await import('../git.js')).stat
           i += osc[0].length;
           continue;
         }
-        const now = Date.now();
         if (rest === '\x1b') {
           if (state.busy) {
             runtime.abort('User skipped/cancelled task via ESC');
@@ -2925,12 +2908,6 @@ if (line === '/branch') { await run(async () => (await import('../git.js')).stat
   return new Promise<void>(() => {});
 }
 
-function formatDuration(ms: number): string {
-  const totalSeconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-}
 
 import { nativeGitBranch, nativeDiffNumstat } from '../native/core.js';
 

@@ -130,7 +130,7 @@ const LANG_SPECS: LangSpec[] = [
     markers: ['CMakeLists.txt', 'Makefile', 'configure.ac'],
     fileManagers: [['CMakeLists.txt', 'cmake'], ['Makefile', 'make']],
     build: (r) => (existsSync(resolve(r, 'CMakeLists.txt')) ? 'cmake --build .' : 'make'),
-    test: (r) => 'ctest',
+    test: (_r) => 'ctest',
     entries: (r) => pickExisting(r, ['src/main.cpp', 'main.cpp', 'src/main.c', 'main.c']),
     hint: 'C/C++: build with the project system (`cmake --build .`, `make`), tests under ctest or a test target.',
   },

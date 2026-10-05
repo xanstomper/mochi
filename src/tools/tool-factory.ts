@@ -16,7 +16,7 @@
 //   - Authored tools can NEVER shadow a built-in tool name or alias.
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, renameSync, statSync } from 'node:fs';
-import { join, dirname, basename } from 'node:path';
+import {join, dirname} from 'node:path';
 import { safeSlug } from '../skill-manager.js';
 import type { Tool, ToolContext } from './types.js';
 import { recordToolUsage, toolUsageLine } from './tool-usage.js';

@@ -1,4 +1,3 @@
-import { StreamParser } from '../stream-parser.js';
 import type { ChatMessage, ModelResponse, StreamChunk, ToolDefinition } from '../types.js';
 import { ProviderError, describeModelError, parseRetryAfter } from '../utils/http-error.js';
 import { withRetries, classifyError } from './rate-limit.js';

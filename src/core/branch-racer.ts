@@ -4,7 +4,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import {existsSync, writeFileSync, mkdirSync} from 'node:fs';
 import { resolve, dirname, relative, isAbsolute } from 'node:path';
 import { WorktreeManager } from '../worktree.js';
 import { detectRepo } from '../repo.js';

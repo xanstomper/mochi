@@ -11,14 +11,14 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        # package.json declares engines.node >= 22 (and @types/node ^22); Node 20
-        # is unsupported, so only test the supported LTS major.
+        # package.json declares engines.node >= 22; test on latest LTS.
         node: [22]
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -26,6 +26,7 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
+
       - name: Build native accelerators (Rust + C++) so parity tests run
         run: |
           if command -v rustc >/dev/null 2>&1 && command -v g++ >/dev/null 2>&1; then
@@ -33,16 +34,24 @@ jobs:
           else
             echo "toolchain missing; native parity tests will self-skip"
           fi
-      - name: Typecheck
+
+      # ── Lint gate (MCH-13/MCH-23): no unused locals/params, strict types ──
+      - name: Typecheck (strict — noUnusedLocals enforced)
         run: npx tsc -p tsconfig.json --noEmit
+
+      # ── Tests with coverage (MCH-23) ──
       - name: Tests
-        run: npx vitest run
+        run: npx vitest run --coverage --coverage.reporter=text --coverage.thresholds.lines=70 --coverage.thresholds.functions=70
+        continue-on-error: false
+
       - name: Build
         run: npm run build
+
       - name: Verify the npm tarball ships runtime files (not raw source)
         # Guard against the distributability regression: dist/ and native/bin
         # are gitignored, so without a "files" whitelist npm would exclude them
         # and ship raw src/*.ts instead, breaking main/bin/exports on install.
+        if: matrix.os == 'ubuntu-latest'
         run: |
           tar=$(npm pack --silent --pack-destination "$RUNNER_TEMP")
           echo "tarball: $tar"
@@ -53,8 +62,20 @@ jobs:
           if grep -q 'package/src/.*\.ts' /tmp/tar-contents.txt; then echo "raw src/ leaked into tarball"; exit 1; fi
           if grep -q '\.test\.ts' /tmp/tar-contents.txt; then echo "test files leaked into tarball"; exit 1; fi
           echo "tarball contents OK"
+
       - name: Memory regression gate
         run: npm run bench:memory
+
+      # ── Speculation bench (MCH-21): branch-racer kill-rate ──
+      - name: Speculation bench (branch-racer kill-rate)
+        run: |
+          if npm run | grep -q 'bench:speculation'; then
+            npm run bench:speculation
+          else
+            echo "bench:speculation not yet configured — skip"
+          fi
+        continue-on-error: true
+
       - name: Smoke test the CLI
         run: |
           node dist/cli.js --version

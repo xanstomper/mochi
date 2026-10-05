@@ -14,7 +14,7 @@
 // skill_manage tool (auto skill creation, Hermes-faithful).
 import { readdirSync, existsSync, readFileSync, statSync, mkdirSync, writeFileSync, renameSync, rmdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { skillsRoot, archiveRoot, loadUsage, saveUsage, safeSlug, parseFrontmatter } from './skill-manager.js';
+import {skillsRoot, archiveRoot, loadUsage, safeSlug, parseFrontmatter} from './skill-manager.js';
 
 export interface CuratorConfig {
   enabled: boolean;

@@ -55,7 +55,7 @@ function table(headers: string[], rows: string[][], style: 'simple' | 'box' | 'm
   // box style
   const b = BOX.single;
   const totalWidth = colWidths.reduce((s, w) => s + w + 3, 1);
-  const hline = (l: string, m: string, r: string) => l + b.h.repeat(totalWidth - 2) + r;
+  const hline = (l: string, _m: string, r: string) => l + b.h.repeat(totalWidth - 2) + r;
   const row = (cells: string[]) => b.v + ' ' + cells.map((c, i) => pad(c, colWidths[i])).join(' ' + b.v + ' ') + ' ' + b.v;
 
   return [

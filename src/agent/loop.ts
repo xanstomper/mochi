@@ -1,6 +1,6 @@
 import { performance } from 'node:perf_hooks';
 import { randomUUID } from 'node:crypto';
-import { sortableId, truncateMiddle } from '../util.js';
+import {sortableId} from '../util.js';
 import type { Attempt, ChatMessage, MochiConfig, ModelProfile, Task, ToolDefinition, ToolCall, ToolResult } from '../types.js';
 import type { EventBus } from '../events.js';
 import type { Workspace } from '../workspace.js';
@@ -30,7 +30,6 @@ import {
   rankHypotheses,
   evaluateProbe,
   diagnosisToPrompt,
-  type FailureKind,
   type Hypothesis,
   type DiagnosisResult,
 } from '../diagnosis.js';
@@ -273,7 +272,6 @@ export interface AgentResult {
 
 export class Agent {
   private id: string;
-  private role: string;
   private profile: AgentProfile;
   private config: MochiConfig;
   private workspace: Workspace;
@@ -366,7 +364,6 @@ export class Agent {
 
   constructor(opts: AgentOptions) {
     this.id = opts.id ?? randomUUID();
-    this.role = opts.role;
     this.config = opts.config;
     this.workspace = opts.workspace;
     this.events = opts.events;
@@ -1969,8 +1966,7 @@ Continue from 'Next:', do not redo completed progress.`,
     // Belt-and-braces: ensure NO path can leak an unhandled rejection from
     // runPromise, even if the child ignores abort and rejects later. The
     // microtask handler is a no-op once we've already reported the outcome.
-    let runPromiseHandled = false;
-    const fence = runPromise.finally(() => { runPromiseHandled = true; });
+    const fence = runPromise.finally(() => {});
     fence.catch(() => { /* handled by the .then above / parent catch */ });
     const timeoutPromise = timeoutMs && timeoutMs > 0
       ? new Promise<never>((_, reject) => {
@@ -1986,7 +1982,6 @@ Continue from 'Next:', do not redo completed progress.`,
         ? await Promise.race([runPromise, timeoutPromise])
         : await runPromise;
       if (timeoutTimer) clearTimeout(timeoutTimer);
-      runPromiseHandled = true;
 
       this.events.emit({
         type: 'subagent:completed',
@@ -2436,11 +2431,11 @@ Continue from 'Next:', do not redo completed progress.`,
       if (!best) return;
       this.speculatedStrategy = best.strategy.slice(0, 200);
       this.speculatedQuestion = task.title.slice(0, 200);
-      const note = best.response?.trim() || best.strategy;
-      if (!note) return;
-      const scored = result.candidates
+      const note = best.response?.trim() || best.strategy ||
+        result.candidates
         .map((c, i) => `[candidate ${i + 1}] (score ${c.score ?? '-'}) ${c.strategy}`)
         .join('\n');
+      if (!note) return;
       const rejected = result.candidates
         .filter((c) => c !== best && (c.score ?? 0) >= 1)
         .slice(0, 2)
@@ -2484,7 +2479,7 @@ Continue from 'Next:', do not redo completed progress.`,
     }
   }
 
-  private pulse(iteration: number, task: Task): { abort: boolean; reason?: string; message?: string } {
+  private pulse(iteration: number, _task: Task): { abort: boolean; reason?: string; message?: string } {
     const recentErrors = this.errors.slice(-3);
     const allSame = recentErrors.length === 3 && new Set(recentErrors).size === 1;
     if (allSame) {
@@ -2520,7 +2515,7 @@ Continue from 'Next:', do not redo completed progress.`,
   /** Classify the most recent failure, refresh hypotheses, persist an
    *  attempt to the autopsy, and inject a structured diagnostic prompt
    *  (including any matching procedural lessons) as the next user turn. */
-  private async observeFailure(task: Task, failureText: string, repo: ReturnType<typeof detectRepo>): Promise<void> {
+  private async observeFailure(task: Task, failureText: string, _repo: ReturnType<typeof detectRepo>): Promise<void> {
     const state = this.context['state'];
     const filesModified: string[] = (state?.filesModified ?? []) as string[];
     const { kind, signals } = classifyFailure(failureText);
@@ -2678,7 +2673,7 @@ Continue from 'Next:', do not redo completed progress.`,
 
   /** Called when verification finally passed; finalize the autopsy with the
    *  resolved outcome and write a procedural lesson from the top hypothesis. */
-  private recordSuccess(task: Task, repo: ReturnType<typeof detectRepo>): void {
+  private recordSuccess(task: Task, _repo: ReturnType<typeof detectRepo>): void {
     this.anchor.recordClaim(task.title, 'Verified', 'Verification passed');
     this.recordDurableState(task);
     // Speculation memory: the preflight's strategy class just RESOLVED a task —
@@ -2792,7 +2787,7 @@ Continue from 'Next:', do not redo completed progress.`,
     }
   }
 
-  private shouldSelfReview(task: Task): boolean {
+  private shouldSelfReview(_task: Task): boolean {
     if (!this.fileChanged) return false;
     // Bound the cost: after two review cycles the model is clearly not going
     // to move; stop burning tokens on it.
@@ -2914,9 +2909,6 @@ Continue from 'Next:', do not redo completed progress.`,
     }
   }
 
-  private emitMessage(role: 'assistant' | 'user' | 'system', content: string) {
-    this.events.emit({ type: 'message', role, content, agentId: this.id });
-  }
 
   private async finish(task: Task, success: boolean, summary: string, stopReason: AgentStopReason = success ? 'completed' : 'aborted'): Promise<AgentResult> {
     // Harness-v2 Phase 1: close the lifecycle — emit the final iteration's

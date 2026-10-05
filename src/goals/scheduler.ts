@@ -1,4 +1,4 @@
-import type { Task, TaskStatus } from '../types.js';
+import type {Task} from '../types.js';
 import type { EventBus } from '../events.js';
 
 export interface SchedulerState {

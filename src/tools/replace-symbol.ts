@@ -54,7 +54,6 @@ export async function insertSymbolBefore(cwd: string, name: string, text: string
   const insertion = (text.endsWith('\n') ? text : text + '\n') + '\n';
   if (!m) {
     // append at EOF
-    const files = new Set<string>();
     // no anchor: need a file — refuse rather than guess
     return { ok: false, message: 'Provide an anchor symbol (insertBefore) or use the write tool for new files.' };
   }

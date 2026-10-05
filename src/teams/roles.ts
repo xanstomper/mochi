@@ -1,4 +1,4 @@
-import type { AgentProfile, AgentRole, ModelProfile } from '../types.js';
+import type {AgentProfile, AgentRole} from '../types.js';
 
 const ROLES: Record<AgentRole, AgentProfile> = {
   lead: {

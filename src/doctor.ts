@@ -2,12 +2,18 @@
 // every subsystem so an operator can see at a glance whether Mochi is ready
 // and where the gaps are: provider keys, sqlite index, code symbol index,
 // background tasks, cron jobs, sessions, and the running daemon.
-import { existsSync, statSync, readdirSync } from 'node:fs';
+import { existsSync, statSync, readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { hasSqlite, sqliteSource } from './sqlite.js';
 import { listJobs } from './cron.js';
 import { SessionStore } from './session-store.js';
 import { runRetention } from './retention.js';
+
+export interface SkillHealthEntry {
+  name: string;
+  status: 'ok' | 'empty' | 'missing-frontmatter' | 'orphaned';
+  path: string;
+}
 
 export interface DoctorReport {
   runtime: { node: string; sqlite: boolean };
@@ -23,6 +29,7 @@ export interface DoctorReport {
   cron: { jobs: number };
   sessions: { sqlite: boolean; count: number };
   diagnostics: { typescript: boolean; python: boolean };
+  skills: { total: number; healthy: number; degraded: SkillHealthEntry[] };
   problems: string[];
 }
 
@@ -55,6 +62,29 @@ export async function doctorReport(opts: {
     try { sessionCount = new SessionStore(opts.workspaceDir).list().length; } catch { /* store not initialised yet */ }
   }
 
+  // Skill regression doctor (MCH-20): scan the skills directory for degraded
+  // entries — empty files, missing frontmatter, or stale orphans.
+  const skillsDir = resolve(opts.workspaceDir, 'skills');
+  const degradedSkills: SkillHealthEntry[] = [];
+  let totalSkills = 0;
+  if (existsSync(skillsDir)) {
+    let skillFiles: string[] = [];
+    try { skillFiles = readdirSync(skillsDir).filter((f) => f.endsWith('.md') || f.endsWith('.yaml') || f.endsWith('.yml')); } catch { /* unreadable */ }
+    totalSkills = skillFiles.length;
+    for (const file of skillFiles) {
+      const skillPath = resolve(skillsDir, file);
+      let raw = '';
+      try { raw = readFileSync(skillPath, 'utf8'); } catch { raw = ''; }
+      const size = (() => { try { return statSync(skillPath).size; } catch { return 0; } })();
+      if (size === 0 || raw.trim().length === 0) {
+        degradedSkills.push({ name: file, status: 'empty', path: skillPath });
+      } else if (!raw.includes('name:') && !raw.startsWith('---')) {
+        degradedSkills.push({ name: file, status: 'missing-frontmatter', path: skillPath });
+      }
+    }
+  }
+  const healthySkills = totalSkills - degradedSkills.length;
+
   const report: DoctorReport = {
     runtime: { node: process.version, sqlite },
     model: { provider: opts.provider, keySet: Boolean(opts.apiKey), keySource: opts.apiKey ? 'env/config' : 'unset', baseUrl: opts.baseUrl, model: opts.model },
@@ -63,6 +93,7 @@ export async function doctorReport(opts: {
     cron: { jobs: cronJobs },
     sessions: { sqlite, count: sessionCount },
     diagnostics: { typescript: tsAvailable, python: pyAvailable },
+    skills: { total: totalSkills, healthy: healthySkills, degraded: degradedSkills },
     problems,
   };
 
@@ -72,12 +103,20 @@ export async function doctorReport(opts: {
   if (!sqlite) problems.push('No SQLite driver (need Node >= 22.5 or the bun binary) — sessions, code index, and search are off.');
   if (!opts.model) problems.push('No model selected for the active provider.');
   if (cronJobs > 0 && !opts.daemon?.running) problems.push(`${cronJobs} scheduled job(s) configured but the daemon is not running — they will not fire.`);
+  if (degradedSkills.length > 0) {
+    for (const s of degradedSkills) {
+      problems.push(`Skill "${s.name}" is degraded (${s.status}): ${s.path}`);
+    }
+  }
   return report;
 }
 
 /** Human-readable doctor output. */
 export function formatDoctor(r: DoctorReport): string {
   const ok = (b: boolean) => (b ? 'ok   ' : 'MISS ');
+  const skillLine = r.skills.total === 0
+    ? 'no skills installed'
+    : `${r.skills.healthy}/${r.skills.total} healthy${r.skills.degraded.length > 0 ? ` (${r.skills.degraded.length} degraded)` : ''}`;
   return [
     `Mochi doctor on node ${r.runtime.node}`,
     '',
@@ -88,6 +127,7 @@ export function formatDoctor(r: DoctorReport): string {
     `  sessions      ${ok(r.sessions.sqlite)} ${r.sessions.sqlite ? 'FTS5 enabled' : 'disabled'}`,
     `  daemon        ${ok(r.daemon.running)} ${r.daemon.running ? `running on :${r.daemon.port}` : 'not running'}`,
     `  diagnostics   TS:${r.diagnostics.typescript ? 'yes' : 'no'} Python:${r.diagnostics.python ? 'yes' : 'no'}`,
+    `  skills        ${ok(r.skills.degraded.length === 0)} ${skillLine}`,
     '',
     ...(r.problems.length === 0 ? ['No problems detected.'] : [`Problems (${r.problems.length}):`, ...r.problems.map((p) => `  • ${p}`)]),
   ].join('\n');

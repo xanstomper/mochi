@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Goal, MochiConfig, Task, AgentRole, ModelProfile } from '../types.js';
+import type {Goal, MochiConfig, Task, AgentRole} from '../types.js';
 import type { EventBus } from '../events.js';
 import type { Workspace } from '../workspace.js';
 import { ContextEngine } from '../context.js';
@@ -309,7 +309,7 @@ Return ONLY the JSON array, no markdown.`;
     return this.sessionStoreInstance;
   }
 
-  private recordSave(goal: Goal, task: Task, result: { summary: string }, context: ContextEngine, sessionId?: string): void {
+  private recordSave(goal: Goal, task: Task, result: { summary: string }, _context: ContextEngine, sessionId?: string): void {
     try {
       const sid = sessionId ?? this.store.begin({ goalId: goal.id, role: task.role, objective: task.title });
       if (!sessionId) {
@@ -451,7 +451,7 @@ Return ONLY the JSON array, no markdown.`;
    *  attempts, MOCHI_AUTO_RESUME_ATTEMPTS tunes it, 0 disables). */
   private async runAgentWithAutoResume(
     agent: InstanceType<typeof Agent>,
-    goal: Goal,
+    _goal: Goal,
     task: Task,
     context: import('../context.js').ContextEngine,
     abortSignal: AbortSignal,

@@ -2,7 +2,7 @@
 // Analyzes code outlines, class hierarchies, and symbol dependencies to produce
 // clean Markdown API documentation and Mermaid architecture flowcharts.
 
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import {readFileSync, readdirSync} from 'node:fs';
 import { resolve, extname, relative } from 'node:path';
 import { extractCodeOutline, type SymbolOutlineItem } from './tools/outline.js';
 

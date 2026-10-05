@@ -83,7 +83,7 @@ export function loadDoxContract(cwd: string, targetPath = '.'): DoxContract {
 /**
  * Phase 2 closeout check to audit if modified files need documentation sync.
  */
-export function auditDoxCloseout(cwd: string, mutatedFiles: string[]): { needsUpdate: boolean; summary: string } {
+export function auditDoxCloseout(_cwd: string, mutatedFiles: string[]): { needsUpdate: boolean; summary: string } {
   if (mutatedFiles.length === 0) {
     return { needsUpdate: false, summary: 'No files modified.' };
   }

@@ -295,7 +295,7 @@ export class MochiPromptCompiler {
 
   private extractIntent(
     prompt: string,
-    classifications: TaskCategory[],
+    _classifications: TaskCategory[],
     context?: { repoName?: string; primaryLanguage?: string }
   ): CompiledPromptSpecification['normalizedIntent'] {
     return {
@@ -320,9 +320,9 @@ export class MochiPromptCompiler {
   }
 
   private inferRequirements(
-    prompt: string,
+    _prompt: string,
     classifications: TaskCategory[],
-    context?: { primaryLanguage?: string }
+    _context?: { primaryLanguage?: string }
   ): CompiledPromptSpecification['inferredRequirements'] {
     const reqs: CompiledPromptSpecification['inferredRequirements'] = [];
 
@@ -357,9 +357,9 @@ export class MochiPromptCompiler {
   }
 
   private buildAssumptions(
-    prompt: string,
-    classifications: TaskCategory[],
-    context?: { repoName?: string; primaryLanguage?: string }
+    _prompt: string,
+    _classifications: TaskCategory[],
+    _context?: { repoName?: string; primaryLanguage?: string }
   ): Assumption[] {
     return [
       {
@@ -380,9 +380,9 @@ export class MochiPromptCompiler {
   }
 
   private extractConstraints(
-    prompt: string,
-    classifications: TaskCategory[],
-    context?: { primaryLanguage?: string }
+    _prompt: string,
+    _classifications: TaskCategory[],
+    _context?: { primaryLanguage?: string }
   ): string[] {
     return [
       'STRICT: Do not perform blind wholesale file rewrites — apply targeted diffs/edits',
@@ -393,8 +393,8 @@ export class MochiPromptCompiler {
 
   private assignPriorities(
     explicitReqs: string[],
-    inferredReqs: CompiledPromptSpecification['inferredRequirements'],
-    complexity: ComplexityLevel
+    _inferredReqs: CompiledPromptSpecification['inferredRequirements'],
+    _complexity: ComplexityLevel
   ): CompiledPromptSpecification['priorities'] {
     return [
       { priority: 'P0', description: 'Application / system must compile with 0 type errors and 0 syntax breaks' },
@@ -407,8 +407,8 @@ export class MochiPromptCompiler {
 
   private generatePhasesForTier(
     prompt: string,
-    classifications: TaskCategory[],
-    complexity: ComplexityLevel,
+    _classifications: TaskCategory[],
+    _complexity: ComplexityLevel,
     tier: CompilerReasoningLevel,
     context?: { testCommand?: string }
   ): PhaseContract[] {
@@ -596,7 +596,7 @@ export class MochiPromptCompiler {
     ];
   }
 
-  private buildToolStrategy(classifications: TaskCategory[], complexity: ComplexityLevel, tier: CompilerReasoningLevel) {
+  private buildToolStrategy(_classifications: TaskCategory[], _complexity: ComplexityLevel, tier: CompilerReasoningLevel) {
     if (tier === 'low' || tier === 'off') {
       return {
         requiredTools: ['read', 'edit', 'write', 'shell'],
@@ -623,8 +623,8 @@ export class MochiPromptCompiler {
 
   private buildAcceptanceCriteria(
     prompt: string,
-    classifications: TaskCategory[],
-    complexity: ComplexityLevel
+    _classifications: TaskCategory[],
+    _complexity: ComplexityLevel
   ): CompiledPromptSpecification['acceptanceCriteria'] {
     return {
       functional: [
