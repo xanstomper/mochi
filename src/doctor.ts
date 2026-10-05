@@ -92,7 +92,7 @@ export async function doctorReport(opts: {
       let entries: string[] = [];
       try { entries = readdirSync(dir); } catch { return; }
       for (const entry of entries) {
-        if (entry.startsWith('.')) continue;
+        if (entry.startsWith('.') || /^readme(?:\.md)?$/i.test(entry)) continue;
         const full = resolve(dir, entry);
         let st;
         try { st = statSync(full); } catch { continue; }
