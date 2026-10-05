@@ -4,7 +4,7 @@ import { getProfile, listRoles } from './roles.js';
 import type { AgentRole } from '../types.js';
 
 const NO_EDIT_ROLES: AgentRole[] = ['lead', 'reviewer', 'researcher', 'security', 'architect'];
-const EDIT_ROLES: AgentRole[] = ['coder', 'debugger', 'tester', 'devops', 'db_admin', 'frontend', 'backend', 'performance', 'tech_writer', 'qa_engineer', 'data_scientist'];
+const EDIT_ROLES: AgentRole[] = ['coder', 'debugger', 'tester', 'devops', 'db_admin', 'frontend', 'backend', 'performance', 'tech_writer', 'qa_engineer', 'data_scientist', 'redteam'];
 
 describe('team roles', () => {
   it('every role resolves a profile and the roster round-trips', () => {

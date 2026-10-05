@@ -7,6 +7,7 @@ import {
   validateTypeScriptSyntax,
   validateRelativeImports,
   validatePythonSyntax,
+  detectLazyPlaceholders,
 } from './ast-guard.js';
 
 describe('In-Turn AST Diagnostic Guard', () => {
@@ -102,6 +103,27 @@ def calculate_metrics(items)
     const res = validatePythonSyntax(invalidPy);
     expect(res.valid).toBe(false);
     expect(res.summary).toContain('SyntaxError');
+  });
+
+  it('detects lazy truncation placeholders and guards large rewrites', () => {
+    const valid = 'export function doWork() {\n  const a = 1;\n  return a;\n}\n';
+    expect(detectLazyPlaceholders(valid).valid).toBe(true);
+
+    const tsLazy = 'export function doWork() {\n  // ... existing code ...\n}\n';
+    const resTs = detectLazyPlaceholders(tsLazy);
+    expect(resTs.valid).toBe(false);
+    expect(resTs.summary).toContain('Lazy code truncation placeholder detected');
+
+    const pyLazy = 'def run():\n    # ... existing code ...\n';
+    expect(detectLazyPlaceholders(pyLazy).valid).toBe(false);
+
+    const blockLazy = '/* ... rest of implementation unchanged ... */';
+    expect(detectLazyPlaceholders(blockLazy).valid).toBe(false);
+
+    // Verify validateFileSyntax halts on lazy truncation
+    const fileDiag = validateFileSyntax('src/app.ts', tsLazy);
+    expect(fileDiag.valid).toBe(false);
+    expect(fileDiag.summary).toContain('Lazy code truncation placeholder detected');
   });
 });
 

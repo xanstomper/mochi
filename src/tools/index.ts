@@ -50,6 +50,7 @@ import { outlineTool } from './outline.js';
 import { mergeConflictTool } from './merge-conflict.js';
 import { codeSimilarityTool } from './code-similarity.js';
 import { securityAuditTool } from './security-audit.js';
+import { codebaseMapTool } from './codebase-map.js';
 import { skillManageTool } from '../skill-manager.js';
 import { astSliceTool } from './ast-slice.js';
 import { compilePromptTool } from './compile-prompt.js';
@@ -76,7 +77,7 @@ export const ALL_TOOLS: Tool[] = [
   webSearchTool, getDiagnosticsTool, mkdirTool, moveFileTool, copyFileTool,
   gitBlameTool, gitHistoryTool, systemInfoTool, findReferencesTool, findDefinitionsTool,
   dbInspectTool, createPrTool, thinkTool, webCrawlTool, renameSymbolTool, replTool,
-  blastRadiusTool, mergeConflictTool, codeSimilarityTool, securityAuditTool,
+  blastRadiusTool, mergeConflictTool, codeSimilarityTool, securityAuditTool, codebaseMapTool,
   ...symbolTools, replaceSymbolTool, chameleonTool,
   skillManageTool,
   // New tools
@@ -101,7 +102,7 @@ export const AUXILIARY_TOOL_NAMES = new Set([
  */
 const CORE_TOOL_NAMES = new Set([
   'read', 'write', 'edit', 'patch', 'replace_symbol', 'delete', 'shell', 'search', 'glob', 'outline', 'ast_slice',
-  'git', 'inspect', 'todo', 'skill', 'subagent', 'bg_task', 'fetch', 'web_search', 'web_crawl', 'think', 'chameleon', 'blast_radius', 'session_recall'
+  'git', 'inspect', 'todo', 'skill', 'subagent', 'bg_task', 'fetch', 'web_search', 'web_crawl', 'think', 'chameleon', 'blast_radius', 'session_recall', 'codebase_map', 'security_audit'
 ]);
 
 /** Detect whether a model name implies a weak/free-tier model that struggles
@@ -136,6 +137,8 @@ export function buildTools(config: MochiConfig, allowed?: string[]): Map<string,
       name === 'session_recall' ||
       name === 'memory' ||
       name === 'skill_manage' ||
+      name === 'codebase_map' ||
+      name === 'security_audit' ||
       name === 'tool_factory';
     if (allowed && !allowed.includes(name) && !alwaysInclude) continue;
     // Keep default advertised schema clean and focused on engineering primitives.

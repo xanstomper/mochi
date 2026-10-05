@@ -342,8 +342,51 @@ export function validatePythonStructure(content: string): ASTDiagnosticResult {
   };
 }
 
+const LAZY_PLACEHOLDER_REGEXES = [
+  /\/\/\s*(?:\.{3,}|…)\s*(?:existing|rest of|remaining|previous|unchanged|same as|original|all other).*(?:code|implementation|content|logic|functions|imports|file|unchanged|\.{3,}|…)/i,
+  /\/\*\s*(?:\.{3,}|…)\s*(?:existing|rest of|remaining|previous|unchanged|same as|original|all other).*(?:\*\/)/i,
+  /#\s*(?:\.{3,}|…)\s*(?:existing|rest of|remaining|previous|unchanged|same as|original|all other).*(?:code|implementation|content|logic|functions|imports|file|unchanged|\.{3,}|…)/i,
+  /\/\/\s*(?:existing|rest of|remaining|previous|unchanged)\s*(?:code|implementation|content)\s*(?:\.{3,}|…)/i,
+  /<!--\s*(?:\.{3,}|…)\s*(?:existing|rest of|remaining|previous|unchanged).*(?:-->)/i,
+  /\[\s*(?:\.{3,}|…)\s*(?:rest of|remaining|existing).*(?:\])/i,
+  /\/\/\s*(?:\.{3,}|…)\s*(?:rest of class|rest of function|rest of file)/i,
+];
+
+/**
+ * Detects lazy code truncation placeholders (e.g. "// ... existing code ...")
+ * that often clobber large portions of files during model-driven rewrites.
+ */
+export function detectLazyPlaceholders(content: string): ASTDiagnosticResult {
+  const lines = content.split(/\r?\n/);
+  const errors: ASTDiagnosticError[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    for (const regex of LAZY_PLACEHOLDER_REGEXES) {
+      if (regex.test(line)) {
+        errors.push({
+          line: i + 1,
+          message: `Lazy code truncation placeholder detected: "${line.trim()}". Never truncate or omit code with placeholders during rewrites; provide the complete implementation.`,
+          severity: 'error',
+        });
+        break;
+      }
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    summary: errors.length > 0 ? errors.map((e) => `Line ${e.line}: ${e.message}`).join('; ') : undefined,
+  };
+}
+
 /** Fast, universal static validator dispatching based on file extension */
 export function validateFileSyntax(filePath: string, content: string): ASTDiagnosticResult {
+  // 1. Guard against lazy truncation placeholders across all file types
+  const lazyCheck = detectLazyPlaceholders(content);
+  if (!lazyCheck.valid) return lazyCheck;
+
   const ext = extname(filePath).toLowerCase();
 
   if (ext === '.json') {

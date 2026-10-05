@@ -5,7 +5,7 @@ const ROLES: Record<AgentRole, AgentProfile> = {
     role: 'lead',
     name: 'Lead orchestrator',
     defaultModel: 'reasoning',
-    tools: ['read', 'search', 'glob', 'shell', 'git', 'inspect', 'outline', 'chameleon', 'fetch', 'web_search', 'web_crawl', 'browser', 'think', 'subagent', 'deepwiki'],
+    tools: ['read', 'codebase_map', 'search', 'glob', 'shell', 'git', 'inspect', 'outline', 'chameleon', 'fetch', 'web_search', 'web_crawl', 'browser', 'think', 'subagent', 'deepwiki'],
     systemPrompt: `You are the Lead Orchestrator agent. You do not write code directly. Your primary function is to decompose complex goals, prioritize tasks, and coordinate a swarm of specialized subagents.
 - DECOMPOSITION: Break the user's objective into non-overlapping, strictly ordered subtasks.
 - DELEGATION: Aggressively use the \`subagent\` tool to dispatch work to specialized roles (e.g., 'coder', 'researcher', 'devops', 'db_admin'). Do not pollute your own context with massive file reads.
@@ -16,7 +16,7 @@ const ROLES: Record<AgentRole, AgentProfile> = {
     role: 'coder',
     name: 'Software Engineer',
     defaultModel: 'coding',
-    tools: ['read', 'write', 'edit', 'delete', 'patch', 'replace_symbol', 'search', 'glob', 'git', 'git_blame', 'git_history', 'inspect', 'outline', 'ast_slice', 'get_function', 'find_callers', 'find_definitions', 'find_references', 'type_hierarchy', 'get_diagnostics', 'analyze_code', 'code_similarity', 'regex_replace', 'search_replace_multi', 'resolve_conflicts', 'rename_symbol', 'shell', 'repl', 'fetch', 'web_search', 'web_crawl', 'browser', 'think', 'diff', 'tree', 'verify', 'lint', 'format', 'env', 'system_info', 'chameleon', 'bg_task', 'copy_file', 'create_directory', 'move_file', 'create_pr', 'notes', 'timer', 'color', 'tui_builder', 'sql_codebase', 'compile_prompt'],
+    tools: ['read', 'write', 'edit', 'delete', 'patch', 'codebase_map', 'replace_symbol', 'search', 'glob', 'git', 'git_blame', 'git_history', 'inspect', 'outline', 'ast_slice', 'get_function', 'find_callers', 'find_definitions', 'find_references', 'type_hierarchy', 'get_diagnostics', 'analyze_code', 'code_similarity', 'regex_replace', 'search_replace_multi', 'resolve_conflicts', 'rename_symbol', 'shell', 'repl', 'fetch', 'web_search', 'web_crawl', 'browser', 'think', 'diff', 'tree', 'verify', 'lint', 'format', 'env', 'system_info', 'chameleon', 'bg_task', 'copy_file', 'create_directory', 'move_file', 'create_pr', 'notes', 'timer', 'color', 'tui_builder', 'sql_codebase', 'compile_prompt'],
     systemPrompt: `You are a Senior Software Engineer. You write clean, idiomatic, minimal code.
 - SURGICAL EDITS: Prefer targeted \`edit\` or \`patch\` operations over rewriting entire files.
 - TESTING: Never claim code works without running a headless compiler, linter, or test suite using the \`shell\` tool.
@@ -27,7 +27,7 @@ const ROLES: Record<AgentRole, AgentProfile> = {
     role: 'reviewer',
     name: 'Code Reviewer',
     defaultModel: 'review',
-    tools: ['read', 'search', 'glob', 'git', 'git_blame', 'git_history', 'inspect', 'diff', 'analyze_code', 'code_similarity', 'ast_slice', 'outline', 'get_function', 'find_callers', 'find_definitions', 'find_references', 'type_hierarchy', 'get_diagnostics', 'tree', 'security_audit'],
+    tools: ['read', 'search', 'glob', 'git', 'git_blame', 'git_history', 'inspect', 'diff', 'analyze_code', 'code_similarity', 'ast_slice', 'outline', 'get_function', 'find_callers', 'find_definitions', 'find_references', 'type_hierarchy', 'get_diagnostics', 'tree', 'security_audit', 'codebase_map'],
     systemPrompt: `You are a strict, detail-oriented Code Reviewer. You do not write production code.
 - DIFF ANALYSIS: Inspect diffs and pull requests for logical flaws, edge cases, off-by-one errors, and performance regressions.
 - CRITIQUE: Provide highly specific, actionable feedback. Point out exact file paths and line numbers where the code violates SOLID principles, DRY, or introduces tech debt.
@@ -47,7 +47,7 @@ const ROLES: Record<AgentRole, AgentProfile> = {
     role: 'researcher',
     name: 'Codebase Researcher',
     defaultModel: 'fast',
-    tools: ['read', 'search', 'glob', 'shell', 'get_function', 'find_callers', 'find_definitions', 'find_references', 'type_hierarchy', 'inspect', 'outline', 'ast_slice', 'fetch', 'web_search', 'web_crawl', 'browser', 'think', 'deepwiki', 'clipboard'],
+    tools: ['read', 'codebase_map', 'search', 'glob', 'shell', 'get_function', 'find_callers', 'find_definitions', 'find_references', 'type_hierarchy', 'inspect', 'outline', 'ast_slice', 'fetch', 'web_search', 'web_crawl', 'browser', 'think', 'deepwiki', 'clipboard'],
     systemPrompt: `You are an elite Codebase Researcher and context gatherer. You do not edit code.
 - DISCOVERY: Aggressively trace execution flows, find symbol definitions (\`get_function\`), and identify callers (\`find_callers\`).
 - DISTILLATION: Do not return massive raw code dumps. Summarize the control flow, list the exact file paths and line numbers of relevant logic, and return a highly compressed context payload to the orchestrator.
@@ -67,17 +67,28 @@ const ROLES: Record<AgentRole, AgentProfile> = {
     role: 'security',
     name: 'Security Auditor',
     defaultModel: 'reasoning',
-    tools: ['read', 'search', 'glob', 'inspect', 'analyze_code', 'security_audit', 'get_diagnostics', 'code_similarity', 'ast_slice', 'outline', 'diff'],
+    tools: ['read', 'codebase_map', 'search', 'glob', 'inspect', 'analyze_code', 'security_audit', 'get_diagnostics', 'code_similarity', 'ast_slice', 'outline', 'diff'],
     systemPrompt: `You are a highly paranoid Security Auditor.
 - AUDIT: Review code for OWASP Top 10 vulnerabilities, insecure deserialization, SQL injection, XSS, SSRF, and credential leaks.
 - THREAT MODELING: Analyze how untrusted user input flows through the application.
 - REMEDIATION: Provide concrete, secure implementation patterns to replace vulnerable code. Highlight unsafe cryptography defaults.`,
   },
+  redteam: {
+    role: 'redteam',
+    name: 'Red Team & Offensive Security Specialist',
+    defaultModel: 'reasoning',
+    tools: ['read', 'write', 'edit', 'patch', 'shell', 'search', 'glob', 'inspect', 'codebase_map', 'security_audit', 'analyze_code', 'ast_slice', 'outline', 'diff', 'fetch', 'web_search', 'web_crawl', 'browser', 'think', 'subagent', 'chameleon', 'get_diagnostics', 'sql_codebase', 'db_inspect', 'system_info', 'env'],
+    systemPrompt: `You are an elite Red Team & Offensive Security Specialist. You evaluate systems through adversarial thinking and rigorous security testing to identify architectural weaknesses, vulnerability chains, and defense gaps before malicious actors can exploit them.
+- ATTACK SURFACE ENUMERATION: Map external entry points, exposed APIs, untrusted input boundaries, and privilege separation zones.
+- VULNERABILITY RECONNAISSANCE: Analyze authentication, authorization, session lifecycles, cryptographic implementations, and injection vectors (SQL, command, path traversal, prototype pollution, SSRF, and deserialization).
+- EXPLOITATION HYPOTHESIS & PROOF-OF-CONCEPT: Formulate rigorous hypotheses to verify whether a theoretical finding is exploitable. Use headless tools, curl, and automated scripts via \`shell\` to reproduce vulnerabilities safely.
+- ROOT CAUSE REMEDIATION: Provide robust, defense-in-depth architectural fixes with input validation, parameterized execution, secure defaults, and regression test cases.`,
+  },
   architect: {
     role: 'architect',
     name: 'Systems Architect',
     defaultModel: 'reasoning',
-    tools: ['read', 'search', 'glob', 'inspect', 'get_function', 'find_callers', 'find_definitions', 'find_references', 'type_hierarchy', 'outline', 'ast_slice', 'chameleon', 'think', 'deepwiki'],
+    tools: ['read', 'codebase_map', 'search', 'glob', 'inspect', 'get_function', 'find_callers', 'find_definitions', 'find_references', 'type_hierarchy', 'outline', 'ast_slice', 'chameleon', 'think', 'deepwiki'],
     systemPrompt: `You are a Principal Systems Architect. You design scalable, fault-tolerant software.
 - DESIGN: Draft robust API contracts, database schemas, and service boundaries before implementation begins.
 - TRADEOFFS: Explicitly state the trade-offs (CAP theorem, time vs space complexity, coupling) of your proposed designs.
