@@ -77,7 +77,40 @@ function envModelConfig(): Partial<MochiConfig['model']> {
   };
 }
 
+export function loadEnvFiles(): void {
+  const envPaths = [
+    resolve(process.cwd(), '.env'),
+    resolve(homedir(), '.mochi', '.env'),
+    resolve(homedir(), '.hermes', '.env'),
+  ];
+  for (const p of envPaths) {
+    if (!existsSync(p)) continue;
+    try {
+      const content = readFileSync(p, 'utf8');
+      for (const line of content.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+        const eqIdx = trimmed.indexOf('=');
+        if (eqIdx <= 0) continue;
+        const key = trimmed.slice(0, eqIdx).trim();
+        let val = trimmed.slice(eqIdx + 1).trim();
+        if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+          val = val.slice(1, -1);
+        }
+        if (!process.env[key] && val) {
+          process.env[key] = val;
+        }
+      }
+    } catch {
+      /* best-effort */
+    }
+  }
+}
+
 export function loadConfig(overrides: Partial<MochiConfig> = {}, configPath?: string): MochiConfig {
+  if (!process.env.VITEST && !process.env.MOCHI_SKIP_DOTENV) {
+    loadEnvFiles();
+  }
   const cfg = defaultConfig();
   const user = readJsonFile(configPath ?? process.env.MOCHI_CONFIG_PATH ?? resolve(cfg.configDir, 'config.json'));
   if (user) merge(cfg as unknown as Record<string, unknown>, user);
@@ -120,6 +153,8 @@ const envKeyMap: Record<string, string> = {
   'groq': 'GROQ_API_KEY',
   'mistral': 'MISTRAL_API_KEY',
   'freeinference': 'FREEINFERENCE_API_KEY',
+  'freeinforge': 'FREEINFORGE_API_KEY',
+  'vyceai': 'VYCEAI_API_KEY',
   'xai': 'XAI_API_KEY',
 };
 const envKey = Object.entries(envKeyMap).find(([needle]) => p.includes(needle))?.[1];

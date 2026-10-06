@@ -223,6 +223,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   let pendingResolver: ((v: string) => void) | undefined;
   let menuResolver: ((i: number) => void) | undefined;
   let lastCtrlCAt = 0;
+  let lastEscAbortAt = 0;
 
   let schedulerTimer: NodeJS.Timeout | undefined;
   let renderQueued = false;
@@ -2736,13 +2737,23 @@ if (line === '/branch' || line.startsWith('/branch ')) {
         }
         if (rest === '\x1b') {
           if (state.busy) {
-            runtime.abort('User skipped/cancelled task via ESC');
-            push('system', '[STOP] Task cancelled via ESC.');
-            state.busy = false;
-            stopSpinner();
-            scheduleRender();
-            i++;
-            continue;
+            const now = Date.now();
+            if (now - lastEscAbortAt < 1500) {
+              lastEscAbortAt = 0;
+              runtime.abort('User skipped/cancelled task via double ESC');
+              push('system', '[STOP] Task cancelled via double ESC.');
+              state.busy = false;
+              stopSpinner();
+              scheduleRender();
+              i++;
+              continue;
+            } else {
+              lastEscAbortAt = now;
+              push('system', `${T.grayDark}Press ESC again within 1.5s (or Ctrl+C) to cancel running task.${T.reset}`);
+              scheduleRender();
+              i++;
+              continue;
+            }
           }
           // Never exit application on ESC; only cancel tasks, close menus/drop, or clear input
           state.input = '';

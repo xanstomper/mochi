@@ -11,13 +11,13 @@ import { isAbort } from './rate-limit.js';
 export type { ProviderConfig } from './openai.js';
 
 const ALIASES: Record<string, { baseUrl: string; defaultModel: string }> = {
-  'opencode-zen': { baseUrl: 'https://opencode.ai/zen/v1', defaultModel: 'opencode/deepseek-v4-flash-free' },
-  'opencode': { baseUrl: 'https://opencode.ai/zen/v1', defaultModel: 'opencode/deepseek-v4-flash-free' },
-  'zen': { baseUrl: 'https://opencode.ai/zen/v1', defaultModel: 'opencode/deepseek-v4-flash-free' },
-  'opencode-go': { baseUrl: 'https://opencode.ai/go/v1', defaultModel: 'opencode-go/deepseek-v4-flash-free' },
-  'go': { baseUrl: 'https://opencode.ai/go/v1', defaultModel: 'opencode-go/deepseek-v4-flash-free' },
-  'freeinference': { baseUrl: 'https://freeinference.org/v1', defaultModel: 'deepseek-v4-flash' },
-  'freeinference-org': { baseUrl: 'https://freeinference.org/v1', defaultModel: 'deepseek-v4-flash' },
+  'opencode-zen': { baseUrl: 'https://opencode.ai/zen/v1', defaultModel: 'deepseek-v4-flash' },
+  'opencode': { baseUrl: 'https://opencode.ai/zen/v1', defaultModel: 'deepseek-v4-flash' },
+  'zen': { baseUrl: 'https://opencode.ai/zen/v1', defaultModel: 'deepseek-v4-flash' },
+  'opencode-go': { baseUrl: 'https://opencode.ai/go/v1', defaultModel: 'deepseek-v4-flash' },
+  'go': { baseUrl: 'https://opencode.ai/go/v1', defaultModel: 'deepseek-v4-flash' },
+  'freeinference': { baseUrl: 'https://freeinference.org/v1', defaultModel: 'kimi-k2.7-code' },
+  'freeinference-org': { baseUrl: 'https://freeinference.org/v1', defaultModel: 'kimi-k2.7-code' },
 };
 
 // OpenCode.ai's OpenAI-compatible endpoints list and accept BARE model ids
@@ -59,8 +59,12 @@ export function selectModel(config: ModelConfig, profile: ModelProfile): string 
 
 export function createProvider(config: ModelConfig, profile?: ModelProfile) {
   const chain = [config, ...(config.failover ?? [])].map((c) => {
-    // A failover entry may omit profiles; inherit them from the primary.
-    const merged: ModelConfig = c.profiles ? c : { ...c, profiles: config.profiles };
+    // A failover entry may omit profiles; only inherit from primary if targeting the same provider.
+    const merged: ModelConfig = c.profiles
+      ? c
+      : (c.provider === config.provider
+        ? { ...c, profiles: config.profiles }
+        : { ...c, profiles: undefined });
     const raw = createRawProvider(merged, profile);
     return withCapabilityGate(raw, merged, resolveProvider(merged));
   });
@@ -80,6 +84,7 @@ export function createProvider(config: ModelConfig, profile?: ModelProfile) {
 export function withFailover(chain: RawProvider[], primaryName: string): RawProvider {
   async function* streamChat(messages: ChatMessage[], tools: ToolDefinition[], options?: { temperature?: number; maxTokens?: number; signal?: AbortSignal }): AsyncGenerator<StreamChunk> {
     let lastErr: unknown;
+    const errors: string[] = [];
     for (let i = 0; i < chain.length; i++) {
       options?.signal?.throwIfAborted();
       let began = false;
@@ -92,14 +97,21 @@ export function withFailover(chain: RawProvider[], primaryName: string): RawProv
       } catch (err) {
         options?.signal?.throwIfAborted();
         lastErr = err;
+        errors.push(`[chain ${i}]: ${err instanceof Error ? err.message : String(err)}`);
         if (began) throw err; // mid-stream: never replay
       }
     }
-    throw lastErr ?? new Error(`All ${chain.length} model providers (${primaryName}${chain.length > 1 ? ' + fallbacks' : ''}) failed.`);
+    const combinedMsg = errors.length > 1
+      ? `All ${chain.length} model providers (${primaryName} + fallbacks) failed:\n${errors.join('\n')}`
+      : (lastErr instanceof Error ? lastErr.message : String(lastErr ?? 'Unknown error'));
+    const combinedErr = new Error(combinedMsg);
+    (combinedErr as any).cause = lastErr;
+    throw combinedErr;
   }
 
   async function chat(messages: ChatMessage[], tools: ToolDefinition[], options?: { temperature?: number; maxTokens?: number; signal?: AbortSignal }): Promise<ModelResponse> {
     let lastErr: unknown;
+    const errors: string[] = [];
     for (let i = 0; i < chain.length; i++) {
       options?.signal?.throwIfAborted();
       try {
@@ -107,9 +119,15 @@ export function withFailover(chain: RawProvider[], primaryName: string): RawProv
       } catch (err) {
         options?.signal?.throwIfAborted();
         lastErr = err;
+        errors.push(`[chain ${i}]: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    throw lastErr instanceof Error ? lastErr : new Error(`All model providers failed: ${String(lastErr)}`);
+    const combinedMsg = errors.length > 1
+      ? `All ${chain.length} model providers (${primaryName} + fallbacks) failed:\n${errors.join('\n')}`
+      : (lastErr instanceof Error ? lastErr.message : String(lastErr ?? 'Unknown error'));
+    const combinedErr = new Error(combinedMsg);
+    (combinedErr as any).cause = lastErr;
+    throw combinedErr;
   }
 
   return { streamChat, chat };
@@ -169,7 +187,7 @@ function withCapabilityGate(provider: RawProvider, config: ModelConfig, resolved
     if (st.status === 'dead') {
       throw new Error(`Provider ${config.provider} is marked dead (${st.record?.lastError ?? 'previous terminal failure'}). Skipping; re-probe after cooldown.`);
     }
-    if (st.status === 'cooldown') {
+    if (st.status === 'cooldown' && (st.record?.consecutiveFailures ?? 0) >= 2) {
       const waitMs = st.record?.cooldownUntil ? Math.max(0, st.record.cooldownUntil - Date.now()) : undefined;
       const wait = waitMs !== undefined ? ` Try again in ~${(Math.round(waitMs / 100) / 10)}s.` : ' Try again shortly.';
       throw new Error(`Provider ${config.provider} is cooling down after failures.${wait} (${st.record?.lastError ?? ''})`);

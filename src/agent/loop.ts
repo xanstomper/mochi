@@ -7,6 +7,7 @@ import type { Workspace } from '../workspace.js';
 import { ContextEngine } from '../context.js';
 import { MemoryStore } from '../memory.js';
 import { createProvider } from '../model/router.js';
+import { PROVIDERS } from '../providers.js';
 import { isMode, modeInstruction } from '../modes.js';
 import { kvCache } from '../kv-cache.js';
 import { executeTool, buildTools, TOOL_ALIASES, normalizeToolArgs } from '../tools/index.js';
@@ -303,6 +304,8 @@ export class Agent {
   private toolCallsTotal = 0;
   private streamLoopNudges = 0;
   private triedFallbackModels = new Set<string>();
+  private triedFallbackProviders = new Set<string>();
+  private consecutiveToolErrorsCount = 0;
   private verifyCount = 0;
   private autopsy: Autopsy | undefined;
   private hypotheses: Hypothesis[] = [];
@@ -689,13 +692,19 @@ Continue from 'Next:', do not redo completed progress.`,
         return this.finish(task, false, 'Runtime limit exceeded', 'runtime_limit');
       }
       if (this.budget) {
-        this.budget.recordAgentStart();
+        if (i === 0) this.budget.recordAgentStart();
         if (!this.budget.canMakeModelCall()) {
-          try {
-            const activeGoal = this.context.state.goal || task.title;
-            this.workspace.saveCheckpoint(activeGoal, `Task paused: budget exhausted before model call at iteration ${i}.\nObjective: ${task.title}\nFiles touched: ${this.context.state.filesModified.join(', ') || 'none'}\nNext: Run "mochi resume" with an increased budget.`);
-          } catch { /* best effort */ }
-          return this.finish(task, false, 'Budget exhausted before model call. Work checkpointed — resume with "mochi resume".', 'budget');
+          // If in uncensored mode and real work has been done, allow a final completion turn
+          // rather than abruptly aborting in the middle of active progress.
+          if (this.config.safety.mode === 'uncensored' && this.fileChanged) {
+            this.events.emit({ type: 'agent:log', agentId: this.id, message: '[budget] budget soft ceiling reached in uncensored mode; allowing final verification' });
+          } else {
+            try {
+              const activeGoal = this.context.state.goal || task.title;
+              this.workspace.saveCheckpoint(activeGoal, `Task paused: budget exhausted before model call at iteration ${i}.\nObjective: ${task.title}\nFiles touched: ${this.context.state.filesModified.join(', ') || 'none'}\nNext: Run "mochi resume" with an increased budget.`);
+            } catch { /* best effort */ }
+            return this.finish(task, false, 'Budget exhausted before model call. Work checkpointed — resume with "mochi resume".', 'budget');
+          }
         }
         this.budget.recordModelCall();
       }
@@ -1031,7 +1040,18 @@ Continue from 'Next:', do not redo completed progress.`,
             }
           }
         }
-        const tool_calls = [...callsByIndex.values()].map((a) => ({ id: a.id, type: 'function' as const, function: { name: a.name, arguments: a.args } }));
+        let tool_calls = [...callsByIndex.values()].map((a) => ({ id: a.id, type: 'function' as const, function: { name: a.name, arguments: a.args } }));
+        if (tool_calls.length === 0 && content) {
+          const extracted = this.extractToolCallsFromText(content);
+          if (extracted.length > 0) {
+            tool_calls = extracted;
+            this.events.emit({
+              type: 'agent:log',
+              agentId: this.id,
+              message: `[tool-extract] recovered ${extracted.length} tool call(s) (${extracted.map(x => x.function.name).join(', ')}) from text output`,
+            });
+          }
+        }
         // If content is empty after stripping think tags, but the model did emit reasoning (and no tools),
         // extract the thinking body so we don't treat it as a dead empty response that triggers an endless loop.
         if (!content && !tool_calls.length) {
@@ -1090,6 +1110,7 @@ Continue from 'Next:', do not redo completed progress.`,
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: `[model-call-error] ${message.slice(0, 160)}` });
 
         // Smart backoff for rate limits (429) to avoid immediately burning the retry
         if (message.toLowerCase().includes('429') || message.toLowerCase().includes('rate limit')) {
@@ -1133,6 +1154,9 @@ Continue from 'Next:', do not redo completed progress.`,
               this.setActiveModel(alt);
               continue;
             }
+            if (this.switchToNextProvider()) {
+              continue;
+            }
             this.cooldownRetries++;
             if (this.cooldownRetries <= 2) {
               const waitMs = 5000 * this.cooldownRetries;
@@ -1154,6 +1178,9 @@ Continue from 'Next:', do not redo completed progress.`,
               this.events.emit({ type: 'agent:log', agentId: this.id, message: `[rate-limit] Primary model exhausted. Failing over to ${alt}` });
               this.setActiveModel(alt);
               continue; // Restart the loop iteration with the new model
+            }
+            if (this.switchToNextProvider()) {
+              continue;
             }
             this.rateLimitRetries++;
             if (this.rateLimitRetries <= 3) {
@@ -1191,6 +1218,20 @@ Continue from 'Next:', do not redo completed progress.`,
               await new Promise(r => setTimeout(r, 2500 * this.transientAbortRetries));
               continue;
             }
+            if (this.switchToNextProvider()) {
+              continue;
+            }
+          }
+
+          const alt = this.pickAlternateModel();
+          if (alt) {
+            this.events.emit({ type: 'agent:log', agentId: this.id, message: `[model-error] Failing over to model ${alt}` });
+            this.setActiveModel(alt);
+            continue;
+          }
+
+          if (this.switchToNextProvider()) {
+            continue;
           }
 
           return this.finish(task, false, `Model request failed: ${message}`, 'model_error');
@@ -1264,6 +1305,11 @@ Continue from 'Next:', do not redo completed progress.`,
             this.setActiveModel(alt);
             this.streamLoopNudges = 0;
             this.context.addMessage({ role: 'system', content: `The previous model degenerated. You are now a fresh model continuing this task. Summarize nothing; just continue the task directly with a tool call or a direct answer.` });
+            continue;
+          }
+          if (this.switchToNextProvider()) {
+            this.streamLoopNudges = 0;
+            this.context.addMessage({ role: 'system', content: `The previous provider degenerated. You are now a fresh model continuing this task. Summarize nothing; just continue the task directly with a tool call or a direct answer.` });
             continue;
           }
           try {
@@ -1411,15 +1457,18 @@ Continue from 'Next:', do not redo completed progress.`,
                    this.recentToolSignatures[rLen - 3] === this.recentToolSignatures[rLen - 6]) {
           isCycle = true;
         }
-        if (isCycle && !this.fileChanged) {
+        const isAllReadOnly = response.toolCalls.every((c) => this.isReadOnly(c.function.name));
+        if (isCycle && !isAllReadOnly && !this.fileChanged) {
           this.cycleNudges++;
-          if (this.cycleNudges >= 2) {
+          if (this.cycleNudges >= 3) {
             return this.finish(task, false, 'Loop guard: stopped after detecting an oscillatory tool loop.', 'tool_loop');
           }
           this.context.addMessage({
             role: 'system',
-            content: 'You are caught in an alternating loop between repeated tool calls. Stop this cycle immediately: step back, inspect why this sequence is failing to make progress, and try a completely different approach or conclude now.',
+            content: 'You are caught in an alternating loop between repeated mutating tool calls. Stop this cycle immediately: step back, inspect why this sequence is failing to make progress, and try a completely different approach or conclude now.',
           });
+        } else if (!isCycle && this.cycleNudges > 0) {
+          this.cycleNudges = Math.max(0, this.cycleNudges - 1);
         }
 
         // Was raised from 3 -> 8 so that legitimate batch work (e.g. editing
@@ -1580,6 +1629,9 @@ Continue from 'Next:', do not redo completed progress.`,
       this.verifyCount++;
       if (verification.passed) {
         this.lastVerifyPassed = true;
+        this.consecutiveToolErrorsCount = 0;
+        this.cycleNudges = 0;
+        this.nudgeInjections = 0;
         // Success after diagnosis turns earlier hypotheses into confirmed or
         // refuted states and writes a procedural lesson so the next run has a
         // head start on this kind of failure.
@@ -1758,13 +1810,19 @@ Continue from 'Next:', do not redo completed progress.`,
   /** Alternate model ids on the same provider to fail over to when the
    *  active model degenerates (repetition loops on weak free tiers). Ordered
    *  by observed reliability for tool-calling tasks. */
-  private static FALLBACK_MODELS = ['qwen3.6-35b', 'minimax-m3', 'glm-5.3', 'glm-5.2', 'diffusiongemma', 'deepseek-v4-flash'];
+  private static FALLBACK_MODELS = ['kimi-k2.7-code', 'qwen3.6-35b', 'minimax-m3', 'glm-5.3', 'glm-5.3-flash', 'deepseek-v4-flash'];
 
   /** Pick the next fallback model id, skipping the active one. Returns
    *  undefined when every fallback has already been tried. */
   private pickAlternateModel(): string | undefined {
     const active = (this.config.model.model ?? '').toLowerCase();
-    for (const m of Agent.FALLBACK_MODELS) {
+    const activeProviderId = (this.config.model.provider ?? '').toLowerCase();
+    const p = PROVIDERS.find((x) =>
+      x.id.toLowerCase() === activeProviderId ||
+      x.name.toLowerCase() === activeProviderId
+    );
+    const candidateModels = (p?.models && p.models.length > 0) ? p.models : Agent.FALLBACK_MODELS;
+    for (const m of candidateModels) {
       if (m.toLowerCase() === active) continue;
       if (this.triedFallbackModels.has(m)) continue;
       return m;
@@ -1780,6 +1838,37 @@ Continue from 'Next:', do not redo completed progress.`,
     this.config.model = { ...this.config.model, model: modelId };
     this.provider = createProvider(this.config.model, this.profile.defaultModel ?? 'coding');
     this.providers.clear();
+  }
+
+  /** Switch to the next available provider in config.model.failover if models
+   *  on the current provider are exhausted or the provider itself is cooling down. */
+  private switchToNextProvider(): boolean {
+    const failovers = this.config.model.failover;
+    if (!failovers || failovers.length === 0) return false;
+    for (const fb of failovers) {
+      const pId = (fb.provider || '').toLowerCase();
+      if (!pId || this.triedFallbackProviders.has(pId)) continue;
+      this.triedFallbackProviders.add(pId);
+      this.triedFallbackProviders.add((this.config.model.provider || '').toLowerCase());
+      this.events.emit({
+        type: 'agent:log',
+        agentId: this.id,
+        message: `[failover] Switching provider from ${this.config.model.provider} to ${fb.provider} (${fb.model})`,
+      });
+      this.config.model = {
+        ...this.config.model,
+        provider: fb.provider,
+        baseUrl: fb.baseUrl,
+        apiKey: fb.apiKey,
+        model: fb.model,
+        profiles: fb.profiles,
+      };
+      this.provider = createProvider(this.config.model, this.profile.defaultModel ?? 'coding');
+      this.providers.clear();
+      this.triedFallbackModels.clear();
+      return true;
+    }
+    return false;
   }
 
   private isReadOnly(name: string): boolean {
@@ -1806,6 +1895,9 @@ Continue from 'Next:', do not redo completed progress.`,
     const canonical = TOOL_ALIASES[name] || name;
     if (['write', 'edit', 'delete', 'patch'].includes(canonical)) {
       this.fileChanged = true;
+      this.consecutiveToolErrorsCount = 0;
+      this.cycleNudges = 0;
+      this.nudgeInjections = 0;
       const path = String(args.path ?? '');
       if (path) this.context.addModifiedFile(resolve(this.cwd, path));
     }
@@ -2311,8 +2403,10 @@ Continue from 'Next:', do not redo completed progress.`,
     const pol = applyToolOutputPolicy(scrubAnsiFragments(maybeRedact(result.output)), { toolName: tc.function.name });
     const foldedOutput = pol.content;
     if (error) {
+      this.consecutiveToolErrorsCount++;
       this.executionRegistry.markFailed(execRecord.executionId, error);
     } else {
+      this.consecutiveToolErrorsCount = 0;
       this.executionRegistry.markCompleted(execRecord.executionId, { output: foldedOutput });
     }
     this.context.addMessage({ role: 'tool', tool_call_id: tc.id, content: foldedOutput, name: tc.function.name });
@@ -2394,6 +2488,76 @@ Continue from 'Next:', do not redo completed progress.`,
 
     // 6. Fallback
     return { content: raw, query: raw, command: raw, path: raw };
+  }
+
+  private extractToolCallsFromText(text: string): Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> {
+    if (!text || !text.trim()) return [];
+    const knownTools = new Set<string>();
+    for (const t of this.toolDefs) {
+      knownTools.add(t.name.toLowerCase());
+    }
+    for (const alias of Object.keys(TOOL_ALIASES)) {
+      knownTools.add(alias.toLowerCase());
+    }
+
+    const results: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> = [];
+
+    // 1. XML style: <tool_call> ... </tool_call>
+    const xmlRegex = /<(?:tool_call|tool-call|call)>([\s\S]*?)<\/(?:tool_call|tool-call|call)>/gi;
+    let xmlMatch: RegExpExecArray | null;
+    while ((xmlMatch = xmlRegex.exec(text)) !== null) {
+      try {
+        const parsed = JSON.parse(xmlMatch[1].trim());
+        const rawName = String(parsed.name || parsed.tool || parsed.function || '').toLowerCase();
+        const name = TOOL_ALIASES[rawName] || rawName;
+        if (knownTools.has(name) || knownTools.has(rawName)) {
+          const rawArgs = parsed.arguments ?? parsed.parameters ?? parsed.args ?? {};
+          const argsStr = typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs);
+          results.push({
+            id: `call_extracted_${Date.now()}_${results.length}`,
+            type: 'function',
+            function: { name, arguments: argsStr },
+          });
+        }
+      } catch {}
+    }
+    if (results.length > 0) return results;
+
+    // 2. Markdown fence style: ```json ... ```
+    const fenceRegex = /```(?:json)?\s*([\s\S]*?)\s*```/gi;
+    let fenceMatch: RegExpExecArray | null;
+    while ((fenceMatch = fenceRegex.exec(text)) !== null) {
+      try {
+        const parsed = JSON.parse(fenceMatch[1].trim());
+        if (Array.isArray(parsed)) {
+          for (const item of parsed) {
+            const rawName = String(item.name || item.tool || item.function || '').toLowerCase();
+            const name = TOOL_ALIASES[rawName] || rawName;
+            if (knownTools.has(name) || knownTools.has(rawName)) {
+              const rawArgs = item.arguments ?? item.parameters ?? item.args ?? {};
+              results.push({
+                id: `call_extracted_${Date.now()}_${results.length}`,
+                type: 'function',
+                function: { name, arguments: typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs) },
+              });
+            }
+          }
+        } else if (typeof parsed === 'object' && parsed !== null) {
+          const rawName = String(parsed.name || parsed.tool || parsed.function || '').toLowerCase();
+          const name = TOOL_ALIASES[rawName] || rawName;
+          if (knownTools.has(name) || knownTools.has(rawName)) {
+            const rawArgs = parsed.arguments ?? parsed.parameters ?? parsed.args ?? {};
+            results.push({
+              id: `call_extracted_${Date.now()}_${results.length}`,
+              type: 'function',
+              function: { name, arguments: typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs) },
+            });
+          }
+        }
+      } catch {}
+    }
+
+    return results;
   }
 
   /** Replace unfilled hints in a verification command (models sometimes write
@@ -2578,8 +2742,8 @@ Continue from 'Next:', do not redo completed progress.`,
     if (this.emptyResponseCount >= 4) {
       return { abort: true, reason: 'Model returning empty responses repeatedly.' };
     }
-    if (this.errors.length >= 6) {
-      return { abort: true, reason: `Too many repeated failures (${this.errors.length}). Stopping.` };
+    if (this.consecutiveToolErrorsCount >= 8 && !this.fileChanged) {
+      return { abort: true, reason: `Too many consecutive tool failures (${this.consecutiveToolErrorsCount}) without file changes. Stopping.` };
     }
     this.events.emit({ type: 'pulse', state: this.context.state });
     return { abort: false };

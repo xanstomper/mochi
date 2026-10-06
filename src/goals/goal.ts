@@ -507,11 +507,18 @@ Return ONLY the JSON array, no markdown.`;
       !result.success &&
       resumes < maxResumes &&
       !abortSignal.aborted &&
-      (result.stopReason === 'model_error' || result.stopReason === 'max_iterations')
+      (result.stopReason === 'model_error' ||
+        result.stopReason === 'max_iterations' ||
+        result.stopReason === 'budget' ||
+        (result.stopReason === 'tool_loop' && (context.state.filesModified?.length ?? 0) > 0))
     ) {
       resumes++;
       const reason = result.stopReason === 'model_error'
         ? 'the model request failed mid-task (transient provider error)'
+        : result.stopReason === 'budget'
+        ? 'the token or agent budget soft limit was reached'
+        : result.stopReason === 'tool_loop'
+        ? 'a repetitive tool loop occurred, but file changes are preserved'
         : 'the iteration/runtime budget ran out mid-task';
       this.events.emit({
         type: 'agent:log',

@@ -267,10 +267,23 @@ export function defaultUserSkillsDir(): string {
   return home ? join(home, '.mochi', 'skills') : '';
 }
 
+/** Additional user/global skill directories across platforms (Hermes, Antigravity, etc.).
+ *  Discovered automatically in full runtime when no explicit userDir is passed. */
+export function additionalUserSkillDirs(): string[] {
+  const home = process.env.HOME || process.env.USERPROFILE;
+  if (!home) return [];
+  const dirs = [
+    join(home, '.hermes', 'skills'),
+    join(home, '.gemini', 'antigravity-cli', 'skills'),
+    join(home, '.gemini', 'antigravity-cli', 'builtin', 'skills'),
+  ];
+  return dirs.filter((d) => existsSync(d));
+}
+
 /** loadProjectSkills plus the bundled catalog appended last (so project and
  *  user skills shadow bundled ones by name). */
 export function loadAllSkills(projectDir: string, userDir?: string): { skills: Skill[]; diagnostics: string[] } {
-  // Correct precedence: bundled (lowest) < project < user (highest). loadAll
+  // Correct precedence: bundled (lowest) < external cross-agent skills < project < user (highest). loadAll
   const map = new Map<string, Skill>();
   const seen = new Set<string>();
   const diagnostics: string[] = [];
@@ -285,6 +298,12 @@ export function loadAllSkills(projectDir: string, userDir?: string): { skills: S
   };
   const bundled = bundledSkillsDir();
   if (bundled) add(bundled);      // lowest precedence
+  // If userDir is not explicitly passed (e.g. not in an isolated test), bridge external skills
+  if (!userDir && !process.env.VITEST) {
+    for (const d of additionalUserSkillDirs()) {
+      add(d);
+    }
+  }
   add(join(projectDir, '.mochi', 'skills'));
   const effectiveUser = userDir || defaultUserSkillsDir();
   if (effectiveUser) add(effectiveUser); // highest precedence — global memory
