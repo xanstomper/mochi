@@ -1609,6 +1609,17 @@ Continue from 'Next:', do not redo completed progress.`,
         // then give up instead of spinning to maxIterations.
         this.emptyResponseCount++;
         if (this.emptyResponseCount >= 4) {
+          const alt = this.pickAlternateModel();
+          if (alt) {
+            this.events.emit({ type: 'agent:log', agentId: this.id, message: `[empty-response] model repeatedly empty; failing over to ${alt}` });
+            this.setActiveModel(alt);
+            this.emptyResponseCount = 0;
+            continue;
+          }
+          if (this.switchToNextProvider()) {
+            this.emptyResponseCount = 0;
+            continue;
+          }
           return this.finish(task, false, 'Model returned empty responses repeatedly. The provider may be overloaded — try again or switch models with /model.', 'model_error');
         }
         const backoffMs = [1500, 4000, 9000][this.emptyResponseCount - 1] ?? 9000;

@@ -49,9 +49,12 @@ export function createAnthropicProvider(config: ProviderConfig) {
 
   async function chat(messages: ChatMessage[], tools: ToolDefinition[], options?: { reasoningEffort?: string }): Promise<ModelResponse> {
     const reasoning = ((options?.reasoningEffort || process.env.MOCHI_REASONING) || '').toLowerCase();
-    const thinkingBudget = (reasoning === 'max' || reasoning === 'extreme' || reasoning === 'deep') ? 32768
-      : (reasoning === 'high' || reasoning === 'hard') ? 16384
-      : (reasoning === 'medium') ? 4096 : 0;
+    const supportsThinking = /(3-7|3\.7|opus-4|sonnet-4|claude-4)/i.test(model);
+    const thinkingBudget = supportsThinking
+      ? ((reasoning === 'max' || reasoning === 'extreme' || reasoning === 'deep') ? 32768
+        : (reasoning === 'high' || reasoning === 'hard') ? 16384
+        : (reasoning === 'medium') ? 4096 : 0)
+      : 0;
 
     const body: Record<string, unknown> = {
       model,

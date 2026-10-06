@@ -81,10 +81,13 @@ export function createGeminiProvider(config: ProviderConfig) {
   async function chat(messages: ChatMessage[], tools: ToolDefinition[], options?: { reasoningEffort?: string }): Promise<ModelResponse> {
     const url = `${base}/v1beta/models/${model}:generateContent?key=${config.apiKey ?? ''}`;
     const reasoning = String(options?.reasoningEffort || process.env.MOCHI_REASONING || '').toLowerCase().trim();
-    const thinkingBudget = (reasoning === 'max' || reasoning === 'extreme' || reasoning === 'deep') ? 24576
-      : (reasoning === 'high' || reasoning === 'hard') ? 16384
-      : (reasoning === 'medium') ? 8192
-      : (reasoning === 'low' || reasoning === 'easy') ? 1024
+    const supportsThinking = /(2\.0|2\.5|gemini-2)/i.test(model);
+    const thinkingBudget = supportsThinking
+      ? ((reasoning === 'max' || reasoning === 'extreme' || reasoning === 'deep') ? 24576
+        : (reasoning === 'high' || reasoning === 'hard') ? 16384
+        : (reasoning === 'medium') ? 8192
+        : (reasoning === 'low' || reasoning === 'easy') ? 1024
+        : 0)
       : 0;
 
     const geminiTools = toGeminiTools(tools);
