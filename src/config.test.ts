@@ -66,7 +66,7 @@ describe('loadConfig', () => {
       const fi = cfg.model.failover!.find((f) => f.provider === 'freeinference');
       expect(fi).toBeDefined();
       expect(fi!.apiKey).toBe('sk-failover-key-bbbbbbbb');
-      expect(fi!.model).toBe('deepseek-v4-flash'); // the provider's defaultModel
+      expect(fi!.model).toBe('kimi-k2.7-code'); // the provider's defaultModel
       // The primary itself must never appear in the chain.
       expect(cfg.model.failover!.some((f) => f.provider === 'opencode-zen')).toBe(false);
     } finally {

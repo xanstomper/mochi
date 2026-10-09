@@ -69,7 +69,7 @@ describe('login / selectProviderById', () => {
 
   it('selects a provider with its default model when none given', () => {
     const cfg = selectProviderById(base(), 'freeinference');
-    expect(cfg.model.model).toBe('deepseek-v4-flash');
+    expect(cfg.model.model).toBe('kimi-k2.7-code');
   });
 });
 
