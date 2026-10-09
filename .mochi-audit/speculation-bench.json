@@ -1,16 +1,16 @@
 {
-  "date": "2026-10-05T18:44:23.029Z",
+  "date": "2026-10-09T23:48:37.628Z",
   "tasks": 5,
   "off": {
     "modelCalls": 5,
     "tokens": 6000,
-    "wallMs": 75,
+    "wallMs": 81,
     "avgScore": 10
   },
   "on": {
     "modelCalls": 25,
     "tokens": 30000,
-    "wallMs": 75,
+    "wallMs": 149,
     "avgScore": 10
   },
   "qualityDelta": 0,
@@ -20,9 +20,9 @@
     "passed": 1,
     "killed": 2,
     "killRate": 0.67,
-    "durationMs": 106,
+    "durationMs": 166,
     "promotedWinner": true,
     "appliedToPrimary": true
   },
-  "verdict": "Planning: PARITY on identical-quality provider (+0 rubric for 20 calls). Execution: branch-racer achieved 67.0% kill-rate (2/3 toxic branches killed before touching main tree), with 100% promotion of verified winner in 106ms."
+  "verdict": "Planning: PARITY on identical-quality provider (+0 rubric for 20 calls). Execution: branch-racer achieved 67.0% kill-rate (2/3 toxic branches killed before touching main tree), with 100% promotion of verified winner in 166ms."
 }

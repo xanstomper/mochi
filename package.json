@@ -32,7 +32,8 @@
     "bench:task": "node bench/task.mjs",
     "bench:stream": "tsx bench/streaming.mjs",
     "typecheck": "tsc --noEmit",
-    "bench:memory": "node bench/memory.mjs"
+    "bench:memory": "node bench/memory.mjs",
+    "bench:speculation": "tsx bench/speculation.mjs"
   },
   "engines": {
     "node": ">=22.0.0"
