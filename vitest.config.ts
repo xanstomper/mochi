@@ -29,5 +29,13 @@ export default defineConfig({
         singleFork: false,
       },
     },
+    // MCH-23: measure coverage of the shipped source tree only. Without an
+    // explicit include, v8 coverage also counts bench/*.mjs, scripts/*.mjs and
+    // dogfood/ (768 uncovered lines of benchmark & utility scripts that are
+    // never imported by src), which dragged global lines below the 70% CI
+    // threshold (69.76% observed 2026-07-10) even though src itself clears it.
+    coverage: {
+      include: ['src/**'],
+    },
   },
 });
