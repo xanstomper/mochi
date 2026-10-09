@@ -35,7 +35,7 @@ export const todoTool: Tool = {
       'Maintain a persistent ordered task list for this run. Use it to plan, track progress, and resume multi-step work. Operations: add <title> (deduped by title), status <title> [in_progress|pending|done], complete <title>, notes <title> <text>, list, clear-completed. Returns the current list.',
     parameters: [
       { name: 'action', type: 'string', description: 'add | status | complete | notes | list | clear', required: true },
-      { name: 'title', type: 'string', description: 'Todo title', required: false },
+      { name: 'title', type: 'string', description: 'Todo title (required for add/status/complete/notes)', required: false },
       { name: 'note', type: 'string', description: 'Short note (for add/notes)', required: false },
       { name: 'state', type: 'string', description: 'New status for status action', required: false },
     ],

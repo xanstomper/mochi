@@ -40,9 +40,10 @@ const REDACT_ENABLED = !/^(0|false|no)$/i.test(process.env.MOCHI_REDACT_SECRETS 
 /** Redact when enabled; identity when disabled. Central gate for the
  *  tool-output→context boundary so a single call site works everywhere. */
 export function maybeRedact(input: string): string {
-  if (process.env.MOCHI_UNCENSORED === '1' || process.env.MOCHI_REDACT_SECRETS === '0') {
-    return input;
-  }
+  // NOTE: MOCHI_UNCENSORED deliberately does NOT bypass redaction. Uncensored
+  // mode relaxes permission gates, not data hygiene — a stray API key in tool
+  // output must never reach the model context or disk in any mode.
+  if (process.env.MOCHI_REDACT_SECRETS === '0') return input;
   return REDACT_ENABLED ? redact(input) : input;
 }
 

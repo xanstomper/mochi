@@ -3,10 +3,20 @@ import { loadConfig, validateConfig } from './config.js';
 
 describe('loadConfig', () => {
   it('loads defaults (isolated from user config)', () => {
-    const cfg = loadConfig({}, '/nonexistent/nowhere.json');
-    expect(cfg.model.provider).toBe('opencode-zen');
-    expect(cfg.safety.mode).toBe('ask');
-    expect(cfg.projectDir).toBe('.mochi');
+    // Hermetic: neutralize host env that promotes safety.mode to 'uncensored'
+    const priorUncensored = process.env.MOCHI_UNCENSORED;
+    const priorSafety = process.env.MOCHI_SAFETY;
+    delete process.env.MOCHI_UNCENSORED;
+    delete process.env.MOCHI_SAFETY;
+    try {
+      const cfg = loadConfig({}, '/nonexistent/nowhere.json');
+      expect(cfg.model.provider).toBe('opencode-zen');
+      expect(cfg.safety.mode).toBe('ask');
+      expect(cfg.projectDir).toBe('.mochi');
+    } finally {
+      if (priorUncensored !== undefined) process.env.MOCHI_UNCENSORED = priorUncensored;
+      if (priorSafety !== undefined) process.env.MOCHI_SAFETY = priorSafety;
+    }
   });
 
   it('applies overrides', () => {

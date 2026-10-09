@@ -50,12 +50,12 @@ describe('Uncensored Harness', () => {
     expect(resOff?.newPolicy).toBe('strict');
   });
 
-  it('bypasses secret redaction when MOCHI_UNCENSORED=1', () => {
+  it('still redacts secrets even when MOCHI_UNCENSORED=1 (redaction is unconditional)', () => {
     const raw = 'Config: {"api_key":"sk-proj-ABCdefGHIJKLMNOP"}';
     const prev = process.env.MOCHI_UNCENSORED;
     try {
       process.env.MOCHI_UNCENSORED = '1';
-      expect(maybeRedact(raw)).toBe(raw);
+      expect(maybeRedact(raw)).toBe('Config: {"api_key":"[secret-redacted]"}');
     } finally {
       if (prev !== undefined) process.env.MOCHI_UNCENSORED = prev;
       else delete process.env.MOCHI_UNCENSORED;
