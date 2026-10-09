@@ -21,3 +21,6 @@ __pycache__
 *.sqlite
 *.sqlite-journal
 *.sqlite3
+
+# Test coverage artifacts
+coverage/
