@@ -739,6 +739,106 @@ async function main() {
       console.log(`\n${rep.imported.length} imported, ${rep.skipped.length} skipped, ${rep.errors.length} errors (origin: ${rep.origin}).`);
       return;
     }
+    if (sub === 'repo' || sub === 'registry' || sub === 'src') {
+      // mochi skills repo add|list|rm|ls + mochi skills repo <name> — the named
+      // shared skill-library surface (MCH-94). Sources are registered in
+      // ~/.mochi/skill-sources.json; `install <pack>@<repo>` resolves by name.
+      const { registerSource, unregisterSource, loadRegistry, getSource } = await import('./features/skill-registry.js');
+      const { resolveSourceDir } = await import('./features/skill-importer.js');
+      const act = positional[2];
+      if (act === 'add' || act === 'register') {
+        const name = positional[3];
+        const source = positional[4];
+        if (!name || !source) {
+          console.log('Usage: mochi skills repo add <name> <source>');
+          console.log('  source = local path, "hermes:", or github:owner/repo / git URL.');
+          return;
+        }
+        const rec = registerSource({ name, source });
+        console.log(`Registered skill source '${rec.name}' -> ${source}`);
+        return;
+      }
+      if (act === 'rm' || act === 'remove') {
+        const name = positional[3];
+        if (!name) { console.log('Usage: mochi skills repo rm <name>'); return; }
+        if (unregisterSource(name)) console.log(`Removed skill source '${name}'.`);
+        else console.error(`No skill source '${name}'.`);
+        return;
+      }
+      if (act === 'publish') {
+        // mochi skills repo publish [--root <dir>] — generate a shareable
+        // packs.json catalog from an installed-skill tree.
+        const { buildCatalogFromSkills } = await import('./features/skill-registry.js');
+        const { homedir } = await import('node:os');
+        const root = typeof flags.root === 'string' ? flags.root : pathJoin(homedir(), '.mochi', 'skills');
+        const cat = buildCatalogFromSkills(root);
+        const json = JSON.stringify(cat, null, 2);
+        const out = pathJoin(cwd, 'packs.json');
+        const { writeFileSync } = await import('node:fs');
+        writeFileSync(out, json + '\n', 'utf8');
+        console.log(`Published ${cat.length} packs -> ${out}`);
+        console.log('Share this repo; recipients: mochi skills repo add <name> <repo> && mochi skills install <pack>.');
+        return;
+      }
+      if (act === 'list' || act === 'ls' || !act) {
+        const state = loadRegistry();
+        const names = Object.keys(state.sources);
+        if (!names.length) { console.log('No skill sources registered. Use: mochi skills repo add <name> <source>'); return; }
+        for (const n of names.sort()) {
+          const s = state.sources[n];
+          console.log(`${n.padEnd(20)} ${s.source}${s.description ? '  # ' + s.description : ''}`);
+        }
+        return;
+      }
+      // mochi skills repo <name> [--list] — show a source's discoverable packs.
+      const { discoverPacks } = await import('./features/skill-registry.js');
+      const name = act;
+      const src = getSource(name);
+      if (!src) { console.error(`No skill source '${name}'.`); return; }
+      const res = await resolveSourceDir(src.source, { update: !!flags.update });
+      if (!res.dir) { console.error(`Source '${name}' unresolvable: ${res.error || 'n/a'}`); return; }
+      const packs = discoverPacks(res.dir, src.catalogFile);
+      if (flags.list) {
+        if (!packs.length) { console.log(`No packs in source '${name}'.`); return; }
+        console.log(`Packs in '${name}' (${packs.length}):`);
+        for (const p of packs) console.log(`  - ${p.name}${p.category ? ` [${p.category}]` : ''}  ${(p.description || '').slice(0, 64)}`);
+        return;
+      }
+      if (packs.length) {
+        console.log(`Source '${name}' -> ${src.source}`);
+        for (const p of packs) console.log(`  ${p.name}${p.category ? ` [${p.category}]` : ''}  ${(p.description || '').slice(0, 64)}`);
+      } else {
+        console.log(`Source '${name}' -> ${src.source} (no packs found)`);
+      }
+      return;
+    }
+    if (sub === 'install') {
+      // mochi skills install <pack>[@<repo>] — install a named pack from a
+      // registered source. Resolves the pack to a subdir by catalog/name, then
+      // reuses the importer's non-destructive copy into ~/.mochi/skills.
+      const { getSource, resolvePackDir, discoverPacks } = await import('./features/skill-registry.js');
+      const { importSkills, resolveSourceDir } = await import('./features/skill-importer.js');
+      const target = positional[2];
+      if (!target) { console.log('Usage: mochi skills install <pack>[@<repo>] [--force]'); return; }
+      const [packId, repoName] = target.split('@');
+      const src = repoName ? getSource(repoName) : getSource(packId);
+      if (!src) { console.error(repoName ? `No skill source '${repoName}'.` : `No pack source — use 'mochi skills install <pack>@<repo>' or 'mochi skills repo add' first.`); return; }
+      const res = await resolveSourceDir(src.source, { update: !!flags.update });
+      if (!res.dir) { console.error(`Source '${src.name}' unresolvable: ${res.error || 'n/a'}`); return; }
+      const resolvedPackId = repoName ? packId : null;
+      const targetDir = resolvedPackId ? resolvePackDir(res.dir, resolvedPackId, src.catalogFile) : res.dir;
+      if (resolvedPackId && !targetDir) {
+        const packs = discoverPacks(res.dir, src.catalogFile);
+        console.error(`Pack '${resolvedPackId}' not found in '${repoName}'. Available: ${(packs.map((p) => p.name).join(', ')) || 'none'}`);
+        return;
+      }
+      const rep = await importSkills({ source: targetDir ?? res.dir, origin: src.name, force: !!flags.force });
+      for (const it of rep.imported) console.log(`installed  ${it.name}  -> ${it.to}`);
+      for (const sk of rep.skipped) console.log(`skipped    ${sk.name}  (${sk.reason})`);
+      for (const e of rep.errors) console.error(`error      ${e}`);
+      console.log(`\n${rep.imported.length} installed, ${rep.skipped.length} skipped, ${rep.errors.length} errors (source: ${src.name}).`);
+      return;
+    }
     const { skills } = loadAllSkills(cwd);
     if (sub === 'list' || !sub) {
       if (!skills.length) { console.log('No skills available.'); return; }
@@ -1335,6 +1435,10 @@ async function main() {
     // the prompt and print the result instead of spewing escape codes.
     const isTTY = Boolean(process.stdin.isTTY && process.stdout.isTTY);
     if (flags.p || flags.print || !isTTY) {
+      // MCH-94: one-shot runs have no human watching a TUI — the print-mode
+      // caller reads `summary` directly. Skip the ~5s post-run narrative
+      // model call entirely; it only beautifies output nobody renders.
+      process.env.MOCHI_NARRATIVE_SUMMARY = '0';
       const detailed = await runtime.runPromptDetailed(prompt);
       if (flags.json) {
         // Machine-readable output for scripts/CI: the full structured result.

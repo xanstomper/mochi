@@ -16,7 +16,7 @@ import { executeTool, buildTools, TOOL_ALIASES, normalizeToolArgs, trimHeavyTool
 import { refreshAuthoredTools, RESERVED_TOOL_NAMES } from '../tools/tool-factory.js';
 import type { ToolContext, ReadCache } from '../tools/types.js';
 import { detectRepo, languageHint } from '../repo.js';
-import { classifyTaskKind, resolveAutoReasoning, isTrivialWriteTask } from '../taskkind.js';
+import { classifyTaskKind, resolveAutoReasoning, isTrivialWriteTask, isSimpleScriptTask } from '../taskkind.js';
 import { matchesBaseline, type VerificationBaseline } from '../verification.js';
 import { diagnoseFile, renderDiagnostics } from '../diagnostics.js';
 import type { AgentProfile } from '../types.js';
@@ -500,6 +500,9 @@ export class Agent {
       // 'max' via the implement default and burned 50k+ thinking tokens on a
       // 1-line task (arena: 54,331 tokensOut). Downgrade them to 'low'.
       if (isTrivialWriteTask(task)) return 'low';
+      // MCH-95: create-and-run script tasks (f1 arena: 21s thinking + 40s of
+      // self-doubt diff re-checks and identical rewrites). 'medium' is ample.
+      if (isSimpleScriptTask(task)) return 'medium';
       return resolveAutoReasoning(kind);
     }
     // Guard against any stray invalid value (config re-validates, but stay safe).

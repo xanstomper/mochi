@@ -534,7 +534,15 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
     }
     if (memory) parts.push(`Project memory:\n${memory}`);
     if (task) {
-      parts.push(kindHint(classifyTaskKind(task)));
+      // MCH-95: once real edits exist, re-stating the kind's work push ("cover
+      // boundary and failure path", "run the suite before AND after") makes
+      // finished models doubt their done-state — live f1 trace: 21s+18.5s of
+      // self-doubt git-diff re-checks then an identical file rewrite. Dampen
+      // the push after work exists: mark it as already-in-progress guidance.
+      const hint = kindHint(classifyTaskKind(task));
+      parts.push(this.state.filesModified.length > 0
+        ? hint.replace(/^\n# Focus:/, '\n# Focus (work already in progress — verify once, then finish; do not re-check completed steps):')
+        : hint);
       const owl = evaluateOwl(task.title + (task.description ? ' ' + task.description : ''));
       if (owl.mode === 'surface' && owl.formattedFindings.length > 0) {
         parts.push(`OWL Operational Guardrails:\n${owl.formattedFindings.join('\n')}`);

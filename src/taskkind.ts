@@ -71,6 +71,21 @@ export function resolveAutoReasoning(kind: TaskKind): 'low' | 'medium' | 'high' 
   }
 }
 
+/** Reasoning tier override for simple create-and-run script tasks. f1-style
+ *  tasks ("Create add.js... Run node add.test.js") used to classify as
+ *  'implement' -> 'max' reasoning: 21s+ thinking on a 5-line task, then
+ *  self-doubt diff re-checks and identical file rewrites. Bounded: length cap
+ *  plus a single small module + one script, no framework/refactor vocabulary. */
+export function isSimpleScriptTask(task: Task): boolean {
+  const text = `${task.title} ${task.description ?? ''}`.toLowerCase();
+  if (text.length > 200) return false;
+  if (/refactor|migrat|deploy|framework|architecture|security|database|schema|api endpoint/.test(text)) return false;
+  // Simple shape: create file(s) + run it. Node/python/canvas scripts, no
+  // package-manager or suite orchestration.
+  return /\b(create|write|make)\b/.test(text) && /\b(run|node |python )/.test(text)
+    && !/\bnpm (test|run)|vitest|jest|pytest|cargo test/.test(text);
+}
+
 /** Tailored hint added to the system prompt per task kind. */
 export function isTrivialWriteTask(task: Task): boolean {
   const text = `${task.title} ${task.description ?? ''}`.toLowerCase();
