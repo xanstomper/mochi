@@ -379,6 +379,7 @@ export class Agent {
   private planAcceptedText = '';
   private emptyResponseCount = 0;
   private selfReviewCount = 0;
+  private taskRunExecuted = false;
   private taskKind?: import('../taskkind.js').TaskKind;
   private contextCutoffNudged = false;
   private lastCompletionAnswer = '';
@@ -1890,6 +1891,27 @@ Continue from 'Next:', do not redo completed progress.`,
           return this.finish(task, false, 'Too many tool calls; stopping to avoid an infinite loop.', 'tool_loop');
         }
         await this.executeToolCalls(response.toolCalls);
+        // MCH-100: simple-script fast path. After a write/edit batch in a
+        // script task whose prompt names the run command, execute it
+        // harness-side right here and hand the output to the model — the
+        // next provider round sees "edits done + output" instead of burning
+        // a full round just to type the run command (live r1 trace: ~7-11s
+        // per round-trip). The model can still react to the output; verify()
+        // still gates completion.
+        if (isSimpleScriptTask(task) && !this.taskRunExecuted) {
+          const runCmd = this.extractTaskRunCommand(task);
+          const touched = response.toolCalls.some((tc) => ['write', 'edit', 'patch', 'replace_symbol'].includes(TOOL_ALIASES[tc.function.name] || tc.function.name));
+          if (runCmd && touched) {
+            this.taskRunExecuted = true;
+            const out = await this.runShell(runCmd, 60);
+            const tail = out.length > 2000 ? out.slice(-2000) : out;
+            this.context.addMessage({
+              role: 'system',
+              content: `[auto-run] The task's requested command was executed harness-side:\n$ ${runCmd}\n${tail.trim() || '(no output)'}\nexit=0. React to this output in your next reply; do NOT re-run it unless you changed code since.`,
+            });
+            this.events.emit({ type: 'agent:log', agentId: this.id, message: `[mch100] auto-ran task command: ${runCmd}` });
+          }
+        }
         continue;
       }
 
@@ -3807,6 +3829,22 @@ Continue from 'Next:', do not redo completed progress.`,
     };
     const { output, error } = await executeTool('shell', { command, timeout }, ctx, this.tools);
     return error ? `Error: ${error}\n${output}` : output;
+  }
+
+  /** MCH-100: extract the run command a simple-script task explicitly asks
+   *  for ("Create add.js … run node add.test.js" → `node add.test.js`).
+   *  Only the LAST "run <cmd>" / "run: <cmd>" occurrence counts, only single
+   *  short commands, and only known-safe runners — this is a harness-side
+   *  convenience probe, not arbitrary execution. */
+  private extractTaskRunCommand(task: Task): string | null {
+    const text = `${task.title} ${task.description ?? ''}`;
+    const matches = [...text.matchAll(/\brun\b[: ]+(?:`([^`]+)`|([\w./-]+(?: +[\w./"'-]+)*))/gi)];
+    if (matches.length === 0) return null;
+    const last = matches[matches.length - 1];
+    const cmd = (last[1] ?? last[2] ?? '').trim().replace(/[.,;]$/, '');
+    if (!cmd || cmd.length > 80) return null;
+    if (/[;&|<>`$()]/.test(cmd)) return null;
+    return /^(node|python3?|bash|sh|npm (test|run [\w:@/-]+)|make)\b/.test(cmd) ? cmd : null;
   }
 
   /** Aider-style auto-lint-fix: run the project's own auto-fixer on edited
