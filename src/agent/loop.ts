@@ -2532,8 +2532,9 @@ Continue from 'Next:', do not redo completed progress.`,
       }
     };
     await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, () => worker()));
-    return results;
+    return synthesizeSubagentResults(results);
   }
+
 
   private async runMoolCall(tc: ToolCall): Promise<void> {
     if (this.abortSignal?.aborted) return;
@@ -3799,4 +3800,31 @@ Continue from 'Next:', do not redo completed progress.`,
       stopReason,
     };
   }
+}
+
+/** MCH-58: subagent result synthesis. Raw fanout output repeats the same
+ *  finding across siblings (they share the task). Line-level dedupe strips
+ *  duplicated finding lines; a VERDICT header leads with the merged picture so
+ *  the parent model reads one conclusion instead of N near-copies. Pure string
+ *  pass — no model calls, deterministic, cheap. */
+export function synthesizeSubagentResults(results: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const r of results) {
+    const lines = r.split('\n');
+    const kept: string[] = [];
+    for (const line of lines) {
+      // Strip the sibling header ("[Subagent #2 (coder)]: ") so identical
+      // findings under different headers still collapse.
+      const bare = line.replace(/^\s*\[[^\]]*\]\s*:?\s*/, '');
+      const key = bare.trim().toLowerCase().replace(/[^a-z0-9 ]/g, '');
+      if (key.length >= 40 && seen.has(key)) continue; // duplicate finding
+      if (key.length >= 40) seen.add(key);
+      kept.push(line);
+    }
+    out.push(kept.join('\n'));
+  }
+  const anyFailed = out.some((r) => r.includes(' FAILED]'));
+  const verdict = `[VERDICT] ${out.length} subagent(s) returned; ${anyFailed ? 'at least one FAILED — read failures before acting' : 'all succeeded'}. First mention of each finding is authoritative; duplicates were merged.`;
+  return [verdict, ...out];
 }
