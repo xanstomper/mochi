@@ -93,6 +93,12 @@ describe('Agent', () => {
     // with no tool calls: the run must finish on the repeat, not keep
     // requesting.
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-repeat-after-write-'));
+    // Git repo: selfReview runs a real (cheap, low-effort) review round after
+    // the first verify — the same-answer guard must still catch the repeat
+    // through that extra round. (In non-git dirs selfReview exits early with
+    // no model call; the no-selfReview choreography is covered by the
+    // repeated-preamble test above.)
+    execSync('git init -q && git config user.email t@t && git config user.name t', { cwd: dir, shell: '/bin/sh' });
     const sameLine = 'Still writing the file, almost there.';
     const fake = await startFakeOpenAI([
       {
