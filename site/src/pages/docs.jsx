@@ -57,7 +57,7 @@ function Docs() {
 
       <main className="doc-body">
         <h1 style={{ display: 'flex', alignItems: 'center', gap: 12 }}>Documentation <Mochi size={44} mood="wink" className="mascot" /></h1>
-        <p className="lede">Everything mochi can do, and exactly how. Mochi — Minimal Orchestrative Coding Harness Intelligence — is an autonomous coding agent for the terminal with a zero-dependency Rust core, 16 agent roles, 30+ skills, AST-native tooling, and a persistent daemon.</p>
+        <p className="lede">Everything mochi can do, and exactly how. Mochi is an autonomous coding agent for the terminal with a zero-dependency Rust core, 16 agent roles, 30+ skills, AST-native tooling, and a persistent daemon.</p>
 
         <h2 id="install">Installation</h2>
         <Reveal as="div">
@@ -109,7 +109,7 @@ mochi team "ship the payments refactor"`}</pre>
         </Reveal>
 
         <h2 id="architecture">Architecture</h2>
-        <p>Mochi is a dual-engine harness:</p>
+        <p>Mochi runs on a dual-engine core:</p>
         <Reveal as="ul">
           <li><strong>Rust core</strong> (<code>native/mochi_core</code>) — a zero-dependency compiled crate handling BPE tokenization (0.28 ms / 100k chars), compaction cut planning (0.12 ms on 250-turn transcripts), N-API workspace indexing (50k files in 3.8 ms), and agent-loop decisions.</li>
           <li><strong>TypeScript frontend</strong> — model I/O, tool execution, TUI rendering via direct ANSI (no webview, no Electron), persistence (SQLite+FTS5).</li>

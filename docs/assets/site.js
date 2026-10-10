@@ -3,7 +3,7 @@
   var path=location.pathname.replace(/\/index\.html$/,'/').replace(/\.html$/,'/');
   var inSub=path.indexOf('/mochi')>-1;
   var REPO='https://github.com/xanstomper/mochi';
-  var pages=[['/',(inSub?'/mochi/':'/'),'Home'],['docs.html','docs.html','Docs'],['benchmarks.html','benchmarks.html','Benchmarks'],['changelog.html','changelog.html','Changelog']];
+  var pages=[['/',(inSub?'/mochi/':'/'),'Home'],['docs.html','docs.html','Docs'],['benchmarks.html','benchmarks.html','Benchmarks'],['changelog.html','changelog.html','Changelog'],['source.html','source.html','Source']];
 
   // mascot mini (nav-size) — same artwork as React <Mochi>, dependency-free
   var mark='<svg class="mascot-nav" viewBox="0 0 96 96" fill="none">'
@@ -21,6 +21,7 @@
     var active;
     if(p[1]==='/') active=(path==='/'||path==='/mochi/'||path==='/mochi');
     else if(p[1]==='docs.html') active=/docs(\.html|\/)?$/.test(location.pathname);
+    else if(p[1]==='source.html') active=/source(\.html|\/)?$/.test(location.pathname);
     else if(p[1]==='benchmarks.html') active=/benchmarks(\.html|\/)?$/.test(location.pathname);
     else active=/changelog(\.html|\/)?$/.test(location.pathname);
     return '<a href="'+p[1]+'"'+(active?' aria-current="page"':'')+'>'+p[2]+'</a>';
@@ -46,35 +47,11 @@
   footer.className='site';
   footer.innerHTML='<div class="wrap"><div class="cols">'
     +'<div><a class="wordmark" href="'+root+'" style="font-size:15px">'+mark+'mochi</a>'
-    +'<p>Minimal Orchestrative Coding Harness Intelligence — a minimal, fast, autonomous coding agent for the terminal, built on a zero-dependency Rust core.</p></div>'
+    +'<p>Mochi — the terminal coding agent — a minimal, fast, autonomous coding agent for the terminal, built on a zero-dependency Rust core.</p></div>'
     +'<div><h6>Product</h6><a href="index.html#features">Features</a><a href="index.html#roles">Agent roles</a><a href="benchmarks.html">Benchmarks</a><a href="docs.html#install">Install</a></div>'
     +'<div><h6>Documentation</h6><a href="docs.html#architecture">Architecture</a><a href="docs.html#tools">Tools</a><a href="docs.html#cli">CLI reference</a><a href="docs.html#daemon">Daemon</a></div>'
-    +'<div><h6>Project</h6><a href="'+REPO+'" target="_blank" rel="noopener">GitHub</a><a href="'+REPO+'/blob/main/CHANGELOG.md" target="_blank" rel="noopener">Changelog (repo)</a><a href="benchmarks.html">Performance</a></div>'
+    +'<div><h6>Project</h6><a href="'+REPO+'" target="_blank" rel="noopener">GitHub</a><a href="'+REPO+'/blob/main/CHANGELOG.md" target="_blank" rel="noopener">Changelog (repo)</a><a href="benchmarks.html">Performance</a><a href="source.html">Source</a></div>'
     +'</div><div class="legal"><span>© 2026 mochi — open source.</span><span>Rust core · TypeScript frontend · zero runtime dependencies</span></div></div>';
   document.body.appendChild(footer);
 
-  // reveal
-  var io=new IntersectionObserver(function(es){
-    es.forEach(function(e){if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}});
-  },{threshold:.1,rootMargin:'0px 0px -30px 0px'});
-  document.querySelectorAll('.rv').forEach(function(el){io.observe(el);});
-
-  // bench bars
-  var bio=new IntersectionObserver(function(es){
-    es.forEach(function(e){
-      if(!e.isIntersecting)return;
-      var rows=e.target.querySelectorAll('.row'),max=0;
-      rows.forEach(function(r){max=Math.max(max,+r.dataset.v);});
-      rows.forEach(function(r,i){
-        var v=+r.dataset.v,f=r.querySelector('.f'),val=r.querySelector('.v');
-        setTimeout(function(){
-          f.style.width=Math.max(2,(v/max)*100)+'%';
-          var txt=r.dataset.fmt==='ms'&&v<100?v.toFixed(1)+' ms':(v<10?v.toFixed(v<1?2:1):Math.round(v).toLocaleString())+(r.dataset.fmt==='ms'?' ms':' MB');
-          val.innerHTML=txt+(r.querySelector('.first')?'<i>1st</i>':'');
-        },100+i*80);
-      });
-      bio.unobserve(e.target);
-    });
-  },{threshold:.25});
-  document.querySelectorAll('.bench').forEach(function(el){bio.observe(el);});
 })();

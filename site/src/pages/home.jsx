@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import Mochi from '../Mascot.jsx';
 import { Reveal, CountUp, BenchChart } from '../anim.jsx';
 import { FeatureGrid } from '../Features.jsx';
+import RepoBrowser from '../RepoBrowser.jsx';
 
 function HeroTerm() {
   const lines = [
@@ -117,6 +118,21 @@ function Home() {
         ))}
       </div>
 
+      <section className="sec" id="repo" style={{ paddingTop: 30 }}>
+        <div className="wrap">
+          <div className="sec-head"><Reveal as="div">
+            <span className="kicker">Source</span>
+            <h2>The whole repo, right here.</h2>
+            <p>Browse every file of mochi without leaving the page. <a href="source.html">Full browser →</a></p>
+          </Reveal></div>
+          <Reveal delay={1}>
+            <div className="rb-window">
+              <RepoBrowser compact />
+            </div>
+          </Reveal>
+        </div>
+      </section>
+
       <section className="sec" id="flow">
         <div className="wrap">
           <div className="sec-head"><Reveal as="div">
@@ -131,7 +147,7 @@ function Home() {
         <div className="wrap">
           <div className="sec-head"><Reveal as="div">
             <span className="kicker">What's inside</span>
-            <h2>A complete harness, not a wrapper.</h2>
+            <h2>A complete agent, not a wrapper.</h2>
             <p>Mochi is built from scratch — no framework, no Electron, no runtime dependencies. Every layer below is clickable: see what it means and exactly how it works.</p>
           </Reveal></div>
           <FeatureGrid />
@@ -181,7 +197,7 @@ function Home() {
       <section className="cta-sec">
         <div className="wrap">
           <Reveal><Mochi size={130} className="bob" /></Reveal>
-          <Reveal as="h2" delay={1}>Give your terminal a harness.</Reveal>
+          <Reveal as="h2" delay={1}>Give your terminal a real agent.</Reveal>
           <Reveal as="p" delay={2}>Node 22+ or Bun. Zero runtime dependencies. Under a minute to build.</Reveal>
           <Reveal as="div" delay={3} className="cta" style={{ justifyContent: 'center' }}>
             <a className="btn primary" href="docs.html#install">Get started</a>

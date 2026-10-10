@@ -47,7 +47,7 @@
   footer.className='site';
   footer.innerHTML='<div class="wrap"><div class="cols">'
     +'<div><a class="wordmark" href="'+root+'" style="font-size:15px">'+mark+'mochi</a>'
-    +'<p>Minimal Orchestrative Coding Harness Intelligence — a minimal, fast, autonomous coding agent for the terminal, built on a zero-dependency Rust core.</p></div>'
+    +'<p>Mochi — the terminal coding agent — a minimal, fast, autonomous coding agent for the terminal, built on a zero-dependency Rust core.</p></div>'
     +'<div><h6>Product</h6><a href="index.html#features">Features</a><a href="index.html#roles">Agent roles</a><a href="benchmarks.html">Benchmarks</a><a href="docs.html#install">Install</a></div>'
     +'<div><h6>Documentation</h6><a href="docs.html#architecture">Architecture</a><a href="docs.html#tools">Tools</a><a href="docs.html#cli">CLI reference</a><a href="docs.html#daemon">Daemon</a></div>'
     +'<div><h6>Project</h6><a href="'+REPO+'" target="_blank" rel="noopener">GitHub</a><a href="'+REPO+'/blob/main/CHANGELOG.md" target="_blank" rel="noopener">Changelog (repo)</a><a href="benchmarks.html">Performance</a><a href="source.html">Source</a></div>'

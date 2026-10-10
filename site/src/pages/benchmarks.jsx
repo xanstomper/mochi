@@ -43,7 +43,7 @@ function Benchmarks() {
       <div className="pagehead">
         <div className="wrap">
           <h1 style={{ display: 'flex', alignItems: 'center', gap: 14 }}>Benchmarks <Mochi size={46} mood="happy" className="mascot bob" /></h1>
-          <p>Measured, not vibes. Ten launches per agent, cross-verified against published <code>--version</code> timings where available. Methodology, raw logs, and the harness live in the repo's <a href="https://github.com/xanstomper/mochi/blob/main/docs/BENCHMARKS.md" target="_blank" rel="noopener">BENCHMARKS.md</a>.</p>
+          <p>Measured, not vibes. Ten launches per agent, cross-verified against published <code>--version</code> timings where available. Methodology, raw logs, and the benchmark suite lives in the repo's <a href="https://github.com/xanstomper/mochi/blob/main/docs/BENCHMARKS.md" target="_blank" rel="noopener">BENCHMARKS.md</a>.</p>
         </div>
       </div>
 
