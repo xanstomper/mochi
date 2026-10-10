@@ -17,7 +17,7 @@
 import { Runtime } from './runtime.js';
 import { SessionStore } from './session-store.js';
 import { addFact, recallFacts } from './memory-store.js';
-import type { MochiConfig } from './types.js';
+import type { MochiConfig, MochiEvent } from './types.js';
 
 export interface RunResult {
   summary: string;
@@ -106,6 +106,59 @@ export class Mochi {
 
   /** Raw Runtime escape hatch for anything the typed surface lacks. */
   get runtime(): Runtime { return this.rt; }
+
+  // ── MCH-68: typed event stream ──────────────────────────────────────────
+  /** Subscribe to a specific typed event on the runtime EventBus. Returns an unsubscribe fn. */
+  on<T extends MochiEvent['type']>(type: T, handler: (event: Extract<MochiEvent, { type: T }>) => void | Promise<void>): () => void {
+    this.rt.events.on(type, handler);
+    return () => this.rt.events.off(type, handler);
+  }
+
+  /** Subscribe to every event (wildcard). Returns an unsubscribe fn. */
+  onAny(handler: (event: MochiEvent) => void | Promise<void>): () => void {
+    return this.rt.events.onAll(handler);
+  }
+
+  /** Async iterator over all runtime events — `for await (const e of mochi.stream())`. */
+  stream(): AsyncIterable<MochiEvent> & { close(): void } {
+    const self = this;
+    type Resolve = (e: MochiEvent) => void;
+    const queue: MochiEvent[] = [];
+    const waiters: Resolve[] = [];
+    let closed = false;
+    let unsubscribe: (() => void) | null = null;
+    const push = (e: MochiEvent) => {
+      const w = waiters.shift();
+      if (w) w(e);
+      else queue.push(e);
+    };
+    const ensureSub = () => {
+      if (!unsubscribe) unsubscribe = self.onAny(push);
+    };
+    const close = () => {
+      closed = true;
+      if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+    };
+    const iterator = {
+      [Symbol.asyncIterator]() {
+        return {
+          next(): Promise<IteratorResult<MochiEvent>> {
+            if (closed) return Promise.resolve({ value: undefined as unknown as MochiEvent, done: true });
+            if (queue.length) return Promise.resolve({ value: queue.shift() as MochiEvent, done: false });
+            ensureSub();
+            return new Promise<IteratorResult<MochiEvent>>((resolve) => {
+              waiters.push((e) => resolve({ value: e, done: false }));
+            });
+          },
+          return(): Promise<IteratorResult<MochiEvent>> {
+            close();
+            return Promise.resolve({ value: undefined as unknown as MochiEvent, done: true });
+          },
+        };
+      },
+    };
+    return Object.assign(iterator, { close });
+  }
 }
 
 /** Thin typed client over the daemon's HTTP API. */
