@@ -37,31 +37,36 @@ const RELEASES = [
 {v:"0.1.0",sum:"Provider-level prefix caching.",body:"- Initial rewrite from Pi baseline.<br/>- Core runtime, event bus, workspace, and config.<br/>- Model-agnostic OpenAI-compatible provider with OpenCode aliases.<br/>- Model profiles: fast, coding, reasoning, review.<br/>- Tool bus: read, write, edit, delete, shell, search, glob, git.<br/>- Permission system: safe / ask / auto.<br/>- Context engine with token budget, compaction, and structured state.<br/>- Agent loop with preflight, verification, recovery, and pulse.<br/>- Persistent goals and task DAG scheduler.<br/>- Team orchestration with role-based agents.<br/>- Git checkpoint and rollback.<br/>- Interactive CLI and slash commands.<br/>- Multiple workspaces.<br/>- Tests and benchmarks.<br/><br/>- <strong>Provider-level prefix caching.</strong> <code>openai.ts</code> injects <code>cache_control: {type: \"ephemeral\"}</code> on index-0 system messages for DeepSeek/openai-compatible providers (freeinference/deepseek). First turn is 200; multi-turn agent runs clean. Combined with the byte-stable STABLE tier design (system prompt is identical across turns), this targets jcode-class token efficiency through cached-prefix billing.<br/>-- Final concrete results (all verified, not projected) --<br/>Freeze: reproduced from $HOME (&gt;30s hang) -&gt; 2.3s after fix.<br/>Dogfood battery (same deepseek-v4-flash): mochi 10.6s/5.6s/7.1s vs jcode 8.6s/5.4s/17.0s; all outputs clean via hygiene scanner; T2 fix + T3 feature verified with untouched tests.<br/>Prompt diet: 5249 -&gt; 4268 tokens (~-1000/turn, -19%).<br/>Cache control: openai provider adds ephemeral cache_control to index-0 system; freeinference returned 200 with usage tracked."}
 ];
 
-function Rel({ r, first }) {
-  const [open, setOpen] = useState(first);
+function Rel({ r, open, onToggle }) {
+  const isOpen = open === undefined ? false : open;
   return (
     <Reveal as="div" className={'rel' + (open ? ' open' : '')}>
-      <button className="rel-head" onClick={() => setOpen(!open)}>
+      <button className="rel-head" onClick={onToggle}>
         <span className="rel-v">v{r.v}</span>
         <span className="rel-sum" dangerouslySetInnerHTML={{ __html: r.sum }}></span>
-        <span className="rel-x">{open ? '−' : '+'}</span>
+        <span className="rel-x">{isOpen ? '−' : '+'}</span>
       </button>
-      {open && <div className="rel-body" dangerouslySetInnerHTML={{ __html: r.body }}></div>}
+      {isOpen && <div className="rel-body" dangerouslySetInnerHTML={{ __html: r.body }}></div>}
     </Reveal>
   );
 }
 
 function Changelog() {
+  const [allOpen, setAllOpen] = useState(true);
+  const [openSet, setOpenSet] = useState(() => new Set(RELEASES.map(r => r.v)));
+  const toggle = v => setOpenSet(s => { const n = new Set(s); n.has(v) ? n.delete(v) : n.add(v); return n; });
+  const flipAll = () => { const next = !allOpen; setAllOpen(next); setOpenSet(next ? new Set(RELEASES.map(r => r.v)) : new Set()); };
   return (
     <>
       <div className="pagehead">
         <div className="wrap">
           <h1 style={{ display: 'flex', alignItems: 'center', gap: 14 }}>Changelog <Mochi size={46} mood="happy" className="mascot bob" /></h1>
-          <p>Every version, every update — all {RELEASES.length} releases, newest first. The raw history lives in the repo's <a href="https://github.com/xanstomper/mochi/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG.md</a>.</p>
+          <p>Every version, every update — all {RELEASES.length} releases, newest first. <button className="flipall" onClick={flipAll}>{allOpen ? 'Collapse all' : 'Expand all'}</button> — raw history: <a href="https://github.com/xanstomper/mochi/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG.md</a></p>
+          <div className="rel-pills">{RELEASES.map(r => <a key={r.v} className={'pill' + (openSet.has(r.v) ? ' on' : '')} href={'#rel-' + r.v} onClick={e => { e.preventDefault(); toggle(r.v); }}>{r.v}</a>)}</div>
         </div>
       </div>
       <div className="wrap relwrap">
-        {RELEASES.map((r, i) => <Rel r={r} first={i === 0} key={r.v} />)}
+        {RELEASES.map(r => <div key={r.v} id={'rel-' + r.v}><Rel r={r} open={openSet.has(r.v)} onToggle={() => toggle(r.v)} /></div>)}
       </div>
     </>
   );
