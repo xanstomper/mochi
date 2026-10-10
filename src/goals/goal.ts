@@ -43,6 +43,20 @@ export class GoalEngine {
   private profiles: AgentProfileService;
   /** MCH-74: live agents keyed by task id — lets the TUI steer a RUNNING agent. */
   private liveAgents = new Map<string, import('../agent/loop.js').Agent>();
+  // MCH-86: monotonically increasing failover rotation index. Each task agent
+  // gets chain[(k + idx) % chain.length] as its primary so parallel siblings
+  // land on distinct endpoints instead of stampeding one free-tier limit.
+  private failoverCursor = 0;
+
+  /** Rotate config.model's failover chain by `index` (mirrors Agent.fanoutConfig). */
+  private rotateFailover(config: import('../types.js').ModelConfig, index?: number): import('../types.js').ModelConfig {
+    if (index === undefined || index <= 0) return config;
+    const chain = [config, ...(config.failover ?? [])];
+    if (chain.length < 2) return config;
+    const rotated = chain.map((_, k) => chain[(k + index) % chain.length]);
+    const [primary, ...rest] = rotated;
+    return { ...primary, failover: rest.map((c) => ({ ...c, failover: undefined })) };
+  }
 
   /** MCH-79: optional hook that receives the run's BudgetEngine at run start
    *  so the host (Runtime) can surface a live per-model cost breakdown. */
@@ -425,7 +439,7 @@ Return ONLY the JSON array, no markdown.`;
     // task toward "perfect" before moving on to the next one. Bounded so a
     // genuinely broken task still fails and the goal progresses.
     const maxSelfReviews = Math.max(0, Number(process.env.MOCHI_GOAL_SELF_REVIEW_ATTEMPTS ?? 2) || 0);
-    let result = await this.runTask(goal, task, abortSignal, budget, extraContext, readCache, sessionId);
+    let result = await this.runTask(goal, task, abortSignal, budget, extraContext, readCache, sessionId, this.failoverCursor++);
     this.goalStats.tokens += result.tokensUsed;
     this.goalStats.duration += result.durationMs;
     // MCH-81: per-task cost attribution for the goal summary card (guard: agent
@@ -584,7 +598,7 @@ Return ONLY the JSON array, no markdown.`;
     return result;
   }
 
-  private async runTask(goal: Goal, task: Task, abortSignal: AbortSignal, budget: BudgetEngine, extraContext: string[] = [], readCache?: ReadCache, sessionId?: string) {
+  private async runTask(goal: Goal, task: Task, abortSignal: AbortSignal, budget: BudgetEngine, extraContext: string[] = [], readCache?: ReadCache, sessionId?: string, failoverIndex?: number) {
     const profile = this.profiles.get(task.role) ?? this.profiles.get('coder')!;
     const modelProfile = profile.defaultModel ?? 'coding';
     const context = new ContextEngine(this.config, this.cwd);
@@ -643,7 +657,11 @@ Return ONLY the JSON array, no markdown.`;
       role: task.role,
       modelProfile,
       profile,
-      config: this.config,
+      // MCH-86: failover-aware fanout for goal task agents (mirrors MCH-41
+      // subagent lanes): each parallel task gets a rotated failover entry as
+      // its PRIMARY so siblings don't stampede one free-tier rate limit; the
+      // original primary stays in every child's failover chain as fallback.
+      config: { ...this.config, model: this.rotateFailover(this.config.model, failoverIndex) },
       workspace: this.workspace,
       events: this.events,
       cwd: this.cwd,
