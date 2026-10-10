@@ -604,11 +604,44 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
     // at least the latest turns so active tool responses and conversation context are never dropped.
     const recent: ChatMessage[] = [];
     const MIN_RECENT = 12; // keep at least last 6 turns (user+assistant+tool) for conversation continuity
+    // Repo-aware eviction (competitive parity vs Claude Code): when the budget
+    // forces dropping OLDER turns, those older turns often held the dense code
+    // the agent is actually editing (`read`/`search`/`grep`/`edit`/`patch`
+    // results). A hard break strands that code, which reads as "bad at coding
+    // on big repos." Instead, collect the dense file-content tool results from
+    // the evicted region and re-inject them (head+tail shrunk, same constants
+    // as shrinkOldToolOutputs) as a trailing system block so the model still
+    // sees the code it touched without breaking API validity (no orphaned
+    // tool_call_id) or the byte-stable prefix-cache tier.
+    const RESCUE_MAX = 6;
+    const RESCUE_HEAD = 240;
+    const RESCUE_TAIL = 160;
+    const CONTENT_TOOLS = new Set(['read', 'search', 'grep', 'edit', 'patch', 'replace_symbol', 'regex-replace', 'search-replace-multi', 'get_function', 'find_definitions', 'find_references']);
+    const evictedDense: { name: string; content: string; tokens: number }[] = [];
     for (let i = this.messages.length - 1; i >= 0; i--) {
       const m = this.messages[i];
       const text = JSON.stringify(m);
       const tokens = approxTokens(text);
-      if (recent.length >= MIN_RECENT && remaining - tokens < 0) break;
+      const overBudget = recent.length >= MIN_RECENT && remaining - tokens < 0;
+      if (overBudget) {
+        // Candidate rescue: dense content-bearing tool result being evicted.
+        // Keep scanning older (collect up to RESCUE_MAX) after the budget cuts
+        // in, so code sitting several turns behind the window is still found —
+        // not only the one message at the exact eviction boundary.
+        if (m.role === 'tool'
+          && typeof m.content === 'string'
+          && m.name && CONTENT_TOOLS.has(m.name)
+          && m.content.length > 300
+          && evictedDense.length < RESCUE_MAX) {
+          evictedDense.push({ name: m.name, content: m.content, tokens });
+        } else if (evictedDense.length >= RESCUE_MAX && recent.length >= MIN_RECENT) {
+          break; // rescue full and window satisfied — stop
+        }
+        // Do NOT add to `recent` once over budget; only scan for rescue.
+        if (recent.length >= MIN_RECENT && evictedDense.length < RESCUE_MAX) continue;
+        if (recent.length >= MIN_RECENT) break;
+        // fall through (below MIN_RECENT): keep adding regardless of budget
+      }
       remaining -= tokens;
       recent.unshift(m);
     }
@@ -617,6 +650,17 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
       { role: 'system', content: baseSystemPrompt },
       ...recent,
     ];
+    if (evictedDense.length > 0) {
+      const MARK = '\n[…earlier output truncated in place; re-run the tool if you need the full text…]';
+      const rescueBody = evictedDense.reverse().map((r) => {
+        const shrunk = r.content.length <= RESCUE_HEAD + RESCUE_TAIL
+          ? r.content
+          : r.content.slice(0, RESCUE_HEAD) + MARK + r.content.slice(-RESCUE_TAIL);
+        return `### ${r.name}\n${shrunk}`;
+      }).join('\n\n');
+      messages.push({ role: 'system', content: `[Preserved file contents from earlier steps (then I compacted the rest) — these are the files you were reading/editing; keep them in mind and re-read only if you need more detail]:\n${rescueBody}` });
+      remaining += evictedDense.reduce((a, r) => a + r.tokens, 0);
+    }
     if (statePrompt) messages.push({ role: 'system', content: statePrompt });
 
     const used = this.budget - remaining;

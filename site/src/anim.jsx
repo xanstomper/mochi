@@ -1,345 +1,469 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 
-/* ── useReveal ────────────────────────────────────────────── */
-export function useReveal(threshold = 0.08) {
-  const ref = useRef(null);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const io = new IntersectionObserver(([e]) => {
-      if (e.isIntersecting) { el.classList.add('in'); io.unobserve(el); }
-    }, { threshold });
-    io.observe(el);
-    return () => io.disconnect();
-  }, [threshold]);
-  return ref;
-}
+/* ═══════════════════════════════════════════════════════════
+   MOCHI v5 — REACT BITS PORTS (zero-dependency)
+   SplitText, BlurText, AnimatedContent, CountUp, ScrollFloat,
+   ShinyText, Magnetic, TiltCard, GooeyBorder, Marquee2,
+   ScrollProgress, ScrollVelocity
+   ═══════════════════════════════════════════════════════════ */
 
-/* ── useInView (boolean, once) ────────────────────────────── */
-export function useInView(threshold = 0.1, rootMargin = '0px') {
+/* ── SplitText ──────────────────────────────────────────────── */
+export function SplitText({
+  text, className = '', delay = 0, stagger = 0.03,
+  as: Tag = 'span', once = true,
+}) {
   const ref = useRef(null);
   const [inView, setInView] = useState(false);
+
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const io = new IntersectionObserver(([e]) => {
-      if (e.isIntersecting) { setInView(true); io.unobserve(el); }
-    }, { threshold, rootMargin });
+    const io = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setInView(true);
+          if (once) io.disconnect();
+        } else if (!once) setInView(false);
+      },
+      { threshold: 0.1 }
+    );
     io.observe(el);
     return () => io.disconnect();
-  }, [threshold, rootMargin]);
-  return [ref, inView];
-}
+  }, [once]);
 
-/* ── useScrollY ───────────────────────────────────────────── */
-export function useScrollY() {
-  const [y, setY] = useState(0);
-  useEffect(() => {
-    let raf;
-    const onScroll = () => { raf = requestAnimationFrame(() => setY(window.scrollY)); };
-    window.addEventListener('scroll', onScroll, { passive: true });
-    onScroll();
-    return () => { window.removeEventListener('scroll', onScroll); cancelAnimationFrame(raf); };
-  }, []);
-  return y;
-}
-
-/* ── SplitText (React Bits port — zero-dep) ──────────────── */
-export function SplitText({ text, className = '', delay = 50, from = 'bottom', as: Tag = 'span' }) {
-  const [ref, inView] = useInView(0.05, '-50px');
-  const chars = text.split('');
-  const hidden = from === 'bottom' ? 'translateY(110%)' : from === 'top' ? 'translateY(-110%)' : from === 'left' ? 'translateX(-110%)' : 'translateX(110%)';
-  return (
-    <Tag ref={ref} className={'split-text ' + className} aria-label={text}>
-      {chars.map((c, i) => (
-        <span key={i} className="split-char-wrap" style={{ overflow: 'hidden', display: 'inline-block' }}>
-          <span className="split-ch" style={{
-            display: 'inline-block',
-            transform: inView ? 'translate(0,0)' : hidden,
-            opacity: inView ? 1 : 0,
-            transition: `transform .9s cubic-bezier(.22,1,.36,1) ${i * delay}ms, opacity .5s ease ${i * delay}ms`,
-          }}>{c === ' ' ? '\u00A0' : c}</span>
-        </span>
-      ))}
-    </Tag>
-  );
-}
-
-/* ── BlurText (React Bits port) ───────────────────────────── */
-export function BlurText({ text, className = '', delay = 80, direction = 'top', as: Tag = 'p' }) {
-  const [ref, inView] = useInView(0.08, '-30px');
   const words = text.split(' ');
-  const yOff = direction === 'top' ? -30 : 30;
+  let charIndex = 0;
+
   return (
-    <Tag ref={ref} className={'blur-text ' + className} style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3em' }}>
-      {words.map((w, wi) => (
-        <span key={wi} style={{ display: 'inline-flex', overflow: 'hidden' }}>
-          {w.split('').map((c, ci) => (
-            <span key={ci} style={{
-              display: 'inline-block',
-              filter: inView ? 'blur(0px)' : 'blur(8px)',
-              opacity: inView ? 1 : 0,
-              transform: inView ? 'translateY(0)' : `translateY(${yOff}px)`,
-              transition: `filter .6s ease ${(wi * 3 + ci) * delay / 3}ms, opacity .5s ease ${(wi * 3 + ci) * delay / 3}ms, transform .6s cubic-bezier(.22,1,.36,1) ${(wi * 3 + ci) * delay / 3}ms`,
-            }}>{c}</span>
-          ))}
+    <Tag ref={ref} className={className} aria-label={text}>
+      {words.map((word, wi) => (
+        <span key={wi} className="split-word" aria-hidden="true">
+          {word.split('').map((ch, ci) => {
+            const idx = charIndex++;
+            return (
+              <span
+                key={ci}
+                className="split-char"
+                style={{
+                  animationDelay: inView ? `${delay + idx * stagger}s` : undefined,
+                  animationPlayState: inView ? 'running' : 'paused',
+                }}
+              >
+                {ch}
+              </span>
+            );
+          })}
+          {wi < words.length - 1 && <span>&nbsp;</span>}
         </span>
       ))}
     </Tag>
   );
 }
 
-/* ── AnimatedContent (React Bits port) ───────────────────── */
-export function AnimatedContent({
-  children, distance = 60, direction = 'vertical', reverse = false,
-  duration = 0.8, initialOpacity = 0, scale = 1, threshold = 0.1,
-  delay = 0, className = '', as: Tag = 'div', ...props
+/* ── BlurText ───────────────────────────────────────────────── */
+export function BlurText({
+  text, className = '', delay = 0, stagger = 0.08,
+  as: Tag = 'span', once = true,
 }) {
-  const [ref, inView] = useInView(threshold, '-30px');
-  const axis = direction === 'horizontal' ? 'X' : 'Y';
-  const dist = reverse ? -distance : distance;
-  return (
-    <Tag ref={ref} className={className} {...props} style={{
-      opacity: inView ? 1 : initialOpacity,
-      transform: inView
-        ? 'translate(0,0) scale(1)'
-        : `translate${axis}(${dist}px) scale(${scale})`,
-      transition: `opacity ${duration}s ease ${delay}s, transform ${duration}s cubic-bezier(.22,1,.36,1) ${delay}s`,
-      willChange: 'transform, opacity',
-    }}>
-      {children}
-    </Tag>
-  );
-}
-
-/* ── CountUp (React Bits port) ────────────────────────────── */
-export function CountUp({ to, from = 0, duration = 1.8, delay = 0, className = '', separator = '' }) {
-  const [ref, inView] = useInView(0.3);
-  const [val, setVal] = useState(from);
-  const rafRef = useRef();
-  const startRef = useRef();
-
-  useEffect(() => {
-    if (!inView) return;
-    const timeout = setTimeout(() => {
-      const step = (ts) => {
-        if (!startRef.current) startRef.current = ts;
-        const p = Math.min((ts - startRef.current) / (duration * 1000), 1);
-        const eased = 1 - Math.pow(1 - p, 4); // easeOutQuart
-        setVal(from + (to - from) * eased);
-        if (p < 1) rafRef.current = requestAnimationFrame(step);
-      };
-      rafRef.current = requestAnimationFrame(step);
-    }, delay * 1000);
-    return () => { clearTimeout(timeout); cancelAnimationFrame(rafRef.current); startRef.current = null; };
-  }, [inView, from, to, duration, delay]);
-
-  const decimals = (() => { const s = to.toString(); return s.includes('.') ? s.split('.')[1].length : 0; })();
-  const formatted = separator
-    ? val.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals }).replace(/,/g, separator)
-    : val.toFixed(decimals);
-
-  return <span className={className} ref={ref}>{formatted}</span>;
-}
-
-/* ── ScrollFloat (React Bits port — char-level parallax) ─── */
-export function ScrollFloat({ children, className = '', as: Tag = 'h2' }) {
   const ref = useRef(null);
-  const scrollY = useScrollY();
-  const [offset, setOffset] = useState(0);
+  const [inView, setInView] = useState(false);
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const rect = el.getBoundingClientRect();
-    const elCenter = rect.top + scrollY + rect.height / 2;
-    const viewportCenter = scrollY + window.innerHeight / 2;
-    setOffset((elCenter - viewportCenter) * 0.12); // parallax factor
-  }, [scrollY]);
+    const io = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setInView(true);
+          if (once) io.disconnect();
+        } else if (!once) setInView(false);
+      },
+      { threshold: 0.1 }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [once]);
 
-  const chars = (typeof children === 'string' ? children : '').split('');
+  const words = text.split(' ');
   return (
-    <Tag ref={ref} className={'scroll-float ' + className} style={{ transform: `translateY(${offset}px)` }}>
-      {chars.map((c, i) => (
-        <span key={i} className="sf-char" style={{
-          display: 'inline-block',
-          transform: `translateY(${Math.sin(i * 0.4) * 4}px)`,
-          transition: 'transform .1s linear',
-        }}>{c === ' ' ? '\u00A0' : c}</span>
+    <Tag ref={ref} className={className} aria-label={text}>
+      {words.map((word, i) => (
+        <span
+          key={i}
+          className="blur-word"
+          aria-hidden="true"
+          style={{
+            animationDelay: inView ? `${delay + i * stagger}s` : undefined,
+            animationPlayState: inView ? 'running' : 'paused',
+          }}
+        >
+          {word}
+          {i < words.length - 1 && '\u00A0'}
+        </span>
       ))}
     </Tag>
   );
 }
 
-/* ── ShinyText (React Bits port) ─────────────────────────── */
-export function ShinyText({ text, className = '', speed = 3, color = '#8A2D4E' }) {
+/* ── AnimatedContent ────────────────────────────────────────── */
+export function AnimatedContent({
+  children, direction = 'bottom', distance = 30, delay = 0,
+  duration = 0.7, scale = 0.96, className = '', once = true,
+}) {
+  const ref = useRef(null);
+  const [inView, setInView] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setInView(true);
+          if (once) io.disconnect();
+        } else if (!once) setInView(false);
+      },
+      { threshold: 0.08 }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [once]);
+
   return (
-    <span className={'shiny-text ' + className} style={{
-      background: `linear-gradient(120deg, ${color} 40%, #F2A7B8 50%, ${color} 60%)`,
-      backgroundSize: '200% 100%',
-      WebkitBackgroundClip: 'text',
-      WebkitTextFillColor: 'transparent',
-      backgroundClip: 'text',
-      animation: `shimmer ${speed}s linear infinite`,
-    }}>{text}</span>
+    <div
+      ref={ref}
+      className={`ac from-${direction} ${inView ? 'in' : ''} ${className}`}
+      style={{ transitionDelay: `${delay}s`, transitionDuration: `${duration}s` }}
+    >
+      {children}
+    </div>
   );
 }
 
-/* ── ScrollProgress (top progress bar) ───────────────────── */
-export function ScrollProgress() {
-  const scrollY = useScrollY();
-  const [max, setMax] = useState(1);
-  useEffect(() => {
-    setMax(document.documentElement.scrollHeight - window.innerHeight);
-  }, [scrollY]);
-  return (
-    <div className="scroll-progress" style={{
-      position: 'fixed', top: 0, left: 0, right: 0, height: '3px',
-      background: 'var(--pink)', transformOrigin: '0 50%',
-      transform: `scaleX(${Math.min(scrollY / max, 1)})`,
-      zIndex: 9999, borderRadius: '0 2px 2px 0',
-    }} />
-  );
-}
-
-/* ── Typewriter ───────────────────────────────────────────── */
-export function Typewriter({ phrases, speed = 45, pause = 1800, className = '' }) {
-  const [text, setText] = useState('');
-  const [pi, setPi] = useState(0);
-  const [ci, setCi] = useState(0);
-  const [del, setDel] = useState(false);
+/* ── CountUp ────────────────────────────────────────────────── */
+export function CountUp({
+  end, start = 0, duration = 1.6, delay = 0, decimals = 0,
+  prefix = '', suffix = '', className = '',
+}) {
+  const ref = useRef(null);
+  const [val, setVal] = useState(start);
+  const started = useRef(false);
 
   useEffect(() => {
-    const current = phrases[pi % phrases.length];
-    let t;
-    if (!del && ci < current.length) t = setTimeout(() => setCi(c => c + 1), speed);
-    else if (!del && ci === current.length) t = setTimeout(() => setDel(true), pause);
-    else if (del && ci > 0) t = setTimeout(() => setCi(c => c - 1), speed / 2);
-    else t = setTimeout(() => { setDel(false); setPi(p => p + 1); }, 350);
-    return () => clearTimeout(t);
-  }, [ci, del, pi, phrases, speed, pause]);
+    const el = ref.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && !started.current) {
+          started.current = true;
+          const t0 = performance.now() + delay * 1000;
+          const tick = (now) => {
+            const p = Math.min(1, Math.max(0, (now - t0) / (duration * 1000)));
+            const e = 1 - Math.pow(1 - p, 4);
+            setVal(start + (end - start) * e);
+            if (p < 1) requestAnimationFrame(tick);
+          };
+          requestAnimationFrame(tick);
+          io.disconnect();
+        }
+      },
+      { threshold: 0.3 }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [end, start, duration, delay]);
 
   return (
-    <span className={'typewriter ' + className}>
-      {currentText(phrases, pi, ci)}
-      <span className="tw-cursor">▌</span>
+    <span ref={ref} className={`countup ${className}`}>
+      {prefix}{val.toFixed(decimals)}{suffix}
     </span>
   );
 }
-function currentText(phrases, pi, ci) {
-  return phrases[pi % phrases.length].slice(0, ci);
+
+/* ── ScrollFloat ────────────────────────────────────────────── */
+export function ScrollFloat({
+  children, scrollStart = 0.1, scrollEnd = 0.9,
+  moveDistance = 60, className = '',
+}) {
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let raf;
+    const onScroll = () => {
+      raf = requestAnimationFrame(() => {
+        const rect = el.getBoundingClientRect();
+        const vh = window.innerHeight;
+        const progress = Math.min(1, Math.max(0,
+          (vh - rect.top) / (vh + rect.height)
+        ));
+        const eased = progress < scrollStart ? 0
+          : progress > scrollEnd ? 1
+          : (progress - scrollStart) / (scrollEnd - scrollStart);
+        el.style.transform = `translateY(${(1 - eased) * moveDistance}px)`;
+      });
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      cancelAnimationFrame(raf);
+    };
+  }, [scrollStart, scrollEnd, moveDistance]);
+
+  return (
+    <span ref={ref} className={`sf ${className}`}>
+      {children}
+    </span>
+  );
 }
 
-/* ── Marquee2 ─────────────────────────────────────────────── */
-export function Marquee2({ items, speed = 28, reverse = false, className = '', separator = '✦' }) {
-  const row = items.concat(items).concat(items);
+/* ── ShinyText ──────────────────────────────────────────────── */
+export function ShinyText({ children, className = '' }) {
+  return <span className={`shiny ${className}`}>{children}</span>;
+}
+
+/* ── Magnetic ───────────────────────────────────────────────── */
+export function Magnetic({ children, strength = 0.3, className = '' }) {
+  const ref = useRef(null);
+
+  const onMove = useCallback((e) => {
+    const el = ref.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const dx = e.clientX - (rect.left + rect.width / 2);
+    const dy = e.clientY - (rect.top + rect.height / 2);
+    el.style.transform = `translate(${dx * strength}px, ${dy * strength}px)`;
+  }, [strength]);
+
+  const onLeave = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.transform = '';
+  }, []);
+
   return (
-    <div className={'marquee2 ' + className} aria-hidden="true">
-      <div className="marquee2-track" style={{
-        animationDuration: speed + 's',
-        animationDirection: reverse ? 'reverse' : 'normal',
-      }}>
-        {row.map((item, i) => (
-          <span key={i} className="marquee2-item">{item}<span className="mq-sep">{separator}</span></span>
-        ))}
+    <span
+      ref={ref}
+      className={`magnetic ${className}`}
+      onMouseMove={onMove}
+      onMouseLeave={onLeave}
+    >
+      {children}
+    </span>
+  );
+}
+
+/* ── TiltCard ───────────────────────────────────────────────── */
+export function TiltCard({ children, max = 8, className = '' }) {
+  const ref = useRef(null);
+
+  const onMove = useCallback((e) => {
+    const el = ref.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const px = (e.clientX - rect.left) / rect.width - 0.5;
+    const py = (e.clientY - rect.top) / rect.height - 0.5;
+    el.style.transform = `perspective(800px) rotateY(${px * max}deg) rotateX(${-py * max}deg)`;
+  }, [max]);
+
+  const onLeave = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.transform = '';
+  }, []);
+
+  return (
+    <div
+      ref={ref}
+      className={className}
+      onMouseMove={onMove}
+      onMouseLeave={onLeave}
+      style={{ transition: 'transform .3s ease-out', willChange: 'transform' }}
+    >
+      {children}
+    </div>
+  );
+}
+
+/* ── GooeyBorder ────────────────────────────────────────────── */
+export function GooeyBorder({ children, className = '' }) {
+  return (
+    <div className={`gooey-border ${className}`} style={{ position: 'relative' }}>
+      <svg style={{ position: 'absolute', width: 0, height: 0 }} aria-hidden="true">
+        <defs>
+          <filter id="gooey-border-filter">
+            <feGaussianBlur in="SourceGraphic" stdDeviation="3" result="blur" />
+            <feColorMatrix in="blur" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 18 -7" result="goo" />
+            <feComposite in="SourceGraphic" in2="goo" operator="atop" />
+          </filter>
+        </defs>
+      </svg>
+      <div
+        style={{
+          position: 'absolute', inset: 0, borderRadius: 'inherit',
+          padding: 2,
+          background: 'conic-gradient(from var(--gangle, 0deg), #f472b6, #c4b5fd, #67e8f9, #f472b6)',
+          filter: 'url(#gooey-border-filter)',
+          WebkitMask: 'linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)',
+          WebkitMaskComposite: 'xor',
+          maskComposite: 'exclude',
+          animation: 'gooeySpin 4s linear infinite',
+        }}
+      />
+      <div style={{ position: 'relative', zIndex: 1 }}>{children}</div>
+    </div>
+  );
+}
+
+/* ── Marquee2 ───────────────────────────────────────────────── */
+export function Marquee2({ children, speed = 30, reverse = false, className = '' }) {
+  return (
+    <div className={`marquee2 ${className}`} style={{ overflow: 'hidden', display: 'flex' }}>
+      <div
+        className="marquee2-track"
+        style={{
+          display: 'flex', flexShrink: 0, minWidth: '100%',
+          animation: `marquee2 ${speed}s linear infinite ${reverse ? 'reverse' : 'normal'}`,
+        }}
+      >
+        {children}
+        {children}
       </div>
     </div>
   );
 }
 
-/* ── Magnetic (MagneticButton port) ───────────────────────── */
-export function Magnetic({ children, strength = 0.3, className = '' }) {
-  const ref = useRef(null);
-  const onMove = useCallback((e) => {
-    const el = ref.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    const x = e.clientX - r.left - r.width / 2;
-    const y = e.clientY - r.top - r.height / 2;
-    el.style.transform = `translate(${x * strength}px, ${y * strength}px)`;
-  }, [strength]);
-  const onLeave = useCallback(() => {
-    const el = ref.current;
-    if (el) el.style.transform = 'translate(0,0)';
+/* ── ScrollProgress ─────────────────────────────────────────── */
+export function ScrollProgress() {
+  useEffect(() => {
+    let raf;
+    const onScroll = () => {
+      raf = requestAnimationFrame(() => {
+        const h = document.documentElement;
+        const p = h.scrollTop / (h.scrollHeight - h.clientHeight);
+        const el = document.querySelector('.scroll-progress');
+        if (el) el.style.transform = `scaleX(${p})`;
+      });
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      cancelAnimationFrame(raf);
+    };
   }, []);
-  return (
-    <div ref={ref} className={'magnetic ' + className}
-      onMouseMove={onMove} onMouseLeave={onLeave}
-      style={{ display: 'inline-block', transition: 'transform .3s cubic-bezier(.22,1,.36,1)' }}>
-      {children}
-    </div>
-  );
+  return <div className="scroll-progress" aria-hidden="true" />;
 }
 
-/* ── TiltCard ─────────────────────────────────────────────── */
-export function TiltCard({ children, className = '' }) {
+/* ── ScrollVelocity ─────────────────────────────────────────── */
+export function ScrollVelocity({ children, velocity = 0.05, className = '' }) {
   const ref = useRef(null);
-  const onMove = useCallback((e) => {
-    const el = ref.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    const rx = ((e.clientY - r.top) / r.height - 0.5) * -8;
-    const ry = ((e.clientX - r.left) / r.width - 0.5) * 8;
-    el.style.transform = `perspective(900px) rotateX(${rx}deg) rotateY(${ry}deg) scale(1.02)`;
-  }, []);
-  const onLeave = useCallback(() => {
-    const el = ref.current;
-    if (el) el.style.transform = 'perspective(900px) rotateX(0) rotateY(0) scale(1)';
-  }, []);
-  return (
-    <div ref={ref} className={'tilt-card ' + className}
-      onMouseMove={onMove} onMouseLeave={onLeave}
-      style={{ transition: 'transform .4s cubic-bezier(.22,1,.36,1)', transformStyle: 'preserve-3d' }}>
-      {children}
-    </div>
-  );
-}
+  const pos = useRef(0);
+  const vel = useRef(0);
+  const lastScroll = useRef(0);
 
-/* ── GooeyBorder ──────────────────────────────────────────── */
-export function GooeyBorder({ children, className = '' }) {
-  return (
-    <div className={'gooey-border ' + className}>
-      <div className="gooey-inner">{children}</div>
-    </div>
-  );
-}
-
-/* ── ParallaxY ────────────────────────────────────────────── */
-export function ParallaxY({ children, factor = 0.15, className = '' }) {
-  const scrollY = useScrollY();
-  const ref = useRef(null);
-  const [offset, setOffset] = useState(0);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const rect = el.getBoundingClientRect();
-    const elCenter = rect.top + scrollY + rect.height / 2;
-    const viewportCenter = scrollY + window.innerHeight / 2;
-    setOffset((viewportCenter - elCenter) * factor);
-  }, [scrollY, factor]);
+    let raf;
+    lastScroll.current = window.scrollY;
+
+    const onScroll = () => {
+      const dy = window.scrollY - lastScroll.current;
+      lastScroll.current = window.scrollY;
+      vel.current += dy * velocity;
+    };
+
+    const loop = () => {
+      vel.current *= 0.92;
+      pos.current += vel.current;
+      el.style.transform = `translateX(${pos.current}px) skewX(${Math.max(-10, Math.min(10, vel.current * 0.15))}deg)`;
+      raf = requestAnimationFrame(loop);
+    };
+
+    window.addEventListener('scroll', onScroll, { passive: true });
+    raf = requestAnimationFrame(loop);
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      cancelAnimationFrame(raf);
+    };
+  }, [velocity]);
+
   return (
-    <div ref={ref} className={className} style={{ transform: `translateY(${offset}px)`, willChange: 'transform' }}>
-      {children}
+    <div className={`sv-outer ${className}`}>
+      <div ref={ref} className="sv-inner">
+        {children}
+      </div>
     </div>
   );
 }
 
+/* ── Reveal (backwards-compat alias) ────────────────────────── */
+export const Reveal = AnimatedContent;
 
-/* ── Backwards-compat aliases ─────────────────────────────── */
-export function Reveal({ children, className = '', delay = 0 }) {
+/* ── Marquee (backwards-compat alias) ───────────────────────── */
+export function Marquee({ children, speed = 30, className = '' }) {
   return (
-    <AnimatedContent direction="vertical" distance={40} duration={0.7} delay={delay} className={className}>
-      {children}
-    </AnimatedContent>
+    <div className={`marquee2 ${className}`} style={{ overflow: 'hidden', display: 'flex' }}>
+      <div
+        className="marquee2-track"
+        style={{
+          display: 'flex', flexShrink: 0, minWidth: '100%',
+          animation: `marquee2 ${speed}s linear infinite`,
+        }}
+      >
+        {children}
+        {children}
+      </div>
+    </div>
   );
 }
 
-export function Marquee({ items, speed = 30, reverse = false, className = '' }) {
-  return <Marquee2 items={items} speed={speed} reverse={reverse} className={className} />;
+/* ── DitherBlock ────────────────────────────────────────────── */
+export function DitherBlock({ width = 200, height = 100, color = '#f472b6', className = '' }) {
+  const canvasRef = useRef(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const { width: w, height: h } = canvas;
+    const bayer = [
+      [0, 8, 2, 10],
+      [12, 4, 14, 6],
+      [3, 11, 1, 9],
+      [15, 7, 13, 5],
+    ];
+    ctx.clearRect(0, 0, w, h);
+    const cell = 4;
+    const cols = Math.ceil(w / cell);
+    const rows = Math.ceil(h / cell);
+    ctx.fillStyle = color;
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const threshold = bayer[y % 4][x % 4] / 16;
+        const fade = 1 - (y / rows);
+        if (threshold < fade) {
+          ctx.fillRect(x * cell, y * cell, cell - 1, cell - 1);
+        }
+      }
+    }
+  }, [color]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      width={width}
+      height={height}
+      className={`dither ${className}`}
+      style={{ width: '100%', height: 'auto' }}
+    />
+  );
 }
 
-
-/* ── BenchChart (backwards compat) ────────────────────────── */
+/* ── BenchChart ─────────────────────────────────────────────── */
 export function BenchChart({ data, max, unit = '', rows }) {
   // support both signatures: { data, max } and { rows: [[label, value, isMochi]], unit }
   const chartData = rows
@@ -364,4 +488,40 @@ export function BenchChart({ data, max, unit = '', rows }) {
       ))}
     </div>
   );
+}
+
+/* ── GooeyBorder keyframes ──────────────────────────────────── */
+const gooeyStyle = document.createElement('style');
+gooeyStyle.textContent = `
+@keyframes gooeySpin {
+  0% { --gangle: 0deg; }
+  100% { --gangle: 360deg; }
+}
+@property --gangle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+`;
+if (typeof document !== 'undefined') {
+  document.head.appendChild(gooeyStyle);
+}
+
+/* ── marquee2 keyframes ─────────────────────────────────────── */
+const marqueeStyle = document.createElement('style');
+marqueeStyle.textContent = `
+@keyframes marquee2 {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+.marquee2-item {
+  font-family: var(--font-mono); font-size: 13px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: .1em;
+  color: rgba(255,255,255,.7); padding: 0 32px;
+  display: flex; align-items: center; gap: 8px; white-space: nowrap;
+}
+.marquee2-item .ticker-dot { width: 6px; height: 6px; border-radius: 50%; background: #f472b6; }
+`;
+if (typeof document !== 'undefined') {
+  document.head.appendChild(marqueeStyle);
 }

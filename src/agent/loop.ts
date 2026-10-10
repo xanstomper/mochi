@@ -2534,6 +2534,32 @@ Continue from 'Next:', do not redo completed progress.`,
     const childProfile = new AgentProfileService(this.workspace.dir).get(childRole) ?? this.profile;
     const childId = `${this.id}-sub-${Math.random().toString(36).slice(2, 8)}`;
     const childContext = new ContextEngine(this.config, this.cwd);
+    // MCH-87a: per-child cost cap. Children previously shared the parent's
+    // budget engine, so one runaway subagent could starve all siblings. The
+    // child gets its OWN BudgetEngine scoped to a fraction of the parent's
+    // remaining tokens (default 25%, MOCHI_SUBAGENT_BUDGET_FRACTION tunable),
+    // plus a hard wall-clock timeout. The parent's budget still sees the final
+    // usage via recordTokens at the child's model calls (they go through the
+    // shared provider), so accounting stays additive.
+    let childBudget = this.budget;
+    if (this.budget) {
+      const frac = Math.min(1, Math.max(0.05, Number(process.env.MOCHI_SUBAGENT_BUDGET_FRACTION ?? 0.25) || 0.25));
+      const scoped = new BudgetEngine({
+        ...this.config.safety,
+        maxTokens: Math.floor(this.budget.remainingTokens() * frac),
+        maxCostUsd: this.budget.remainingCostUsd() * frac,
+        maxModelCalls: Math.max(2, Math.ceil(8 * frac)),
+      });
+      scoped.start();
+      childBudget = scoped;
+    }
+    // MCH-87b: output contract. Every spawned child must end its final message
+    // with a machine-parseable footer so the parent can aggregate outcomes
+    // deterministically instead of free-text prose.
+    childContext.addMessage({
+      role: 'system',
+      content: '[Output contract] End your FINAL message with exactly this footer:\n<result>\nSTATUS: done | partial | blocked\nFILES: comma-separated paths you created or modified (or "none")\nRESULT: one-paragraph summary of the outcome\n</result>',
+    });
     if (scratchpad) {
       childContext.addMessage({
         role: 'system',
@@ -2574,7 +2600,7 @@ Continue from 'Next:', do not redo completed progress.`,
       events: this.events,
       cwd: this.cwd,
       context: childContext,
-      budget: this.budget,
+      budget: childBudget,
       abortSignal: combinedAbort,
       readCache: this.readCache,
       subagentDepth: this.subagentDepth + 1,
@@ -2638,7 +2664,15 @@ Continue from 'Next:', do not redo completed progress.`,
         summary: result.summary,
         tokensUsed: result.tokensUsed,
       });
-      return `[completed=${result.success}] ${result.summary} (${result.tokensUsed} tokens, ${result.durationMs}ms)`;
+      // MCH-87b: extract the output-contract footer when present. The parent
+      // gets a structured tail `[contract: STATUS files=...]` plus the child's
+      // summary; when the child ignored the contract the summary is returned
+      // as-is (never fail a task purely for a missing footer).
+      const m = result.summary.match(/<result>\s*STATUS:\s*(\S+)\s*FILES:\s*([^\n]*)\s*RESULT:\s*([\s\S]*?)<\/result>/i);
+      const contractTail = m
+        ? ` [contract: ${m[1]} files=${m[2].trim().slice(0, 120)}]`
+        : ' [contract: missing]';
+      return `[completed=${result.success}] ${result.summary}${contractTail} (${result.tokensUsed} tokens, ${result.durationMs}ms)`;
     } catch (err) {
       if (timeoutTimer) clearTimeout(timeoutTimer);
       // Wait briefly for the orphaned child to honour the abort signal so its

@@ -201,5 +201,32 @@ describe('conditional tool guidelines (VNext P1.3)', () => {
     expect(added.content.length).toBeLessThan(noisyOutput.length);
     rmSync(dir, { recursive: true, force: true });
   });
+
+  it('rescues dense file-content tool results evicted by budget pressure (repo-aware) into a trailing system band', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mochi-ctx-'));
+    // Tiny budget forces the newest-window retention loop to evict old turns.
+    const engine = makeEngine(dir, {
+      safety: { contextBudgetTokens: 4000, maxIterations: 50, maxRuntimeMinutes: 10, mode: 'safe' as const },
+    } as any);
+    // Oldest: dense read/edit tool results (would normally be dropped).
+    const denseSrc = `const handler = async (req, res) => {\n  // very long realistic source so this message is dense\n${Array.from({ length: 120 }, (_, i) => `  const v${i} = compute(${i}) * factor(${i % 7});`).join('\n')}\n  return res.json({ ok: true });\n};`;
+    engine.addMessage({ role: 'tool', tool_call_id: 'tc-old-1', name: 'read', content: denseSrc });
+    engine.addMessage({ role: 'tool', tool_call_id: 'tc-old-2', name: 'edit', content: `diff for src/a.ts\n${denseSrc}` });
+    engine.addMessage({ role: 'tool', tool_call_id: 'tc-old-3', name: 'grep', content: denseSrc });
+    // Lots of thin chatter afterwards to push the dense ones out of the recent window.
+    for (let i = 0; i < 25; i++) {
+      engine.addMessage({ role: 'user', content: `turn ${i}` });
+      engine.addMessage({ role: 'assistant', content: `ok step ${i}` });
+    }
+    const p = engine.buildPacket([] as any);
+    const band = p.messages.find((m) => m.role === 'system' && /Preserved file contents/i.test(String(m.content)));
+    expect(band).toBeDefined();
+    const body = String((band as any).content);
+    expect(body).toContain('### read');
+    expect(body).toContain('### edit');
+    // The dense code survives (head) but is not ballooned (tail cut).
+    expect(body).toContain('const handler');
+    rmSync(dir, { recursive: true, force: true });
+  });
 });
 
