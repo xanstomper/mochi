@@ -98,6 +98,72 @@ export const AUXILIARY_TOOL_NAMES = new Set([
   'color', 'tui_builder', 'markdown', 'notes', 'timer', 'env', 'benchmark', 'compile_prompt',
 ]);
 
+/** MCH-91: heavy/rare tools — executable if invoked, but NOT advertised by default
+ *  for focused coding tasks (implement/fix/refactor/test). Their combined schemas
+ *  cost ~4-5K tokens on EVERY model call; a 2-file edit task does not need
+ *  browser/db/PR/SQL tooling, and competitors advertise ~10 tools for the same
+ *  work. The model can pull any of these in mid-run via the `load_tools` tool. */
+export const HEAVY_TOOL_NAMES = new Set([
+  'browser', 'db_inspect', 'deepwiki', 'sql_codebase_query', 'create_pr', 'repl',
+  'perf', 'clipboard', 'mcp_manage', 'lint', 'format', 'diff', 'tree',
+  'analyze_code', 'code_similarity', 'type_hierarchy', 'rename_symbol',
+  'resolve_conflicts', 'system_info',
+]);
+
+/** Task text regexes that justify advertising heavy tools up front. */
+const HEAVY_SIGNAL_RE =
+  /\b(browser|web page|screenshot|database|sql|postgres|mysql|sqlite|pull request|github pr|deepwiki|wiki|performance|profile|benchmark|lint|format|refactor across|rename (across|symbol)|merge conflict|clipboard)\b/i;
+
+/** Filter heavy tools out of the advertised map for focused coding tasks.
+ *  Returns the number of tools trimmed (0 = nothing trimmed). Authored tools and
+ *  the always-include set are never trimmed. Idempotent. */
+export function trimHeavyTools(map: Map<string, Tool>, taskText: string): number {
+  if (HEAVY_SIGNAL_RE.test(taskText)) return 0;
+  let trimmed = 0;
+  for (const name of [...map.keys()]) {
+    if (HEAVY_TOOL_NAMES.has(name)) { map.delete(name); trimmed++; }
+  }
+  return trimmed;
+}
+
+/** MCH-91: deferred tool discovery — the model calls this when it needs a tool
+ *  that was trimmed from its advertised schema. Loads the named heavy/auxiliary
+ *  tool(s) into the live toolset; the loop re-advertises defs on change. */
+export function loadToolsTool(getTools: () => Map<string, Tool>): Tool {
+  return {
+    def: {
+      name: 'load_tools',
+      description:
+        'Load additional tools into your active toolset. Some specialized tools (browser, db_inspect, deepwiki, create_pr, repl, lint, format, ...) are not advertised by default to keep context lean. Call this with the tool names you need and they become available on your next turn.',
+      parameters: [
+        {
+          name: 'names',
+          type: 'array',
+          description: 'Tool names to load, e.g. ["browser"] or ["lint","format"].',
+          required: true,
+          items: { type: 'string' },
+        },
+      ],
+    },
+    async execute(args: { names: string[] }) {
+      const tools = getTools();
+      const loaded: string[] = [];
+      const unknown: string[] = [];
+      for (const raw of args.names ?? []) {
+        const name = TOOL_ALIASES[raw] ?? raw;
+        const tool = ALL_TOOLS_MAP.get(name);
+        if (!tool) { unknown.push(raw); continue; }
+        if (!tools.has(name)) tools.set(name, tool);
+        loaded.push(name);
+      }
+      const parts: string[] = [];
+      if (loaded.length) parts.push(`Loaded: ${loaded.join(', ')} — available on your next turn.`);
+      if (unknown.length) parts.push(`Unknown tools (ignored): ${unknown.join(', ')}.`);
+      return parts.join(' ') || 'No tool names provided.';
+    },
+  };
+}
+
 /**
  * Core tools that are ALWAYS included regardless of model tier. These are the
  * essential tools every agent needs. Extra/advanced tools are only sent to
@@ -152,6 +218,9 @@ export function buildTools(config: MochiConfig, allowed?: string[]): Map<string,
     if (weak && !CORE_TOOL_NAMES.has(name) && !alwaysInclude) continue;
     map.set(name, tool);
   }
+  // MCH-91: deferred tool discovery — always-available escape hatch for heavy
+  // tools (trimmed per-task by trimHeavyTools) and auxiliary tools.
+  if (!map.has('load_tools')) map.set('load_tools', loadToolsTool(() => map));
   return map;
 }
 

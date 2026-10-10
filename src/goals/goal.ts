@@ -240,8 +240,16 @@ Return ONLY the JSON array, no markdown.`;
     });
 
     const BASELINE_TTL_MS = 5 * 60 * 1000;
+    // MCH-92: the baseline (git-diff + repo-suite capture, up to 15s) is only
+    // consumed by VerifierEngine when a task actually has acceptance criteria
+    // or a verification command (see runOne's needsVerification gate). When NO
+    // task in this goal can ever reach verification, the capture is 15s of
+    // dead weight on every trivial one-shot prompt — the exact latency gap
+    // the arena showed vs one-shot rivals (mochi 122s vs jcode 9.8s median).
+    // Skip it entirely when verification is unreachable for the whole run.
+    const needsVerificationAny = !this.config.planMode && allTasks.some((t) => t.acceptanceCriteria.length > 0 || Boolean(t.verificationCommand));
     let baselinePromise: Promise<VerificationBaseline | undefined> | undefined;
-    if (isOnlyChatOrResearch) {
+    if (isOnlyChatOrResearch || !needsVerificationAny) {
       baselinePromise = undefined;
     } else if (this.baselineCache && Date.now() - this.baselineCache.cachedAt < BASELINE_TTL_MS) {
       baselinePromise = Promise.resolve(this.baselineCache.baseline);

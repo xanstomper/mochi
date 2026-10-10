@@ -12,7 +12,7 @@ import { createProvider } from '../model/router.js';
 import { PROVIDERS } from '../providers.js';
 import { isMode, modeInstruction } from '../modes.js';
 import { kvCache } from '../kv-cache.js';
-import { executeTool, buildTools, TOOL_ALIASES, normalizeToolArgs } from '../tools/index.js';
+import { executeTool, buildTools, TOOL_ALIASES, normalizeToolArgs, trimHeavyTools } from '../tools/index.js';
 import { refreshAuthoredTools, RESERVED_TOOL_NAMES } from '../tools/tool-factory.js';
 import type { ToolContext, ReadCache } from '../tools/types.js';
 import { detectRepo, languageHint } from '../repo.js';
@@ -627,6 +627,17 @@ Continue from 'Next:', do not redo completed progress.`,
     } catch { /* best-effort */ }
 
     let taskKind = this.taskKind = classifyTaskKind(task);
+    // MCH-91: task-adaptive tool advertising — focused coding tasks don't need
+    // browser/db/PR/SQL schemas burning ~4-5K tokens on EVERY call. Trim heavy
+    // tools unless the task text itself signals them (trimHeavyTools is a no-op
+    // then); the model can pull any back mid-run via `load_tools`.
+    if (taskKind === 'implement' || taskKind === 'fix' || taskKind === 'refactor' || taskKind === 'test') {
+      const trimmed = trimHeavyTools(this.tools, `${task.title} ${task.description ?? ''}`);
+      if (trimmed > 0) {
+        this.toolDefs = [...this.tools.values()].map((t) => t.def);
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: `[mch91] trimmed ${trimmed} heavy tools for ${taskKind} task (load_tools restores them)` });
+      }
+    }
     const repo = detectRepo(this.cwd);
     // Harness-v2 perf (FREEZE FIX 2026-08-22): warm codegraph grammars and the
     // Chameleon scaffold strictly in the BACKGROUND - fire-and-forget, never
@@ -2976,6 +2987,11 @@ Continue from 'Next:', do not redo completed progress.`,
     };
     this.events.emit({ type: 'tool:called', tool: tc.function.name, args, agentId: this.id, tool_call_id: tc.id });
     const { output, error, durationMs } = await executeTool(tc.function.name, args, ctx, this.tools);
+    // MCH-91: `load_tools` mutated the live toolset — re-advertise defs so the
+    // newly loaded tools appear in the next packet.
+    if (!error && toolName === 'load_tools') {
+      this.toolDefs = [...this.tools.values()].map((t) => t.def);
+    }
     // Codex/Claude Code parity (MCH-27): a shell command that exits nonzero is
     // a FAILED work step even though the shell tool resolves normally (it
     // embeds `exit_code: N` in its output text). Promote it to a tool error so
