@@ -353,9 +353,10 @@ header.site {
   display: inline-flex; align-items: center; gap: 8px;
   font-family: var(--font-mono); font-size: 11px; font-weight: 600;
   text-transform: uppercase; letter-spacing: .12em;
-  padding: 6px 14px; border-radius: 100px;
-  background: linear-gradient(135deg, var(--pink), var(--peach));
-  color: var(--white); margin-bottom: 20px;
+  padding: 8px 16px; border-radius: 100px;
+  background: var(--pink); color: var(--white);
+  margin-bottom: 20px;
+  box-shadow: 0 2px 12px rgba(242,167,184,.3);
 }
 .section-title {
   font-family: var(--font-display); font-size: clamp(32px, 4.5vw, 52px);
