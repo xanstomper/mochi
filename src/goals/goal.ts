@@ -41,6 +41,19 @@ export class GoalEngine {
   private sessionStoreInstance: SessionStore | undefined;
   private hooks: HookManager;
   private profiles: AgentProfileService;
+  /** MCH-74: live agents keyed by task id — lets the TUI steer a RUNNING agent. */
+  private liveAgents = new Map<string, import('../agent/loop.js').Agent>();
+
+  /** MCH-74: push mid-run guidance to every live agent of this engine.
+   *  Returns the number of agents that received it (0 = nothing running). */
+  steerActive(text: string): number {
+    let n = 0;
+    this.liveAgents.forEach((agent) => {
+      agent.steer(text);
+      n++;
+    });
+    return n;
+  }
 
   constructor(config: MochiConfig, workspace: Workspace, events: EventBus, cwd: string) {
     this.config = config;
@@ -608,8 +621,14 @@ Return ONLY the JSON array, no markdown.`;
       readCache,
       verifyBaseline: this.runBaseline,
     });
-
-    const result = await this.runAgentWithAutoResume(agent, goal, task, context, abortSignal);
+    // MCH-74: register as a steer target for the lifetime of the run.
+    this.liveAgents.set(task.id, agent);
+    let result;
+    try {
+      result = await this.runAgentWithAutoResume(agent, goal, task, context, abortSignal);
+    } finally {
+      this.liveAgents.delete(task.id);
+    }
     // Persist the conversation to the searchable session store so
     // `mochi session search` finds past work and a resume can reconstruct
     // the exact prior conversation (Hermes insight).

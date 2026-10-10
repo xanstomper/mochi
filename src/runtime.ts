@@ -243,6 +243,12 @@ export class Runtime {
     return new RetrievalEngine(this.cwd).inspect(query);
   }
 
+  /** MCH-74: steer a RUNNING goal — pushes guidance to all live agents; they
+   *  inject it at their next loop iteration. Returns #agents reached. */
+  steer(text: string): number {
+    return this.goals.steerActive(text);
+  }
+
   async goal(objective: string, constraints: string[] = [], opts?: { enhance?: boolean; enhanceMode?: string }, signal?: AbortSignal): Promise<string> {
     const r = await this.runGoal(objective, constraints, opts, signal);
     return r.summary;

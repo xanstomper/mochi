@@ -343,6 +343,8 @@ export class Agent {
    *  the post-stream execution path skips them (results already in context). */
   private midStreamExecutedIds = new Set<string>();
   private recentToolSignatures: string[] = [];
+  /** MCH-74: mid-run steer queue — user guidance injected at next iteration. */
+  private steerQueue: string[] = [];
   private cycleNudges = 0;
   private lastSig = '';
   private sigStreak = 0;
@@ -819,6 +821,8 @@ Continue from 'Next:', do not redo completed progress.`,
       } catch { /* never block the loop over tool refresh */ }
       // MCH-73: speculative continuation — warm next-turn reads every iteration.
       void this.prefetchForNextTurn();
+      // MCH-74: mid-run steer — inject any queued user guidance before the turn.
+      this.drainSteerQueue();
       sm.beginIteration(i);
       // Deliver completed background tasks as events into the transcript.
       try {
@@ -2434,6 +2438,27 @@ Continue from 'Next:', do not redo completed progress.`,
         this.events.emit({ type: 'agent:log', agentId: this.id, message: `prefetch: warmed ${warmed} co-change file(s) for next turn` });
       }
     } catch { /* prefetch is strictly optional */ }
+  }
+
+  /** MCH-74: mid-run steer. Users can push guidance into a RUNNING task
+   *  without aborting it; queued lines are injected at the next loop
+   *  iteration as a user-role note the model must acknowledge. */
+  steer(text: string): void {
+    const t = text.trim();
+    if (t) this.steerQueue.push(t);
+  }
+
+  /** Drain any mid-run steering into the transcript (called at each
+   *  iteration top). Returns true if anything was injected. */
+  private drainSteerQueue(): boolean {
+    if (this.steerQueue.length === 0) return false;
+    const lines = this.steerQueue.splice(0, this.steerQueue.length);
+    this.context.addMessage({
+      role: 'user',
+      content: `[mid-run steer] The user sent this while the task was running — take it into account NOW and adjust course if needed:\n${lines.join('\n')}`,
+    });
+    this.events.emit({ type: 'agent:log', agentId: this.id, message: `steer: injected ${lines.length} mid-run guidance line(s)` });
+    return true;
   }
 
   /** Spawn a fresh child agent on a subtask and return a short summary. The

@@ -2771,11 +2771,18 @@ if (line === '/branch' || line.startsWith('/branch ')) {
             state.input = '';
             state.cursor = 0;
           } else if (state.busy) {
-            // MESSAGE QUEUE: while a task is running, Enter queues the message
-            // instead of interleaving/dropping it. Drains automatically when
-            // the current run finishes (see queueDrain in run()).
-            messageQueue.push(text.trim());
-            push('system', `◇ queued (${messageQueue.length}) — sends when the current task finishes. Alt+↑ pops the last queued message.`);
+            // MCH-74: mid-run steer FIRST — if a goal run has live agents,
+            // deliver immediately (injected at the next loop iteration).
+            // Otherwise fall back to the message queue (drains at run end).
+            const steerText = text.trim();
+            let steered = 0;
+            try { steered = runtime.steer(steerText); } catch { /* fall through */ }
+            if (steered > 0) {
+              push('system', `↯ steered ${steered} running agent(s) — guidance lands at their next iteration`);
+            } else {
+              messageQueue.push(steerText);
+              push('system', `◇ queued (${messageQueue.length}) — sends when the current task finishes. Alt+↑ pops the last queued message.`);
+            }
             state.input = '';
             state.cursor = 0;
           } else {
