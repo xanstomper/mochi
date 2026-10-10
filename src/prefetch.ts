@@ -109,6 +109,27 @@ export function prefetchSignalWeights(workspaceDir: string): Record<string, numb
 }
 
 /**
+ * MCH-69: compact prefetch-health badge for the TUI status bar, e.g.
+ * "⇉ 62%" — prefetch ledger hit-rate (predicted files actually read).
+ * Returns '' when the ledger is too thin (<5 predictions) or missing.
+ */
+export function prefetchBadge(workspaceDir: string): string {
+  try {
+    const stats = loadStats(workspaceDir);
+    let predicted = 0;
+    let hit = 0;
+    for (const s of Object.values(stats)) {
+      predicted += s.predicted;
+      hit += s.hit;
+    }
+    if (predicted < 5) return '';
+    return `⇉ ${Math.round((hit / predicted) * 100)}%`;
+  } catch {
+    return '';
+  }
+}
+
+/**
  * Fuse the three signals into a ranked prefetch list.
  * Score = max(signal strengths) + 0.15 per additional signal (fusion bonus),
  * capped at 1. Structural rank is 0..1 by rank value; co-change and cache

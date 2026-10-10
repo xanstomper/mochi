@@ -10,6 +10,7 @@ import { describeProviderFailure } from '../model/provider-failure.js';
 import { wrap, visibleLen } from './wrap.js';
 import pkg from '../../package.json' with { type: 'json' };
 import { kvCache } from '../kv-cache.js';
+import { prefetchBadge } from '../prefetch.js';
 import { recordFeedback } from '../feedback.js';
 import type { FeedbackVerdict } from '../feedback.js';
 import { formatModes } from '../modes.js';
@@ -940,6 +941,8 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
 
     const extra: string[] = [];
     if (kvCache.badge()) extra.push(kvCache.badge());
+    const pfBadge = prefetchBadge(runtime.workspace.dir);
+    if (pfBadge) extra.push(pfBadge);
     const queued = [...state.tasks.values()].filter((t) => t.status === 'pending').length;
     if (queued) extra.push(`${queued} queued`);
     const activeSubs = state.activeSubagents ? [...state.activeSubagents.values()] : [];
