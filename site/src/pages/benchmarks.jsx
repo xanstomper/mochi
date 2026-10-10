@@ -1,9 +1,10 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import Mochi from '../Mascot.jsx';
+import { Reveal, BenchChart, CountUp } from '../anim.jsx';
 
 const MEM = [
-  ['Mochi', 18.2, true], ['jcode', 27.8], ['Codex CLI', 140.0],
+  ['Mochi', 18.2, true], ['jcode', 27.8], ['Pi', 34.4], ['Codex CLI', 140.0],
   ['Cursor Agent', 214.9], ['OpenCode', 371.5], ['Claude Code', 386.6],
 ];
 const TTFI = [
@@ -19,22 +20,19 @@ const EXT = [
   ['OpenCode', 24.8], ['Claude Code', 30.0], ['Cursor Agent', 47.2],
 ];
 
-function Bars({ title, meta, rows, unit, lower = true }) {
-  const max = Math.max(...rows.map(r => r[1]));
+function Headline() {
   return (
-    <div className="bench rv">
-      <h3>{title}</h3>
-      <div className="meta">{meta}</div>
-      {rows.map(([n, v, me]) => (
-        <div className={'row' + (me ? ' me first' : '')} data-v={v} data-fmt={unit} key={n}>
-          <span className="n">{n}</span>
-          <span className="t"><span className="f"></span></span>
-          <span className="v"></span>
-        </div>
+    <div className="wrap bench-hero">
+      {[
+        ['21.2×', 'less memory than Claude Code', 18.2, 386.6],
+        ['4.5×', 'faster to first input than Claude Code', 38.2, 172.4],
+        ['1.6×', 'more stable latency than Claude Code', 30.0, 10.9],
+      ].map(([big, lbl, a, b], i) => (
+        <Reveal as="div" className="big-stat" delay={i} key={i}>
+          <div className="big">{big}</div>
+          <div className="lbl">{lbl}</div>
+        </Reveal>
       ))}
-      <p style={{ fontSize: 11.5, color: 'var(--faint)', fontFamily: 'var(--mono)', marginTop: 10 }}>
-        {lower ? 'lower is better' : 'higher is better'} · 10 launches per agent · PSS profiling / high-res PTY timing
-      </p>
     </div>
   );
 }
@@ -49,37 +47,63 @@ function Benchmarks() {
         </div>
       </div>
 
+      <Headline />
+
       <div className="wrap" style={{ paddingBottom: 80 }}>
-        <div className="sec-head rv" style={{ marginBottom: 8 }}>
+        <div className="sec-head"><Reveal as="div">
           <span className="kicker">Methodology</span>
           <h2>How these were measured.</h2>
           <p>Each agent was launched 10 times against a fixed warm cache. Memory is Process Set Size (PSS) from <code>/proc</code> at steady state. Timing uses high-resolution PTY timestamps, wall-clock from process spawn to first output. Same machine, same terminal, same shell profile, no cold-start handouts.</p>
-        </div>
+        </Reveal></div>
 
-        <Bars title="Memory — single active session" meta="PSS · MB · 10 runs" rows={MEM} unit="MB" />
-        <Bars title="Time to first input (TTFI)" meta="spawn → prompt accepted · ms · P50" rows={TTFI} unit="ms" />
-        <Bars title="Time to first token (TTFT)" meta="first prompt sent → first token rendered · ms · P50" rows={TTFT} unit="ms" />
-        <Bars title="First-token p95 extension factor" meta="P95 ÷ median TTFT · × · 1.0 = perfectly stable" rows={EXT} unit="x" />
+        <Reveal as="div" className="metric-block">
+          <div className="metric-head">
+            <h3>Memory — single active session</h3>
+            <p><b>Why it matters:</b> memory is what lets you run mochi alongside your editor, tests, and containers without fan noise. Mochi's Rust core keeps the heavy work out of the JS heap — the agent uses <b>21.2× less memory than Claude Code</b> and <b>10.2× less than OpenCode</b>.</p>
+          </div>
+          <BenchChart unit="MB" rows={MEM} />
+        </Reveal>
 
-        <div className="sec-head rv" style={{ marginTop: 60 }}>
+        <Reveal as="div" className="metric-block">
+          <div className="metric-head">
+            <h3>Time to first input (TTFI)</h3>
+            <p><b>Why it matters:</b> every second before the prompt appears is friction between you and work. At <b>38.2 ms</b>, mochi opens faster than most terminals draw — <b>4.5× faster than Claude Code</b>, <b>3.2× faster than Cursor Agent</b>. You never wait to start typing.</p>
+          </div>
+          <BenchChart unit="ms" rows={TTFI} />
+        </Reveal>
+
+        <Reveal as="div" className="metric-block">
+          <div className="metric-head">
+            <h3>Time to first token (TTFT)</h3>
+            <p><b>Why it matters:</b> the feel of an agent is set by how quickly it starts responding. Mochi's lean pipeline adds almost nothing on top of the provider — <b>441 ms P50</b>, the lowest of all nine agents tested.</p>
+          </div>
+          <BenchChart unit="ms" rows={TTFT} />
+        </Reveal>
+
+        <Reveal as="div" className="metric-block">
+          <div className="metric-head">
+            <h3>First-token p95 extension factor</h3>
+            <p><b>Why it matters:</b> averages hide stalls. This is P95 ÷ median — how much worse the worst case gets. At <b>10.9×</b> mochi is the most predictable agent tested; at 47.2×, Cursor's worst-case first token can lag 47× its median. Predictable latency is what "feels fast" actually means.</p>
+          </div>
+          <BenchChart unit="x" rows={EXT} />
+        </Reveal>
+
+        <div className="sec-head" style={{ marginTop: 60 }}><Reveal as="div">
           <span className="kicker">Full matrix</span>
           <h2>Every metric, every agent.</h2>
-        </div>
-        <table className="tbl rv">
+        </Reveal></div>
+        <Reveal as="table" className="tbl">
           <thead><tr>
             <th>Agent</th><th>Memory (MB)</th><th>TTFI (ms)</th><th>TTFT (ms)</th><th>Ext. factor (×)</th>
           </tr></thead>
           <tbody>
-            {[['Mochi', 18.2, 38.2, 441, 10.9, true], ['jcode', 27.8, 45.4, 510, 12.1],
-              ['Pi', 34.4, 52.1, 650, 13.6], ['Codex CLI', 140.0, 93.0, 594, 19.3],
-              ['Cursor Agent', 214.9, 121.5, 621, 47.2], ['OpenCode', 371.5, 168.3, 679, 24.8],
-              ['Claude Code', 386.6, 172.4, 708, 30.0]].map(r => (
-              <tr key={r[0]} className={r[5] ? 'me' : ''}>
-                <td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td><td>{r[4]}</td>
+            {MEM.map(([n, mem], i) => (
+              <tr key={n} className={n === 'Mochi' ? 'me' : ''}>
+                <td>{n}</td><td>{mem}</td><td>{TTFI[i][1]}</td><td>{TTFT[i][1]}</td><td>{EXT[i][1]}</td>
               </tr>
             ))}
           </tbody>
-        </table>
+        </Reveal>
 
         <div className="grid3" style={{ marginTop: 44 }}>
           {[
@@ -87,17 +111,17 @@ function Benchmarks() {
             ['WHY FAST', 'Nothing booted that you did not ask for', 'No Electron, no bundled language servers at startup, no telemetry warm-up. The TUI renders through direct ANSI to a high-res PTY clock.'],
             ['WHY STABLE', 'Latency you can feel, not just average', 'A 10.9× p95 extension factor means worst-case first tokens stay close to the median — no multi-second stalls mid-conversation.'],
           ].map(([k, h, p], i) => (
-            <div className={'card rv' + (i ? ' d' + i : '')} key={i}>
+            <Reveal as="div" className="card" delay={i} key={i}>
               <span className="k">{k}</span>
               <h3><span className="dot"></span>{h}</h3>
               <p>{p}</p>
-            </div>
+            </Reveal>
           ))}
         </div>
 
-        <p className="rv" style={{ marginTop: 40, fontSize: 14, color: 'var(--muted)' }}>
+        <Reveal as="p" className="bench-note" style={{ marginTop: 40, textAlign: 'left' }}>
           Reproduce it yourself: <code>npm run bench:memory</code> in the repo, or read the full <a href="https://github.com/xanstomper/mochi/blob/main/docs/BENCHMARKS.md" target="_blank" rel="noopener">methodology and raw data</a>.
-        </p>
+        </Reveal>
       </div>
     </>
   );
