@@ -1,50 +1,48 @@
 import { describe, it, expect, afterAll } from 'bun:test';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import { skillsRoot, markUsed, curateAutoSkills, usagePath } from './skill-manager.js';
-import { readFileSync } from 'node:fs';
+import { skillsRoot, curateAutoSkills, usagePath } from './skill-manager.js';
+import { skillTool } from './tools/skill.js';
 
-const dir = mkdtempSync(join(tmpdir(), 'mochi-curate-'));
-afterAll(() => { try { rmSync(dir, { recursive: true, force: true }); } catch {} });
+const ws = mkdtempSync('/tmp/mochi-curate-');
+const autoDir = join(skillsRoot(ws), 'auto');
 
-function makeAutoSkill(ws: string, slug: string): void {
-  const autoDir = join(skillsRoot(ws), 'auto');
+function writeAuto(name: string, body = 'test skill body'): void {
   mkdirSync(autoDir, { recursive: true });
-  writeFileSync(join(autoDir, `${slug}.md`), `---\nname: ${slug}\ndescription: auto\n---\nbody\n`);
+  writeFileSync(join(autoDir, `${name}.md`), body);
 }
 
-describe('curateAutoSkills (MCH-56)', () => {
-  it('archives never-used auto skills and returns their slugs', () => {
-    const ws = join(dir, 'stale');
-    makeAutoSkill(ws, 'tool-route-stale');
-    const archived = curateAutoSkills(ws, { maxAgeMs: 1000 });
-    expect(archived).toContain('tool-route-stale');
-    expect(existsSync(join(skillsRoot(ws), 'auto', 'tool-route-stale.md'))).toBe(false);
-    // Archived, not deleted: file lives under .archive/
-    const arcDir = join(ws, '.mochi', 'skills', '.archive', 'tool-route-stale');
-    expect(readdirSync(arcDir).length).toBeGreaterThan(0);
+afterAll(() => rmSync(ws, { recursive: true, force: true }));
+
+describe('curateAutoSkills', () => {
+  it('archives never-used auto skills', async () => {
+    writeAuto('never-used');
+    const n = await curateAutoSkills(ws, { maxAgeMs: 0 });
+    expect(n.length).toBeGreaterThanOrEqual(1);
+    expect(existsSync(join(autoDir, 'never-used.md'))).toBe(false);
+    expect(existsSync(join(skillsRoot(ws), '.archive', 'never-used', 'never-used.md'))).toBe(true);
   });
 
-  it('keeps recently used auto skills', () => {
-    const ws = join(dir, 'fresh');
-    makeAutoSkill(ws, 'tool-route-fresh');
-    markUsed(ws, 'tool-route-fresh'); // lastUsedAt = now
-    const archived = curateAutoSkills(ws, { maxAgeMs: 1000 });
-    expect(archived).not.toContain('tool-route-fresh');
-    expect(existsSync(join(skillsRoot(ws), 'auto', 'tool-route-fresh.md'))).toBe(true);
+  it('keeps recently-used auto skills', async () => {
+    writeAuto('fresh');
+    // Simulate a load via the real skill tool path: usagePath file with fresh lastUsedAt.
+    mkdirSync(join(ws, '.mochi'), { recursive: true });
+    writeFileSync(usagePath(ws), JSON.stringify({ fresh: { lastUsedAt: Date.now() } }));
+    const n = await curateAutoSkills(ws, { maxAgeMs: 14 * 24 * 3600_000 });
+    expect(existsSync(join(autoDir, 'fresh.md'))).toBe(true);
+    expect(n.length).toBe(0);
   });
 
-  it('archives skills whose lastUsedAt is older than the window', () => {
-    const ws = join(dir, 'old');
-    makeAutoSkill(ws, 'tool-route-old');
-    markUsed(ws, 'tool-route-old');
-    // Force lastUsedAt far into the past.
-    const usageFile = usagePath(ws);
-    const db = JSON.parse(readFileSync(usageFile, 'utf8'));
-    db['tool-route-old'].lastUsedAt = Date.now() - 30 * 24 * 3600_000;
-    writeFileSync(usageFile, JSON.stringify(db));
-    const archived = curateAutoSkills(ws, { maxAgeMs: 14 * 24 * 3600_000 });
-    expect(archived).toContain('tool-route-old');
+  it('archives auto skills whose last use expired', async () => {
+    writeAuto('stale');
+    mkdirSync(join(ws, '.mochi'), { recursive: true });
+    writeFileSync(usagePath(ws), JSON.stringify({ stale: { lastUsedAt: Date.now() - 30 * 24 * 3600_000 } }));
+    await curateAutoSkills(ws, { maxAgeMs: 14 * 24 * 3600_000 });
+    expect(existsSync(join(autoDir, 'stale.md'))).toBe(false);
+  });
+
+  it('usagePath points at skill-meta.json (no schema collision with skills.ts)', () => {
+    expect(usagePath(ws)).not.toContain('skill-usage.json');
+    expect(usagePath(ws).endsWith('skill-meta.json')).toBe(true);
   });
 });

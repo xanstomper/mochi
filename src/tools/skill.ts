@@ -24,6 +24,17 @@ function findSkill(projectDir: string, name: string): Skill | undefined {
 const skillBodyCache = new Map<string, { body: string; path: string; mtimeNs: bigint; size: bigint }>();
 const loadedByAgent = new Set<string>();
 const skillLoadCounts = new Map<string, number>();
+// MCH-57: per-run skill loads so finish() can attribute wins to every skill
+// that actually participated in the run (not just the last one loaded).
+const skillsLoadedThisRun = new Set<string>();
+
+export function getSkillsLoadedThisRun(): string[] {
+  return Array.from(skillsLoadedThisRun);
+}
+
+export function clearSkillsLoadedThisRun(): void {
+  skillsLoadedThisRun.clear();
+}
 
 export function getSkillLoadCounts(): ReadonlyMap<string, number> {
   return skillLoadCounts;
@@ -33,6 +44,7 @@ export function resetSkillCache(): void {
   skillBodyCache.clear();
   loadedByAgent.clear();
   skillLoadCounts.clear();
+  skillsLoadedThisRun.clear();
 }
 
 export const skillTool: Tool = {
@@ -55,6 +67,7 @@ export const skillTool: Tool = {
     const skill = findSkill(ctx.cwd, name);
     if (!skill) return `No skill named '${name}'. Run \`skill list\` to see available skills.`;
     skillLoadCounts.set(name, (skillLoadCounts.get(name) ?? 0) + 1);
+    skillsLoadedThisRun.add(name);
     // MCH-40: persist the load so usage-ranked relevance can boost skills
     // that actually get used. Best-effort; never blocks the load.
     try {

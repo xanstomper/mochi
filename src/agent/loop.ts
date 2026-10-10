@@ -3682,6 +3682,15 @@ Continue from 'Next:', do not redo completed progress.`,
     // here, so the trace records where the run actually stopped).
     this.sm?.enter('finish');
     this.sm?.flush(stopReason);
+    // MCH-57: attribute run outcome to every skill loaded this run. Success ->
+    // each participant gets a win; failure -> load stands without a win, so
+    // win-rate (wins/loads) self-corrects the MCH-40 relevance boost.
+    try {
+      const { getSkillsLoadedThisRun, clearSkillsLoadedThisRun } = await import('../tools/skill.js');
+      const { recordSkillUsage } = await import('../skills.js');
+      for (const name of getSkillsLoadedThisRun()) recordSkillUsage(this.workspace.dir, name, success === true);
+      clearSkillsLoadedThisRun();
+    } catch { /* skill outcome attribution must never affect task completion */ }
     this.mcpClose?.();
     this.mcpClose = undefined;
     this.budget?.recordAgentEnd();

@@ -23,7 +23,7 @@ export function archiveRoot(projectDir: string): string {
   return join(projectDir, '.mochi', 'skills', '.archive');
 }
 export function usagePath(projectDir: string): string {
-  return join(projectDir, '.mochi', 'skill-usage.json');
+  return join(projectDir, '.mochi', 'skill-meta.json');
 }
 
 // ─── Usage registry (mirrors Hermes' tools/skill_usage.py) ───────────────
