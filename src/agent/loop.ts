@@ -6,6 +6,7 @@ import type { EventBus } from '../events.js';
 import type { Workspace } from '../workspace.js';
 import { ContextEngine } from '../context.js';
 import { MemoryStore } from '../memory.js';
+import { loadReadCache, saveReadCache } from '../read-cache-store.js';
 import { createProvider } from '../model/router.js';
 import { PROVIDERS } from '../providers.js';
 import { isMode, modeInstruction } from '../modes.js';
@@ -443,7 +444,7 @@ export class Agent {
     // A shared run-wide cache is preferred so parallel agents that read the same
     // source file don't each re-read it from disk; the cache is keyed on
     // (mtime, size) so any edit automatically misses, keeping it safe to share.
-    this.readCache = opts.readCache ?? new Map();
+    this.readCache = opts.readCache ?? loadReadCache(this.workspace.dir);
     const profileService = new AgentProfileService(this.workspace.dir);
     this.profile = opts.profile ?? profileService.get(opts.role) ?? profileService.get('coder')!;
     this.tools = buildTools(this.config, this.profile.tools);
@@ -3681,6 +3682,10 @@ Continue from 'Next:', do not redo completed progress.`,
           recordPlanSuccess(this.workspace.dir, task.title, task.description ?? '', planText);
         }
       } catch { /* plan-cache must never affect task completion */ }
+      // MCH-48: persist the warm read cache so future sessions skip disk reads.
+      try {
+        if (this.readCache.size > 0) saveReadCache(this.workspace.dir, this.readCache);
+      } catch { /* read-cache persistence must never affect task completion */ }
     }
     const durationMs = Math.round(performance.now() - this.startTime);
     this.events.emit({ type: 'agent:completed', id: this.id, taskId: task.id });
