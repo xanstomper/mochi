@@ -3483,6 +3483,21 @@ Continue from 'Next:', do not redo completed progress.`,
     // can say "last time you saw this, X fixed it" instead of starting cold.
     this.lastLessons = retrieveLessons(this.workspace.dir, failureText, kind);
 
+    // MCH-77: consult the cross-run LearningStore — if this error pattern was
+    // seen in prior sessions, surface the historically best strategy so the
+    // warm start beats cold retries.
+    try {
+      const classified = classifyErrorPattern(failureText);
+      if (classified) {
+        const best = this.learning.bestStrategy(classified.pattern);
+        if (best && best.successes > 0) {
+          const rate = Math.round((best.successes / best.attempts) * 100);
+          this.lastStrategy = best.strategy;
+          this.context.addMessage({ role: 'system', content: `[learning] In prior sessions, error pattern ${classified.pattern} was fixed by strategy "${best.strategy}" (${best.successes}/${best.attempts} successes, ${rate}%). Prefer this approach unless evidence contradicts it.` });
+        }
+      }
+    } catch { /* learning hint must never block failure handling */ }
+
     if (this.autopsy) {
       this.autopsy.failureKind = kind;
       this.autopsy.signals = signals;
