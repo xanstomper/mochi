@@ -541,6 +541,16 @@ export class Agent {
         });
       }
     } catch { /* plan-cache warm-start must never affect task start */ }
+    // MCH-49: repo-map — surface the structurally most important files
+    // (PageRank over the codegraph symbol graph) so the model plans around
+    // hub files instead of discovering them by trial and error.
+    try {
+      const { repoMapText } = await import('../repo-map.js');
+      const mapText = repoMapText(this.workspace.dir);
+      if (mapText) {
+        this.context.addMessage({ role: 'system', content: mapText });
+      }
+    } catch { /* repo-map must never affect task start */ }
     if (this.planMode) {
       this.context.addMessage({
         role: 'system',
