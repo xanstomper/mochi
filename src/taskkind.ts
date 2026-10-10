@@ -72,6 +72,13 @@ export function resolveAutoReasoning(kind: TaskKind): 'low' | 'medium' | 'high' 
 }
 
 /** Tailored hint added to the system prompt per task kind. */
+export function isTrivialWriteTask(task: Task): boolean {
+  const text = `${task.title} ${task.description ?? ''}`.toLowerCase();
+  if (text.length > 140) return false;
+  if (/test|spec|build|run|deploy|migrat|refactor|debug|fix|implement|verify|npm|node|python|cargo/.test(text)) return false;
+  return /\.[a-z]{1,5}\b|\bfile\b|\bwrite\b|\bcreate\b/.test(text);
+}
+
 export function kindHint(kind: TaskKind): string {
   switch (kind) {
     case 'chat':

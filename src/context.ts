@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, readdirSync } from 'node:fs';
 import {hostname, platform, arch, totalmem, freemem, cpus, release} from 'node:os';
 import { resolve } from 'node:path';
 import { MemoryStore, type MemoryEntry } from './memory.js';
@@ -23,6 +23,28 @@ import { formatEnvironmentBlock } from './core/env-profiler.js';
 import { condenseOutput } from './core/output-condenser.js';
 
 const CANDIDATE_RULES = ['MOCHI.md', 'mochi.md', 'AGENTS.md', 'CLAUDE.md', '.cursorrules', '.github/copilot-instructions.md'];
+
+/** MCH-93: tiny-workspace fast path — at/below this file count, skip scouting. */
+const TINY_WORKSPACE_FILES = 12;
+
+/** Shallow file count (top level + one dir deep, hidden dirs skipped) — cheap
+ *  proxy for "is exploring this workspace worth a model round-trip". */
+function countFilesShallow(root: string): number {
+  let count = 0;
+  const visit = (dir: string, depth: number) => {
+    if (depth > 1 || count > TINY_WORKSPACE_FILES * 2) return; // early-exit once clearly not tiny
+    let entries: import('node:fs').Dirent[];
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name.startsWith('.')) continue;
+      if (e.isDirectory()) visit(resolve(dir, e.name), depth + 1);
+      else if (e.isFile()) count++;
+      if (count > TINY_WORKSPACE_FILES * 2) return;
+    }
+  };
+  visit(root, 0);
+  return count;
+}
 
 /**
  * Cheap, synchronous environment snapshot (node:os only — never spawns
@@ -409,8 +431,7 @@ export class ContextEngine {
 
     private buildSystemPrompt(tools: ToolDefinition[], repo?: RepoInfo, task?: Task): string {
     const rules = this.loadProjectRules(task);
-    const repoInfo = repo ? `
-Repository Context:
+    const repoInfo = repo ? `\nRepository Context:
 - Language: ${repo.language ?? 'unknown'} | Framework: ${repo.framework ?? 'unknown'}
 - Build: ${repo.buildCommand ?? 'unknown'} | Test: ${repo.testCommand ?? 'unknown'}
 - Lint: ${repo.lintCommand ?? 'unknown'} | Typecheck: ${repo.typecheckCommand ?? 'unknown'}
@@ -527,6 +548,11 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
           /* continue */
         }
       }
+      // MCH-93: tiny-workspace fast path (recomputed cheaply, memoized per dir mtime).
+      try {
+        const tiny = this.tinyWorkspaceLine();
+        if (tiny) parts.push(tiny);
+      } catch { /* continue */ }
       try {
         const allModularRules = loadRules(this.projectRoot);
         const activeFileRules = selectActiveRules(
@@ -548,6 +574,29 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
    *  (the loop owns the counters); rendered once in the state prompt when the
    *  agent is visibly spinning so the model can see and break the pattern. */
   stuckSignal: string | null = null;
+
+  /** MCH-93: workspaces at or below this file count get the skip-scouting
+   *  fast-path directive — discovery round-trips cost more than the task. */
+  private tinyWorkspaceLine(): string | null {
+    if (this.projectRoot && this.projectRoot !== process.cwd()) { /* fallthrough: still valid */ }
+    try {
+      const root = this.projectRoot || process.cwd();
+      // Memoize per (dir, minute) — a fast readdirSync count, only until it changes.
+      const now = Date.now();
+      if (this._tinyCache && this._tinyCache.root === root && now - this._tinyCache.at < 30_000) {
+        return this._tinyCache.line;
+      }
+      const count = countFilesShallow(root);
+      const line = count <= TINY_WORKSPACE_FILES
+        ? `Tiny workspace: this directory has ${count} files. Do NOT explore, list, or read around — act directly on the task using the file paths implied by it. Skip discovery steps entirely.`
+        : null;
+      this._tinyCache = { root, at: now, line };
+      return line;
+    } catch {
+      return null;
+    }
+  }
+  private _tinyCache?: { root: string; at: number; line: string | null };
 
   private buildStatePrompt(task?: Task): string {
     const isChat = task ? classifyTaskKind(task) === 'chat' : false;

@@ -16,7 +16,7 @@ import { executeTool, buildTools, TOOL_ALIASES, normalizeToolArgs, trimHeavyTool
 import { refreshAuthoredTools, RESERVED_TOOL_NAMES } from '../tools/tool-factory.js';
 import type { ToolContext, ReadCache } from '../tools/types.js';
 import { detectRepo, languageHint } from '../repo.js';
-import { classifyTaskKind, resolveAutoReasoning } from '../taskkind.js';
+import { classifyTaskKind, resolveAutoReasoning, isTrivialWriteTask } from '../taskkind.js';
 import { matchesBaseline, type VerificationBaseline } from '../verification.js';
 import { diagnoseFile, renderDiagnostics } from '../diagnostics.js';
 import type { AgentProfile } from '../types.js';
@@ -496,6 +496,10 @@ export class Agent {
     const raw = (this.config.reasoning || process.env.MOCHI_REASONING || 'auto').trim().toLowerCase();
     if (raw === 'auto') {
       const kind = this.taskKind ?? classifyTaskKind(task);
+      // MCH-92b: trivial mechanical writes (create x.txt containing ok) got
+      // 'max' via the implement default and burned 50k+ thinking tokens on a
+      // 1-line task (arena: 54,331 tokensOut). Downgrade them to 'low'.
+      if (isTrivialWriteTask(task)) return 'low';
       return resolveAutoReasoning(kind);
     }
     // Guard against any stray invalid value (config re-validates, but stay safe).
@@ -2024,7 +2028,13 @@ Continue from 'Next:', do not redo completed progress.`,
         // WORKS, not that it is CLEAN. One bounded pass catches debug logging,
         // TODO markers, suppressed checks, and focused tests the model added,
         // so shipped code never needs a human cleanup pass.
-        if (!this.planMode && this.hygieneNudges < 1) {
+        // MCH-93: in a non-git workspace both gates can only fail (every git
+        // probe errors) — skip them instead of burning 2+ model round-trips.
+        const mch93GitWs = this.isGitWorkspace();
+        if (!mch93GitWs) {
+          this.events.emit({ type: 'agent:log', agentId: this.id, message: `[mch93] non-git workspace — hygiene+self-review gates skipped` });
+        }
+        if (!this.planMode && mch93GitWs && this.hygieneNudges < 1) {
           const findings = await this.collectHygieneFindings();
           if (findings.length > 0) {
             this.hygieneNudges++;
@@ -3072,6 +3082,14 @@ Continue from 'Next:', do not redo completed progress.`,
         recoveryHint += '\n[Harness Hint: Target file was not found. Use glob or search to verify paths before editing/reading.]';
       } else if (toolName === 'shell' && (errLower.includes('exit') || errLower.includes('failed') || errLower.includes('command not found'))) {
         recoveryHint += '\n[Harness Hint: Shell command failed. Review the terminal error above to fix syntax or missing packages.]';
+        // MCH-93: a test failing right after THIS run wrote the test file means
+        // the test (or its assumptions), not the world, is broken — fix your
+        // own recent output first instead of rewriting the implementation.
+        const wroteTest = this.context.state.filesModified.some((f) => /test|spec/i.test(f));
+        const failureRefersToWritten = this.context.state.filesModified.some((f) => err.includes(f.split('/').pop() ?? ''));
+        if (wroteTest || failureRefersToWritten) {
+          recoveryHint += `\n[Harness Hint: You wrote/modified these files yourself moments ago: ${this.context.state.filesModified.slice(-4).join(', ')}. The failure is inside your own recent output — re-read what you just wrote and correct it; do not blame or rewrite unrelated code.]`;
+        }
       }
     } else {
       this.consecutiveToolErrors.delete(toolName);
@@ -3815,6 +3833,14 @@ Continue from 'Next:', do not redo completed progress.`,
     }
   }
 
+  /** MCH-93: cheap git-repo detection (memoized per run) for gate skipping. */
+  private gitWorkspace?: boolean;
+  private isGitWorkspace(): boolean {
+    if (this.gitWorkspace !== undefined) return this.gitWorkspace;
+    try { this.gitWorkspace = existsSync(resolve(this.cwd, '.git')); } catch { this.gitWorkspace = false; }
+    return this.gitWorkspace;
+  }
+
   /** Self-review only pays off when the agent actually changed files this run.
    *  Pure answer/research tasks skip it (nothing to review). */
   /** Gather hygiene findings from tracked diff + untracked new files. Best
@@ -3943,7 +3969,7 @@ Continue from 'Next:', do not redo completed progress.`,
           ].join('\n'),
         },
       ];
-      const response = await this.provider.chat(reviewMsg, [], { signal: this.abortSignal });
+      const response = await this.provider.chat(reviewMsg, [], { signal: this.abortSignal, reasoningEffort: 'low' as any });
       const text = (response.content ?? '').trim();
       const tail = text.slice(0, 200);
       // A review only counts as a real problem when it actually cites a
