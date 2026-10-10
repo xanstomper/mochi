@@ -5,14 +5,14 @@ const { chromium } = require('playwright');
   await p.goto('http://127.0.0.1:8937/mochi/source.html', {waitUntil:'networkidle'});
   await p.waitForTimeout(5000);
   const info = await p.evaluate(() => {
-    const rbWindow = document.querySelector('.rb-window');
-    const wraps = document.querySelectorAll('.wrap');
-    const wrapInfo = [...wraps].map(w => ({
-      cls: w.className,
-      children: w.children.length,
-      firstChild: w.children[0]?.className?.slice(0,30),
+    const wrap = document.querySelector('.wrap');
+    if (!wrap) return 'no wrap';
+    const children = [...wrap.children].map(c => ({
+      tag: c.tagName,
+      cls: (c.className||'').slice(0,50),
+      text: c.textContent?.slice(0,60),
     }));
-    return { rbWindow: !!rbWindow, wrapInfo };
+    return children;
   });
   console.log(JSON.stringify(info, null, 1));
   await b.close();
