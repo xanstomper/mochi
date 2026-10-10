@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Documentation — Mochi</title>
+<meta name="description" content="Mochi documentation: architecture, agent roles, tools, CLI reference, daemon, and installation.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect x='2.5' y='12.5' width='19' height='7' rx='2.5' fill='%23A9C97E'/><rect x='2.5' y='4.5' width='19' height='7' rx='2.5' stroke='%23A9C97E' stroke-opacity='.45' stroke-width='1.6' fill='none'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<style>.rv{opacity:0;transform:translateY(14px);transition:opacity .55s cubic-bezier(.2,.6,.2,1),transform .55s cubic-bezier(.2,.6,.2,1)}.rv.in{opacity:1;transform:none}</style>
+</head>
+<body>
+
+<div class="wrap layout">
+  <aside class="sidebar">
+    <div class="grp"><h5>Get started</h5>
+      <a href="#install">Installation</a>
+      <a href="#first-run">First run</a>
+      <a href="#cli">CLI reference</a>
+    </div>
+    <div class="grp"><h5>Core concepts</h5>
+      <a href="#architecture">Architecture</a>
+      <a href="#roles">Agent roles</a>
+      <a href="#tools">Native tools</a>
+      <a href="#daemon">Daemon</a>
+      <a href="#sessions">Sessions &amp; traces</a>
+    </div>
+    <div class="grp"><h5>Reference</h5>
+      <a href="benchmarks.html">Benchmarks</a>
+      <a href="https://github.com/xanstomper/mochi/blob/main/docs/CAPABILITIES.md" target="_blank" rel="noopener">Full capabilities (repo)</a>
+      <a href="https://github.com/xanstomper/mochi/blob/main/docs/ARCHITECTURE.md" target="_blank" rel="noopener">Architecture blueprint</a>
+    </div>
+  </aside>
+
+  <main class="doc-body">
+    <h1>Documentation</h1>
+    <p class="lede">Mochi — Minimal Orchestrative Coding Harness Intelligence — is an autonomous coding agent for the terminal. This page covers installation, core concepts, and the CLI. Deep dives live in the repo's <code>docs/</code>.</p>
+
+    <h2 id="install">Installation</h2>
+    <p>Requires Node 22+ or Bun. Mochi has zero runtime JavaScript dependencies.</p>
+<pre><span style="color:var(--faint)"># clone and build</span>
+git clone https://github.com/xanstomper/mochi.git
+cd mochi
+npm install &amp;&amp; npm run build
+
+<span style="color:var(--faint)"># optional: standalone native binary (no runtime needed)</span>
+npm run build:bin</pre>
+    <p>A memory regression gate (<code>npm run bench:memory</code>) runs in CI after every build and fails above 80 MB codegraph import / 95 MB runtime import — lazy-loading wins can't silently regress.</p>
+
+    <h2 id="first-run">First run</h2>
+<pre><span style="color:var(--faint)"># interactive TUI</span>
+mochi
+
+<span style="color:var(--faint)"># one-shot headless run</span>
+mochi "add a rate limiter to the auth service"
+
+<span style="color:var(--faint)"># multi-agent swarm</span>
+mochi team "ship the payments refactor"</pre>
+    <p>One-shot runs execute to completion with verification; <code>mochi trace &lt;goalId&gt;</code> replays the whole run afterwards.</p>
+
+    <h2 id="cli">CLI reference</h2>
+    <table>
+      <tr><th>Command</th><th>What it does</th></tr>
+      <tr><td>mochi</td><td>Launch the interactive terminal UI</td></tr>
+      <tr><td>mochi "prompt"</td><td>TUI preloaded with a prompt</td></tr>
+      <tr><td>mochi daemon start --host 0.0.0.0</td><td>Start background daemon on port 8642</td></tr>
+      <tr><td>mochi daemon status</td><td>Daemon status and active jobs</td></tr>
+      <tr><td>mochi daemon send "task"</td><td>Send a task to the running daemon</td></tr>
+      <tr><td>mochi daemon jobs</td><td>List in-flight and completed jobs</td></tr>
+      <tr><td>mochi daemon cron add|list|remove</td><td>Recurring agent jobs on a schedule</td></tr>
+      <tr><td>mochi daemon stop</td><td>Stop the background daemon</td></tr>
+      <tr><td>mochi team "goal"</td><td>Decompose and run across a role-diverse swarm</td></tr>
+      <tr><td>mochi trace [goalId]</td><td>Replay a run end to end (deep redaction)</td></tr>
+      <tr><td>mochi session list / search "q"</td><td>Full-text SQLite+FTS5 history search</td></tr>
+      <tr><td>mochi termix --sessions 3</td><td>Split-pane agent workspace</td></tr>
+      <tr><td>mochi acp</td><td>Agent Client Protocol v1 stdio server</td></tr>
+      <tr><td>mochi doctor</td><td>Health check: workspace, tools, compilers</td></tr>
+      <tr><td>mochi skills</td><td>List bundled and project skills</td></tr>
+    </table>
+    <p>The TUI itself has a rounded input, live transcript, command palette, and status bar. Interactive slash commands and keybindings are in the <a href="https://github.com/xanstomper/mochi/blob/main/docs/CLI_REFERENCE.md" target="_blank" rel="noopener">full CLI reference</a>.</p>
+
+    <h2 id="architecture">Architecture</h2>
+    <p>Mochi is a dual-engine harness:</p>
+    <ul>
+      <li><strong>Rust core</strong> (<code>native/mochi_core</code>) — a zero-dependency compiled crate handling BPE tokenization (0.28 ms / 100k chars), compaction cut planning (0.12 ms on 250-turn transcripts), N-API workspace indexing (50k files in 3.8 ms), and agent-loop decisions. No GC pressure, in-process memory sharing.</li>
+      <li><strong>TypeScript frontend</strong> — model I/O, tool execution, TUI rendering via direct ANSI (no webview, no Electron), and persistence (SQLite+FTS5).</li>
+      <li><strong>Parity-tested fallbacks</strong> — every native path has a TypeScript equivalent, so CI and cold installs work when the Rust binary is absent.</li>
+    </ul>
+    <p>Implemented systems include the event bus, model routing by capability profile, budget-aware fallback, codex-style multi-file patches with whitespace-tolerant matching, hook pipelines (<code>before_*</code>, <code>after_*</code>, <code>on_*</code>), speculative execution, credential pools, and multiple workspaces. See the <a href="https://github.com/xanstomper/mochi/blob/main/docs/ARCHITECTURE.md" target="_blank" rel="noopener">architecture blueprint</a> for the full deep dive.</p>
+
+    <h2 id="roles">Agent roles</h2>
+    <p>Sixteen specialized subagents can spawn via the <code>subagent</code> tool or <code>mochi team</code>. Each role gets a capability profile and a scoped tool allowlist:</p>
+    <table>
+      <tr><th>Role</th><th>Tier</th><th>Responsibility</th></tr>
+      <tr><td>lead</td><td>reasoning</td><td>Decomposes goals into DAGs, coordinates swarms, resolves blockers</td></tr>
+      <tr><td>coder</td><td>coding</td><td>Full-stack implementation, surgical diffs, headless test verification</td></tr>
+      <tr><td>reviewer</td><td>review</td><td>Read-only PR/diff inspection, SOLID/DRY audits, edge cases</td></tr>
+      <tr><td>tester</td><td>fast</td><td>Test creation, bug reproduction, suite execution</td></tr>
+      <tr><td>researcher</td><td>fast</td><td>AST/call-graph traversal, doc indexing, web research</td></tr>
+      <tr><td>debugger</td><td>reasoning</td><td>Root-cause diagnosis, hypothesis testing, telemetry injection</td></tr>
+      <tr><td>security</td><td>reasoning</td><td>OWASP auditing, threat modeling, secret-leak detection</td></tr>
+      <tr><td>architect</td><td>reasoning</td><td>API contracts, distributed trade-offs, service boundaries</td></tr>
+      <tr><td>devops</td><td>coding</td><td>Dockerfiles, K8s manifests, CI/CD, Terraform</td></tr>
+      <tr><td>db_admin</td><td>reasoning</td><td>Schema migrations, index design, EXPLAIN analysis</td></tr>
+      <tr><td>frontend / backend</td><td>coding</td><td>UI components; REST/GraphQL/gRPC APIs and concurrency</td></tr>
+      <tr><td>performance</td><td>reasoning</td><td>Hotspot profiling, leak detection, Big-O optimization</td></tr>
+      <tr><td>tech_writer</td><td>coding</td><td>ADRs, READMEs, Mermaid diagrams, API references</td></tr>
+      <tr><td>qa_engineer</td><td>coding</td><td>Playwright/Cypress E2E, visual regression, smoke tests</td></tr>
+      <tr><td>data_scientist</td><td>reasoning</td><td>Pandas/Polars wrangling, PyTorch/TensorFlow modeling</td></tr>
+    </table>
+    <p>Agent profiles are also user-definable from <code>.mochi/agents/*.md</code>.</p>
+
+    <h2 id="tools">Native tools</h2>
+    <p>Thirty-plus built-in tools, grouped:</p>
+    <h3>Editing</h3>
+    <p><code>edit</code> (anchor-matched, whitespace-tolerant), <code>patch</code> (multi-file <code>*** Begin Patch</code> format that refuses ambiguity rather than guessing), <code>write</code>, <code>delete</code>, <code>replace_symbol</code> (AST-driven whole-symbol rewrite), <code>rename_symbol</code> (project-wide atomic), <code>search_replace_multi</code>, <code>regex_replace</code>.</p>
+    <h3>Code intelligence</h3>
+    <p><code>get_function</code>, <code>find_callers</code>, <code>type_hierarchy</code>, <code>find_references</code>, <code>find_definitions</code>, <code>analyze_code</code> (cyclomatic complexity, code smells). <code>read</code> also supports <code>skeleton: true</code> for 85% token reduction on AST outlines.</p>
+    <h3>Execution &amp; inspection</h3>
+    <p><code>shell</code> (background jobs supported), <code>repl</code> (stateful Node/Python/Shell), <code>search</code> (N-API accelerated, sub-millisecond), <code>glob</code>, <code>inspect</code>, plus <code>git</code>, <code>memory</code>, <code>todo</code>, <code>skill</code>, and <code>subagent</code>.</p>
+    <p>Permissions run through a safe / ask / auto system with git checkpoint and rollback underneath.</p>
+
+    <h2 id="daemon">Daemon</h2>
+    <pre>mochi daemon start --host 0.0.0.0   <span style="color:var(--faint)"># port 8642</span>
+mochi daemon send "run the test suite"
+mochi daemon cron add "0 9 * * *" "triage open issues"</pre>
+    <p>The daemon exposes <code>start / status / jobs / send / approve / resume / cron / stop</code> over HTTP, so editors, scripts, and CI can drive the same long-lived agent. Recurring jobs run on schedule; approvals gate anything the permission system marks as <code>ask</code>.</p>
+
+    <h2 id="sessions">Sessions &amp; traces</h2>
+    <p>Every session is stored in SQLite with FTS5 full-text search (<code>mochi session search "compaction bug"</code>). Every goal run produces a durable trace with deep redaction — replay it with <code>mochi trace &lt;goalId&gt;</code> to see model turns, tool calls, verifications, and recoveries in order.</p>
+
+    <p style="margin-top:44px;padding-top:20px;border-top:1px solid var(--border);font-size:13.5px;color:var(--faint)">More: <a href="https://github.com/xanstomper/mochi/blob/main/docs/CAPABILITIES.md" target="_blank" rel="noopener">Complete capabilities reference</a> · <a href="https://github.com/xanstomper/mochi/blob/main/docs/CLI_REFERENCE.md" target="_blank" rel="noopener">CLI &amp; interface reference</a> · <a href="benchmarks.html">Benchmarks</a></p>
+  </main>
+</div>
+
+<script src="assets/site.js"></script>
+</body>
+</html>
