@@ -203,7 +203,7 @@ header.site {
   min-height: 100vh; display: grid;
   grid-template-columns: 1fr 1fr; align-items: center;
   position: relative; z-index: 1;
-  padding: 100px 5vw 120px;
+  padding: 100px 5vw 140px;
   max-width: 1400px; margin: 0 auto;
   gap: 40px;
 }
@@ -397,11 +397,12 @@ header.site {
 
 /* ── STATS TICKER ───────────────────────────────────────────── */
 .stats-ticker {
-  display: flex; overflow: hidden; padding: 16px 0;
-  border-top: 1px solid var(--hairline);
-  border-bottom: 1px solid var(--hairline);
-  background: rgba(255,255,255,.05);
-  backdrop-filter: blur(10px);
+  display: flex; overflow: hidden; padding: 18px 0;
+  border-top: 1px solid rgba(255,255,255,.15);
+  border-bottom: 1px solid rgba(255,255,255,.15);
+  background: rgba(26,26,110,.3);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
 }
 .ticker-track { display: flex; animation: tickerScroll 30s linear infinite; }
 .ticker-item {
