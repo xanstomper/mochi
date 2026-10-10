@@ -6,6 +6,7 @@ import type { EventBus } from '../events.js';
 import type { Workspace } from '../workspace.js';
 import { ContextEngine } from '../context.js';
 import { MemoryStore } from '../memory.js';
+import { projectMemoryPrefix, recordProjectMemory } from '../project-memory.js';
 import { loadReadCache, saveReadCache } from '../read-cache-store.js';
 import { createProvider } from '../model/router.js';
 import { PROVIDERS } from '../providers.js';
@@ -926,6 +927,9 @@ Continue from 'Next:', do not redo completed progress.`,
       // session from a blank slate (the Cline/Claude Code multi-session edge).
       if (taskKind !== 'chat' && repo && !this.resumeProtocolInjected) {
         this.resumeProtocolInjected = true;
+        // MCH-76: stable cross-session project-memory prefix, before the protocol.
+        const memPrefix = projectMemoryPrefix(this.workspace.dir);
+        if (memPrefix) this.context.addMessage({ role: 'system', content: memPrefix });
         this.context.addMessage({ role: 'system', content: TASK_FOCUS_PROTOCOL });
       }
       // Anti-loop: if gathering context extensively without editing, nudge the appropriate action.
@@ -3963,6 +3967,16 @@ Continue from 'Next:', do not redo completed progress.`,
           recordPrefetchOutcome(this.workspace.dir, this.prefetchLedger, actualReads);
         }
       } catch { /* prefetch ledger must never affect task completion */ }
+      // MCH-76: persist a durable, deduped fact about this run so future
+      // sessions warm-start with the workspace's accumulated knowledge.
+      try {
+        if (this.fileChanged) {
+          const files = [...new Set(this.context['state'].filesModified)] as string[];
+          if (files.length > 0) {
+            recordProjectMemory(this.workspace.dir, `Run touched ${Math.min(files.length, 5)} file(s): ${files.slice(0, 5).join(', ')}${files.length > 5 ? ` (+${files.length - 5} more)` : ''}`);
+          }
+        }
+      } catch { /* project memory must never affect task completion */ }
       // MCH-52: persist this run's tool sequence for route-pattern mining.
       try {
         const { loadToolSeqs, saveToolSeq } = await import('../tool-sequence.js');
