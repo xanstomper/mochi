@@ -2,7 +2,7 @@
 
 **➡️ [Website & Docs — xanstomper.github.io/mochi](https://xanstomper.github.io/mochi)**
 
-> Minimal, fast, autonomous coding agent for the terminal. Goals, task DAGs, teams,
+> Minimal Orchestrative Coding Harness Intelligence — a minimal, fast, autonomous coding agent for the terminal. Goals, task DAGs, teams,
 > a persistent daemon, and deep run traces on a Rust runtime core with a TypeScript
 > frontend.
 
