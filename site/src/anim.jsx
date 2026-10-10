@@ -44,7 +44,7 @@ export function SplitText({
               <span
                 key={ci}
                 className="split-char"
-                style={{ transitionDelay: `${delay + idx * stagger}s` }}
+                style={{ '--split-delay': `${delay + idx * stagger}s` }}
               >
                 {ch}
               </span>
@@ -89,7 +89,7 @@ export function BlurText({
           key={i}
           className="blur-word"
           aria-hidden="true"
-          style={{ transitionDelay: `${delay + i * stagger}s` }}
+          style={{ '--blur-delay': `${delay + i * stagger}s` }}
         >
           {word}
           {i < words.length - 1 && '\u00A0'}

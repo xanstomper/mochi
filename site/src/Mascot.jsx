@@ -1,63 +1,115 @@
-// mochi mascot — hand-drawn round mochi blob, inline SVG, original artwork.
-// variants: happy (default), wink, sleepy
-// Cuter upgrade: bigger sparkly eyes, rosier blush, happy tongue smile, charm sparkles.
-// Kept ARM-LESS per user preference. Uses exact site palette.
+// mochi mascot — pastel lavender edition, inline SVG, original artwork.
+// White round blob, glossy black oval eyes, pink blush, purple leaf sprout.
 import React from 'react';
 
-function Face({ blink }) {
-  return (
-    <g>
-      {/* eyes: rounder, lower, cuter */}
-      <ellipse cx="34" cy="40" rx="4.2" ry={blink ? 0.9 : 5.2} fill="#5E4B3C" />
-      <ellipse cx="62" cy="40" rx="4.2" ry={blink ? 0.9 : 5.2} fill="#5E4B3C" />
-      {/* eye sparkles: dual highlight for shine */}
-      {!blink && <>
-        <circle cx="35.6" cy="37.6" r="1.6" fill="#fff" />
-        <circle cx="63.6" cy="37.6" r="1.6" fill="#fff" />
-        <circle cx="32.4" cy="42.6" r="0.9" fill="#fff" opacity=".75" />
-        <circle cx="60.4" cy="42.6" r="0.9" fill="#fff" opacity=".75" />
-      </>}
-      {/* rosier blush */}
-      <ellipse cx="21" cy="49" rx="7" ry="4" fill="#F2A7B8" opacity=".7" />
-      <ellipse cx="75" cy="49" rx="7" ry="4" fill="#F2A7B8" opacity=".7" />
-      {/* happy open smile + tongue */}
-      <path d="M40 50 Q48 60 56 50 Q48 54 40 50" fill="#5E4B3C" />
-      <path d="M45 55 Q48 62 51 55 Z" fill="#F6C1CB" />
-    </g>
-  );
-}
-
-export default function Mochi({ size = 240, mood = 'happy', className = '' }) {
+export default function Mochi({ size = 280, mood = 'happy', className = '' }) {
   const blink = mood === 'blink';
   const wink = mood === 'wink';
+
   return (
-    <svg className={className} width={size} height={size} viewBox="0 0 96 96" fill="none" role="img" aria-label="Mochi mascot">
-      {/* charm: floating sparkles + tiny heart */}
-      <g fill="#E8B04B" opacity=".9">
-        <path d="M20 14 l1.6 3.2 3.2 1.6 -3.2 1.6 -1.6 3.2 -1.6-3.2 -3.2-1.6 3.2-1.6z" />
-        <path d="M78 66 l1.2 2.4 2.4 1.2 -2.4 1.2 -1.2 2.4 -1.2-2.4 -2.4-1.2 2.4-1.2z" opacity=".7" />
-      </g>
-      <path d="M16 40 c0 -2.4 1.8 -3.8 4.2 -3.8 c2.4 0 3.8 1.8 3.8 3.8 c0 3.2 -4 5.4 -4 5.4 s-4 -2.2 -4 -5.4z" fill="#F2A7B8" opacity=".65" />
-      {/* body: soft round mochi */}
+    <svg
+      className={className}
+      width={size}
+      height={size}
+      viewBox="0 0 200 200"
+      fill="none"
+      role="img"
+      aria-label="Mochi mascot"
+    >
+      {/* soft shadow beneath */}
+      <ellipse cx="100" cy="178" rx="55" ry="10" fill="#8B75F6" opacity=".18" />
+
+      {/* body — soft white mochi blob */}
       <path
-        d="M48 10 C71 10 85 27 85 50 C85 73 71 87 48 87 C25 87 11 73 11 50 C11 27 25 10 48 10 Z"
-        fill="#FDF0E4" stroke="#8A6F5B" strokeWidth="2.6"
+        d="M100 28 C138 28 162 52 162 90 C162 128 138 168 100 168 C62 168 38 128 38 90 C38 52 62 28 100 28 Z"
+        fill="#FFFFFF"
+        stroke="#E8E3FD"
+        strokeWidth="3"
       />
-      {/* squish highlight — cuter, bigger */}
-      <path d="M24 30 C30 20 40 15 52 15" stroke="#fff" strokeWidth="6" strokeLinecap="round" opacity=".9" fill="none" />
-      {/* little leaf on top */}
-      <path d="M48 10 C50 4 57 2 63 4 C62 11 55 14 48 10 Z" fill="#A9C97E" stroke="#8A6F5B" strokeWidth="2" strokeLinejoin="round" />
-      {wink
-        ? <g>
-            <ellipse cx="34" cy="40" rx="4.2" ry="5.2" fill="#5E4B3C" />
-            <circle cx="35.6" cy="37.6" r="1.6" fill="#fff" />
-            <circle cx="32.4" cy="42.6" r="0.9" fill="#fff" opacity=".75" />
-            <path d="M58 40 q4 -4 9 0" stroke="#5E4B3C" strokeWidth="2.4" strokeLinecap="round" fill="none" />
-            <ellipse cx="21" cy="49" rx="7" ry="4" fill="#F2A7B8" opacity=".7" />
-            <ellipse cx="75" cy="49" rx="7" ry="4" fill="#F2A7B8" opacity=".7" />
-            <path d="M40 50 Q48 62 56 50 Q48 54 40 50" fill="#5E4B3C" />
-          </g>
-        : <Face blink={blink} />}
+
+      {/* subtle body shading */}
+      <path
+        d="M100 32 C134 32 156 54 156 88"
+        stroke="#F3F1FA"
+        strokeWidth="8"
+        strokeLinecap="round"
+        fill="none"
+        opacity=".8"
+      />
+
+      {/* leaf sprout on top */}
+      <g transform="translate(100, 28)">
+        <path
+          d="M0 0 C-2 -8 -8 -14 -14 -14 C-14 -6 -8 0 0 0 Z"
+          fill="#8B75F6"
+          opacity=".9"
+        />
+        <path
+          d="M0 0 C2 -10 8 -16 14 -16 C14 -8 8 0 0 0 Z"
+          fill="#8B75F6"
+          opacity=".7"
+        />
+        <path
+          d="M0 0 C0 -12 2 -18 6 -20 C8 -14 4 -4 0 0 Z"
+          fill="#A78BFA"
+          opacity=".8"
+        />
+      </g>
+
+      {/* eyes — glossy black ovals */}
+      {wink ? (
+        <g>
+          {/* left eye open */}
+          <ellipse cx="78" cy="88" rx="7" ry="10" fill="#111116" />
+          <circle cx="80" cy="84" r="3" fill="#fff" />
+          <circle cx="75" cy="92" r="1.5" fill="#fff" opacity=".7" />
+          {/* right eye winking */}
+          <path
+            d="M118 88 Q126 80 134 88"
+            stroke="#111116"
+            strokeWidth="3.5"
+            strokeLinecap="round"
+            fill="none"
+          />
+        </g>
+      ) : (
+        <g>
+          {/* left eye */}
+          <ellipse
+            cx="78"
+            cy="88"
+            rx="7"
+            ry={blink ? 1.5 : 10}
+            fill="#111116"
+          />
+          {!blink && <circle cx="80" cy="84" r="3" fill="#fff" />}
+          {!blink && <circle cx="75" cy="92" r="1.5" fill="#fff" opacity=".7" />}
+          {/* right eye */}
+          <ellipse
+            cx="122"
+            cy="88"
+            rx="7"
+            ry={blink ? 1.5 : 10}
+            fill="#111116"
+          />
+          {!blink && <circle cx="124" cy="84" r="3" fill="#fff" />}
+          {!blink && <circle cx="119" cy="92" r="1.5" fill="#fff" opacity=".7" />}
+        </g>
+      )}
+
+      {/* blush — soft pink circles */}
+      <ellipse cx="62" cy="108" rx="10" ry="6" fill="#E3B7EB" opacity=".6" />
+      <ellipse cx="138" cy="108" rx="10" ry="6" fill="#E3B7EB" opacity=".6" />
+
+      {/* tiny smile */}
+      <path
+        d="M92 112 Q100 118 108 112"
+        stroke="#111116"
+        strokeWidth="2.5"
+        strokeLinecap="round"
+        fill="none"
+        opacity=".6"
+      />
     </svg>
   );
 }

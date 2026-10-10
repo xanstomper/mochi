@@ -7,7 +7,7 @@ import { loadAllSkills, formatSkillsForPrompt, type Skill, bundledSkillsDir, dis
 import { nativeCountTokens } from './native/core.js';
 import { nativePlanCompaction } from './native/agent-protocol.js';
 import type { PlanRequestMessage } from './native/agent-protocol.js';
-import { classifyTaskKind, kindHint } from './taskkind.js';
+import { classifyTaskKind, kindHint, isSimpleScriptTask } from './taskkind.js';
 import type { ChatMessage, MochiConfig, RepoInfo, Task, ToolDefinition } from './types.js';
 import {TOOL_ALIASES, normalizeToolArgs} from './tools/index.js';
 import { getCachedScaffold } from './cognitive/chameleon.js';
@@ -540,9 +540,15 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
       // self-doubt git-diff re-checks then an identical file rewrite. Dampen
       // the push after work exists: mark it as already-in-progress guidance.
       const hint = kindHint(classifyTaskKind(task));
-      parts.push(this.state.filesModified.length > 0
+      const h = this.state.filesModified.length > 0
         ? hint.replace(/^\n# Focus:/, '\n# Focus (work already in progress — verify once, then finish; do not re-check completed steps):')
-        : hint);
+        : hint;
+      // MCH-98: mechanical script tasks name their files in the prompt —
+      // pre-exploration rounds (glob -> read -> confirm) burned 2 provider
+      // round-trips (~7s) before the first edit in live arena traces.
+      parts.push(isSimpleScriptTask(task)
+        ? `${h}Speed protocol: the task names every file involved — do NOT re-explore (no glob/read of files you already know). Batch ALL edits in one parallel round, run the requested command, and finish. No speculative extra probes (npm test etc.) beyond the command the task asks for.`
+        : h);
       const owl = evaluateOwl(task.title + (task.description ? ' ' + task.description : ''));
       if (owl.mode === 'surface' && owl.formattedFindings.length > 0) {
         parts.push(`OWL Operational Guardrails:\n${owl.formattedFindings.join('\n')}`);

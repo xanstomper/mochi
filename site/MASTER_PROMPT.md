@@ -1,96 +1,89 @@
-# MOCHI SITE v4 — MASTER DESIGN PROMPT
+# MOCHI SITE v6 — MASTER DESIGN PROMPT
 
 ## North Star
-A premium, editorial, single-page-scroll experience for Mochi (terminal coding agent).
-Reference quality: reactbits.dev components + Claude.ai warmth + Vercel/Linear polish.
-NOT a template. NOT "AI slanted-gradient slop". Every element must earn its place.
+A serious, editorial, infrastructure-grade marketing site for Mochi (terminal coding agent).
+Reference quality: linear.app, vercel.com, clerk.com, postman.com — sites that treat
+engineering software like a serious product, not a lifestyle brand.
 
-## Design Tokens (locked)
+This is the ANTI-vibecode manifesto. No dreamlike sky gradients. No emoji-laden cards.
+No glassmorphism. No glow/pulse/float animations competing for attention.
+If it looks like a generic AI SaaS template, it's a bug.
+
+## Design Tokens (locked — professional infra palette)
 colors:
-  canvas:      #FBF6EE  (warm cream — page bg)
-  surface:     #FFFFFF  (cards, nav)
-  surface-2:   #F5EDE0  (subtle sections)
-  ink:         #2A1E18  (headings — deep mocha)
-  body:        #5C4A3E  (paragraphs)
-  muted:       #8A6F5B  (labels, eyebrows)
-  pink:        #F2A7B8  (primary accent — CTAs, highlights)
-  pink-deep:   #D97A94  (hover, emphasis)
-  pink-ink:    #8A2D4E  (text on light pink)
-  mocha:       #8A6F5B  (secondary text)
-  hairline:    #E8DCC8  (borders)
-  dark:        #2A1E18  (dark sections — coda, terminal)
-  on-dark:     #FBF6EE
-  amber:       #E8B04B  (tertiary accent — sparing)
+  canvas:      #FFFFFF  (page bg — pure white)
+  surface:     #FAFAFA  (cards, section alt)
+  surface-2:   #F5F5F5  (subtle section bg)
+  ink:         #111827  (headings — near black)
+  body:        #374151  (paragraphs)
+  muted:       #6B7280  (labels, eyebrows)
+  accent:      #0F4394  (primary — deep blue, serious)
+  accent-hover: #1e3a8a  (accent hover)
+  hairline:    #E5E7EB  (borders)
+  dark:        #111827  (dark sections)
+  on-dark:     #F9FAFB
+  success:     #10B981  (green — for Mochi wins in benchmarks)
+  warning:     #F59E0B  (amber)
 
 typography:
-  display:  "Fraunces", serif — 72-120px, weight 400-600, tight tracking
-  heading:  "Fraunces", serif — 36-56px
-  body:     "Inter", sans — 16-18px, line-height 1.7
+  display:  "Inter", system-ui — 48-72px, weight 700-800, tight tracking
+  heading:  "Inter", system-ui — 28-42px, weight 600-700
+  body:     "Inter", system-ui — 16-18px, line-height 1.7
   mono:     "JetBrains Mono", monospace — 13-14px, eyebrows, stats, code
-  eyebrow:  11px, uppercase, letter-spacing 0.14em, mono
+  eyebrow:  12px, uppercase, letter-spacing 0.12em, mono
 
-spacing: 8px base scale — sections 120px apart, cards 24px, text blocks 16px
-radius:  16px cards, 999px pills/buttons, 8px code blocks
-shadow:  0 1px 2px rgba(42,30,24,.04), 0 8px 32px rgba(42,30,24,.06)
+spacing: 8px base scale — sections 100-140px apart, cards 24px, text blocks 16px
+radius:  10px cards, 6px inputs, 999px pills
+shadow:  0 1px 3px rgba(17,24,39,.08), 0 4px 6px rgba(17,24,39,.12)
 
 ## Layout Principles
-1. Max content width: 1120px (not 1240 — tighter = more premium)
-2. Sections: generous 120px vertical padding, hairline dividers between
-3. Cards: white surface, 1px hairline border, 16px radius, NO shadow on rest, soft shadow on hover
-4. Dark sections: full-bleed #2A1E18, cream text, pink accents
-5. Grid: 12-col mental model, 2-3 col card layouts, never more than 4 stats in a row
-6. Mobile-first: stack everything below 768px
+1. Max content width: 1120px
+2. Sections: 100-140px vertical padding, hairline #E5E7EB dividers
+3. Cards: white surface, 1px hairline border, 10px radius, subtle shadow on hover
+4. Dark sections: #111827 bg, white text, blue accent
+5. Grid: clean, asymmetric when interesting, never more than 4 stats in a row
+6. Mobile-first: stack everything below 768px, font sizes clamp
 
-## Animation System (reactbits-inspired, all CSS/JS no deps)
-Entrance (on scroll into view):
-  - SplitText: per-char staggered rise, 40ms between chars, cubic-bezier(.22,1,.36,1)
-  - BlurIn: opacity 0→1 + blur(8px)→0, 600ms
-  - SlideUp: translateY(40px)→0, opacity, 700ms
-  - ScaleIn: scale(.94)→1, opacity, 500ms
-  - StaggerGroup: children cascade with 80ms delay each
-Scroll-linked:
-  - ParallaxY: element translates at 0.6× scroll speed
-  - ProgressBar: 2px pink bar at very top, scaleX tracks scroll
-Hover:
-  - Lift: translateY(-4px) + shadow, 250ms
-  - Magnetic: button drifts toward cursor (strength 0.25)
-  - Glow: box-shadow pink halo
-Continuous:
-  - Marquee2: infinite scroll, 28s loop, seamless
-  - Counter: number counts up on view, 1.4s easeOutQuart
+## Animation System (restrained, purposeful)
+Motion serves the content, not decoration. Two classes:
+1. **Entrance**: subtle slide-up + fade on scroll (40px translate, 600ms, ease-out)
+2. **Data**: bar-width growth on scroll for benchmarks, number count-up for stats
+No floating blobs. No parallax drift. No cursor-following elements.
+Everything behind `prefers-reduced-motion`.
 
 ## Component Inventory
-Background:  Iridescence (WebGL, dimmed to opacity .28, cream veil)
-Nav:         Sticky, transparent→cream on scroll, active = pink underline (not pill)
-Hero:        Full-viewport, giant serif MOCHI, typewriter subtitle, 2 CTAs,
-             stats ticker pinned to bottom edge (frosted blur, mono text, scrolling right)
-Stats:       4-up grid, white cards, hairline borders, count-up numbers, mono labels
-Manifesto:   2-col (text left, mascot right), serif pull-quote, orbit-ring mascot
-Flow:        5 numbered steps, horizontal rule dividers, hover: number turns pink
-Terminal:    Dark card, macOS chrome dots, syntax-colored output, typing animation on view
-Benchmark:   Horizontal bar chart, animated width, pink for Mochi, gray for others
-Features:    3-up cards, icon + title + body, hover lift
-Repo:        Embedded file browser, collapsible tree, syntax highlighting
-Coda:        Dark section, giant serif "SMALL IS THE FEATURE", 2 CTAs
-Footer:      Minimal, hairline top border, mono copyright + links
+Background:  Clean white — NO shader, NO gradient sky. Optional: subtle static noise texture (0.5% opacity).
+Nav:         Sticky, white → hairline bottom border on scroll. Active = blue underline.
+Hero:        Full-viewport, giant display headline, 16px mono eyebrow, 2 CTAs,
+             stats strip pinned below the fold (mono, clean).
+Stats:       4-up grid, clean cards, count-up numbers, mono labels.
+Manifesto:   2-col (text left, terminal screenshot right).
+Flow:        5 numbered steps, vertical rules, clean.
+Terminal:    Real macOS-style terminal, syntax colors, typing animation.
+Benchmark:   Horizontal bar chart, animated width, blue for Mochi, gray for others.
+Features:    3-up cards, no emoji, icon + title + body.
+Repo:        Clean file browser, collapsible tree.
+Coda:        Clean dark section, simple headline, 2 CTAs.
+Footer:      Minimal, hairline top border, clean links.
 
 ## Page Structure (single scroll)
 1. Nav (sticky)
 2. Hero (100vh)
-3. Stats ticker (pinned to hero bottom)
-4. Receipts (4-up stat cards)
-5. Manifesto (2-col)
-6. Flow (5 steps)
-7. Terminal demo (dark card)
-8. Features (3-up)
-9. Benchmarks (bar chart)
-10. Repo browser
-11. Coda (dark)
-12. Footer
+3. Stats (4-up)
+4. Manifesto (2-col)
+5. Flow (5 steps)
+6. Terminal demo
+7. Features (3-up)
+8. Benchmarks (bar chart)
+9. Repo browser
+10. Coda (dark)
+11. Footer
 
 ## Quality Bar
-- Every scroll triggers at least one animation
-- Text is always readable (text-shadow halo over shader)
+- Motion is restrained and purposeful
+- Text is always readable (proper contrast, no overlays)
 - No element is >2 levels deep in z-index
-- No layout shifts after load (reserve space for all animations)
-- Mobile: every section stacks, font sizes clamp, ticker stays pinned
+- No layout shifts after load
+- Mobile: every section stacks, font sizes clamp
+- No emoji in feature cards or any content
+- No glassmorphism, no glowing orb blobs, no dreamlike skies

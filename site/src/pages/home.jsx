@@ -59,61 +59,25 @@ const FLOW_STEPS = [
   { title: 'Ship it', desc: 'Approved code is written to disk with full git integration. One command to commit and push.' },
 ];
 
-function SkyBackground() {
+function BackgroundDecor() {
   return (
-    <div className="sky-bg" aria-hidden="true">
-      <div className="sky-glow sky-glow-1" />
-      <div className="sky-glow sky-glow-2" />
-      <div className="sky-glow sky-glow-3" />
-      <div className="sky-glow sky-glow-4" />
-      {/* Cloud layers */}
-      <div className="cloud-layer cloud-back">
-        <svg viewBox="0 0 1440 200" preserveAspectRatio="none" style={{ width: '100%', height: '100%' }}>
-          <path d="M0,120 C200,80 400,140 600,110 C800,80 1000,130 1200,100 C1300,90 1400,110 1440,100 L1440,200 L0,200 Z" fill="rgba(255,255,255,.15)" />
-          <path d="M0,150 C300,120 500,170 700,140 C900,110 1100,160 1300,130 C1380,120 1420,140 1440,130 L1440,200 L0,200 Z" fill="rgba(255,255,255,.1)" />
-        </svg>
-      </div>
-      <div className="cloud-layer cloud-mid">
-        <svg viewBox="0 0 1440 200" preserveAspectRatio="none" style={{ width: '100%', height: '100%' }}>
-          <ellipse cx="200" cy="160" rx="150" ry="40" fill="rgba(255,255,255,.2)" />
-          <ellipse cx="500" cy="170" rx="180" ry="35" fill="rgba(255,255,255,.18)" />
-          <ellipse cx="800" cy="155" rx="160" ry="42" fill="rgba(255,255,255,.22)" />
-          <ellipse cx="1100" cy="165" rx="170" ry="38" fill="rgba(255,255,255,.2)" />
-          <ellipse cx="1350" cy="160" rx="140" ry="35" fill="rgba(255,255,255,.18)" />
-        </svg>
-      </div>
-      <div className="cloud-layer cloud-front">
-        <svg viewBox="0 0 1440 200" preserveAspectRatio="none" style={{ width: '100%', height: '100%' }}>
-          <ellipse cx="100" cy="180" rx="120" ry="30" fill="rgba(255,255,255,.35)" />
-          <ellipse cx="350" cy="185" rx="140" ry="28" fill="rgba(255,255,255,.32)" />
-          <ellipse cx="600" cy="175" rx="130" ry="32" fill="rgba(255,255,255,.38)" />
-          <ellipse cx="850" cy="182" rx="150" ry="30" fill="rgba(255,255,255,.35)" />
-          <ellipse cx="1100" cy="178" rx="135" ry="32" fill="rgba(255,255,255,.38)" />
-          <ellipse cx="1350" cy="183" rx="125" ry="28" fill="rgba(255,255,255,.35)" />
-        </svg>
-      </div>
-    </div>
-  );
-}
-
-function FloatingDecorations() {
-  return (
-    <div className="deco-layer" aria-hidden="true">
-      <div className="deco deco-star" style={{ top: '15%', left: '8%', animationDelay: '0s' }} />
-      <div className="deco deco-star cyan" style={{ top: '25%', right: '12%', animationDelay: '1s' }} />
-      <div className="deco deco-star purple" style={{ top: '60%', left: '5%', animationDelay: '2s' }} />
-      <div className="deco deco-sparkle" style={{ top: '10%', right: '30%', animationDelay: '.5s' }} />
-      <div className="deco deco-sparkle" style={{ top: '40%', left: '15%', animationDelay: '1.5s' }} />
-      <div className="deco deco-sparkle" style={{ top: '70%', right: '8%', animationDelay: '2.5s' }} />
-      <div className="deco deco-bubble" style={{ top: '30%', left: '3%', animationDelay: '0s' }} />
-      <div className="deco deco-bubble small" style={{ top: '50%', right: '5%', animationDelay: '1.5s' }} />
-      <div className="deco deco-bubble large" style={{ top: '65%', left: '10%', animationDelay: '3s' }} />
-      <div className="deco deco-bubble small" style={{ top: '20%', right: '25%', animationDelay: '2s' }} />
-      <div className="deco deco-sprinkle pink" style={{ top: '35%', left: '20%', animationDelay: '0s' }} />
-      <div className="deco deco-sprinkle yellow" style={{ top: '55%', right: '18%', animationDelay: '1s' }} />
-      <div className="deco deco-sprinkle cyan" style={{ top: '45%', left: '8%', animationDelay: '2s' }} />
-      <div className="deco deco-sprinkle purple" style={{ top: '25%', right: '8%', animationDelay: '.5s' }} />
-      <div className="deco deco-sprinkle pink" style={{ top: '75%', right: '30%', animationDelay: '1.5s' }} />
+    <div className="bg-decor" aria-hidden="true">
+      <div className="bg-blob bg-blob-1" />
+      <div className="bg-blob bg-blob-2" />
+      <div className="bg-blob bg-blob-3" />
+      <div className="bg-dot bg-dot-1" />
+      <div className="bg-dot bg-dot-2" />
+      <div className="bg-dot bg-dot-3" />
+      <div className="bg-dot bg-dot-4" />
+      <div className="bg-sparkle bg-sparkle-1" />
+      <div className="bg-sparkle bg-sparkle-2" />
+      <div className="bg-sparkle bg-sparkle-3" />
+      <div className="bg-sparkle bg-sparkle-4" />
+      <div className="bg-sparkle bg-sparkle-5" />
+      <div className="bg-sparkle bg-sparkle-6" />
+      <div className="bg-wave bg-wave-1" />
+      <div className="bg-wave bg-wave-2" />
+      <div className="bg-wave bg-wave-3" />
     </div>
   );
 }
@@ -123,17 +87,27 @@ function HeroSection() {
     <section className="hero" id="hero">
       <div className="hero-copy">
         <AnimatedContent direction="bottom" delay={0.1}>
-          <div className="hero-eyebrow">Minimal Orchestrative Coding Intelligence</div>
+          <div className="hero-eyebrow">
+            <span className="sparkle" />
+            THE NEXT GENERATION AI CODING AGENT
+          </div>
         </AnimatedContent>
         <SplitText
-          text="A SOFTER KIND OF INTELLIGENCE."
+          text="A Softer Kind of"
           className="hero-title"
           as="h1"
           delay={0.3}
           stagger={0.02}
         />
+        <SplitText
+          text="Intelligence."
+          className="hero-title accent-title"
+          as="h1"
+          delay={0.5}
+          stagger={0.02}
+        />
         <BlurText
-          text="A Minimal Orchestrative Coding Intelligence, faster and better than your premium coding agents, highly capable of heavy task while being resource friendly."
+          text="A minimal, powerful, and friendly AI coding intelligence. Faster, smarter, and better than your premium coding agents, built to be lightweight, reliable, and resource friendly."
           className="hero-sub"
           delay={0.8}
           stagger={0.015}
@@ -143,7 +117,7 @@ function HeroSection() {
             <Magnetic strength={0.25}>
               <a href="https://github.com/xanstomper/mochi/releases" className="btn btn-primary" target="_blank" rel="noopener">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7v10c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-10-5zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V13H5V9.3l7-3.11v8.8z"/></svg>
-                DOWNLOAD
+                Download
               </a>
             </Magnetic>
             <Magnetic strength={0.2}>
@@ -156,19 +130,16 @@ function HeroSection() {
       </div>
       <div className="hero-mascot">
         <AnimatedContent direction="right" delay={0.5} duration={1}>
-          <div className="mascot-bubble">
-            <div className="mascot-leaf" />
-            <div className="mascot-face">
-              <div className="mascot-eyes">
-                <div className="mascot-eye" />
-                <div className="mascot-eye" />
-              </div>
-              <div className="mascot-cheeks">
-                <div className="mascot-cheek" />
-                <div className="mascot-cheek" />
-              </div>
-            </div>
-            <div className="mascot-platform" />
+          <div className="mascot-wrap">
+            <div className="mascot-blob mascot-blob-1" />
+            <div className="mascot-blob mascot-blob-2" />
+            <div className="mascot-ring mascot-ring-1" />
+            <div className="mascot-ring mascot-ring-2" />
+            <Mochi size={280} mood="happy" />
+            <div className="mascot-shadow" />
+            <div className="mascot-sparkle mascot-sparkle-1" />
+            <div className="mascot-sparkle mascot-sparkle-2" />
+            <div className="mascot-sparkle mascot-sparkle-3" />
           </div>
         </AnimatedContent>
       </div>
@@ -196,39 +167,51 @@ function StatsTicker() {
 
 function CapabilitiesSection() {
   return (
-    <section className="cream-section" id="capabilities">
-      <div style={{ maxWidth: 1120, margin: '0 auto', padding: '80px 5vw' }}>
-        <AnimatedContent direction="bottom">
-          <div className="section-tag">SECTION 02 / WHY MOCHI?</div>
-        </AnimatedContent>
-        <ScrollFloat moveDistance={40}>
-          <SplitText
-            text="AGENTIC CAPABILITIES"
-            className="section-title"
-            as="h2"
-            delay={0.2}
-            stagger={0.03}
-          />
-        </ScrollFloat>
-        <BlurText
-          text="Six reasons why developers switch to Mochi and never look back."
-          className="section-desc"
-          delay={0.6}
-          stagger={0.02}
-        />
-        <div className="caps-grid">
-          {CAPABILITIES.map((cap, i) => (
-            <AnimatedContent key={cap.title} direction="bottom" delay={i * 0.1}>
-              <TiltCard max={6}>
-                <div className="cap-card">
-                  <div className="cap-icon">{cap.icon}</div>
-                  <div className="cap-title">{cap.title}</div>
-                  <div className="cap-desc">{cap.desc}</div>
-                </div>
-              </TiltCard>
-            </AnimatedContent>
-          ))}
+    <section className="section" id="capabilities">
+      <AnimatedContent direction="bottom">
+        <div className="section-tag">
+          <span className="sparkle" />
+          SECTION 02 / WHY MOCHI?
         </div>
+      </AnimatedContent>
+      <ScrollFloat moveDistance={40}>
+        <SplitText
+          text="AGENTIC"
+          className="section-title"
+          as="h2"
+          delay={0.2}
+          stagger={0.03}
+        />
+        <SplitText
+          text="CAPABILITIES"
+          className="section-title accent-title"
+          as="h2"
+          delay={0.3}
+          stagger={0.03}
+        />
+      </ScrollFloat>
+      <svg className="section-arrow" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <line x1="7" y1="17" x2="17" y2="7"></line>
+        <polyline points="7 7 17 7 17 17"></polyline>
+      </svg>
+      <BlurText
+        text="Six reasons why developers switch to Mochi and never look back."
+        className="section-desc"
+        delay={0.6}
+        stagger={0.02}
+      />
+      <div className="caps-grid">
+        {CAPABILITIES.map((cap, i) => (
+          <AnimatedContent key={cap.title} direction="bottom" delay={i * 0.1}>
+            <TiltCard max={6}>
+              <div className="cap-card">
+                <div className="cap-icon">{cap.icon}</div>
+                <div className="cap-title">{cap.title}</div>
+                <div className="cap-desc">{cap.desc}</div>
+              </div>
+            </TiltCard>
+          </AnimatedContent>
+        ))}
       </div>
     </section>
   );
@@ -236,18 +219,17 @@ function CapabilitiesSection() {
 
 function StatsSection() {
   return (
-    <section id="stats" style={{ maxWidth: 1120, margin: '0 auto', padding: '60px 5vw' }}>
+    <section className="section" id="stats">
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 20 }}>
         {STATS.map(([val, label], i) => (
           <AnimatedContent key={label} direction="bottom" delay={i * 0.1}>
             <div style={{
-              background: 'rgba(255,255,255,.06)', borderRadius: 16, padding: '28px 24px',
-              border: '1px solid rgba(255,255,255,.1)', textAlign: 'center',
-              backdropFilter: 'blur(10px)',
+              background: 'var(--white)', borderRadius: 16, padding: '28px 24px',
+              border: '1px solid var(--hairline-ink)', textAlign: 'center',
             }}>
               <div style={{
-                fontFamily: 'var(--font-display)', fontSize: 36, fontWeight: 700,
-                color: 'var(--white)', marginBottom: 8,
+                fontFamily: 'var(--font-display)', fontSize: 36, fontWeight: 800,
+                color: 'var(--ink)', marginBottom: 8,
               }}>
                 {val.includes('.') ? (
                   <CountUp end={parseFloat(val)} decimals={1} suffix={val.replace(/[0-9.]/g, '')} />
@@ -257,7 +239,7 @@ function StatsSection() {
               </div>
               <div style={{
                 fontFamily: 'var(--font-mono)', fontSize: 11, textTransform: 'uppercase',
-                letterSpacing: '.1em', color: 'rgba(255,255,255,.5)',
+                letterSpacing: '.1em', color: 'var(--ink-soft)',
               }}>
                 {label}
               </div>
@@ -271,11 +253,14 @@ function StatsSection() {
 
 function FlowSection() {
   return (
-    <section id="flow" style={{ maxWidth: 720, margin: '0 auto', padding: '60px 5vw' }}>
+    <section className="section" id="flow" style={{ maxWidth: 720 }}>
       <AnimatedContent direction="bottom">
-        <div className="hero-eyebrow">HOW IT WORKS</div>
+        <div className="section-tag">
+          <span className="sparkle" />
+          HOW IT WORKS
+        </div>
       </AnimatedContent>
-      <SplitText text="From prompt to product." className="hero-title" as="h2" style={{ fontSize: 36 }} delay={0.2} stagger={0.02} />
+      <SplitText text="From prompt to product." className="section-title" as="h2" style={{ fontSize: 36 }} delay={0.2} stagger={0.02} />
       <div style={{ marginTop: 40 }}>
         {FLOW_STEPS.map((step, i) => (
           <AnimatedContent key={step.title} direction="left" delay={i * 0.15}>
@@ -295,11 +280,14 @@ function FlowSection() {
 
 function TerminalSection() {
   return (
-    <section id="terminal" style={{ maxWidth: 860, margin: '0 auto', padding: '60px 5vw' }}>
+    <section className="section" id="terminal" style={{ maxWidth: 860 }}>
       <AnimatedContent direction="bottom">
-        <div className="hero-eyebrow">LIVE DEMO</div>
+        <div className="section-tag">
+          <span className="sparkle" />
+          LIVE DEMO
+        </div>
       </AnimatedContent>
-      <SplitText text="Watch it think." className="hero-title" as="h2" style={{ fontSize: 36 }} delay={0.2} stagger={0.02} />
+      <SplitText text="Watch it think." className="section-title" as="h2" style={{ fontSize: 36 }} delay={0.2} stagger={0.02} />
       <AnimatedContent direction="bottom" delay={0.4}>
         <div style={{ marginTop: 32 }}>
           <GooeyBorder>
@@ -353,7 +341,7 @@ function TerminalSection() {
 
 function BenchmarksSection() {
   const memData = [
-    { label: 'Mochi', value: 18.2, color: 'pink', display: '18.2 MB' },
+    { label: 'Mochi', value: 18.2, color: 'purple', display: '18.2 MB' },
     { label: 'jcode', value: 27.8, display: '27.8 MB' },
     { label: 'Pi', value: 34.4, display: '34.4 MB' },
     { label: 'Codex CLI', value: 140.0, display: '140 MB' },
@@ -362,7 +350,7 @@ function BenchmarksSection() {
     { label: 'Claude Code', value: 386.6, display: '386.6 MB' },
   ];
   const ttfiData = [
-    { label: 'Mochi', value: 38.2, color: 'pink', display: '38.2 ms' },
+    { label: 'Mochi', value: 38.2, color: 'purple', display: '38.2 ms' },
     { label: 'jcode', value: 45.4, display: '45.4 ms' },
     { label: 'Pi', value: 52.1, display: '52.1 ms' },
     { label: 'Codex CLI', value: 93.0, display: '93 ms' },
@@ -372,15 +360,18 @@ function BenchmarksSection() {
   ];
 
   return (
-    <section id="benchmarks" style={{ maxWidth: 860, margin: '0 auto', padding: '60px 5vw' }}>
+    <section className="section" id="benchmarks" style={{ maxWidth: 860 }}>
       <AnimatedContent direction="bottom">
-        <div className="hero-eyebrow">RECEIPTS, NOT VIBES</div>
+        <div className="section-tag">
+          <span className="sparkle" />
+          RECEIPTS, NOT VIBES
+        </div>
       </AnimatedContent>
-      <SplitText text="Measured. Verified. Repeated." className="hero-title" as="h2" style={{ fontSize: 36 }} delay={0.2} stagger={0.02} />
+      <SplitText text="Measured. Verified. Repeated." className="section-title" as="h2" style={{ fontSize: 36 }} delay={0.2} stagger={0.02} />
       <div style={{ marginTop: 40, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 40 }}>
         <AnimatedContent direction="left" delay={0.3}>
           <div>
-            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'rgba(255,255,255,.5)', marginBottom: 16, textTransform: 'uppercase', letterSpacing: '.1em' }}>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--ink-soft)', marginBottom: 16, textTransform: 'uppercase', letterSpacing: '.1em' }}>
               Resident Memory (MB)
             </div>
             <BenchChart data={memData} max={400} />
@@ -388,7 +379,7 @@ function BenchmarksSection() {
         </AnimatedContent>
         <AnimatedContent direction="right" delay={0.4}>
           <div>
-            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'rgba(255,255,255,.5)', marginBottom: 16, textTransform: 'uppercase', letterSpacing: '.1em' }}>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--ink-soft)', marginBottom: 16, textTransform: 'uppercase', letterSpacing: '.1em' }}>
               Time to First Input (ms)
             </div>
             <BenchChart data={ttfiData} max={200} />
@@ -401,10 +392,7 @@ function BenchmarksSection() {
 
 function CodaSection() {
   return (
-    <section id="coda" style={{
-      padding: '120px 5vw', textAlign: 'center',
-      background: 'linear-gradient(180deg, transparent, rgba(26,26,110,.3))',
-    }}>
+    <section className="coda" id="coda">
       <AnimatedContent direction="bottom">
         <ShinyText>
           <SplitText
@@ -438,8 +426,7 @@ export default function Home() {
   return (
     <>
       <ScrollProgress />
-      <SkyBackground />
-      <FloatingDecorations />
+      <BackgroundDecor />
       <HeroSection />
       <CapabilitiesSection />
       <StatsSection />
