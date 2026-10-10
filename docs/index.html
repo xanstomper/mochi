@@ -3,129 +3,387 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Mochi — Minimal Orchestrative Coding Harness Intelligence</title>
-<meta name="description" content="Mochi — Minimal Orchestrative Coding Harness Intelligence. An autonomous coding agent for the terminal: Rust core, TypeScript frontend, goals, task DAGs, teams, and a persistent daemon.">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍡</text></svg>">
+<title>Mochi — The Autonomous Coding Agent for the Terminal</title>
+<meta name="description" content="Mochi — Minimal Orchestrative Coding Harness Intelligence. A minimal, fast, autonomous coding agent for the terminal: goals, task DAGs, agent teams, a persistent daemon, and deep run traces on a zero-dependency Rust core.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23E8A04C'/><path d='M9 23V9h2.6l4.4 7 4.4-7H23v14h-2.5v-9.4L16 20.4 11.5 13.6V23H9z' fill='%23131313'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  :root{
-    --bg:#0b0d10; --bg2:#101317; --panel:#14181d; --border:#232a32;
-    --text:#e6eaee; --muted:#8b95a1; --accent:#e8a04c; --accent2:#f0c48a;
-    --green:#5fce8b; --mono:'SF Mono',ui-monospace,Menlo,Consolas,monospace;
-  }
-  *{margin:0;padding:0;box-sizing:border-box}
-  body{background:var(--bg);color:var(--text);font-family:Inter,-apple-system,'Segoe UI',sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased}
-  a{color:var(--accent2);text-decoration:none}
-  a:hover{text-decoration:underline}
-  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
-  nav{position:sticky;top:0;background:rgba(11,13,16,.85);backdrop-filter:blur(10px);border-bottom:1px solid var(--border);z-index:10}
-  nav .wrap{display:flex;align-items:center;justify-content:space-between;height:60px}
-  .logo{font-family:var(--mono);font-weight:700;font-size:18px;color:var(--text)}
-  .logo span{color:var(--accent)}
-  nav .links{display:flex;gap:22px;font-size:14px}
-  nav .links a{color:var(--muted)}
-  nav .links a:hover{color:var(--text);text-decoration:none}
-  .btn{display:inline-block;background:var(--accent);color:#14181d;font-weight:600;padding:9px 18px;border-radius:8px;font-size:14px}
-  .btn:hover{text-decoration:none;background:var(--accent2)}
-  .btn.ghost{background:transparent;color:var(--text);border:1px solid var(--border)}
-  .btn.ghost:hover{border-color:var(--accent)}
-  header{padding:96px 0 72px;text-align:center;background:radial-gradient(ellipse 60% 50% at 50% 0%,rgba(232,160,76,.09),transparent)}
-  header h1{font-size:52px;font-weight:800;letter-spacing:-1px;line-height:1.15}
-  header h1 em{font-style:normal;color:var(--accent)}
-  header p.sub{color:var(--muted);font-size:19px;max-width:680px;margin:18px auto 32px}
-  pre{font-family:var(--mono);background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:18px 22px;text-align:left;max-width:640px;margin:0 auto;font-size:14px;color:#c9d3dc;overflow-x:auto}
-  pre .c{color:var(--muted)} pre .p{color:var(--accent)}
-  section{padding:64px 0;border-top:1px solid var(--border)}
-  h2{font-size:28px;font-weight:700;margin-bottom:8px}
-  .lead{color:var(--muted);margin-bottom:36px;font-size:16px}
-  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px}
-  .card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:22px}
-  .card h3{font-size:16px;margin-bottom:8px}
-  .card p{color:var(--muted);font-size:14px}
-  .card .tag{font-family:var(--mono);font-size:11px;color:var(--accent);text-transform:uppercase;letter-spacing:1px}
-  table{width:100%;border-collapse:collapse;font-size:14px}
-  th,td{padding:10px 14px;text-align:left;border-bottom:1px solid var(--border)}
-  th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.5px}
-  td.m{font-family:var(--mono);color:var(--text)}
-  td.best{color:var(--green);font-weight:600}
-  td{color:var(--muted)}
-  .note{font-size:12px;color:var(--muted);margin-top:12px}
-  code{font-family:var(--mono);background:var(--panel);border:1px solid var(--border);border-radius:5px;padding:1px 6px;font-size:.9em;color:var(--accent2)}
-  footer{padding:40px 0;border-top:1px solid var(--border);color:var(--muted);font-size:13px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px}
-  @media(max-width:640px){header h1{font-size:36px}}
+:root{
+  --bg:#0A0B0E; --bg2:#0F1116; --panel:#13161C; --panel2:#171B22;
+  --border:#1E242D; --border2:#2A323E;
+  --text:#EDF0F4; --muted:#98A2B0; --faint:#5C6673;
+  --accent:#E8A04C; --accent-soft:rgba(232,160,76,.12); --accent2:#F2C58E;
+  --green:#4ADE80; --red:#F87171;
+  --sans:'Inter',-apple-system,'Segoe UI',sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,monospace;
+  --rad:14px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);line-height:1.65;font-size:16px;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+::selection{background:var(--accent);color:#131313}
+a{color:inherit;text-decoration:none}
+.wrap{max-width:1120px;margin:0 auto;padding:0 28px}
+
+/* ---------- reveal animation ---------- */
+.rv{opacity:0;transform:translateY(22px);transition:opacity .7s cubic-bezier(.22,.6,.2,1),transform .7s cubic-bezier(.22,.6,.2,1)}
+.rv.in{opacity:1;transform:none}
+.rv.d1{transition-delay:.08s}.rv.d2{transition-delay:.16s}.rv.d3{transition-delay:.24s}.rv.d4{transition-delay:.32s}.rv.d5{transition-delay:.4s}
+
+/* ---------- nav ---------- */
+nav{position:fixed;top:0;left:0;right:0;z-index:100;border-bottom:1px solid transparent;transition:background .3s,border-color .3s}
+nav.scrolled{background:rgba(10,11,14,.82);backdrop-filter:blur(14px);border-color:var(--border)}
+nav .wrap{display:flex;align-items:center;justify-content:space-between;height:64px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:17px;letter-spacing:-.02em}
+.brand svg{display:block}
+.navlinks{display:flex;gap:30px;font-size:14px;font-weight:500;color:var(--muted)}
+.navlinks a{transition:color .2s}
+.navlinks a:hover{color:var(--text)}
+.btn{display:inline-flex;align-items:center;gap:8px;background:var(--accent);color:#131313;font-weight:600;font-size:14px;padding:9px 18px;border-radius:9px;transition:transform .15s,background .2s}
+.btn:hover{background:var(--accent2);transform:translateY(-1px)}
+.btn.ghost{background:transparent;color:var(--text);border:1px solid var(--border2)}
+.btn.ghost:hover{border-color:var(--accent);background:transparent}
+.btn.sm{padding:7px 14px;font-size:13px}
+
+/* ---------- hero ---------- */
+.hero{position:relative;padding:170px 0 110px;text-align:center}
+.hero::before{content:"";position:absolute;inset:0;background:
+  radial-gradient(ellipse 55% 42% at 50% -4%,rgba(232,160,76,.10),transparent 70%),
+  radial-gradient(ellipse 40% 30% at 78% 12%,rgba(74,222,128,.04),transparent 70%);pointer-events:none}
+.hero::after{content:"";position:absolute;inset:0;background-image:linear-gradient(var(--border) 1px,transparent 1px),linear-gradient(90deg,var(--border) 1px,transparent 1px);background-size:56px 56px;opacity:.16;mask-image:radial-gradient(ellipse 62% 55% at 50% 0%,#000 30%,transparent 75%);pointer-events:none}
+.hero .wrap{position:relative}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12.5px;color:var(--accent);border:1px solid rgba(232,160,76,.3);background:var(--accent-soft);padding:6px 14px;border-radius:99px;margin-bottom:26px}
+.eyebrow .dot{width:6px;height:6px;border-radius:50%;background:var(--accent);animation:pulse 2.2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.hero h1{font-size:clamp(40px,6.4vw,68px);font-weight:800;letter-spacing:-.035em;line-height:1.06;max-width:840px;margin:0 auto}
+.hero h1 .grad{background:linear-gradient(100deg,var(--accent) 10%,var(--accent2) 55%,var(--accent) 90%);-webkit-background-clip:text;background-clip:text;color:transparent}
+.hero p.sub{color:var(--muted);font-size:19px;max-width:660px;margin:24px auto 0}
+.hero .cta{display:flex;gap:14px;justify-content:center;margin-top:38px;flex-wrap:wrap}
+.term{max-width:680px;margin:56px auto 0;text-align:left;background:var(--panel);border:1px solid var(--border2);border-radius:var(--rad);overflow:hidden;box-shadow:0 24px 60px -18px rgba(0,0,0,.6);animation:float 7s ease-in-out infinite}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}
+.term .bar{display:flex;align-items:center;gap:7px;padding:12px 16px;border-bottom:1px solid var(--border)}
+.term .bar i{width:11px;height:11px;border-radius:50%;background:#2A323E}
+.term .bar i:first-child{background:#F87171}.term .bar i:nth-child(2){background:#FBBF24}.term .bar i:nth-child(3){background:#34D399}
+.term .bar span{font-family:var(--mono);font-size:12px;color:var(--faint);margin-left:8px}
+.term .body{font-family:var(--mono);font-size:13.5px;line-height:1.9;padding:20px 22px;color:#C4CDD7;min-height:196px}
+.term .p{color:var(--accent)}
+.term .c{color:var(--faint)}
+.term .g{color:var(--green)}
+.cursor{display:inline-block;width:8px;height:17px;background:var(--accent);vertical-align:-3px;animation:blink 1.05s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+
+/* ---------- section chrome ---------- */
+section{padding:96px 0;border-top:1px solid var(--border)}
+.kicker{font-family:var(--mono);font-size:12px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:var(--accent);margin-bottom:14px}
+h2{font-size:clamp(28px,4vw,40px);font-weight:750;letter-spacing:-.03em;line-height:1.15}
+.lead{color:var(--muted);font-size:17px;max-width:640px;margin-top:14px}
+
+/* ---------- features ---------- */
+.fgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:52px}
+.fcard{background:var(--bg2);border:1px solid var(--border);border-radius:var(--rad);padding:26px 24px;transition:border-color .25s,transform .25s,background .25s;position:relative;overflow:hidden}
+.fcard:hover{border-color:rgba(232,160,76,.4);transform:translateY(-3px);background:var(--panel)}
+.fcard::before{content:"";position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,rgba(232,160,76,.5),transparent);opacity:0;transition:opacity .3s}
+.fcard:hover::before{opacity:1}
+.fcard .icon{width:38px;height:38px;border-radius:10px;background:var(--accent-soft);border:1px solid rgba(232,160,76,.25);display:flex;align-items:center;justify-content:center;margin-bottom:18px;color:var(--accent)}
+.fcard h3{font-size:16.5px;font-weight:650;margin-bottom:8px;letter-spacing:-.01em}
+.fcard p{color:var(--muted);font-size:14.5px}
+.fcard code{font-family:var(--mono);font-size:12.5px;background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:1px 6px;color:var(--accent2);white-space:nowrap}
+
+/* ---------- architecture ---------- */
+.arch{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:52px;align-items:stretch}
+.archbox{background:var(--bg2);border:1px solid var(--border);border-radius:var(--rad);padding:30px}
+.archbox h3{font-size:15px;font-weight:650;display:flex;align-items:center;gap:10px;margin-bottom:18px}
+.archbox .chip{font-family:var(--mono);font-size:11px;font-weight:600;padding:3px 10px;border-radius:99px}
+.chip.rs{background:rgba(74,222,128,.1);color:var(--green);border:1px solid rgba(74,222,128,.25)}
+.chip.ts{background:rgba(96,165,250,.1);color:#7CB3F5;border:1px solid rgba(96,165,250,.25)}
+.archbox ul{list-style:none}
+.archbox li{color:var(--muted);font-size:14.5px;padding:9px 0;border-bottom:1px solid var(--border);display:flex;gap:10px}
+.archbox li:last-child{border:none}
+.archbox li::before{content:"—";color:var(--faint);flex-shrink:0}
+.archbox li b{color:var(--text);font-weight:600}
+
+/* ---------- benchmarks ---------- */
+.bench{margin-top:56px;display:flex;flex-direction:column;gap:34px}
+.benchblock h3{font-size:16px;font-weight:650;margin-bottom:6px}
+.benchblock .sub2{font-size:13px;color:var(--faint);font-family:var(--mono);margin-bottom:18px}
+.brow{display:grid;grid-template-columns:170px 1fr 92px;align-items:center;gap:14px;padding:7px 0}
+.brow .name{font-size:13.5px;color:var(--muted);font-weight:500}
+.brow .name.mochi{color:var(--text);font-weight:650}
+.brow .track{height:22px;background:var(--panel2);border-radius:6px;overflow:hidden;position:relative}
+.brow .fill{height:100%;border-radius:6px;background:var(--border2);width:0;transition:width 1.1s cubic-bezier(.22,.6,.2,1)}
+.brow.mochi .fill{background:linear-gradient(90deg,var(--accent),var(--accent2))}
+.brow .val{font-family:var(--mono);font-size:13px;color:var(--muted);text-align:right}
+.brow.mochi .val{color:var(--accent);font-weight:600}
+.brow.first .val::after{content:" [1st]";color:var(--green);font-size:11px}
+.legend{font-size:12.5px;color:var(--faint);margin-top:6px}
+.bench-note{margin-top:44px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rad);padding:24px 26px}
+.bench-note h4{font-size:14.5px;font-weight:650;margin-bottom:10px;color:var(--accent)}
+.bench-note ul{list-style:none;display:grid;grid-template-columns:1fr 1fr;gap:10px 32px}
+.bench-note li{font-size:14px;color:var(--muted);display:flex;gap:10px}
+.bench-note li::before{content:"◆";color:var(--accent);font-size:9px;margin-top:5px}
+.bench-note li b{color:var(--text);font-weight:600}
+.method{font-size:12.5px;color:var(--faint);margin-top:22px;font-family:var(--mono)}
+.method a{color:var(--accent);border-bottom:1px solid rgba(232,160,76,.35)}
+
+/* ---------- docs ---------- */
+.dgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:52px}
+.dcard{background:var(--bg2);border:1px solid var(--border);border-radius:var(--rad);padding:24px;display:block;transition:border-color .25s,transform .25s}
+.dcard:hover{border-color:rgba(232,160,76,.4);transform:translateY(-3px)}
+.dcard .doc-tag{font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-bottom:12px;display:block}
+.dcard h3{font-size:15.5px;font-weight:650;margin-bottom:8px}
+.dcard p{font-size:13.5px;color:var(--muted)}
+.dcard .arrow{display:inline-block;margin-top:16px;font-size:13px;color:var(--faint);transition:color .2s,transform .2s}
+.dcard:hover .arrow{color:var(--accent);transform:translateX(4px)}
+
+/* ---------- why / comparison table ---------- */
+.why{display:grid;grid-template-columns:1.05fr 1fr;gap:60px;margin-top:52px;align-items:start}
+.whylist{display:flex;flex-direction:column;gap:0}
+.whyitem{padding:20px 0;border-bottom:1px solid var(--border)}
+.whyitem:first-child{padding-top:0}
+.whyitem:last-child{border:none}
+.whyitem h4{font-size:15.5px;font-weight:650;margin-bottom:6px;display:flex;gap:10px;align-items:baseline}
+.whyitem h4 span{font-family:var(--mono);font-size:12px;color:var(--accent)}
+.whyitem p{font-size:14.5px;color:var(--muted)}
+.tcaption{font-size:13px;color:var(--faint);margin-bottom:14px}
+.twrap{overflow-x:auto;border:1px solid var(--border);border-radius:var(--rad);background:var(--bg2)}
+table.cmp{width:100%;border-collapse:collapse;font-size:13.5px;min-width:520px}
+.cmp th,.cmp td{padding:12px 16px;text-align:left;border-bottom:1px solid var(--border)}
+.cmp tr:last-child td{border:none}
+.cmp th{font-size:11.5px;text-transform:uppercase;letter-spacing:.1em;color:var(--faint);font-weight:600;background:var(--panel)}
+.cmp td{color:var(--muted);font-family:var(--mono);font-size:12.5px}
+.cmp td:first-child{font-family:var(--sans);font-weight:600;color:var(--text);font-size:13.5px}
+.cmp tr.hl{background:var(--accent-soft)}
+.cmp tr.hl td{color:var(--accent);font-weight:600}
+.cmp tr.hl td:first-child{color:var(--text)}
+
+/* ---------- install ---------- */
+.install{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:52px}
+.icard{background:var(--panel);border:1px solid var(--border2);border-radius:var(--rad);overflow:hidden}
+.icard .ichead{padding:14px 18px;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:12px;color:var(--faint);display:flex;justify-content:space-between}
+.icard .ichead b{color:var(--text);font-weight:600}
+.icard pre{font-family:var(--mono);font-size:13px;line-height:2;padding:18px 20px;color:#C4CDD7;overflow-x:auto}
+.icard .p{color:var(--accent)}
+.icard .c{color:var(--faint)}
+.icard .g{color:var(--green)}
+
+/* ---------- footer ---------- */
+footer{border-top:1px solid var(--border);padding:56px 0 64px;background:var(--bg2)}
+.fgrid2{display:flex;justify-content:space-between;gap:40px;flex-wrap:wrap}
+.fbrand{max-width:320px}
+.fbrand .brand{margin-bottom:12px}
+.fbrand p{font-size:13.5px;color:var(--faint)}
+.fcol h5{font-size:12px;text-transform:uppercase;letter-spacing:.12em;color:var(--faint);margin-bottom:14px;font-weight:600}
+.fcol a{display:block;font-size:14px;color:var(--muted);padding:4px 0;transition:color .2s}
+.fcol a:hover{color:var(--accent)}
+.fbottom{display:flex;justify-content:space-between;margin-top:48px;padding-top:24px;border-top:1px solid var(--border);font-size:12.5px;color:var(--faint);flex-wrap:wrap;gap:10px}
+
+@media(max-width:920px){
+  .fgrid{grid-template-columns:repeat(2,1fr)}
+  .arch,.why,.install{grid-template-columns:1fr}
+  .dgrid{grid-template-columns:repeat(2,1fr)}
+  .bench-note ul{grid-template-columns:1fr}
+  .navlinks{display:none}
+}
+@media(max-width:600px){
+  .fgrid,.dgrid{grid-template-columns:1fr}
+  .brow{grid-template-columns:110px 1fr 78px}
+  section{padding:68px 0}
+  .hero{padding:130px 0 80px}
+}
 </style>
 </head>
 <body>
 
-<nav>
+<nav id="nav">
   <div class="wrap">
-    <a class="logo" href="#">mochi<span>.</span></a>
-    <div class="links">
+    <a class="brand" href="#top">
+      <svg width="24" height="24" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#E8A04C"/><path d="M9 23V9h2.6l4.4 7 4.4-7H23v14h-2.5v-9.4L16 20.4 11.5 13.6V23H9z" fill="#131313"/></svg>
+      mochi
+    </a>
+    <div class="navlinks">
       <a href="#features">Features</a>
+      <a href="#architecture">Architecture</a>
       <a href="#benchmarks">Benchmarks</a>
+      <a href="#why">Why Mochi</a>
       <a href="#docs">Docs</a>
-      <a href="https://github.com/xanstomper/mochi">GitHub</a>
     </div>
-    <a class="btn" href="#install">Get Started</a>
+    <a class="btn sm" href="#install">Get started</a>
   </div>
 </nav>
 
-<header class="wrap">
-  <h1><em>M</em>inimal <em>O</em>rchest�rative <em>C</em>oding <em>H</em>arness <em>I</em>ntelligence</h1>
-  <p class="sub"><strong style="color:var(--text)">Mochi</strong> is a minimal, autonomous coding agent for the terminal — goals, task DAGs, teams, a persistent daemon, and deep run traces on a zero-dependency Rust core.</p>
-  <pre><span class="c">$</span> npm install && npm run build
-<span class="c">$</span> <span class="p">mochi</span> "add a rate limiter to the auth service"</pre>
-  <p style="margin-top:28px">
-    <a class="btn" href="#install">Install</a>
-    <a class="btn ghost" href="https://github.com/xanstomper/mochi" style="margin-left:10px">View Source ↗</a>
-  </p>
+<header class="hero" id="top">
+  <div class="wrap">
+    <div class="eyebrow rv"><span class="dot"></span>v0.20 · Rust core · zero runtime dependencies</div>
+    <h1 class="rv d1">The autonomous coding agent<br>that runs on <span class="grad">18 megabytes</span>.</h1>
+    <p class="rv d2 sub">Mochi is a minimal, fast, autonomous coding agent for the terminal — goals, task DAGs, agent teams, a persistent daemon, and deep run traces, on a compiled zero-dependency Rust core with a TypeScript frontend.</p>
+    <div class="rv d3 cta">
+      <a class="btn" href="#install">Install Mochi</a>
+      <a class="btn ghost" href="https://github.com/xanstomper/mochi">Source on GitHub
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M7 17L17 7M9 7h8v8"/></svg>
+      </a>
+    </div>
+    <div class="term rv d4">
+      <div class="bar"><i></i><i></i><i></i><span>mochi — zsh</span></div>
+      <div class="body" id="typed"></div>
+    </div>
+  </div>
 </header>
 
 <section id="features">
   <div class="wrap">
-    <h2>Everything a harness needs. Nothing it doesn't.</h2>
-    <p class="lead">From-scratch re-imagining of the terminal coding-agent harness — best ideas from Pi plus first-class autonomy primitives.</p>
-    <div class="grid">
-      <div class="card"><span class="tag">Rust Core</span><h3>Native performance core</h3><p>Tokenization, budget math, compaction planning, and agent-loop decisions run in a zero-dependency Rust crate — with parity-tested TS fallbacks everywhere.</p></div>
-      <div class="card"><span class="tag">Autonomy</span><h3>Goals, DAGs & teams</h3><p>Persistent goals, task DAG scheduler, role-diverse agent teams, and independent verifiers that judge outcomes before anything ships.</p></div>
-      <div class="card"><span class="tag">Daemon</span><h3>Persistent agent over HTTP</h3><p><code>mochi daemon start</code> and drive it from anywhere: jobs, approvals, resume, and recurring cron-scheduled agent runs.</p></div>
-      <div class="card"><span class="tag">Context</span><h3>Adaptive context engine</h3><p>Token budgets, compaction, project memory, and intelligent retrieval across files, symbols, references, imports, and git history.</p></div>
-      <div class="card"><span class="tag">Safety</span><h3>Budgets & permissions</h3><p>Token, cost, time, tool, model, and agent limits. Safe / ask / auto permission system with git checkpoint & rollback.</p></div>
-      <div class="card"><span class="tag">Observability</span><h3>Deep run traces</h3><p><code>mochi trace &lt;goalId&gt;</code> replays any run end to end. Full-text session history in SQLite+FTS5.</p></div>
-      <div class="card"><span class="tag">Polyglot</span><h3>15-language registry</h3><p>Tree-sitter codegraph plus native Rust/C++ accelerators in the edit/patch hot paths. 15+ languages indexed.</p></div>
-      <div class="card"><span class="tag">Zero deps</span><h3>Zero runtime JS dependencies</h3><p>Runs under Node 22 or Bun — or build a standalone native binary that needs no runtime at all.</p></div>
-      <div class="card"><span class="tag">Model-agnostic</span><h3>Any OpenAI-compatible model</h3><p>Capability-profile routing (fast / coding / reasoning / review), budget-aware fallback, and multi-key credential pools on 401/429/403.</p></div>
+    <div class="kicker rv">Capabilities</div>
+    <h2 class="rv d1">Everything a harness needs.<br>Nothing it doesn't.</h2>
+    <p class="rv d2 lead">Sixteen specialized agent roles, thirty-plus native tools, adaptive context, and a daemon you can drive from anywhere — without a single runtime JS dependency.</p>
+    <div class="fgrid">
+      <div class="fcard rv"><div class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/></svg></div><h3>Compiled Rust core</h3><p>Tokenization, budget math, compaction planning, and loop decisions run natively via N-API — with parity-tested TypeScript fallbacks so nothing breaks on cold installs.</p></div>
+      <div class="fcard rv d1"><div class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="2.5"/><circle cx="5" cy="19" r="2.5"/><circle cx="19" cy="19" r="2.5"/><path d="M12 7.5V12m0 0l-5 4.8M12 12l5 4.8"/></svg></div><h3>Goals, DAGs &amp; teams</h3><p>Persistent goals decompose into task DAGs executed by role-diverse agent swarms — <code>lead</code>, <code>coder</code>, <code>reviewer</code>, <code>debugger</code>, and 12 more.</p></div>
+      <div class="fcard rv d2"><div class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="7" rx="2"/><rect x="2" y="14" width="20" height="7" rx="2"/><path d="M6 6.5h.01M6 17.5h.01"/></svg></div><h3>Persistent daemon</h3><p><code>mochi daemon start</code> then drive it over HTTP — jobs, approvals, resume, and recurring cron-scheduled runs on port 8642.</p></div>
+      <div class="fcard rv d3"><div class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 11-9-9"/><path d="M21 3l-9 9"/><path d="M15 3h6v6"/></svg></div><h3>Adaptive context engine</h3><p>Token budgets, compaction planning, project memory, and retrieval across files, symbols, references, imports, and git history.</p></div>
+      <div class="fcard rv d4"><div class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6l8-4z"/><path d="M9 12l2 2 4-4"/></svg></div><h3>Budgets &amp; permissions</h3><p>Token, cost, time, tool, model, and agent limits. Safe / ask / auto permission system with git checkpoint and rollback underneath.</p></div>
+      <div class="fcard rv d5"><div class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg></div><h3>Deep run traces</h3><p><code>mochi trace &lt;goalId&gt;</code> replays any run end to end. Full-text session history in SQLite+FTS5 with deep redaction.</p></div>
+      <div class="fcard rv"><div class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 17l6-6-6-6M12 19h8"/></svg></div><h3>Polyglot codegraph</h3><p>15-language registry with tree-sitter AST intelligence: <code>find_callers</code>, <code>type_hierarchy</code>, <code>replace_symbol</code>, and complexity analysis built in.</p></div>
+      <div class="fcard rv d1"><div class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8M12 18v3"/></svg></div><h3>Any model, any provider</h3><p>Model-agnostic OpenAI-compatible provider with capability routing (<code>fast</code> / <code>coding</code> / <code>reasoning</code> / <code>review</code>), budget-aware fallback, and multi-key credential pools.</p></div>
+      <div class="fcard rv d2"><div class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 21h16"/></svg></div><h3>Standalone binary</h3><p><code>npm run build:bin</code> ships a native binary that needs no runtime at all — or run it under Node 22 / Bun.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="architecture">
+  <div class="wrap">
+    <div class="kicker rv">Architecture</div>
+    <h2 class="rv d1">Two engines, one harness.</h2>
+    <p class="rv d2 lead">Pure compute lives in a compiled Rust crate. Everything else — model I/O, TUI, tool execution — stays in a thin TypeScript frontend. Every native path has a tested fallback.</p>
+    <div class="arch">
+      <div class="archbox rv d1">
+        <h3>native/mochi_core <span class="chip rs">RUST · ZERO-DEP</span></h3>
+        <ul>
+          <li><span><b>BPE tokenization</b> — 0.28 ms per 100k chars, compiled heuristic tokenizer</span></li>
+          <li><span><b>Compaction cut planning</b> — O(n) walk, zero GC pressure</span></li>
+          <li><span><b>Workspace indexing</b> — N-API <code style="font-family:var(--mono);font-size:12px">nativeSearchDir</code>, 50k files in 3.8 ms</span></li>
+          <li><span><b>Agent-loop decisions</b> &amp; budget math, in-process memory sharing</span></li>
+        </ul>
+      </div>
+      <div class="archbox rv d2">
+        <h3>Frontend &amp; harness <span class="chip ts">TYPESCRIPT</span></h3>
+        <ul>
+          <li><span><b>Model I/O</b> — OpenAI-compatible provider, streaming, credential rotation</span></li>
+          <li><span><b>TUI</b> — direct ANSI rendering, no webview, no Electron</span></li>
+          <li><span><b>Tool bus</b> — 30+ tools: edit, patch, shell, search, git, subagent…</span></li>
+          <li><span><b>Persistence</b> — SQLite+FTS5 sessions, run traces, project memory</span></li>
+        </ul>
+      </div>
     </div>
   </div>
 </section>
 
 <section id="benchmarks">
   <div class="wrap">
-    <h2>Fastest agent on the board.</h2>
-    <p class="lead">Standardized PSS memory and latency benchmarks against other terminal agents. [1st] in every row.</p>
-    <table>
-      <tr><th>Metric</th><th>Mochi (Rust core)</th><th>jcode</th><th>Cursor Agent</th><th>Claude Code</th><th>OpenCode</th></tr>
-      <tr><td>1 session (PSS)</td><td class="m best">18.2 MB [1st]</td><td class="m">27.8 MB</td><td class="m">214.9 MB</td><td class="m">386.6 MB</td><td class="m">371.5 MB</td></tr>
-      <tr><td>10 sessions (PSS)</td><td class="m best">84.5 MB [1st]</td><td class="m">117.0 MB</td><td class="m">1632.4 MB</td><td class="m">2300.6 MB</td><td class="m">3237.2 MB</td></tr>
-      <tr><td>Time to First Frame</td><td class="m best">11.2 ms [1st]</td><td class="m">14.0 ms</td><td class="m">1949.7 ms</td><td class="m">3436.9 ms</td><td class="m">1035.9 ms</td></tr>
-      <tr><td>Time to First Input</td><td class="m best">38.2 ms [1st]</td><td class="m">48.7 ms</td><td class="m">1978.7 ms</td><td class="m">3512.8 ms</td><td class="m">1047.9 ms</td></tr>
-      <tr><td>Compaction cut calc</td><td class="m best">0.12 ms [1st]</td><td class="m">0.45 ms</td><td class="m">14.5 ms</td><td class="m">35.0 ms</td><td class="m">19.8 ms</td></tr>
-    </table>
-    <p class="note">Full methodology, PTY probe scripts, and 9-agent comparison tables in <a href="https://github.com/xanstomper/mochi/blob/main/docs/BENCHMARKS.md">docs/BENCHMARKS.md</a>.</p>
+    <div class="kicker rv">Benchmarks</div>
+    <h2 class="rv d1">First place in every row.</h2>
+    <p class="rv d2 lead">Standardized PSS memory and latency benchmarks across nine terminal agents. 10 launches per metric, PTY timing probes, AMD Ryzen 9 / 64 GB DDR5.</p>
+    <div class="bench">
+      <div class="benchblock rv">
+        <h3>Memory — 10 concurrent sessions (PSS)</h3>
+        <div class="sub2">daemon jobs · termix split panes · lower is better</div>
+        <div class="brow mochi first" data-v="84.5"><span class="name mochi">Mochi</span><span class="track"><span class="fill"></span></span><span class="val"></span></div>
+        <div class="brow" data-v="117.0"><span class="name">jcode</span><span class="track"><span class="fill"></span></span><span class="val"></span></div>
+        <div class="brow" data-v="334.8"><span class="name">Codex CLI</span><span class="track"><span class="fill"></span></span><span class="val"></span></div>
+        <div class="brow" data-v="833.0"><span class="name">Pi</span><span class="track"><span class="fill"></span></span><span class="val"></span></div>
+        <div class="brow" data-v="1632.4"><span class="name">Cursor Agent</span><span class="track"><span class="fill"></span></span><span class="val"></span></div>
+        <div class="brow" data-v="2300.6"><span class="name">Claude Code</span><span class="track"><span class="fill"></span></span><span class="val"></span></div>
+        <div class="brow" data-v="3237.2"><span class="name">OpenCode</span><span class="track"><span class="fill"></span></span><span class="val"></span></div>
+      </div>
+      <div class="benchblock rv">
+        <h3>Time to first input (TTFI)</h3>
+        <div class="sub2">launch → interactive · lower is better</div>
+        <div class="brow mochi first" data-v="38.2"><span class="name mochi">Mochi</span><span class="track"><span class="fill"></span></span><span class="val"></span></div>
+        <div class="brow" data-v="48.7"><span class="name">jcode</span><span class="track"><span class="fill"></span></span><span class="val"></span></div>
+        <div class="brow" data-v="596.4"><span class="name">Pi</span><span class="track"><span class="fill"></span></span><span class="val"></span></div>
+        <div class="brow" data-v="905.8"><span class="name">Codex CLI</span><span class="track"><span class="fill"></span></span><span class="val"></span></div>
+        <div class="brow" data-v="1978.7"><span class="name">Cursor Agent</span><span class="track"><span class="fill"></span></span><span class="val"></span></div>
+        <div class="brow" data-v="3512.8"><span class="name">Claude Code</span><span class="track"><span class="fill"></span></span><span class="val"></span></div>
+      </div>
+    </div>
+    <div class="bench-note rv">
+      <h4>Why the gap</h4>
+      <ul>
+        <li><span><b>Dual-engine architecture</b> — hot paths in compiled Rust with N-API in-process memory sharing, not subprocess spawns.</span></li>
+        <li><span><b>No startup blockers</b> — zero synchronous shell probes during initial frame generation.</span></li>
+        <li><span><b>No webview tax</b> — direct terminal ANSI rendering; no Electron or heavy UI layers.</span></li>
+        <li><span><b>Intelligent caching</b> — <code style="font-family:var(--mono);font-size:12px">(mtime, size)</code> keyed read cache eliminates redundant I/O across agent turns.</span></li>
+        <li><span><b>Headless-grade</b> — full harness under 20 MB RAM for CI, containers, and embedded nodes.</span></li>
+        <li><span><b>Regression-gated</b> — <code style="font-family:var(--mono);font-size:12px">npm run bench:memory</code> fails CI above ceilings, so the wins can't silently regress.</span></li>
+      </ul>
+      <p class="method">Methodology, PTY probe scripts &amp; full 9-agent matrix → <a href="https://github.com/xanstomper/mochi/blob/main/docs/BENCHMARKS.md">docs/BENCHMARKS.md</a></p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <div class="wrap">
+    <div class="kicker rv">Why Mochi</div>
+    <h2 class="rv d1">Built different, on purpose.</h2>
+    <div class="why">
+      <div class="whylist">
+        <div class="whyitem rv"><h4><span>01</span>Autonomy as a primitive, not a bolt-on</h4><p>Goals persist, decompose into task DAGs, and execute through role-scoped swarms with independent verifiers and an outcome judge — the harness itself ships the work.</p></div>
+        <div class="whyitem rv d1"><h4><span>02</span>Fail-safe by construction</h4><p>Every Rust-native path has a parity-tested TypeScript fallback. Whitespace-drift-tolerant patching refuses ambiguity rather than guessing. Budgets cap tokens, cost, time, and tools.</p></div>
+        <div class="whyitem rv d2"><h4><span>03</span>It learns your repo</h4><p>Project memory carries cross-session engineering facts; local harness learning records which recovery strategies actually worked and reuses them.</p></div>
+        <div class="whyitem rv d3"><h4><span>04</span>Observable to the last token</h4><p>Durable run traces with deep redaction, SQLite+FTS5 full-text session search, and per-turn checkpoint rollback via git.</p></div>
+      </div>
+      <div class="rv d2">
+        <div class="tcaption">Single-session memory footprint (PSS)</div>
+        <div class="twrap">
+          <table class="cmp">
+            <tr><th>Agent</th><th>1 session</th><th>×Mochi</th></tr>
+            <tr class="hl"><td>Mochi</td><td>18.2 MB</td><td>1.0×</td></tr>
+            <tr><td>jcode</td><td>27.8 MB</td><td>1.5×</td></tr>
+            <tr><td>Codex CLI</td><td>140.0 MB</td><td>7.7×</td></tr>
+            <tr><td>Pi</td><td>144.4 MB</td><td>7.9×</td></tr>
+            <tr><td>Cursor Agent</td><td>214.9 MB</td><td>11.8×</td></tr>
+            <tr><td>Antigravity CLI</td><td>243.7 MB</td><td>13.4×</td></tr>
+            <tr><td>Copilot CLI</td><td>333.3 MB</td><td>18.3×</td></tr>
+            <tr><td>OpenCode</td><td>371.5 MB</td><td>20.4×</td></tr>
+            <tr><td>Claude Code</td><td>386.6 MB</td><td>21.2×</td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="docs">
+  <div class="wrap">
+    <div class="kicker rv">Documentation</div>
+    <h2 class="rv d1">Deep dives for every layer.</h2>
+    <div class="dgrid">
+      <a class="dcard rv" href="https://github.com/xanstomper/mochi/blob/main/docs/ARCHITECTURE.md"><span class="doc-tag">Architecture</span><h3>Blueprint</h3><p>The dual-engine design, compaction protocols, and event loops.</p><span class="arrow">Read →</span></a>
+      <a class="dcard rv d1" href="https://github.com/xanstomper/mochi/blob/main/docs/CAPABILITIES.md"><span class="doc-tag">Capabilities</span><h3>System reference</h3><p>16 agent roles, 30+ tools, 30+ skills, MCP/ACP protocols.</p><span class="arrow">Read →</span></a>
+      <a class="dcard rv d2" href="https://github.com/xanstomper/mochi/blob/main/docs/BENCHMARKS.md"><span class="doc-tag">Benchmarks</span><h3>Performance report</h3><p>PSS, TTFF, TTFI, and compaction latency vs eight other agents.</p><span class="arrow">Read →</span></a>
+      <a class="dcard rv d3" href="https://github.com/xanstomper/mochi/blob/main/docs/CLI_REFERENCE.md"><span class="doc-tag">CLI</span><h3>Interface reference</h3><p>Commands, daemon endpoints, slash commands, and hotkeys.</p><span class="arrow">Read →</span></a>
+    </div>
   </div>
 </section>
 
 <section id="install">
   <div class="wrap">
-    <h2>Install in 30 seconds.</h2>
-    <p class="lead">Requires Node 22+ or Bun. Zero runtime dependencies.</p>
-    <pre><span class="c"># clone &amp; build</span>
-git clone https://github.com/xanstomper/mochi.git && cd mochi
-npm install && npm run build
+    <div class="kicker rv">Get started</div>
+    <h2 class="rv d1">Up and running in a minute.</h2>
+    <p class="rv d2 lead">Requires Node 22+ or Bun. Zero runtime dependencies.</p>
+    <div class="install">
+      <div class="icard rv">
+        <div class="ichead"><b>Build &amp; run</b><span>bash</span></div>
+        <pre><span class="c"># clone and build</span>
+git clone https://github.com/xanstomper/mochi.git
+cd mochi && npm install && npm run build
 
 <span class="c"># one-shot agent run</span>
-<span class="p">mochi</span> "add a rate limiter to the auth service"
-
-<span class="c"># persistent daemon</span>
+<span class="p">mochi</span> "add a rate limiter to the auth service"</pre>
+      </div>
+      <div class="icard rv d1">
+        <div class="ichead"><b>Daemon, teams &amp; traces</b><span>bash</span></div>
+        <pre><span class="c"># persistent daemon over HTTP</span>
 <span class="p">mochi</span> daemon start --host 0.0.0.0
 <span class="p">mochi</span> daemon send "finish the auth flow"
 
@@ -134,28 +392,101 @@ npm install && npm run build
 
 <span class="c"># replay any run end to end</span>
 <span class="p">mochi</span> trace &lt;goalId&gt;</pre>
-  </div>
-</section>
-
-<section id="docs">
-  <div class="wrap">
-    <h2>Documentation.</h2>
-    <p class="lead">Deep dives for every layer of the harness.</p>
-    <div class="grid">
-      <a class="card" href="https://github.com/xanstomper/mochi/blob/main/docs/ARCHITECTURE.md" style="display:block"><span class="tag">Architecture</span><h3>Technical Architecture Blueprint →</h3><p>Dual-engine Rust Core + TypeScript TUI, compaction protocols, and event loops.</p></a>
-      <a class="card" href="https://github.com/xanstomper/mochi/blob/main/docs/CAPABILITIES.md" style="display:block"><span class="tag">Capabilities</span><h3>Complete Capabilities Reference →</h3><p>16 specialized agent roles, 30+ native tools, 30+ skills, MCP/ACP protocols.</p></a>
-      <a class="card" href="https://github.com/xanstomper/mochi/blob/main/docs/BENCHMARKS.md" style="display:block"><span class="tag">Benchmarks</span><h3>Empirical Benchmarks →</h3><p>PSS memory, TTFF, TTFI, and compaction latency vs other agents.</p></a>
-      <a class="card" href="https://github.com/xanstomper/mochi/blob/main/docs/CLI_REFERENCE.md" style="display:block"><span class="tag">CLI</span><h3>CLI & Interface Reference →</h3><p>CLI flags, daemon endpoints, slash commands, and keybindings.</p></a>
+      </div>
     </div>
   </div>
 </section>
 
 <footer>
-  <div class="wrap" style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;width:100%">
-    <span>mochi — Minimal Orchestrative Coding Harness Intelligence.</span>
-    <span><a href="https://github.com/xanstomper/mochi">github.com/xanstomper/mochi</a></span>
+  <div class="wrap">
+    <div class="fgrid2">
+      <div class="fbrand">
+        <a class="brand" href="#top">
+          <svg width="22" height="22" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#E8A04C"/><path d="M9 23V9h2.6l4.4 7 4.4-7H23v14h-2.5v-9.4L16 20.4 11.5 13.6V23H9z" fill="#131313"/></svg>
+          mochi
+        </a>
+        <p>Minimal Orchestrative Coding Harness Intelligence — a minimal, fast, autonomous coding agent for the terminal.</p>
+      </div>
+      <div class="fcol">
+        <h5>Product</h5>
+        <a href="#features">Features</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#benchmarks">Benchmarks</a>
+        <a href="#why">Why Mochi</a>
+      </div>
+      <div class="fcol">
+        <h5>Docs</h5>
+        <a href="https://github.com/xanstomper/mochi/blob/main/docs/ARCHITECTURE.md">Architecture</a>
+        <a href="https://github.com/xanstomper/mochi/blob/main/docs/CAPABILITIES.md">Capabilities</a>
+        <a href="https://github.com/xanstomper/mochi/blob/main/docs/BENCHMARKS.md">Benchmarks</a>
+        <a href="https://github.com/xanstomper/mochi/blob/main/docs/CLI_REFERENCE.md">CLI Reference</a>
+      </div>
+      <div class="fcol">
+        <h5>Project</h5>
+        <a href="https://github.com/xanstomper/mochi">GitHub</a>
+        <a href="https://github.com/xanstomper/mochi/blob/main/CHANGELOG.md">Changelog</a>
+        <a href="#install">Install</a>
+      </div>
+    </div>
+    <div class="fbottom">
+      <span>© 2026 Mochi. Open source under the repo license.</span>
+      <span>Minimal Orchestrative Coding Harness Intelligence</span>
+    </div>
   </div>
 </footer>
 
+<script>
+// nav scroll state
+const nav=document.getElementById('nav');
+addEventListener('scroll',()=>nav.classList.toggle('scrolled',scrollY>10),{passive:true});
+
+// scroll reveal
+const io=new IntersectionObserver(es=>es.forEach(e=>{
+  if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}
+}),{threshold:.12,rootMargin:'0px 0px -40px 0px'});
+document.querySelectorAll('.rv').forEach(el=>io.observe(el));
+
+// animated benchmark bars
+const fmt=v=>v<100?v.toFixed(1)+' ms':Math.round(v).toLocaleString()+' ms';
+const bio=new IntersectionObserver(es=>es.forEach(e=>{
+  if(!e.isIntersecting)return;
+  const rows=e.target.querySelectorAll('.brow');
+  const max=Math.max(...[...rows].map(r=>+r.dataset.v));
+  rows.forEach((r,i)=>{
+    const v=+r.dataset.v,fill=r.querySelector('.fill'),val=r.querySelector('.val');
+    setTimeout(()=>{
+      fill.style.width=Math.max(2.5,(v/max)*100)+'%';
+      val.textContent=fmt(v);
+    },120+i*90);
+  });
+  bio.unobserve(e.target);
+}),{threshold:.3});
+document.querySelectorAll('.benchblock').forEach(el=>bio.observe(el));
+
+// hero terminal typing
+const lines=[
+  ['$','npm install && npm run build','c'],
+  ['g','✔ built in 2.4s · native core linked','g'],
+  ['$','mochi "add a rate limiter to the auth service"','c'],
+  ['p','◆ goal decomposed → 3 tasks · team: lead, coder, tester','p'],
+  ['g','✔ verified · tests passing · traced in 41s','g'],
+];
+const body=document.getElementById('typed');
+let li=0,ci=0,cur=null;
+function type(){
+  if(li>=lines.length){body.insertAdjacentHTML('beforeend','<span class="cursor"></span>');return;}
+  const [pfx,text,cls]=lines[li];
+  if(ci===0){
+    if(cur)cur=null;
+    body.insertAdjacentHTML('beforeend',`<div><span class="${cls==='c'?'p':'g'}">${cls==='c'?'<span class="c">$ </span>':''}</span><span class="${cls}"></span></div>`);
+    cur=body.lastElementChild.lastElementChild;
+    if(cls!=='c')cur.textContent=pfx+' ';
+  }
+  cur.textContent+=text[ci++]||'';
+  if(ci>=text.length){li++;ci=0;setTimeout(type,420);return;}
+  setTimeout(type,14+Math.random()*26);
+}
+new IntersectionObserver((es,o)=>{if(es[0].isIntersecting){type();o.disconnect();}},{threshold:.4}).observe(body);
+</script>
 </body>
 </html>
