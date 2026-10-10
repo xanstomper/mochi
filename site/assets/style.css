@@ -37,7 +37,7 @@
 html { scroll-behavior: smooth; }
 body {
   font-family: var(--font-body);
-  background: var(--sky-top);
+  background: transparent;
   color: var(--white);
   line-height: 1.6;
   overflow-x: hidden;
@@ -459,8 +459,8 @@ header.site {
 .bench-chart { display: flex; flex-direction: column; gap: 10px; margin-top: 24px; }
 .bench-row { display: flex; align-items: center; gap: 12px; }
 .bench-label {
-  font-family: var(--font-mono); font-size: 12px;
-  width: 110px; text-align: right; color: rgba(255,255,255,.6);
+  font-family: var(--font-mono); font-size: 12px; font-weight: 500;
+  width: 110px; text-align: right; color: rgba(255,255,255,.85);
   flex-shrink: 0;
 }
 .bench-bar-wrap { flex: 1; height: 28px; background: rgba(255,255,255,.06); border-radius: 8px; overflow: hidden; }
@@ -470,9 +470,9 @@ header.site {
   transition: width 1.2s var(--ease);
   width: 0;
 }
-.bench-bar.pink { background: linear-gradient(90deg, var(--pink), var(--peach)); color: var(--white); }
-.bench-bar.gray { background: rgba(255,255,255,.15); color: rgba(255,255,255,.5); }
-.bench-val { font-family: var(--font-mono); font-size: 12px; color: rgba(255,255,255,.5); width: 70px; flex-shrink: 0; }
+.bench-bar.pink { background: var(--pink); color: var(--white); box-shadow: 0 0 12px rgba(244,114,182,.4); }
+.bench-bar.gray { background: rgba(0,0,0,.4); color: rgba(255,255,255,.95); border: 1px solid rgba(255,255,255,.1); }
+.bench-val { font-family: var(--font-mono); font-size: 12px; font-weight: 600; color: rgba(255,255,255,.8); width: 70px; flex-shrink: 0; }
 
 /* ── FLOW STEPS ─────────────────────────────────────────────── */
 .flow-step { display: flex; gap: 24px; margin-bottom: 32px; position: relative; }
@@ -624,3 +624,117 @@ header.site {
 ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.3); }
 
 footer.site { display: none !important; }
+
+/* ── SUBPAGE LAYOUT (docs, benchmarks, changelog, source) ── */
+.pagehead {
+  padding: 140px 5vw 60px;
+  max-width: 1200px; margin: 0 auto;
+  position: relative; z-index: 1;
+}
+.pagehead h1 {
+  font-family: var(--font-display); font-size: clamp(36px, 5vw, 64px);
+  font-weight: 700; letter-spacing: -.03em; line-height: 1.05;
+  margin-bottom: 12px;
+}
+.pagehead .page-desc {
+  font-size: 17px; color: rgba(255,255,255,.7); max-width: 600px; line-height: 1.7;
+}
+.wrap.layout {
+  padding: 0 5vw 80px;
+  max-width: 1200px; margin: 0 auto;
+  position: relative; z-index: 1;
+}
+/* Code blocks on subpages */
+.wrap.layout pre, .wrap.layout code {
+  background: rgba(0,0,0,.5);
+  border: 1px solid rgba(255,255,255,.15);
+  border-radius: 8px;
+  padding: 16px 20px;
+  font-family: var(--font-mono); font-size: 13px;
+  color: #67e8f9; overflow-x: auto; display: block;
+  margin: 12px 0;
+  line-height: 1.8;
+  text-shadow: 0 1px 2px rgba(0,0,0,.3);
+}
+.wrap.layout h2 {
+  font-family: var(--font-display); font-size: 28px; font-weight: 700;
+  margin: 40px 0 16px; color: var(--white);
+}
+.wrap.layout h3 {
+  font-family: var(--font-body); font-size: 18px; font-weight: 600;
+  margin: 28px 0 12px; color: var(--white);
+}
+.wrap.layout p { color: rgba(255,255,255,.75); margin-bottom: 12px; line-height: 1.7; }
+.wrap.layout a { color: #67e8f9; font-weight: 500; }
+.wrap.layout a:hover { color: #a5f3fc; text-decoration: underline; }
+.wrap.layout table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+.wrap.layout th, .wrap.layout td {
+  padding: 10px 14px; text-align: left;
+  border-bottom: 1px solid rgba(255,255,255,.1);
+  font-size: 14px; color: rgba(255,255,255,.8);
+}
+.wrap.layout th { font-family: var(--font-mono); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--pink); }
+
+/* ── DECORATIVE FLOATING ELEMENTS ──────────────────────────── */
+.deco-layer {
+  position: fixed; inset: 0; z-index: 1; pointer-events: none;
+  overflow: hidden;
+}
+
+/* Stars */
+.deco-star {
+  position: absolute; width: 12px; height: 12px; pointer-events: none;
+  animation: twinkle 3s ease-in-out infinite;
+}
+.deco-star::before {
+  content: ''; position: absolute; inset: 0;
+  background: var(--white);
+  clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);
+}
+.deco-star.pink::before { background: var(--pink); filter: drop-shadow(0 0 8px rgba(244,114,182,.6)); }
+.deco-star.cyan::before { background: var(--cyan); filter: drop-shadow(0 0 8px rgba(103,232,249,.6)); }
+.deco-star.purple::before { background: var(--lav); filter: drop-shadow(0 0 8px rgba(196,181,253,.6)); }
+@keyframes twinkle {
+  0%, 100% { opacity: .3; transform: scale(.8); }
+  50% { opacity: 1; transform: scale(1.1); }
+}
+
+/* Bubbles */
+.deco-bubble {
+  position: absolute; border-radius: 50%; pointer-events: none;
+  background: radial-gradient(circle at 30% 30%, rgba(255,255,255,.4), rgba(255,255,255,.05) 70%);
+  border: 1px solid rgba(255,255,255,.15);
+  animation: float 8s ease-in-out infinite;
+}
+.deco-bubble.b1 { width: 80px; height: 80px; top: 15%; left: 10%; animation-delay: 0s; }
+.deco-bubble.b2 { width: 50px; height: 50px; top: 30%; left: 80%; animation-delay: 2s; }
+.deco-bubble.b3 { width: 100px; height: 100px; top: 55%; left: 5%; animation-delay: 4s; }
+.deco-bubble.b4 { width: 40px; height: 40px; top: 70%; left: 85%; animation-delay: 1s; }
+.deco-bubble.b5 { width: 60px; height: 60px; top: 40%; left: 50%; animation-delay: 3s; }
+@keyframes float {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-20px) rotate(5deg); }
+}
+
+/* Sprinkles */
+.deco-sprinkle {
+  position: absolute; width: 6px; height: 14px; border-radius: 3px; pointer-events: none;
+  animation: sprinkleFloat 6s ease-in-out infinite;
+}
+.deco-sprinkle.pink { background: var(--pink); }
+.deco-sprinkle.yellow { background: var(--yellow); }
+.deco-sprinkle.cyan { background: var(--cyan); }
+.deco-sprinkle.purple { background: var(--lav); }
+@keyframes sprinkleFloat {
+  0%, 100% { transform: translateY(0) rotate(0deg); opacity: .6; }
+  50% { transform: translateY(-15px) rotate(15deg); opacity: 1; }
+}
+
+/* ── SUBPAGE READABILITY OVERLAY ────────────────────────────── */
+body::after {
+  content: ''; position: fixed; bottom: 0; left: 0; right: 0;
+  height: 50vh; z-index: 0; pointer-events: none;
+  background: linear-gradient(to top, rgba(26,26,110,.6) 0%, transparent 100%);
+}
+/* Ensure content sits above overlay */
+.pagehead, .wrap.layout { z-index: 2; }
