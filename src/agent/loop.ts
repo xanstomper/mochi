@@ -289,6 +289,8 @@ export interface AgentResult {
   attempts: number;
   tokensUsed: number;
   durationMs: number;
+  /** MCH-82: real per-run cost attribution (from budget ledger estimate). */
+  costUsd: number;
   /** Why the run ended, mirroring modern agent SDKs (LangChain/LangGraph). */
   stopReason: AgentStopReason;
 }
@@ -312,6 +314,8 @@ export class Agent {
   private provider: ReturnType<typeof createProvider>;
   private providers = new Map<ModelProfile, ReturnType<typeof createProvider>>();
   private tokensUsed = 0;
+  /** MCH-82: cumulative cost estimate for THIS agent run (summed per model call). */
+  private costUsd = 0;
   private startTime = 0;
   private errors: string[] = [];
   private lastStrategy?: string;
@@ -1553,6 +1557,7 @@ Continue from 'Next:', do not redo completed progress.`,
         const u = response.usage as { promptTokens?: number; completionTokens?: number; totalTokens?: number };
         const cacheRead = kvCache.totalCacheSaved || kvCache.lastCacheSaved;
         const cost = estimateCostUsd({ promptTokens: u.promptTokens, completionTokens: u.completionTokens }, this.config.model.model);
+        this.costUsd += cost;
         this.events.emit({
           type: 'usage:updated' as any,
           agentId: this.id,
@@ -4073,6 +4078,7 @@ Continue from 'Next:', do not redo completed progress.`,
       filesModified: [...new Set(this.context['state'].filesModified)],
       attempts: this.errors.length + 1,
       tokensUsed: this.tokensUsed,
+      costUsd: this.costUsd,
       durationMs,
       stopReason,
     };

@@ -321,7 +321,7 @@ Return ONLY the JSON array, no markdown.`;
               .slice()
               .sort((a, b) => b.costUsd - a.costUsd)
               .slice(0, 3)
-              .map((tc) => `${tc.title.slice(0, 60)} ($${tc.costUsd.toFixed(4)}, ${tc.tokens.toLocaleString()} tok)`)
+              .map((tc) => `${tc.title.slice(0, 60)} ($${(tc.costUsd ?? 0).toFixed(4)}, ${(tc.tokens ?? 0).toLocaleString()} tok)`)
               .join(' | ')
           : ''),
       tokensUsed: this.goalStats.tokens,
@@ -419,8 +419,9 @@ Return ONLY the JSON array, no markdown.`;
     let result = await this.runTask(goal, task, abortSignal, budget, extraContext, readCache, sessionId);
     this.goalStats.tokens += result.tokensUsed;
     this.goalStats.duration += result.durationMs;
-    // MCH-81: per-task cost attribution for the goal summary card.
-    this.taskCosts.push({ title: task.title, tokens: result.tokensUsed, costUsd: result.costUsd });
+    // MCH-81: per-task cost attribution for the goal summary card (guard: agent
+    // run results don't always carry costUsd — crash found by live probe).
+    this.taskCosts.push({ title: task.title, tokens: result.tokensUsed ?? 0, costUsd: result.costUsd ?? 0 });
     if (hasSqlite() && (sessionId || goal.id)) {
       try {
         const sid = sessionId ?? this.store.begin({ goalId: goal.id });
@@ -623,6 +624,7 @@ Return ONLY the JSON array, no markdown.`;
         filesModified: [],
         attempts: 0,
         tokensUsed: 0,
+        costUsd: 0,
         durationMs: 0,
       };
     }
