@@ -348,6 +348,9 @@ export class Agent {
   private toolNameCounts = new Map<string, number>();
   private chatToolRounds = 0; // tool-call rounds issued for a chat task
   private consecutiveToolErrors = new Map<string, { error: string; count: number }>();
+  /** MCH-60: error-signature -> last tool that produced it + total count, so a
+   *  shared root cause alternating across tools still trips an advisory. */
+  private crossToolFailures = new Map<string, { toolName: string; count: number }>();
   private readCache: ReadCache;
   private planMode: boolean;
   private planVetoes = 0;
@@ -2762,6 +2765,19 @@ Continue from 'Next:', do not redo completed progress.`,
     let recoveryHint = '';
     if (err) {
       const errSig = err.slice(0, 100);
+      // MCH-60: cross-tool failure loop — track the error signature regardless
+      // of which tool produced it. A model alternating shell->patch->shell
+      // with the same root cause never trips the per-tool counter above.
+      const crossPrev = this.crossToolFailures.get(errSig);
+      if (crossPrev !== undefined && crossPrev.toolName !== toolName) {
+        crossPrev.count++;
+        if (crossPrev.count === 2) {
+          recoveryHint += `\n[HARNESS ADVISORY: This same failure signature has now appeared across multiple different tools (last: '${crossPrev.toolName}', now: '${toolName}'). The root cause is shared — stop retrying either tool and re-diagnose from the first error message.]`;
+        }
+      } else if (crossPrev) {
+        crossPrev.count++;
+      }
+      this.crossToolFailures.set(errSig, crossPrev ?? { toolName, count: 1 });
       const prevError = this.consecutiveToolErrors.get(toolName);
       if (prevError && prevError.error === errSig) {
         prevError.count++;
