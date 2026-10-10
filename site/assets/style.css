@@ -211,6 +211,7 @@ body {
   font-family: var(--font-display); font-size: clamp(36px, 5vw, 56px);
   font-weight: 600; line-height: 1.05; letter-spacing: -.03em;
   margin-bottom: 24px;
+  color: var(--white);
   background: linear-gradient(135deg, #fff 0%, #e0e7ff 30%, #c7d2fe 60%, #a5b4fc 100%);
   -webkit-background-clip: text; -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -352,6 +353,7 @@ body {
   font-family: var(--font-display); font-size: clamp(32px, 4.5vw, 52px);
   font-weight: 700; line-height: 1.05; letter-spacing: -.03em;
   margin-bottom: 16px;
+  color: var(--ink);
   background: linear-gradient(135deg, var(--ink) 0%, #6d28d9 50%, var(--pink) 100%);
   -webkit-background-clip: text; -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -492,16 +494,18 @@ body {
 .split-char {
   display: inline-block;
   transform: translateY(110%);
-  animation: charRise .8s var(--ease) forwards;
+  transition: transform .7s var(--ease);
 }
-@keyframes charRise { to { transform: translateY(0); } }
+.in .split-char { transform: translateY(0); }
+.split-char.no-anim { transform: translateY(0); transition: none; }
 
 /* ── BLUR TEXT ──────────────────────────────────────────────── */
 .blur-word {
   display: inline-block; opacity: 0; filter: blur(12px);
-  animation: blurIn .7s var(--ease) forwards;
+  transition: opacity .6s var(--ease), filter .6s var(--ease);
 }
-@keyframes blurIn { to { opacity: 1; filter: blur(0); } }
+.in .blur-word { opacity: 1; filter: blur(0); }
+.blur-word.no-anim { opacity: 1; filter: none; transition: none; }
 
 /* ── ANIMATED CONTENT ───────────────────────────────────────── */
 .ac {
