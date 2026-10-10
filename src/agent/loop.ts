@@ -344,6 +344,9 @@ export class Agent {
    *  the post-stream execution path skips them (results already in context). */
   private midStreamExecutedIds = new Set<string>();
   private recentToolSignatures: string[] = [];
+  /** MCH-78: current failing-signature cluster (sig + consecutive count). */
+  private failureClusterSig: string | null = null;
+  private failureClusterCount = 0;
   /** MCH-74: mid-run steer queue — user guidance injected at next iteration. */
   private steerQueue: string[] = [];
   private cycleNudges = 0;
@@ -1754,6 +1757,30 @@ Continue from 'Next:', do not redo completed progress.`,
           isCycle = true;
         }
         const isAllReadOnly = response.toolCalls.every((c) => this.isReadOnly(c.function.name));
+        // MCH-78: failure-cluster dedup — the same tool signature producing the
+        // same error 2+ times is a failed cluster: don't let the model re-run it
+        // verbatim again. Inject the exact last error so the fix targets the
+        // real failure instead of a re-run, and escalate to a finish after 3.
+        if (nowSig === this.lastSig && this.errors.length > 0 && !isAllReadOnly) {
+          const lastErr = this.errors[this.errors.length - 1];
+          if (this.failureClusterSig === nowSig) {
+            this.failureClusterCount++;
+          } else {
+            this.failureClusterSig = nowSig;
+            this.failureClusterCount = 1;
+          }
+          if (this.failureClusterCount === 2) {
+            this.context.addMessage({
+              role: 'system',
+              content: `LOOP ALERT: this exact tool call already failed with the same error. Do NOT re-run it unchanged. The actual error was:\n${String(lastErr).slice(0, 500)}\nFix the root cause (different args, different approach, or investigate dependencies) before calling it again.`,
+            });
+          } else if (this.failureClusterCount >= 3) {
+            return this.finish(task, false, `Loop guard: the same failing tool call was retried ${this.failureClusterCount} times with identical errors. Last error:\n${String(lastErr).slice(0, 500)}`, 'tool_loop');
+          }
+        } else if (nowSig !== this.lastSig) {
+          this.failureClusterSig = null;
+          this.failureClusterCount = 0;
+        }
         if (isCycle && !isAllReadOnly && !this.fileChanged) {
           this.cycleNudges++;
           if (this.cycleNudges >= 3) {
