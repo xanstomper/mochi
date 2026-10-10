@@ -52,6 +52,7 @@ import {
 import { HookManager } from '../hooks.js';
 import { resolve, extname } from 'node:path';
 import { statSync, existsSync, readFileSync } from 'node:fs';
+import { stat, readFile } from 'node:fs/promises';
 import { condenseOutput } from '../core/output-condenser.js';
 import { autoTestCommand, isWeakVerification, cwdForScope, withCwd } from '../testdetect.js';
 import { classifyOneShot } from '../one-shot.js';
@@ -816,6 +817,8 @@ Continue from 'Next:', do not redo completed progress.`,
           this.events.emit({ type: 'agent:log', agentId: this.id, message: '[tool_factory] authored toolset changed — defs re-advertised' });
         }
       } catch { /* never block the loop over tool refresh */ }
+      // MCH-73: speculative continuation — warm next-turn reads every iteration.
+      void this.prefetchForNextTurn();
       sm.beginIteration(i);
       // Deliver completed background tasks as events into the transcript.
       try {
@@ -2398,6 +2401,39 @@ Continue from 'Next:', do not redo completed progress.`,
       batch.shift();
       await this.runMoolCall(head);
     }
+  }
+
+  /**
+   * MCH-73: speculative continuation prefetch. Fires the co-change predictor
+   * EVERY iteration (not just once at run start) using the latest touched
+   * files, warming the read cache so the next model turn's reads are served
+   * with zero added latency. Cheap (one git log via predictNextFiles) and
+   * deduped by readCache freshness, so repeat warming is nearly free.
+   */
+  private async prefetchForNextTurn(): Promise<void> {
+    try {
+      const touched = this.context.getMessages()
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .slice(-20)
+        .flatMap((m) => (m.content?.match(/[\w./-]+\.(?:ts|js|py|go|rs)/g) ?? []));
+      const uniqueTouched = [...new Set(touched)].slice(0, 10);
+      if (uniqueTouched.length === 0) return;
+      const predicted = predictNextFiles(this.workspace.dir, uniqueTouched, 5);
+      let warmed = 0;
+      for (const f of predicted) {
+        try {
+          const full = join(this.workspace.dir, f);
+          const st = await stat(full);
+          if (st.size <= 64_000 && !this.readCache.has(full)) {
+            this.readCache.set(full, { mtimeMs: st.mtimeMs, size: st.size, content: await readFile(full, 'utf8') });
+            warmed++;
+          }
+        } catch { /* unreadable: skip this file */ }
+      }
+      if (warmed > 0) {
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: `prefetch: warmed ${warmed} co-change file(s) for next turn` });
+      }
+    } catch { /* prefetch is strictly optional */ }
   }
 
   /** Spawn a fresh child agent on a subtask and return a short summary. The

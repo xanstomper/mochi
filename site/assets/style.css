@@ -805,9 +805,9 @@ body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:9999;o
   z-index: -1;
   pointer-events: none;
   background: linear-gradient(180deg,
-    rgba(251,246,238,.88) 0%,
-    rgba(251,246,238,.82) 50%,
-    rgba(251,246,238,.9) 100%);
+    rgba(251,246,238,.55) 0%,
+    rgba(251,246,238,.42) 50%,
+    rgba(251,246,238,.6) 100%);
 }
 
 /* ============ SCROLL SLIDE-IN ============ */

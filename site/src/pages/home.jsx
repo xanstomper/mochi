@@ -214,8 +214,7 @@ function Home() {
           detail={7}
           warp={1.2}
           hueShift={10}
-          saturation={0.55}
-          brightness={1.1}
+
           contrast={0.85}
           mouseReact={true}
           amplitude={0.08}
@@ -223,7 +222,9 @@ function Home() {
           sheen={0.25}
           clickSwirl={true}
           grain={0.04}
-          opacity={0.5}
+          opacity={0.85}
+          saturation={0.75}
+          brightness={1.25}
           resolution={0.75}
         />
       </div>
