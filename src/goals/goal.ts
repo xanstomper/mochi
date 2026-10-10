@@ -264,6 +264,8 @@ Return ONLY the JSON array, no markdown.`;
     // so edits still invalidate). Parallel agents re-reading the same hot
     // source files now hit memory instead of disk repeatedly.
     const readCache: ReadCache = new Map();
+    // MCH-83: in-flight worker pool for continuous parallel refill.
+    const inFlight = new Set<Promise<unknown>>();
 
     while (!scheduler.isDone()) {
       if (abortController.signal.aborted) break;
@@ -283,17 +285,24 @@ Return ONLY the JSON array, no markdown.`;
       // neither had been marked running yet. Incremental starting lets a just-
       // started task's scope gate the ones after it (and lets an unscoped task
       // exclude concurrent writers), preventing parallel write-write races.
-      const launched = this.startReadyBatch(scheduler, goal, abortController.signal, budget, extraContext, maxConcurrency, verifier, readCache, sessionId);
-      if (launched.length === 0) {
-        // Nothing could launch (all ready tasks conflict with the running set);
-        // wait for an in-flight agent to finish instead of spinning.
-        if (this.runningCount(scheduler) > 0) {
-          await new Promise((r) => setTimeout(r, 200));
-          continue;
-        }
+      // MCH-83: continuous parallel refill. Instead of awaiting the whole
+      // batch (which idled slots until the SLOWEST task finished), keep an
+      // in-flight pool and launch into freed slots as soon as ANY task
+      // completes. Scheduler readiness is still re-checked per launch, so
+      // file-scope conflict gating is unchanged.
+      const launched = this.startReadyBatch(scheduler, goal, abortController.signal, budget, extraContext, maxConcurrency - inFlight.size, verifier, readCache, sessionId);
+      for (const p of launched) {
+        const safe = p.catch(() => { /* runOne marks failure via scheduler */ });
+        inFlight.add(safe);
+        void safe.finally(() => inFlight.delete(safe));
+      }
+      if (inFlight.size === 0) {
+        // Nothing could launch (all ready tasks conflict with the running set
+        // or nothing is ready) and nothing is running — the goal is stuck.
         break;
       }
-      await Promise.all(launched);
+      // Wait for the FIRST task to finish, then loop to refill its slot.
+      await Promise.race(inFlight);
 
       goal.progress = scheduler.progress();
       goal.updatedAt = Date.now();

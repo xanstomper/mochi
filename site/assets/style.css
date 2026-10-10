@@ -83,7 +83,7 @@ h1, h2, h3, h4 { font-family: var(--serif); color: var(--ink); font-weight: 500;
 /* ── Layout ─────────────────────────────────────────────── */
 .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
 
-section { padding: 120px 0; position: relative; }
+section { padding: 160px 0 120px; position: relative; }
 
 .hairline-t { border-top: 1px solid var(--hairline); }
 
@@ -95,7 +95,10 @@ header.site {
   padding: 0 24px;
   gap: 8px;
   transition: background .3s ease, box-shadow .3s ease;
-  background: transparent;
+  background: rgba(251,246,238,.94);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 1px 0 var(--hairline);
 }
 header.site.scrolled {
   background: rgba(251,246,238,.92);
@@ -134,6 +137,7 @@ header.site .gh:hover { color: var(--ink); }
   display: flex; flex-direction: column; justify-content: center;
   position: relative; overflow: hidden;
   padding-top: 64px;
+  padding-bottom: 0;
 }
 .hero-inner {
   flex: 1; display: flex; flex-direction: column; justify-content: center;
@@ -366,9 +370,9 @@ footer.site {
   to { transform: translateX(0); }
 }
 .marquee2-item {
-  font-family: var(--mono); font-size: 12px; font-weight: 500;
-  text-transform: uppercase; letter-spacing: 0.1em;
-  color: var(--muted); padding: 0 20px;
+  font-family: var(--mono); font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.12em;
+  color: var(--ink); padding: 0 20px;
   display: inline-flex; align-items: center; gap: 20px;
 }
 .mq-sep { color: var(--pink); font-size: 10px; }
