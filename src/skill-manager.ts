@@ -285,6 +285,42 @@ export function patchSkill(projectDir: string, name: string, target: ResolvedSki
   }
 }
 
+// ─── Auto-skill lifecycle curator (MCH-56) ────────────────────────────────
+// Auto-drafted skills (MCH-44/55) that were never marked used within
+// `maxAgeMs` get archived (never deleted) so the skill list stays dense with
+// skills that actually earn their prompt tokens.
+
+/** Archive auto-drafted skills with zero usage older than maxAgeMs. Returns archived slugs. */
+export function curateAutoSkills(projectDir: string, opts: { maxAgeMs?: number } = {}): string[] {
+  const maxAgeMs = opts.maxAgeMs ?? 14 * 24 * 3600_000; // 14 days
+  const archived: string[] = [];
+  try {
+    const autoDir = join(skillsRoot(projectDir), 'auto');
+    if (!existsSync(autoDir)) return archived;
+    const db = loadUsage(projectDir);
+    const now = Date.now();
+    for (const file of readdirSync(autoDir)) {
+      if (!file.endsWith('.md')) continue;
+      const slug = file.replace(/\.md$/, '');
+      const rec = db.byName[slug];
+      // Never touched, or last touched beyond the window -> archive.
+      const last = rec?.lastUsedAt ?? 0;
+      if (last !== 0 && now - last < maxAgeMs) continue;
+      // Auto skills are flat files <auto>/<slug>.md — archive directly.
+      const src = join(autoDir, file);
+      const arc = join(archiveRoot(projectDir), slug, file);
+      mkdirSync(dirname(arc), { recursive: true });
+      renameSync(src, arc);
+      archived.push(slug);
+    }
+    if (archived.length) {
+      for (const slug of archived) delete db.byName[slug];
+      saveUsage(projectDir, db);
+    }
+  } catch { /* curation must never throw */ }
+  return archived;
+}
+
 export function deleteSkill(projectDir: string, name: string): WriteResult {
   const found = findSkillFile(projectDir, name);
   if (!found) return { ok: false, error: `No skill named '${name}'` };

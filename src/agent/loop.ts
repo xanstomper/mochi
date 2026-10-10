@@ -3739,6 +3739,9 @@ Continue from 'Next:', do not redo completed progress.`,
         // MCH-55: habitual opening routes become auto-drafted skills.
         const { draftSkillFromToolRoutes } = await import('../skill-curator.js');
         await draftSkillFromToolRoutes(this.workspace.dir);
+        // MCH-56: archive stale never-used auto skills so the list stays dense.
+        const { curateAutoSkills } = await import('../skill-manager.js');
+        curateAutoSkills(this.workspace.dir);
       } catch { /* tool-route persistence must never affect task completion */ }
     }
     const durationMs = Math.round(performance.now() - this.startTime);
