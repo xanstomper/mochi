@@ -80,9 +80,9 @@ export function isSimpleScriptTask(task: Task): boolean {
   const text = `${task.title} ${task.description ?? ''}`.toLowerCase();
   if (text.length > 200) return false;
   if (/refactor|migrat|deploy|framework|architecture|security|database|schema|api endpoint/.test(text)) return false;
-  // Simple shape: create file(s) + run it. Node/python/canvas scripts, no
-  // package-manager or suite orchestration.
-  return /\b(create|write|make)\b/.test(text) && /\b(run|node |python )/.test(text)
+  // Simple shape: create file(s) and run, or rename/update-and-run mechanical
+  // edits. Node/python scripts, no package-manager or suite orchestration.
+  return /\b(create|write|make|rename|update)\b/.test(text) && /\brun\b|\bnode\b|\bpython\b/.test(text)
     && !/\bnpm (test|run)|vitest|jest|pytest|cargo test/.test(text);
 }
 
