@@ -19,7 +19,7 @@
     var cur=(p[0]==='/'? (path==='/'||path==='/mochi/') : path.indexOf('/'+p[1].replace('.html',''))>-1&&p[1]!=='docs.html'?false:false)||false;
     // simpler: compute active explicitly
     var active;
-    if(p[1]==='/') active=(path==='/'||path==='/mochi/'||path==='/mochi');
+    if(p[0]==='/') active=(path==='/'||path==='/mochi/'||path==='/mochi');
     else if(p[1]==='docs.html') active=/docs(\.html|\/)?$/.test(location.pathname);
     else if(p[1]==='source.html') active=/source(\.html|\/)?$/.test(location.pathname);
     else if(p[1]==='benchmarks.html') active=/benchmarks(\.html|\/)?$/.test(location.pathname);
