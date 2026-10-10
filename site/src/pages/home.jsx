@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import Mochi from '../Mascot.jsx';
+import Footer from '../Footer.jsx';
 import { RepoBrowser } from '../RepoBrowser.jsx';
 import {
   SplitText, BlurText, AnimatedContent, CountUp,
@@ -130,17 +131,7 @@ function HeroSection() {
       </div>
       <div className="hero-mascot">
         <AnimatedContent direction="right" delay={0.5} duration={1}>
-          <div className="mascot-wrap">
-            <div className="mascot-blob mascot-blob-1" />
-            <div className="mascot-blob mascot-blob-2" />
-            <div className="mascot-ring mascot-ring-1" />
-            <div className="mascot-ring mascot-ring-2" />
-            <Mochi size={280} mood="happy" />
-            <div className="mascot-shadow" />
-            <div className="mascot-sparkle mascot-sparkle-1" />
-            <div className="mascot-sparkle mascot-sparkle-2" />
-            <div className="mascot-sparkle mascot-sparkle-3" />
-          </div>
+          <Mochi size={520} />
         </AnimatedContent>
       </div>
       <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 10 }}>
@@ -393,30 +384,34 @@ function BenchmarksSection() {
 function CodaSection() {
   return (
     <section className="coda" id="coda">
+      <div style={{ position: 'absolute', right: 20, bottom: -10, opacity: 0.9, pointerEvents: 'none' }}>
+        <Mochi size={200} />
+      </div>
       <AnimatedContent direction="bottom">
-        <ShinyText>
-          <SplitText
-            text="SMALL IS THE FEATURE."
-            as="h2"
-            className="hero-title"
-            style={{ fontSize: 'clamp(40px, 6vw, 72px)', marginBottom: 24 }}
-            delay={0.2}
-            stagger={0.03}
-          />
-        </ShinyText>
+        <SplitText
+          text="Ready to Build with Mochi?"
+          as="h2"
+          className="hero-title"
+          delay={0.2}
+          stagger={0.02}
+        />
       </AnimatedContent>
       <BlurText
-        text="No bloat. No telemetry. No black boxes. Just a small, fast, capable agent that respects your machine and your time."
+        text="Join thousands of developers using Mochi to build faster, smarter, and better."
         className="hero-sub"
-        style={{ margin: '0 auto 40px', textAlign: 'center' }}
-        delay={0.6}
+        delay={0.5}
       />
-      <AnimatedContent direction="bottom" delay={0.8}>
-        <Magnetic strength={0.25}>
-          <a href="https://github.com/xanstomper/mochi/releases" className="btn btn-primary" target="_blank" rel="noopener">
-            Get Mochi →
+      <AnimatedContent direction="bottom" delay={0.7}>
+        <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
+          <Magnetic strength={0.25}>
+            <a href="https://github.com/xanstomper/mochi/releases" className="btn btn-primary" target="_blank" rel="noopener">
+              ↓ Download
+            </a>
+          </Magnetic>
+          <a href="./docs.html" className="btn btn-outline" style={{ borderColor: 'rgba(255,255,255,.3)', color: '#fff' }}>
+            Read the Docs →
           </a>
-        </Magnetic>
+        </div>
       </AnimatedContent>
     </section>
   );
@@ -434,6 +429,7 @@ export default function Home() {
       <TerminalSection />
       <BenchmarksSection />
       <CodaSection />
+      <Footer />
     </>
   );
 }

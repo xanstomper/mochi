@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import Mochi from '../Mascot.jsx';
-import { Reveal, Marquee } from '../anim.jsx';
+import Footer from '../Footer.jsx';
+import { AnimatedContent, SplitText, Reveal } from '../anim.jsx';
 
 const RELEASES = [
 {v:"0.20.0",sum:"Default model chain upgraded (MCH-35)",body:"- <strong>Default model chain upgraded (MCH-35)</strong> \u2014 freeinference <code>kimi-k2.7-code</code> is now the coding/reasoning/review primary; <code>glm-5.3-flash</code> stays the <code>fast</code> profile only and remains first failover. The flash model was the source of the long-run spin (98 calls / 2.1M tokens on a hard vitest task); the coding-primary chain changes real outcomes.<br/>- <strong>MCP client (MCH-33)</strong> \u2014 minimal Model Context Protocol client over stdio (initialize handshake, <code>tools/list</code>, <code>tools/call</code>). Configure servers via <code>.mcp.json</code> or <code>config.mcpServers</code> (same shape as Claude Code). Each server tool is exposed as a native <code>mcp_&lt;server&gt;_&lt;tool&gt;</code> Mochi tool with network-class permissions, so loop guards apply unchanged. A dead server is skipped with a warning \u2014 it can never take down a run \u2014 and connections are torn down on every finish path.<br/>- <strong>Mid-run context digest (MCH-32)</strong> \u2014 CC-style summarization tier between mechanical tool-output shrinking and full turn-dropping compaction: when shrink alone can't get under the context floor, the oldest messages are summarized into a \u2264300-word digest (goal, files touched, commands run, errors/fixes, open threads) and the recent working set is kept intact. Best-effort: any failure falls through to compaction.<br/>- <strong>Codex-style independent acceptance gate (MCH-31)</strong> \u2014 after verification commands pass, every acceptance criterion naming a concrete artifact (exists/created/contains) is re-checked against the filesystem independently of the builder's claims, before any finish. Gates tasks even with zero verification commands.<br/>- <strong>Plan-mode AcceptPlan contract (MCH-28)</strong> \u2014 plan mode now ends via an explicit <code>accept_plan</code> tool call (Claude Code's ExitPlanMode shape) with the plan persisted to <code>.mochi/state/plan.json</code>, instead of regex-guessing prose.<br/>- <strong>Per-endpoint stall budgets (MCH-29/29b)</strong> \u2014 stall-retry budgets are keyed by <code>baseUrl|model</code> instead of global, so a flaky primary burns its own budget and failovers start fresh; transport-level stall retries no longer consume task iterations (a flaky provider can no longer kill a task as <code>max_iterations</code> with zero work done).<br/>- <strong>CC-style in-place context shrink (MCH-30)</strong> \u2014 old tool outputs (&gt;600 chars, outside the recent window) are truncated head+tail in place before any compaction, deferring history loss on long runs.<br/>- <strong>Fake-provider fidelity fix</strong> \u2014 the test fake's <code>stall</code> entry consumed its queue slot, so abort+retry wrongly popped the next scripted success; stalled providers now stay broken across retries (wire-truth), and <code>close()</code> destroys open stalled sockets so teardown can't hang. <strong>Test suite: 1200 passed / 0 failed</strong> (first fully green run; two stall-guard failures had stood since introduction).<br/>- <strong><code>mochi doctor --probe</code></strong> \u2014 doctor now reports app version and can live-ping the provider endpoint (<code>models</code> list, 2s budget) so dead endpoints are caught at onboarding, not mid-run."},
@@ -37,39 +38,104 @@ const RELEASES = [
 {v:"0.1.0",sum:"Provider-level prefix caching.",body:"- Initial rewrite from Pi baseline.<br/>- Core runtime, event bus, workspace, and config.<br/>- Model-agnostic OpenAI-compatible provider with OpenCode aliases.<br/>- Model profiles: fast, coding, reasoning, review.<br/>- Tool bus: read, write, edit, delete, shell, search, glob, git.<br/>- Permission system: safe / ask / auto.<br/>- Context engine with token budget, compaction, and structured state.<br/>- Agent loop with preflight, verification, recovery, and pulse.<br/>- Persistent goals and task DAG scheduler.<br/>- Team orchestration with role-based agents.<br/>- Git checkpoint and rollback.<br/>- Interactive CLI and slash commands.<br/>- Multiple workspaces.<br/>- Tests and benchmarks.<br/><br/>- <strong>Provider-level prefix caching.</strong> <code>openai.ts</code> injects <code>cache_control: {type: \"ephemeral\"}</code> on index-0 system messages for DeepSeek/openai-compatible providers (freeinference/deepseek). First turn is 200; multi-turn agent runs clean. Combined with the byte-stable STABLE tier design (system prompt is identical across turns), this targets jcode-class token efficiency through cached-prefix billing.<br/>-- Final concrete results (all verified, not projected) --<br/>Freeze: reproduced from $HOME (&gt;30s hang) -&gt; 2.3s after fix.<br/>Dogfood battery (same deepseek-v4-flash): mochi 10.6s/5.6s/7.1s vs jcode 8.6s/5.4s/17.0s; all outputs clean via hygiene scanner; T2 fix + T3 feature verified with untouched tests.<br/>Prompt diet: 5249 -&gt; 4268 tokens (~-1000/turn, -19%).<br/>Cache control: openai provider adds ephemeral cache_control to index-0 system; freeinference returned 200 with usage tracked."}
 ];
 
-function Rel({ r, open, onToggle }) {
-  const isOpen = open === undefined ? false : open;
+function TimelineEntry({ r, isLatest }) {
   return (
-    <Reveal as="div" className={'rel' + (open ? ' open' : '')}>
-      <button className="rel-head" onClick={onToggle}>
-        <span className="rel-v">v{r.v}</span>
-        <span className="rel-sum" dangerouslySetInnerHTML={{ __html: r.sum }}></span>
-        <span className="rel-x">{isOpen ? '−' : '+'}</span>
-      </button>
-      {isOpen && <div className="rel-body" dangerouslySetInnerHTML={{ __html: r.body }}></div>}
+    <Reveal as="div" className="timeline-entry">
+      <div className="timeline-marker" />
+      <div className="timeline-content">
+        <div className="timeline-head">
+          <span className="timeline-version">v{r.v}</span>
+          {isLatest && <span className="timeline-badge">NEW</span>}
+          <span className="timeline-date">{r.date || ''}</span>
+        </div>
+        <h3 className="timeline-title" dangerouslySetInnerHTML={{ __html: r.sum }} />
+        <div className="timeline-body" dangerouslySetInnerHTML={{ __html: r.body }} />
+      </div>
     </Reveal>
   );
 }
 
 function Changelog() {
-  const [allOpen, setAllOpen] = useState(true);
-  const [openSet, setOpenSet] = useState(() => new Set(RELEASES.map(r => r.v)));
-  const toggle = v => setOpenSet(s => { const n = new Set(s); n.has(v) ? n.delete(v) : n.add(v); return n; });
-  const flipAll = () => { const next = !allOpen; setAllOpen(next); setOpenSet(next ? new Set(RELEASES.map(r => r.v)) : new Set()); };
   return (
     <>
       <div className="pagehead">
         <div className="wrap">
-          <div className="eyebrow">EVERY VERSION, TRACE-FOR-TRACE</div>
-          <h1 style={{ display: 'flex', alignItems: 'center', gap: 14 }}>Changelog <Mochi size={46} mood="happy" className="mascot bob" /></h1>
-          <p>Every version, every update — all {RELEASES.length} releases, newest first. <button className="flipall" onClick={flipAll}>{allOpen ? 'Collapse all' : 'Expand all'}</button> — raw history: <a href="https://github.com/xanstomper/mochi/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG.md</a></p>
-                <Marquee speed={38} items={['V0.20.0 — MCP CLIENT', 'V0.11.0 — RELIABILITY OVERHAUL', 'V0.10.6 — RUST RUNTIME CORE', 'V0.9.4 — PERSISTENT DAEMON', '31 RELEASES', '1200+ TESTS']} />
-      <div className="rel-pills">{RELEASES.map(r => <a key={r.v} className={'pill' + (openSet.has(r.v) ? ' on' : '')} href={'#rel-' + r.v} onClick={e => { e.preventDefault(); toggle(r.v); }}>{r.v}</a>)}</div>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 24, flexWrap: 'wrap' }}>
+            <div style={{ flex: '1 1 480px' }}>
+              <AnimatedContent direction="bottom" delay={0.1}>
+                <div className="hero-eyebrow">
+                  <span className="sparkle" />
+                  UPDATES
+                </div>
+              </AnimatedContent>
+              <SplitText
+                text="What's New in Mochi."
+                className="hero-title"
+                as="h1"
+                style={{ fontSize: 48 }}
+                delay={0.3}
+                stagger={0.015}
+              />
+              <AnimatedContent direction="bottom" delay={0.5}>
+                <p className="lede" style={{ marginTop: 16, maxWidth: 560 }}>
+                  We ship updates frequently to make Mochi faster, smarter, and more capable. Here's what's new.
+                </p>
+              </AnimatedContent>
+            </div>
+            <AnimatedContent direction="right" delay={0.4}>
+              <div style={{ position: 'relative', textAlign: 'center' }}>
+                <Mochi size={140} />
+                <div style={{
+                  fontFamily: 'var(--font-sans)',
+                  fontSize: 13,
+                  color: 'var(--purple-dark)',
+                  fontStyle: 'italic',
+                  marginTop: 4,
+                }}>
+                  new stuff!
+                </div>
+              </div>
+            </AnimatedContent>
+          </div>
         </div>
       </div>
-      <div className="wrap relwrap">
-        {RELEASES.map(r => <div key={r.v} id={'rel-' + r.v}><Rel r={r} open={openSet.has(r.v)} onToggle={() => toggle(r.v)} /></div>)}
+
+      <div className="wrap" style={{ padding: '24px 24px 60px' }}>
+        <div className="timeline">
+          {RELEASES.map((r, i) => (
+            <TimelineEntry key={r.v} r={r} isLatest={i === 0} />
+          ))}
+        </div>
       </div>
+
+      {/* Dark CTA banner */}
+      <div className="wrap" style={{ padding: '0 24px 80px' }}>
+        <div style={{
+          background: 'linear-gradient(135deg, #1A1633 0%, #2D2460 100%)',
+          borderRadius: 20,
+          padding: '36px 40px',
+          color: '#fff',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: 20,
+        }}>
+          <p style={{ color: 'rgba(255,255,255,.85)', fontSize: 16, margin: 0 }}>
+            Want to stay updated? Follow us for the latest releases and announcements.
+          </p>
+          <a
+            href="https://x.com/xanstomper"
+            target="_blank"
+            rel="noopener"
+            className="btn btn-primary"
+          >
+            𝕏 Follow on X
+          </a>
+        </div>
+      </div>
+
+      <Footer />
     </>
   );
 }

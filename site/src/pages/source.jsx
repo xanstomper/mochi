@@ -1,22 +1,134 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import RepoBrowser from '../RepoBrowser.jsx';
-import { Marquee, Reveal } from '../anim.jsx';
+import Mochi from '../Mascot.jsx';
+import Footer from '../Footer.jsx';
+import { Marquee, Reveal, AnimatedContent, SplitText } from '../anim.jsx';
+
+const FEATURES = [
+  { icon: '🌐', title: 'Open Source', desc: 'Transparent, community-driven, and always open. →' },
+  { icon: '🤝', title: 'Contribute', desc: 'Help us improve Mochi with code, ideas, and feedback. →' },
+  { icon: '💬', title: 'Join the Community', desc: 'Get support, share your projects, and connect with other builders. →' },
+];
 
 function Source() {
   return (
     <>
       <div className="pagehead">
         <div className="wrap">
-          <div className="eyebrow">NOTHING HIDDEN — READ EVERYTHING</div>
-          <h1>Source</h1>
-          <p className="lede">Every file of mochi, fetched live from the main branch. Search it, open it, read it — without leaving the page.</p>
+          <AnimatedContent direction="bottom" delay={0.1}>
+            <div className="hero-eyebrow">
+              <span className="sparkle" />
+              OPEN SOURCE
+            </div>
+          </AnimatedContent>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 24, flexWrap: 'wrap' }}>
+            <div style={{ flex: '1 1 480px' }}>
+              <SplitText
+                text="Open Source and Always Free."
+                className="hero-title"
+                as="h1"
+                style={{ fontSize: 48 }}
+                delay={0.3}
+                stagger={0.015}
+              />
+              <AnimatedContent direction="bottom" delay={0.5}>
+                <p className="lede" style={{ marginTop: 16, maxWidth: 560 }}>
+                  Mochi is open source. Build, contribute, and make it better together with our community.
+                </p>
+                <div style={{ display: 'flex', gap: 12, marginTop: 24, flexWrap: 'wrap' }}>
+                  <a
+                    href="https://github.com/xanstomper/mochi"
+                    target="_blank"
+                    rel="noopener"
+                    className="btn btn-dark"
+                  >
+                    View on GitHub
+                  </a>
+                  <a
+                    href="https://github.com/xanstomper/mochi/blob/main/CONTRIBUTING.md"
+                    target="_blank"
+                    rel="noopener"
+                    className="btn btn-outline"
+                  >
+                    Contribute →
+                  </a>
+                </div>
+              </AnimatedContent>
+            </div>
+            <AnimatedContent direction="right" delay={0.4}>
+              <div style={{ position: 'relative', textAlign: 'center' }}>
+                <Mochi size={180} />
+                <div style={{
+                  fontFamily: 'var(--font-sans)',
+                  fontSize: 13,
+                  color: 'var(--purple-dark)',
+                  fontStyle: 'italic',
+                  marginTop: 8,
+                }}>
+                  built by the community ♡
+                </div>
+              </div>
+            </AnimatedContent>
+          </div>
         </div>
       </div>
+
       <Marquee speed={32} items={['REPO: XANSTOMPER/MOCHI', 'BRANCH: MAIN', 'LIVE FROM GITHUB', 'MIT LICENSE', 'ZERO DEPENDENCIES']} />
-      <div className="wrap" style={{ padding: '48px 24px 90px' }}>
+
+      <div className="wrap" style={{ padding: '48px 24px 60px' }}>
+        <div className="grid3" style={{ marginBottom: 48 }}>
+          {FEATURES.map((f, i) => (
+            <Reveal as="div" className="card" delay={i} key={i}>
+              <span className="card-icon">{f.icon}</span>
+              <h3 className="card-title">{f.title}</h3>
+              <p className="card-desc">{f.desc}</p>
+            </Reveal>
+          ))}
+        </div>
+
         <div className="rb-window"><RepoBrowser /></div>
       </div>
+
+      {/* Dark CTA banner */}
+      <div className="wrap" style={{ padding: '0 24px 80px' }}>
+        <div style={{
+          position: 'relative',
+          background: 'linear-gradient(135deg, #1A1633 0%, #2D2460 100%)',
+          borderRadius: 28,
+          padding: '60px 48px',
+          color: '#fff',
+          overflow: 'hidden',
+        }}>
+          <div style={{ maxWidth: 560, position: 'relative', zIndex: 1 }}>
+            <h2 style={{ fontSize: 36, fontWeight: 700, marginBottom: 12, color: '#fff' }}>
+              Ready to Build with Mochi?
+            </h2>
+            <p style={{ color: 'rgba(255,255,255,.75)', marginBottom: 28, fontSize: 16 }}>
+              Join thousands of developers using Mochi to build faster, smarter, and better.
+            </p>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              <a href="https://github.com/xanstomper/mochi/releases" target="_blank" rel="noopener" className="btn btn-primary">
+                ↓ Download
+              </a>
+              <a href="./docs.html" className="btn btn-outline" style={{ borderColor: 'rgba(255,255,255,.3)', color: '#fff' }}>
+                Read the Docs →
+              </a>
+            </div>
+          </div>
+          <div style={{
+            position: 'absolute',
+            right: -20,
+            bottom: -10,
+            zIndex: 0,
+            opacity: 0.9,
+          }}>
+            <Mochi size={220} />
+          </div>
+        </div>
+      </div>
+
+      <Footer />
     </>
   );
 }
