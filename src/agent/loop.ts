@@ -1906,6 +1906,21 @@ Continue from 'Next:', do not redo completed progress.`,
           if (!this.planMode && this.planNudges > 0 && this.toolCallsTotal === 0) {
             return this.finish(task, false, 'No execution evidence after a recovery nudge. Last reply:\n' + response.content, 'tool_loop');
           }
+          // MCH-75: a bare-text finish with no tool calls and no file changes
+          // has produced NO verifiable evidence. If a verification command or
+          // acceptance criteria exists, run it once and downgrade to partial
+          // on failure instead of trusting the prose claim. Read-only/chat
+          // tasks and plan mode are exempt.
+          if (this.toolCallsTotal === 0 && !this.fileChanged && !this.planMode) {
+            const hasGate = Boolean(task.verificationCommand || (task.acceptanceCriteria && task.acceptanceCriteria.length > 0) || detectRepo(this.cwd).testCommand || detectRepo(this.cwd).buildCommand);
+            if (hasGate) {
+              const verification = await this.verify(task, detectRepo(this.cwd));
+              if (!verification.passed) {
+                return this.finish(task, false, `Completion claimed in prose but verification failed:\n${verification.summary}`, 'verification_failed');
+              }
+              return this.finish(task, true, `${response.content}\n\n${verification.summary}`, 'completed');
+            }
+          }
           return this.finish(task, true, response.content, 'completed');
         }
         // Empty response: the model returned nothing (common with overloaded
