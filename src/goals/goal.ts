@@ -48,6 +48,9 @@ export class GoalEngine {
    *  so the host (Runtime) can surface a live per-model cost breakdown. */
   onBudget?: (b: import('../budget.js').BudgetEngine) => void;
 
+  /** MCH-81: per-task token/cost attribution, filled as tasks finish. */
+  private taskCosts: Array<{ title: string; tokens: number; costUsd: number }> = [];
+
   /** MCH-74: push mid-run guidance to every live agent of this engine.
    *  Returns the number of agents that received it (0 = nothing running). */
   steerActive(text: string): number {
@@ -311,7 +314,16 @@ Return ONLY the JSON array, no markdown.`;
       goal,
       completedTasks: completed,
       failedTasks: failed,
-      summary: `Goal ${goal.status}. ${completed.length} done, ${failed.length} failed, ${scheduler.all().length - completed.length - failed.length} remaining. Tokens: ${this.goalStats.tokens}. Cost: $${budget.snapshot(this.config.model.model).usedCostUsd.toFixed(4)}. Time: ${Math.round(this.goalStats.duration / 1000)}s.`,
+      summary: `Goal ${goal.status}. ${completed.length} done, ${failed.length} failed, ${scheduler.all().length - completed.length - failed.length} remaining. Tokens: ${this.goalStats.tokens}. Cost: $${budget.snapshot(this.config.model.model).usedCostUsd.toFixed(4)}. Time: ${Math.round(this.goalStats.duration / 1000)}s.` +
+        (this.taskCosts.length > 0
+          ? '\nCostliest tasks: ' +
+            this.taskCosts
+              .slice()
+              .sort((a, b) => b.costUsd - a.costUsd)
+              .slice(0, 3)
+              .map((tc) => `${tc.title.slice(0, 60)} ($${tc.costUsd.toFixed(4)}, ${tc.tokens.toLocaleString()} tok)`)
+              .join(' | ')
+          : ''),
       tokensUsed: this.goalStats.tokens,
       costUsd: budget.snapshot(this.config.model.model).usedCostUsd,
       durationMs: this.goalStats.duration,
@@ -407,6 +419,8 @@ Return ONLY the JSON array, no markdown.`;
     let result = await this.runTask(goal, task, abortSignal, budget, extraContext, readCache, sessionId);
     this.goalStats.tokens += result.tokensUsed;
     this.goalStats.duration += result.durationMs;
+    // MCH-81: per-task cost attribution for the goal summary card.
+    this.taskCosts.push({ title: task.title, tokens: result.tokensUsed, costUsd: result.costUsd });
     if (hasSqlite() && (sessionId || goal.id)) {
       try {
         const sid = sessionId ?? this.store.begin({ goalId: goal.id });
