@@ -3,7 +3,7 @@ import {hostname, platform, arch, totalmem, freemem, cpus, release} from 'node:o
 import { resolve } from 'node:path';
 import { MemoryStore, type MemoryEntry } from './memory.js';
 import { selectRelevant } from './relevance.js';
-import { loadAllSkills, formatSkillsForPrompt, type Skill, bundledSkillsDir, discoverSkills } from './skills.js';
+import { loadAllSkills, formatSkillsForPrompt, type Skill, bundledSkillsDir, discoverSkills, loadSkillUsage, usageBoostMap } from './skills.js';
 import { nativeCountTokens } from './native/core.js';
 import { nativePlanCompaction } from './native/agent-protocol.js';
 import type { PlanRequestMessage } from './native/agent-protocol.js';
@@ -149,10 +149,19 @@ export function tokenOverlap(a: string, b: string): number {
  *  preserving stable source order for ties. Strong harnesses only surface
  *  skills whose description matches the request; this reproduces that so the
  *  model is not shown an off-topic skill registry it can hallucinate from. */
-export function selectRelevantSkills(skills: Skill[], taskText: string, max: number): Skill[] {
+export function selectRelevantSkills(skills: Skill[], taskText: string, max: number, usageBoost?: Map<string, number>): Skill[] {
   if (!taskText.trim()) return [];
+  // MCH-40 (skills v2): usageBoost folds real-world skill success into the
+  // rank — boost = min(0.15, successes/20 * 0.15). Skills that actually help
+  // (loaded AND followed by successful outcomes) surface ahead of equally
+  // relevant never-used ones. +0.15 breaks ties but never lifts noise above
+  // the MIN_SKILL_SCORE floor.
   const scored = skills
-    .map((s) => ({ s, score: tokenOverlap(taskText, `${s.name} ${s.description}`) }))
+    .map((s) => {
+      const base = tokenOverlap(taskText, `${s.name} ${s.description}`);
+      const boost = usageBoost ? Math.min(0.15, ((usageBoost.get(s.name) ?? 0) / 20) * 0.15) : 0;
+      return { s, score: base + boost };
+    })
     .filter((e) => e.score >= MIN_SKILL_SCORE)
     .sort((a, b) => b.score - a.score || skills.indexOf(a.s) - skills.indexOf(b.s));
   return scored.slice(0, max).map((e) => e.s);
@@ -378,7 +387,12 @@ export class ContextEngine {
       // nothing for no-tool runs (chat/bare) and bundled skills when tools are registered.
       let relevant: Skill[];
       if (task) {
-        relevant = selectRelevantSkills(skills, task.title + ' ' + (task.description ?? ''), MAX_TASK_SKILLS);
+        // MCH-40: usage-ranked boost — skills with proven win history float up.
+        let boost: Map<string, number> | undefined;
+        try {
+          boost = usageBoostMap(loadSkillUsage(this.projectRoot));
+        } catch { boost = undefined; }
+        relevant = selectRelevantSkills(skills, task.title + ' ' + (task.description ?? ''), MAX_TASK_SKILLS, boost);
       } else if (tools && tools.length > 0) {
         const bDir = bundledSkillsDir();
         relevant = bDir ? discoverSkills(bDir).skills : [];
@@ -445,7 +459,7 @@ ${this.toolGuidelines(tools)}
 - **Insightful & Professional**: Provide clear technical insights without unnecessary fluff, but always communicate your plans, findings, and outcomes.
 - **Clean Markdown Formatting**: Use concise GitHub-flavored markdown with code snippets, paths, and clear bullet points where helpful.
 
-${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSection(this.projectRoot)}${memoryDigest()}${feedbackDigest()}${detectCircle(this.messages).stopDirective}
+${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSection(this.projectRoot)}${memoryDigest(task ? `${task.title} ${task.description}` : undefined)}${feedbackDigest()}${detectCircle(this.messages).stopDirective}
 `.trim();
   }
 
@@ -695,6 +709,38 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
     if (this.lastReportedPromptTokens != null) return this.lastReportedPromptTokens;
     if (this.lastSentTokens > 0) return this.lastSentTokens;
     return this.estimateTokens() + 1500;
+  }
+
+  /**
+   * MCH-30: Claude Code-style mid-run compression — shrink OLD tool outputs
+   * IN PLACE before resorting to full turn-dropping compaction. Compaction
+   * (compact()) removes whole turns and rewrites history via a checkpoint;
+   * this cheaper first step keeps the conversation STRUCTURE (every tool_call
+   * id keeps its result) but caps each old tool result to head+tail so the
+   * model still sees what each step produced without the full mass. Recent
+   * turns (last RECENT_WINDOW messages) are never touched, and already-shrunk
+   * outputs are marked so repeated calls are O(new mass) not O(history).
+   * Returns the estimated tokens saved (0 when nothing was old/large enough).
+   */
+  shrinkOldToolOutputs(): number {
+    const RECENT_WINDOW = 12;      // never touch the newest ~6 turns
+    const SHRINK_THRESHOLD = 600;  // chars: outputs below this are already cheap
+    const KEEP_HEAD = 240;
+    const KEEP_TAIL = 160;
+    const MARK = '\n[…earlier tool output truncated in place to save context; re-run the tool if you need the full text…]';
+
+    let saved = 0;
+    const end = Math.max(0, this.messages.length - RECENT_WINDOW);
+    for (let i = 0; i < end; i++) {
+      const m = this.messages[i];
+      if (m.role !== 'tool') continue;
+      const c = typeof m.content === 'string' ? m.content : '';
+      if (c.length < SHRINK_THRESHOLD || c.includes(MARK)) continue;
+      const shrunk = c.slice(0, KEEP_HEAD) + MARK + (c.length > KEEP_HEAD + KEEP_TAIL ? c.slice(-KEEP_TAIL) : '');
+      saved += c.length - shrunk.length;
+      m.content = shrunk;
+    }
+    return Math.floor(saved / 3.8);
   }
 
   private stateLedger(): string {

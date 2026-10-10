@@ -21,7 +21,8 @@ import type { AgentProfile } from '../types.js';
 import { AgentProfileService } from '../agents/profile.js';
 import { BudgetEngine, estimateCostUsd } from '../budget.js';
 import { SpeculativeEngine } from '../speculative.js';
-import { retrieveSpeculationMemory, recordSpeculationOutcome, speculationMemoryToPrompt } from '../speculative.js';
+import { retrieveSpeculationMemory, recordSpeculationOutcome, speculationMemoryToPrompt, predictNextFiles } from '../speculative.js';
+import { join } from 'node:path';
 import { detectSkillOpportunities, opportunitiesToPrompt, shouldRunCurator, runCurator, recordCuratorRun, defaultCuratorConfig } from '../skill-curator.js';
 import { LearningStore } from '../learning.js';
 import { classifyFailure as classifyErrorPattern } from '../learning.js';
@@ -169,6 +170,24 @@ export function isPlanShaped(text: string): boolean {
     t.length >= 120 &&
     /(^|\n)\s*(steps|plan|approach|files? to change|risks?|verification|how to verify|outline|summary|tasks?|deliverables)\s*[:.]/i.test(t)
   );
+}
+
+/**
+ * MCH-31: pull candidate file paths out of an acceptance-criterion sentence.
+ * Recognizes quoted paths, backticked paths, and bare relative paths with a
+ * known extension or a slash. Returns repo-relative candidates (deduped).
+ */
+export function extractPathsFromCriterion(criterion: string): string[] {
+  const out: string[] = [];
+  const quoted = criterion.match(/["'`]([^\s"'`]+\.[A-Za-z0-9]{1,8}|[^\s"'`]*\/[^\s"'`]+)["'`]/g) ?? [];
+  for (const q of quoted) out.push(q.slice(1, -1));
+  // Bare tokens that look like paths: contain a slash or have a file extension.
+  const bare = criterion.match(/(?:^|\s)((?:[\w.@-]+\/)*[\w.@-]+\.[A-Za-z0-9]{1,8})(?=\s|$|[,.;)])|(?:^|\s)((?:[\w.@-]+\/)+[\w.@-]+)/g) ?? [];
+  for (const b of bare) {
+    const tok = b.trim().replace(/[,.;)]$/, '');
+    if (tok && !/^(https?|the|a|an|this|that|file|test|grep|test -f)$/i.test(tok)) out.push(tok);
+  }
+  return [...new Set(out)].filter((p) => p.length > 1 && !p.includes('..') && !p.startsWith('/'));
 }
 
 /** Plan shape: a substantive multi-file change the model must plan, track,
@@ -332,6 +351,10 @@ export class Agent {
   private planMode: boolean;
   private planVetoes = 0;
   private planNudges = 0;
+  /** MCH-28: set when the model submits its plan via the accept_plan tool. */
+  private planAccepted = false;
+  /** MCH-28: plan text captured from the accept_plan call (falls back to prose). */
+  private planAcceptedText = '';
   private emptyResponseCount = 0;
   private selfReviewCount = 0;
   private taskKind?: import('../taskkind.js').TaskKind;
@@ -351,10 +374,40 @@ export class Agent {
   private transientAbortRetries = 0;
   private rateLimitRetries = 0;
   private cooldownRetries = 0;
-  /** Bounded retry budget for model-response stalls (timeouts). Stalls first
-   *  attempt provider failover, then retry with backoff; only when both the
-   *  failover pool and this budget are exhausted does the task finish. */
+  // Bounded retry budget for model-response stalls (timeouts). Stalls first
+  // attempt provider failover, then retry with backoff; only when both the
+  // failover pool and this budget are exhausted does the task finish.
   private stallRetries = 0;
+  /** MCH-29: per-(provider,model) stall budgets. Claude Code budgets retry
+   *  state per endpoint, not globally: a flaky primary burning its own budget
+   *  must not exhaust the retries a healthy failover still deserves. Keyed by
+   *  `baseUrl|model`; stallRetries is kept as the CURRENT key's mirror for the
+   *  existing retry/budget logic below. */
+  private stallRetriesByKey = new Map<string, number>();
+
+  /** MCH-29: current provider+model key for per-endpoint stall budgets. */
+  private stallKey(): string {
+    return `${this.config.model.baseUrl ?? ''}|${this.config.model.model ?? ''}`;
+  }
+
+  /** Mirror the current endpoint's stall budget into stallRetries. Called
+   *  after any model switch (failover) so the budget tracked is always the
+   *  ACTIVE endpoint's, never the previous one's. */
+  private syncStallBudget(): void {
+    this.stallRetries = this.stallRetriesByKey.get(this.stallKey()) ?? 0;
+  }
+
+  /** Increment the ACTIVE endpoint's stall budget and mirror it. */
+  private bumpStallRetries(): void {
+    const k = this.stallKey();
+    this.stallRetriesByKey.set(k, (this.stallRetriesByKey.get(k) ?? 0) + 1);
+    this.stallRetries = this.stallRetriesByKey.get(k)!;
+  }
+  /** Last tool outcome (MCH-26): error string if the most recent tool call
+   *  failed, null once any later tool succeeds. finish() uses this to gate
+   *  "completed" on the run not ENDING on a failed command (Codex-style),
+   *  while still allowing runs that recovered from earlier errors. */
+  private lastToolError: string | null = null;
   /** Phase 5 (VNext): stuck-signal counters surfaced in the volatile state
    *  prompt so the model can see its own loop pattern and break it. */
   private nudgeInjections = 0;
@@ -404,6 +457,8 @@ export class Agent {
     this.learning = new LearningStore(this.workspace.dir);
     this.hooks = new HookManager(this.workspace.dir);
     this.toolDefs = [...this.tools.values()].map((t) => t.def);
+    // MCH-33: MCP servers (config.mcpServers / .mcp.json) are loaded lazily
+    // on first run() so the constructor stays sync; see loadMcpInRun.
     this.provider = createProvider(this.config.model, opts.modelProfile ?? this.profile.defaultModel ?? 'coding');
     this.events.emit({ type: 'agent:spawned', id: this.id, role: opts.role as any, taskId: '' });
   }
@@ -476,7 +531,7 @@ export class Agent {
     if (this.planMode) {
       this.context.addMessage({
         role: 'system',
-        content: 'PLAN MODE: Research the codebase with read-only tools if needed, then your VERY NEXT message must be the complete plan itself: numbered steps, files to change, risks, and how to verify. Do NOT edit files or run mutating commands. Do NOT say "I will proceed" — output the plan directly.',
+        content: 'PLAN MODE: Research the codebase with read-only tools if needed, then submit your complete plan by calling the accept_plan tool with the plan as its argument (numbered steps, files to change, risks, and how to verify). Do NOT edit files or run mutating commands. After calling accept_plan, end your turn — do not call other tools.',
       });
     }
 
@@ -637,6 +692,32 @@ Continue from 'Next:', do not redo completed progress.`,
     // Bounded: runs at most once (guarded by speculativePreflighted), only if
     // budget allows, and swallows any failure so it never blocks the task.
     if (!this.planMode && taskKind !== 'chat' && this.specPreflightEnabled() && !this.specPreflighted) {
+      // MCH-43: predictive file pre-fetch — warm the read cache with files the
+      // co-change graph predicts we'll need next, before the model asks. Cheap
+      // (one git log) and best-effort: any failure is invisible to the task.
+      try {
+        const touched = this.context.getMessages()
+          .filter((m) => m.role === 'user' || m.role === 'assistant')
+          .slice(-20)
+          .flatMap((m) => (m.content?.match(/[\w./-]+\.(?:ts|js|py|go|rs)/g) ?? []));
+        const uniqueTouched = [...new Set(touched)].slice(0, 10);
+        if (uniqueTouched.length > 0) {
+          const predicted = predictNextFiles(this.workspace.dir, uniqueTouched, 5);
+          const { readFile, stat } = await import('node:fs/promises');
+          for (const f of predicted) {
+            try {
+              const full = join(this.workspace.dir, f);
+              const st = await stat(full);
+              if (st.size <= 64_000) {
+                this.readCache.set(full, { mtimeMs: st.mtimeMs, size: st.size, content: await readFile(full, 'utf8') });
+              }
+            } catch { /* unreadable: skip this file */ }
+          }
+          if (predicted.length > 0) {
+            this.events.emit({ type: 'agent:log', agentId: this.id, message: `prefetch: warmed ${predicted.length} co-change file(s)` });
+          }
+        }
+      } catch { /* prefetch is strictly optional */ }
       await this.maybeSpeculativePreflight(task);
     }
 
@@ -713,6 +794,7 @@ Continue from 'Next:', do not redo completed progress.`,
         this.budget.recordModelCall();
       }
 
+      if (i === 0) await this.loadMcpInRun();
       if (i > 0 && i % 8 === 0) await this.checkpointAndCompact('periodic');
 
       // Compact-first context floor: once the live transcript grows past a
@@ -727,7 +809,21 @@ Continue from 'Next:', do not redo completed progress.`,
       const floor = Math.min(this.config.safety.contextBudgetTokens * 0.6, ceiling);
       const msgCount = (this.context as any).messages?.length ?? 0;
       if (i > 0 && msgCount >= 10 && this.context.effectiveContextTokens() > floor) {
-        await this.checkpointAndCompact('floor');
+        // MCH-30: CC-style two-stage pressure response. Stage 1 (cheap):
+        // shrink old tool outputs in place — keeps every turn's structure, no
+        // model call, no history rewrite. Stage 2 (only if still over floor):
+        // the existing full checkpoint+compact. This defers expensive
+        // compaction on long runs the way Claude Code's context editor does.
+        const savedTokens = this.context.shrinkOldToolOutputs();
+        if (savedTokens > 0) {
+          this.events.emit({ type: 'agent:log', agentId: this.id, message: `[context] shrunk old tool outputs in place (~${savedTokens} tokens saved); deferring full compaction` });
+        }
+        if (this.context.effectiveContextTokens() > floor) {
+          await this.digestOldMessages(floor);
+        }
+        if (this.context.effectiveContextTokens() > floor) {
+          await this.checkpointAndCompact('floor');
+        }
       }
 
       const pulse = this.pulse(i, task);
@@ -840,7 +936,20 @@ Continue from 'Next:', do not redo completed progress.`,
 
         const activeReasoning = this.resolveReasoning(task);
         sm.enter('stream-guard');
+        // MCH-39 (strength/UX): headless runs look FROZEN during a long silent
+        // model turn (kimi thinks 60-90s before the first token). A heartbeat
+        // every 30s of stream silence tells the user the run is alive and how
+        // long it's been thinking — the difference between "wait" and "kill it".
+        const turnStartedAt = Date.now();
+        let lastHeartbeatAt = turnStartedAt;
+        const HEARTBEAT_MS = 30_000;
         for await (const chunk of activeProvider.streamChat(messages, this.toolDefs, { temperature: 0.2, signal: activeCallSignal.signal, reasoningEffort: activeReasoning as any })) {
+          const now = Date.now();
+          if (now - lastHeartbeatAt >= HEARTBEAT_MS) {
+            lastHeartbeatAt = now;
+            const elapsedS = Math.round((now - turnStartedAt) / 1000);
+            this.events.emit({ type: 'agent:log' as any, agentId: this.id, message: `[heartbeat] model thinking ${elapsedS}s… (still alive, ${this.context.effectiveContextTokens()} ctx tokens)` });
+          }
           chunks.push(chunk);
           if (chunk.reasoningContent) {
             const rChunk = chunk.reasoningContent || '';
@@ -1112,17 +1221,25 @@ Continue from 'Next:', do not redo completed progress.`,
           // the task as failed immediately — now treat it like any other
           // transient provider failure: failover → retry → checkpoint+finish
           // only when the bounded budget is exhausted.
-          this.stallRetries++;
+          this.bumpStallRetries();
+          // MCH-29b: a transport-level stall retry is NOT a task iteration.
+          // It previously consumed one, so a flaky provider burned the task's
+          // maxIterations budget with zero agent work and the run died as
+          // 'max_iterations' instead of 'model_error'. Undo the loop increment
+          // for stall retries; the per-endpoint stall budget bounds the loop.
+          i = Math.max(0, i - 1);
           this.events.emit({ type: 'agent:log', agentId: this.id, message: `[model] no data for ${MODEL_RESPONSE_TIMEOUT_MS / 1000}s; aborting this response to avoid a mid-task stall.` });
 
           const alt = this.pickAlternateModel();
           if (alt) {
             this.events.emit({ type: 'agent:log', agentId: this.id, message: `[model-stall] Failing over to model ${alt}` });
             this.setActiveModel(alt);
+            this.syncStallBudget();
             continue;
           }
 
           if (this.switchToNextProvider()) {
+            this.syncStallBudget();
             continue;
           }
 
@@ -1158,16 +1275,20 @@ Continue from 'Next:', do not redo completed progress.`,
           const retryRaced = await boundedGather(retryPacket.messages);
           if ('__timedOut' in retryRaced) {
             this.events.emit({ type: 'agent:log', agentId: this.id, message: `[model] retry stalled ${MODEL_RESPONSE_TIMEOUT_MS / 1000}s; treating as transient provider failure.` });
-            this.stallRetries++;
+            this.bumpStallRetries();
+            // MCH-29b: transport retry, not a task iteration (see above).
+            i = Math.max(0, i - 1);
 
             const alt = this.pickAlternateModel();
             if (alt) {
               this.events.emit({ type: 'agent:log', agentId: this.id, message: `[model-stall] Failing over to model ${alt}` });
               this.setActiveModel(alt);
+              this.syncStallBudget();
               continue;
             }
 
             if (this.switchToNextProvider()) {
+              this.syncStallBudget();
               continue;
             }
 
@@ -1318,12 +1439,17 @@ Continue from 'Next:', do not redo completed progress.`,
           costUsd: this.budget?.snapshot(this.config.model.model).usedCostUsd ?? cost,
         });
       }
-      // Reset empty-response counter on any successful model output.
+      // Reset retry counters on any successful model output. stallRetries was
+      // previously omitted: a couple early transient timeouts would leave it non-zero
+      // so the NEXT (potentially unrelated) stall exhausted the retry budget and
+      // finished the task as model_error instead of failing over. See MCH-25.
       if ((response.content && response.content.trim()) || response.toolCalls?.length) {
         this.emptyResponseCount = 0;
         this.transientAbortRetries = 0;
         this.rateLimitRetries = 0;
         this.cooldownRetries = 0;
+        this.stallRetries = 0;
+        this.stallRetriesByKey.delete(this.stallKey());
       }
       
       // Reset stream-loop counter if the model successfully used a tool,
@@ -1603,12 +1729,26 @@ Continue from 'Next:', do not redo completed progress.`,
             if (this.planNudges > 3) {
               return this.finish(task, false, 'Planner never produced a plan. Last reply:\n' + response.content, 'max_iterations');
             }
+            // MCH-28: if the model already submitted the plan via accept_plan,
+            // a short confirmation reply is a valid ending, not a preamble.
+            if (this.planAccepted) {
+              const planText = this.planAcceptedText || response.content.trim() || 'Planned. No files were changed.';
+              return this.finish(task, true, planText, 'completed');
+            }
             this.context.addMessage({
               role: 'system',
-              content: 'PLAN MODE: that was a preamble, not a plan. Your final message MUST be the actual plan: numbered steps, files to change, risks, and how to verify. Output the plan directly now, no tool calls, no "I will".',
+              content: 'PLAN MODE: that was a preamble, not a plan. Submit your actual plan by calling the accept_plan tool with the plan text as its argument (numbered steps, files to change, risks, verification), then end your turn.',
             });
             this.events.emit({ type: 'agent:log', agentId: this.id, message: '[plan-mode] non-plan reply; nudging for the plan' });
             continue;
+          }
+          // MCH-28: explicit-acceptance ending. If the plan was submitted via
+          // the accept_plan tool, even a plan-shaped prose reply now ends plan
+          // mode with the SUBMITTED plan as the deliverable (artifact, not
+          // regex-guessed prose).
+          if (this.planAccepted && this.planMode && !this.fileChanged) {
+            const planText = this.planAcceptedText || (response.content ?? '').trim() || 'Planned. No files were changed.';
+            return this.finish(task, true, planText, 'completed');
           }
           // Phase 9 (VNext): prose runaway guard. A no-tool-call answer that
           // huge is usually padding/repetition (the spam class of bug). Ask
@@ -1798,6 +1938,88 @@ Continue from 'Next:', do not redo completed progress.`,
    *  transcript, ask the fast-profile model to distill it into Goal/Progress/
    *  Decisions/Next steps. On any failure (timeout, empty answer, weak model)
    *  fall back to the heuristic ledger so compaction NEVER blocks the loop. */
+  /**
+   * MCH-32: model-backed mid-run digest — CC-style summarization tier between
+   * mechanical shrinking (shrinkOldToolOutputs) and full turn-dropping
+   * compaction. Summarizes the OLDEST messages into a compact digest so long
+   * tasks keep their recent working state and lose only stale detail.
+   * Best-effort: on any failure it returns without touching history and the
+   * caller falls through to checkpointAndCompact.
+   */
+  private async digestOldMessages(floorTokens: number): Promise<void> {
+    const msgs = (this.context as unknown as { messages?: ChatMessage[] }).messages;
+    if (!msgs || msgs.length < 12) return;
+    const est = () => msgs.reduce((s, m) => s + Math.ceil((m.content ?? '').length / 4), 0);
+    if (est() <= floorTokens) return;
+    // Digest window: all but the last RECENT_KEEP messages (current working set).
+    const RECENT_KEEP = 8;
+    const oldCount = msgs.length - RECENT_KEEP;
+    if (oldCount < 4) return;
+    const old = msgs.slice(0, oldCount);
+    const transcript = old
+      .map((m) => `${m.role}: ${(m.content ?? '').slice(0, 400)}`)
+      .join('\n')
+      .slice(0, 12_000);
+    const sys = 'Summarize this agent-work transcript into a compact digest (max 300 words). Keep: goal, files touched and their state, commands run and outcomes, errors hit and fixes, open threads. Omit prose fluff. Output ONLY the digest.';
+    try {
+      const resp = await this.provider.chat(
+        [
+          { role: 'system' as const, content: sys },
+          { role: 'user' as const, content: transcript },
+        ],
+        [],
+        { maxTokens: 500, signal: this.abortSignal },
+      );
+      const digest = (resp.content ?? '').trim();
+      if (!digest) return;
+      const before = est();
+      msgs.splice(0, oldCount, { role: 'user' as const, content: `[digest of ${oldCount} earlier messages]\n${digest}` } as ChatMessage);
+      const after = est();
+      this.events.emit({ type: 'agent:log', agentId: this.id, message: `[context] MCH-32 digest: ${oldCount} old messages -> ${digest.length} chars (~${Math.max(0, before - after)} tokens saved)` });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.events.emit({ type: 'agent:log', agentId: this.id, message: `[context] digest failed (non-fatal, falling back to compaction): ${msg.slice(0, 120)}` });
+    }
+  }
+
+  /** MCH-33: MCP connections opened this run; closed on finish. */
+  private mcpConnections: Array<{ channel: { call: (m: string, p: unknown, t?: number) => Promise<any>; close: () => void } }> = [];
+  private mcpLoaded = false;
+
+  /** MCH-33: lazily connect configured MCP servers and merge their tools in. */
+  private async loadMcpInRun(): Promise<void> {
+    if (this.mcpLoaded) return;
+    this.mcpLoaded = true;
+    const servers = this.config.mcpServers;
+    if (!servers || Object.keys(servers).length === 0) return;
+    try {
+      const { loadMcpTools, closeMcpConnections } = await import('../tools/mcp.js');
+      const list = Object.entries(servers).map(([name, s]) => ({
+        name,
+        command: (s as any).command ? String((s as any).command) : undefined,
+        args: Array.isArray((s as any).args) ? (s as any).args.map(String) : [],
+        url: (s as any).url ? String((s as any).url) : undefined,
+        headers: (s as any).headers as Record<string, string> | undefined,
+        env: (s as any).env as Record<string, string> | undefined,
+      })).filter((s) => s.command || s.url);
+      const { tools, connections } = await loadMcpTools(list, (m) =>
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: m }));
+      this.mcpConnections = connections as unknown as typeof this.mcpConnections;
+      for (const t of tools) {
+        if (!this.tools.has(t.def.name)) this.tools.set(t.def.name, t);
+      }
+      if (tools.length > 0) {
+        this.toolDefs = [...this.tools.values()].map((t) => t.def);
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: `[mcp] ${tools.length} MCP tool(s) registered` });
+      }
+      // Close connections when the abort signal fires (run end/abort).
+      this.abortSignal?.addEventListener('abort', () => closeMcpConnections(this.mcpConnections), { once: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.events.emit({ type: 'agent:log', agentId: this.id, message: `[mcp] load failed (non-fatal): ${msg.slice(0, 160)}` });
+    }
+  }
+
   private async checkpointAndCompact(reason: 'periodic' | 'floor' | 'error'): Promise<void> {
     const dropped = await this.context.previewCompact();
     if (!dropped || dropped.length === 0) {
@@ -1940,7 +2162,7 @@ Continue from 'Next:', do not redo completed progress.`,
       'todo', 'skill', 'memory', 'session_recall', 'blast_radius', 'chameleon', 'analyze_code', 'perf', 'perf_audit',
       'web_search', 'get_diagnostics', 'git_blame', 'git_history', 'system_info',
       'find_references', 'find_definitions', 'db_inspect', 'diff', 'tree', 'deepwiki',
-      'fetch', 'verify', 'sql_codebase', 'sql_codebase_query', 'think',
+      'fetch', 'verify', 'sql_codebase', 'sql_codebase_query', 'think', 'accept_plan',
     ].includes(canonical) || /__resources_(list|read)$/.test(canonical);
   }
 
@@ -2073,11 +2295,13 @@ Continue from 'Next:', do not redo completed progress.`,
    *  budget, and file read cache so delegation is cheap and consistent. */
   private async spawnSubagent(
     prompt: string,
-    opts?: { role?: string; timeoutMs?: number; scratchpad?: string } | string
+    opts?: { role?: string; timeoutMs?: number; scratchpad?: string; lane?: string; failoverIndex?: number } | string
   ): Promise<string> {
     const roleStr = typeof opts === 'string' ? opts : opts?.role;
     const timeoutMs = typeof opts === 'object' ? opts?.timeoutMs : undefined;
     const scratchpad = typeof opts === 'object' ? opts?.scratchpad : undefined;
+    const lane = typeof opts === 'object' ? opts?.lane : undefined;
+    const failoverIndex = typeof opts === 'object' ? opts?.failoverIndex : undefined;
 
     const childRole = (roleStr ?? 'coder') as import('../types.js').AgentRole;
     const childProfile = new AgentProfileService(this.workspace.dir).get(childRole) ?? this.profile;
@@ -2098,9 +2322,17 @@ Continue from 'Next:', do not redo completed progress.`,
     const child = new Agent({
       id: childId,
       role: childRole,
-      modelProfile: childProfile.defaultModel ?? 'coding',
-      profile: childProfile,
-      config: this.config,
+      // MCH-41 lanes: read-only research roles run the fast profile (breadth
+      // not depth, 3-5x cheaper); explicit `lane` overrides; coder keeps its
+      // role profile.
+      modelProfile: (lane === 'fast' || (!lane && (childRole === 'researcher' || childRole === 'reviewer')))
+        ? ('fast' as import('../types.js').ModelProfile)
+        : (childProfile.defaultModel ?? 'coding'),
+      // MCH-41 failover-aware fanout: rotate failover entries as the child's
+      // PRIMARY so parallel siblings land on distinct endpoints instead of
+      // stampeding one free-tier rate limit. Original chain order is kept as
+      // each child's fallback path.
+      config: { ...this.config, model: this.fanoutConfig(this.config.model, failoverIndex) },
       workspace: this.workspace,
       events: this.events,
       cwd: this.cwd,
@@ -2194,13 +2426,36 @@ Continue from 'Next:', do not redo completed progress.`,
     }
   }
 
-  /** Spawn multiple subagents concurrently and return their aggregated results.
+  /** MCH-41: failover-aware fanout. Rotate the failover chain so sibling N's
+   *  PRIMARY is chain entry N % len; every child keeps the full chain (rotated)
+   *  as its fallback. index undefined -> original config untouched. */
+  private fanoutConfig(config: import('../types.js').ModelConfig, index?: number): import('../types.js').ModelConfig {
+    if (index === undefined || index <= 0) return config;
+    const chain = [config, ...(config.failover ?? [])];
+    if (chain.length < 2) return config;
+    const rotated = chain.map((_, k) => chain[(k + index) % chain.length]);
+    const [primary, ...rest] = rotated;
+    return { ...primary, failover: rest.map((c) => ({ ...c, failover: undefined })) };
+  }
+
+/** Spawn multiple subagents concurrently and return their aggregated results.
    *  Bounded by safety.maxConcurrentAgents (distilled from Hermes'
    *  max_concurrent_children): N unbounded Promise.allSettled would OOM or
    *  hammer a free-tier provider. Runs in a fixed pool, reusing spawnSubagent. */
   private async spawnSubagents(
     tasks: Array<{ prompt: string; role?: string; timeoutMs?: number; scratchpad?: string }>
   ): Promise<string[]> {
+    // MCH-41 (agents v2): two upgrades to the pool.
+    // (1) PRIORITY LANES — read-only research tasks (role=researcher/reviewer)
+    //     run on the 'fast' model profile: they need breadth, not depth, and
+    //     the fast profile is 3-5x cheaper/quicker. Code-producing roles keep
+    //     their profile. Lane is overridable per-task via `lane`.
+    // (2) FAILOVER-AWARE FANOUT — when several siblings hit the SAME provider
+    //     concurrently, a free-tier rate limit fails ALL of them at once and
+    //     each then retries the same chain in lockstep. Assign each parallel
+    //     child a rotated entry of config.failover as its PRIMARY, so N
+    //     siblings spread across N distinct endpoints; the original primary
+    //     stays in each child's failover chain as a fallback.
     const limit = Math.max(1, this.config.safety.maxConcurrentAgents || 3);
     const results = new Array<string>(tasks.length);
     let cursor = 0;
@@ -2209,7 +2464,8 @@ Continue from 'Next:', do not redo completed progress.`,
         const i = cursor++;
         const t = tasks[i];
         try {
-          const val = await this.spawnSubagent(t.prompt, { role: t.role, timeoutMs: t.timeoutMs, scratchpad: t.scratchpad });
+          const lane = (t as { lane?: string }).lane;
+          const val = await this.spawnSubagent(t.prompt, { role: t.role, timeoutMs: t.timeoutMs, scratchpad: t.scratchpad, lane, failoverIndex: i });
           results[i] = `[Subagent #${i + 1} (${t.role ?? 'coder'})]: ${val}`;
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -2284,10 +2540,18 @@ Continue from 'Next:', do not redo completed progress.`,
         return;
       }
     }
-    const before = await this.hooks.runBefore('before_tool', { tool: toolName });
+    // MCH-37: before_tool hook receives the tool's args too (MOCHI_ARGS), so
+    // user hooks can veto on CONTENT (block `rm -rf`, force-push, etc.) — the
+    // Claude Code PreToolUse capability Mochi lacked for third-party use.
+    const before = await this.hooks.runBefore('before_tool', {
+      tool: toolName,
+      args: tc.function.arguments ?? '{}',
+      agent: this.id,
+    });
     if (!before.allowed) {
-      this.context.addKnownError(`before_tool hook vetoed ${toolName}`);
-      this.vetoToolCall(tc, `before_tool hook vetoed ${toolName}.`);
+      const reason = (before.stderr || before.stdout).trim().slice(0, 160);
+      this.context.addKnownError(`before_tool hook vetoed ${toolName}${reason ? `: ${reason}` : ''}`);
+      this.vetoToolCall(tc, `before_tool hook vetoed ${toolName}.${reason ? ` Hook says: ${reason}` : ''}`);
       return;
     }
     if (['edit', 'write', 'delete', 'patch'].includes(toolName)) {
@@ -2298,7 +2562,9 @@ Continue from 'Next:', do not redo completed progress.`,
       }
     }
     if (toolName === 'shell') {
-      const shellHook = await this.hooks.runBefore('before_shell', { tool: toolName });
+      // MCH-37b: before_shell gets MOCHI_ARGS too — a content-veto hook
+      // (block rm -rf) needs the command text, not just the tool name.
+      const shellHook = await this.hooks.runBefore('before_shell', { tool: toolName, args: tc.function.arguments ?? '{}', agent: this.id });
       if (!shellHook.allowed) {
         this.vetoToolCall(tc, 'before_shell hook vetoed this shell command.');
         return;
@@ -2386,12 +2652,31 @@ Continue from 'Next:', do not redo completed progress.`,
     };
     this.events.emit({ type: 'tool:called', tool: tc.function.name, args, agentId: this.id, tool_call_id: tc.id });
     const { output, error, durationMs } = await executeTool(tc.function.name, args, ctx, this.tools);
+    // Codex/Claude Code parity (MCH-27): a shell command that exits nonzero is
+    // a FAILED work step even though the shell tool resolves normally (it
+    // embeds `exit_code: N` in its output text). Promote it to a tool error so
+    // the completion gate and recovery hints see it — the shell tool itself
+    // never sets `error`, which let runs end "successfully" on failed commands.
+    let effectiveError = error;
+    let effectiveOutput = output;
+    if (!error && toolName === 'shell' && typeof output === 'string') {
+      const m = /^exit_code: (\d+)/m.exec(output);
+      const code = m ? Number(m[1]) : 0;
+      if (code !== 0 && !/exit_code: 0/.test(output)) {
+        effectiveError = `shell command exited with code ${code}`;
+        effectiveOutput = output;
+      }
+    }
+    // Downstream logic (diagnostics, recovery hints, error ledger, completion
+    // gate) operates on the exit-code-aware outcome, not the raw tool result.
+    const err = effectiveError;
+    const out = effectiveOutput;
     // Instant diagnostics (the Crush LSP insight): after every edit, surface
     // type/syntax errors for the touched file in the SAME turn so the model
     // fixes them now instead of burning whole iterations discovering them at
     // verification time.
     let diagNote = '';
-    if (['write', 'edit', 'patch'].includes(toolName) && !error) {
+    if (['write', 'edit', 'patch'].includes(toolName) && !err) {
       const targets = [String(args.path ?? '')].filter(Boolean);
       if (toolName === 'patch' && typeof output === 'string') {
         for (const line of output.split('\n')) {
@@ -2415,8 +2700,8 @@ Continue from 'Next:', do not redo completed progress.`,
       }
     }
     let recoveryHint = '';
-    if (error) {
-      const errSig = error.slice(0, 100);
+    if (err) {
+      const errSig = err.slice(0, 100);
       const prevError = this.consecutiveToolErrors.get(toolName);
       if (prevError && prevError.error === errSig) {
         prevError.count++;
@@ -2427,7 +2712,7 @@ Continue from 'Next:', do not redo completed progress.`,
         this.consecutiveToolErrors.set(toolName, { error: errSig, count: 1 });
       }
 
-      const errLower = error.toLowerCase();
+      const errLower = err.toLowerCase();
       if (errLower.includes('oldtext') || errLower.includes('did not match') || errLower.includes('patch')) {
         recoveryHint += '\n[Harness Hint: Target text was not found verbatim in the file. Call read tool to inspect current lines before editing.]';
       } else if (errLower.includes('enoent') || errLower.includes('file not found') || errLower.includes('no such file') || (errLower.includes('not found') && !errLower.includes('oldtext'))) {
@@ -2451,8 +2736,8 @@ Continue from 'Next:', do not redo completed progress.`,
     const result: ToolResult = {
       toolCallId: tc.id,
       name: tc.function.name,
-      output: (error ? `Error: ${error}\n${output}` : output) + (diagNote ? `\n${diagNote}` : '') + recoveryHint,
-      error,
+      output: (err ? `Error: ${err}\n${out}` : out) + (diagNote ? `\n${diagNote}` : '') + recoveryHint,
+      error: err,
       durationMs,
     };
     // Uniform output policy (Harness V2): dual-limit truncation preserving
@@ -2462,37 +2747,56 @@ Continue from 'Next:', do not redo completed progress.`,
     // ANSI hygiene FIRST: colored tool output (npm/git --color=always) in the
     const pol = applyToolOutputPolicy(scrubAnsiFragments(maybeRedact(result.output)), { toolName: tc.function.name });
     const foldedOutput = pol.content;
-    if (error) {
+    if (err) {
       this.consecutiveToolErrorsCount++;
-      this.executionRegistry.markFailed(execRecord.executionId, error);
+      this.executionRegistry.markFailed(execRecord.executionId, err);
+      // Codex-style completion gate input: remember the LAST tool outcome so
+      // finish() can tell "ended on a failure" from "recovered from one".
+      // Only WORK tools (shell/mutating edits) count — a failed speculative
+      // `read`/`search` miss is normal exploration, not a failed deliverable.
+      if (['shell', 'write', 'edit', 'patch', 'delete', 'git'].includes(TOOL_ALIASES[toolName] || toolName)) {
+        this.lastToolError = String(err);
+      }
     } else {
       this.consecutiveToolErrorsCount = 0;
+      this.lastToolError = null;
       this.executionRegistry.markCompleted(execRecord.executionId, { output: foldedOutput });
+      // MCH-28: a successful accept_plan call flips plan mode to "plan
+      // submitted" — the loop's no-tool-call path then ends the run with the
+      // submitted plan instead of regex-guessing prose shape.
+      if ((TOOL_ALIASES[toolName] || toolName) === 'accept_plan' && this.planMode && String(result.output ?? '').startsWith('Plan accepted')) {
+        this.planAccepted = true;
+        // Recover the submitted plan text from the persisted artifact.
+        try {
+          const saved = this.workspace.readJson<{ plan?: string }>('state/plan.json', {});
+          if (typeof saved.plan === 'string' && saved.plan) this.planAcceptedText = saved.plan;
+        } catch { /* fall back to prose */ }
+      }
     }
     this.context.addMessage({ role: 'tool', tool_call_id: tc.id, content: foldedOutput, name: tc.function.name });
     this.events.emit({ type: 'tool:completed', tool: tc.function.name, result, agentId: this.id });
-    await this.hooks.runAfter('after_tool', { tool: toolName });
+    await this.hooks.runAfter('after_tool', { tool: toolName, agent: this.id });
     if (['edit', 'write', 'delete', 'patch'].includes(toolName)) {
       await this.hooks.runAfter('after_edit', { tool: toolName });
     }
     if (toolName === 'shell') {
       await this.hooks.runAfter('after_shell', { tool: toolName });
     }
-    if (error) {
+    if (err) {
       await this.hooks.runAfter('on_error', {
         tool: toolName,
-        error: String(error),
+        error: String(err),
         durationMs: String(durationMs),
       });
-      this.errors.push(error);
-      this.context.addKnownError(error);
-      const classified = classifyErrorPattern(error);
+      this.errors.push(err);
+      this.context.addKnownError(err);
+      const classified = classifyErrorPattern(err);
       if (classified) {
         this.seenPatterns.add(classified.pattern);
         this.learning.record(classified.pattern, this.lastStrategy ?? 'unclassified', false);
       }
     }
-    this.trackFileChange(toolName, args, { output: result.output });
+    this.trackFileChange(toolName, args, { output: out });
   }
   private parseArgs(raw: string): Record<string, unknown> {
     if (!raw || !raw.trim()) return {};
@@ -2681,6 +2985,13 @@ Continue from 'Next:', do not redo completed progress.`,
       const auto = autoTestCommand(this.cwd, task.fileScope);
       if (auto) checks.push(auto);
     }
+    // MCH-31: independent acceptance-criteria gate runs BEFORE any command
+    // logic — a task can state concrete criteria with no verification command
+    // at all, and those must still gate completion (Codex re-checks acceptance
+    // independently of whatever evidence the builder collected).
+    const criteriaFail = this.checkArtifactCriteria(task);
+    if (criteriaFail) return { passed: false, summary: criteriaFail };
+
     if (checks.length === 0) return { passed: true, summary: 'No verification configured.' };
 
     const baseline = await this.verifyBaseline;
@@ -2711,6 +3022,43 @@ Continue from 'Next:', do not redo completed progress.`,
       return { passed: false, summary: `Check failed: ${cmd}\n${condensed.condensed}` };
     }
     return { passed: true, summary: `All checks passed: ${checks.join(', ')}` };
+  }
+
+  /**
+   * MCH-31 (Codex-style independent acceptance): commands passing proves the
+   * suite is green; it does NOT prove the task's stated acceptance criteria
+   * are met. Each criterion naming a concrete artifact (file existence /
+   * content) is verified directly against the filesystem, independent of the
+   * builder's claims. Criteria with no checkable artifact return null (left
+   * to the self-review pass). Returns a failure summary string or null.
+   */
+  private checkArtifactCriteria(task: Task): string | null {
+    const artifactCriteria = (task.acceptanceCriteria ?? []).filter((c) => {
+      const s = c.toLowerCase();
+      return /exists?\b|\bfile\b|\bcreated\b|\bcontains?\b|\bgrep\b|\btest -f\b/.test(s);
+    });
+    for (const criterion of artifactCriteria) {
+      const paths = extractPathsFromCriterion(criterion);
+      for (const p of paths) {
+        const abs = resolve(this.cwd, p);
+        let exists = false;
+        try { exists = existsSync(abs); } catch { /* unreadable -> missing */ }
+        if (!exists) {
+          return `Acceptance criterion not met: "${criterion}" — expected artifact ${p} does not exist.`;
+        }
+        // Content criterion: "contains X" -> check the file for the term.
+        const contentMatch = /contains?\s+(?:the\s+)?(?:text\s+)?["'`]?([^\s"'`]{2,64})["'`]?/i.exec(criterion);
+        if (contentMatch) {
+          try {
+            const body = readFileSync(abs, 'utf8');
+            if (!body.includes(contentMatch[1])) {
+              return `Acceptance criterion not met: "${criterion}" — ${p} exists but does not contain "${contentMatch[1]}".`;
+            }
+          } catch { /* binary/dir: existence already checked */ }
+        }
+      }
+    }
+    return null;
   }
 
   /**
@@ -3251,8 +3599,25 @@ Continue from 'Next:', do not redo completed progress.`,
     }
   }
 
-
   private async finish(task: Task, success: boolean, summary: string, stopReason: AgentStopReason = success ? 'completed' : 'aborted'): Promise<AgentResult> {
+    // MCH-33: tear down MCP server connections on every finish path.
+    try {
+      const { closeMcpConnections } = await import('../tools/mcp.js');
+      closeMcpConnections(this.mcpConnections);
+    } catch { /* module gone / nothing open */ }
+    // Claude Code gates completion on the last tool's exit code; Codex re-runs
+    // acceptance criteria independently. Mochi (MCH-26): a run that ENDS on a
+    // failed tool call (failed git commit, failed verify command) cannot
+    // truthfully be "completed" — downgrade and surface the real error, so the
+    // user sees the failure instead of a false "done". Runs that RECOVERED from
+    // earlier errors (last tool succeeded) still finish as completed.
+    if (success && this.lastToolError) {
+      success = false;
+      if (stopReason === 'completed') {
+        stopReason = 'verification_failed';
+      }
+      summary = `${summary}\n\n[last tool call failed: ${this.lastToolError.slice(0, 300)}]`;
+    }
     // Harness-v2 Phase 1: close the lifecycle — emit the final iteration's
     // trace with the run's stop reason (abort/timeout from ANY phase lands
     // here, so the trace records where the run actually stopped).
@@ -3275,6 +3640,26 @@ Continue from 'Next:', do not redo completed progress.`,
       for (const pattern of this.seenPatterns) {
         this.learning.record(pattern, this.lastStrategy ?? 'unclassified', true);
       }
+      // MCH-44: auto-skill from successful runs — when a (pattern, strategy)
+      // pair has now succeeded ≥2 times and no skill covers it, draft one from
+      // the run's real lessons. Best-effort; never affects completion.
+      try {
+        const { autoDraftSkill } = await import('../skill-curator.js');
+        for (const pattern of this.seenPatterns) {
+          const rec = this.learning.bestStrategy(pattern);
+          if (!rec || rec.successes < 2) continue;
+          const drafted = autoDraftSkill(this.workspace.dir, {
+            pattern,
+            strategy: rec.strategy,
+            successes: rec.successes,
+            lessons: (this.lastLessons ?? []).map((l) => l.lesson),
+            taskTitle: task.title,
+          });
+          if (drafted) {
+            this.events.emit({ type: 'agent:log', agentId: this.id, message: `[skills] auto-drafted skill "${drafted}" from repeated successful strategy` });
+          }
+        }
+      } catch { /* auto-draft must never affect task completion */ }
     }
     const durationMs = Math.round(performance.now() - this.startTime);
     this.events.emit({ type: 'agent:completed', id: this.id, taskId: task.id });

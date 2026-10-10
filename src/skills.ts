@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -212,6 +212,103 @@ export function formatSkillsForPrompt(skills: Skill[], limit?: number): string {
   }
   lines.push('</available_skills>');
   return lines.join('\n');
+}
+
+
+// ---- MCH-40 (skills v2): usage stats + staleness + conflict detection ------
+
+/** Where per-project skill usage stats live. JSON: { [skillName]: { loads, wins } } */
+export function skillUsagePath(projectDir: string): string {
+  return join(projectDir, '.mochi', 'skill-usage.json');
+}
+
+export interface SkillUsage { loads: number; wins: number }
+
+/** Read usage stats; missing/corrupt file -> empty map (never break a run). */
+export function loadSkillUsage(projectDir: string): Map<string, SkillUsage> {
+  const out = new Map<string, SkillUsage>();
+  try {
+    const p = skillUsagePath(projectDir);
+    if (!existsSync(p)) return out;
+    const parsed = JSON.parse(readFileSync(p, 'utf8')) as Record<string, SkillUsage>;
+    for (const [k, v] of Object.entries(parsed)) {
+      if (v && typeof v.loads === 'number' && typeof v.wins === 'number') out.set(k, v);
+    }
+  } catch { /* corrupt stats are non-fatal */ }
+  return out;
+}
+
+/** Record one skill load; `won` marks the run ending successfully after use. */
+export function recordSkillUsage(projectDir: string, name: string, won?: boolean): void {
+  try {
+    const p = skillUsagePath(projectDir);
+    const all: Record<string, SkillUsage> = existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : {};
+    const cur = all[name] ?? { loads: 0, wins: 0 };
+    cur.loads += 1;
+    if (won === true) cur.wins += 1;
+    all[name] = cur;
+    mkdirSync(join(projectDir, '.mochi'), { recursive: true });
+    writeFileSync(p, JSON.stringify(all, null, 2));
+  } catch { /* stats are best-effort */ }
+}
+
+/** Build the boost map for selectRelevantSkills: wins count as successes. */
+export function usageBoostMap(usage: Map<string, SkillUsage>): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const [name, u] of usage) {
+    if (u.loads >= 3 && u.wins > 0) m.set(name, u.wins);
+  }
+  return m;
+}
+
+/** Stale = frontmatter `updated` stamp older than 90 days, or no stamp and
+ *  file mtime older than 90 days. Returns skill names needing a refresh. */
+export function staleSkills(skills: Skill[], now = Date.now()): string[] {
+  const NINETY_DAYS = 90 * 24 * 3600 * 1000;
+  const out: string[] = [];
+  for (const s of skills) {
+    try {
+      const raw = readFileSync(s.path, 'utf8');
+      const m = raw.match(/^updated:\s*(\d{4}-\d{2}-\d{2})/m);
+      if (m) {
+        const age = now - new Date(m[1] + 'T00:00:00Z').getTime();
+        if (age > NINETY_DAYS) out.push(s.name);
+      } else {
+        const stat = statSync(s.path) as { mtimeMs: number };
+        if (now - stat.mtimeMs > NINETY_DAYS) out.push(s.name);
+      }
+    } catch { /* unreadable: skip */ }
+  }
+  return out;
+}
+
+/** Conflicts: two skills whose name+description overlap >0.8 tokenOverlap —
+ *  the model can't choose between near-twins, so surface them for merge. */
+export function skillConflicts(skills: Skill[]): Array<{ a: string; b: string; score: number }> {
+  const out: Array<{ a: string; b: string; score: number }> = [];
+  for (let i = 0; i < skills.length; i++) {
+    for (let j = i + 1; j < skills.length; j++) {
+      const score = skillConflictScore(skills[i], skills[j]);
+      if (score > 0.8) out.push({ a: skills[i].name, b: skills[j].name, score: Math.round(score * 100) / 100 });
+    }
+  }
+  return out;
+}
+
+function skillConflictScore(a: Skill, b: Skill): number {
+  // Local overlap copy to avoid a circular import with context.ts.
+  const STOP = new Set(['a','an','the','and','or','of','to','in','for','on','with','that','is','be']);
+  const tok = (s: string) => {
+    const t = new Set<string>();
+    for (const w of (s.toLowerCase().match(/[a-z0-9]+/g) ?? [])) if (!STOP.has(w)) t.add(w);
+    return t;
+  };
+  const A = tok(a.name + ' ' + a.description);
+  const B = tok(b.name + ' ' + b.description);
+  if (A.size === 0 || B.size === 0) return 0;
+  let inter = 0;
+  for (const t of A) if (B.has(t)) inter++;
+  return inter / Math.min(A.size, B.size);
 }
 
 function esc(s: string): string {

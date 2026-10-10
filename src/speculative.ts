@@ -93,6 +93,42 @@ export interface SpeculativeResult {
   verifierNotes: string;
 }
 
+import { execSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+// MCH-43: predictive file pre-fetch. Given recently-touched files, predict
+// which files are likely to be needed NEXT (co-change graph from git history),
+// so the agent can warm its read cache before the model even asks.
+export function predictNextFiles(workspaceDir: string, recentlyTouched: string[], limit = 5): string[] {
+  try {
+    if (!existsSync(join(workspaceDir, '.git'))) return [];
+    // Sample recent commits, list co-changed file groups.
+    const log = execSync('git log --oneline -40 --name-only', { cwd: workspaceDir, encoding: 'utf8', timeout: 5000 });
+    const commits: string[][] = [];
+    for (const line of log.split('\n')) {
+      if (/^[0-9a-f]{7,} /.test(line)) commits.push([]);
+      else if (line.trim()) commits[commits.length - 1]?.push(line.trim());
+    }
+    // Co-change counts: file -> files that appear in the same commit as a touched file.
+    const counts = new Map<string, number>();
+    const touchedSet = new Set(recentlyTouched);
+    for (const files of commits) {
+      // Mega-commits (init imports, bulk renames) carry no co-change signal.
+      if (files.length > 8) continue;
+      for (const f of files) {
+        if (!touchedSet.has(f)) continue;
+        for (const g of files) {
+          if (g === f || touchedSet.has(g) || !g.endsWith('.ts')) continue;
+          counts.set(g, (counts.get(g) ?? 0) + 1);
+        }
+      }
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit).map(([f]) => f);
+  } catch {
+    return [];
+  }
+}
+
 export class SpeculativeEngine {
   private provider: ReturnType<typeof createProvider>;
 

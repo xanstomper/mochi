@@ -60,7 +60,7 @@ export interface MochiConfig {
   model: ModelConfig;
   safety: SafetyConfig;
   permissions: PermissionConfig;
-  mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string> }>;
+  mcpServers?: Record<string, { command?: string; args?: string[]; url?: string; headers?: Record<string, string>; env?: Record<string, string> }>;
   /** Plan-then-act: in plan mode the agent produces a plan instead of editing. */
   planMode?: boolean;
   /** Active execution mode: normal | spec | security | codemod | chaos. */

@@ -97,7 +97,11 @@ export function createOpenAIProvider(config: ProviderConfig) {
           return { role: 'user', content: `[system notice] ${m.content ?? ''}` };
         }
         const mapped: any = { role: m.role, content: m.content ?? '' };
-        if (i === 0 && m.role === 'system') mapped.cache_control = { type: 'ephemeral' };
+        if (m.role === 'system') mapped.cache_control = { type: 'ephemeral' };
+        // MCH-38 (speed): mark the LAST message so every turn's prefix is a
+        // cache breakpoint — with an append-only transcript, turns N+1 reuse
+        // turns 1..N from the provider prompt cache at ~10% of input cost.
+        if (i === messages.length - 1) mapped.cache_control = { type: 'ephemeral' };
         return mapped;
       }),
       stream: true,
@@ -161,7 +165,7 @@ export function createOpenAIProvider(config: ProviderConfig) {
           },
           body: JSON.stringify(body),
           signal: signal.signal,
-        });
+        } as RequestInit);
         if (!r.ok) {
           const text = await r.text().catch(() => '');
           throw describeModelError(r.status, text, model, 'opencode/OpenAI-compatible', parseRetryAfter(r.headers.get('retry-after')));

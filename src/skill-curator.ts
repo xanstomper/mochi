@@ -15,7 +15,7 @@
 import { readdirSync, existsSync, readFileSync, statSync, mkdirSync, writeFileSync, renameSync, rmdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import {skillsRoot, archiveRoot, loadUsage, safeSlug, parseFrontmatter} from './skill-manager.js';
+import {skillsRoot, archiveRoot, loadUsage, safeSlug, parseFrontmatter, renderSkill} from './skill-manager.js';
 
 export interface CuratorConfig {
   enabled: boolean;
@@ -295,6 +295,61 @@ export function recordCuratorRun(projectDir: string, summary: string): void {
   s.lastSummary = summary;
   saveCuratorState(projectDir, s);
 }
+
+// ─── Auto-skill from successful runs (MCH-44) ──────────────────────────────
+/** When the learning store shows a (pattern, strategy) pair that has succeeded
+ *  ≥ `minSuccesses` times and NO existing skill covers it, write a draft
+ *  SKILL.md derived from the run's lessons. Returns the skill name or null.
+ *  Model-free: the draft body is compiled from real recorded evidence, and the
+ *  model is later free to refine it via skill_manage. Never throws. */
+export function autoDraftSkill(
+  projectDir: string,
+  opts: {
+    pattern: string;
+    strategy: string;
+    successes: number;
+    lessons?: string[];
+    taskTitle?: string;
+    minSuccesses?: number;
+  },
+): string | null {
+  try {
+    const min = opts.minSuccesses ?? 2;
+    if (opts.successes < min) return null;
+    const slug = safeSlug(`${opts.pattern}-${opts.strategy}`);
+    if (!slug || slug.length < 3) return null;
+    const root = skillsRoot(projectDir);
+    const skillDir = join(root, 'auto');
+    const path = join(skillDir, `${slug}.md`);
+    if (existsSync(path)) return null; // already drafted — never overwrite
+    // Skip if any existing skill's name/description already covers this pattern.
+    const usage = loadUsage(projectDir);
+    for (const name of Object.keys(usage.byName)) {
+      if (skillSimilarity(name.toLowerCase(), `${opts.pattern} ${opts.strategy}`.toLowerCase()) > 0.5) return null;
+    }
+    const lessons = (opts.lessons ?? []).filter((l) => l && l.length > 3).slice(0, 5);
+    const body = [
+      `# Auto-drafted: ${opts.pattern}`,
+      '',
+      `Distilled from ${opts.successes} successful run(s) using strategy \`${opts.strategy}\`.`,
+      opts.taskTitle ? `Originating task: "${opts.taskTitle.slice(0, 120)}".` : '',
+      '',
+      '## Procedure that worked',
+      ...(lessons.length
+        ? lessons.map((l, i) => `${i + 1}. ${l.slice(0, 200)}`)
+        : ['1. Apply the strategy that repeatedly succeeded for this pattern; verify before claiming completion.']),
+      '',
+      '## Notes',
+      '- This skill was auto-drafted from run telemetry (MCH-44). Refine or delete via skill_manage.',
+    ].filter(Boolean).join('\n');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(path, renderSkill({ name: slug, description: `Auto-drafted procedure for recurring pattern: ${opts.pattern.slice(0, 80)}`, category: 'auto', body }));
+    return slug;
+  } catch {
+    return null;
+  }
+}
+
 
 // ─── Skill Regression Doctor (MCH-20) ──────────────────────────────────
 

@@ -479,6 +479,12 @@ async function handleRequest(
         const out = await runtime.goal(objective);
         send(200, { ok: true, out });
       }
+    } else if (path === '/api/prompt') {
+      // One-shot prompt → full agent run → structured result (SDK remote mode).
+      const task = String(body.task ?? '');
+      if (!task) { send(400, { ok: false, error: 'task required' }); return; }
+      const r = await runtime.runPromptDetailed(task);
+      send(200, { ok: true, ...r });
     } else {
       send(404, { error: 'not found' });
     }

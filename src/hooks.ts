@@ -36,13 +36,22 @@ export class HookManager {
   private config: HookConfig = {};
 
   constructor(workspaceDir: string) {
-    const path = resolve(workspaceDir, 'hooks.json');
-    if (!existsSync(path)) return;
-    try {
-      const parsed = JSON.parse(readFileSync(path, 'utf8'));
-      if (parsed && typeof parsed === 'object') this.config = parsed as HookConfig;
-    } catch {
-      this.config = {};
+    // MCH-37: hooks.json is read from BOTH the workspace (.mochi/) and the
+    // project root — project-root wins (more specific). Same convention as
+    // Claude Code's hooks (settings.json > project settings).
+    const candidates = [
+      resolve(workspaceDir, 'hooks.json'),
+      resolve(process.cwd(), 'hooks.json'),
+      resolve(process.cwd(), '.mochi', 'hooks.json'),
+    ];
+    for (const path of candidates) {
+      if (!existsSync(path)) continue;
+      try {
+        const parsed = JSON.parse(readFileSync(path, 'utf8'));
+        if (parsed && typeof parsed === 'object') this.config = { ...this.config, ...(parsed as HookConfig) };
+      } catch {
+        // malformed hook file: skip, never break the run
+      }
     }
   }
 

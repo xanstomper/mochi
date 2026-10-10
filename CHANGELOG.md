@@ -1,5 +1,16 @@
 # Mochi Changelog
 
+## 0.21.0 — Operation Frontier
+
+- **Predictive file pre-fetch (MCH-43)** — `predictNextFiles()` in `src/speculative.ts`: builds a co-change graph from the last 40 git commits (`git log --name-only`), skips mega-commits (>8 files — init imports and bulk renames carry no co-change signal), and predicts the top-5 likely-next files for the currently-touched set. The agent loop's speculative preflight now warms the read cache (absolute-path + mtime keyed) with those predictions BEFORE the agent asks, so first-touch reads are cache hits on familiar codebases.
+- **Auto-skill from successful runs (MCH-44)** — `autoDraftSkill()` in `src/skill-curator.ts`: when a (task-pattern, strategy) pair from the learning store reaches ≥2 successes and no existing skill covers it (usage-registry similarity check), a draft SKILL.md is written under `skills/auto/` compiled from the run's recorded lessons. Wired into `finish()`; uses real success counts from telemetry (not a hardcoded threshold at the call site); best-effort — drafting can never affect task completion.
+- **SDK remote prompt + typed status (MCH-45)** — `RemoteMochi.prompt(task)` now exists (previously remote mode could only goal/plan), backed by a new `/api/prompt` daemon endpoint that runs `runPromptDetailed` and returns the full structured `RunResult`. `RemoteMochi.statusTyped()` gives a typed `{ready, tasks, activeAgents}` view.
+- **SDK memory surface** — `Mochi.remember(statement, category)` and `Mochi.recall(context, limit)` expose the MCH-42 memory store (dedup, semantic scoring, decay) on the typed SDK: scripts and CI can now persist and recall durable facts without touching the Runtime escape hatch.
+- **TUI chat-box corner fix** — the bottom-right corner of the prompt input rendered as `____,,,]` instead of `____]` on the last row; writing exactly `w` columns on the final row is now safe (cursor-position escape prevents the terminal wrap), restoring the perfect rectangle. 189/189 TUI tests.
+- **Skills v2 relevance (MCH-40) verified end-to-end** — usage-boosted skill selection, 90-day stale pruning, esm-hygiene clean (no bare `require()` anywhere in new code).
+
+**Test suite: 1202 passed / 5 skipped. `tsc --noEmit`: 0 errors. Both `npm run build` and `npm run build:bin` green.**
+
 ## 0.20.0
 
 - **Default model chain upgraded (MCH-35)** — freeinference `kimi-k2.7-code` is now the coding/reasoning/review primary; `glm-5.3-flash` stays the `fast` profile only and remains first failover. The flash model was the source of the long-run spin (98 calls / 2.1M tokens on a hard vitest task); the coding-primary chain changes real outcomes.

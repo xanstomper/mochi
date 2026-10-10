@@ -78,6 +78,9 @@ export interface FakeOpenAI {
 export async function startFakeOpenAI(script?: FakeScriptResponse[]): Promise<FakeOpenAI> {
   const queue: FakeScriptResponse[] = [...(script ?? [])];
   const requests: { body: any }[] = [];
+  /** Open stalled response sockets - server.close() never fires while these
+   *  stay open, so close() must destroy them explicitly. */
+  const openStalls = new Set<any>();
   const defaultResp: FakeScriptResponse = { content: 'done', finishReason: 'stop', promptTokens: 1, completionTokens: 1 };
 
   const server: Server = createServer((req, res) => {
@@ -105,8 +108,22 @@ export async function startFakeOpenAI(script?: FakeScriptResponse[]): Promise<Fa
         // Simulate a silent provider hold: open a 200 SSE response, write
         // nothing, and leave it open. The client must recover via its own
         // stall guard — an unprotected caller hangs here forever.
+        //
+        // Wire-truth fix (2026-10-09): a stalled request previously CONSUMED
+        // its queue slot, so the client's abort+retry then popped the NEXT
+        // scripted entry ('ok') and the task wrongly succeeded — the stall
+        // guard tests failed because the fake recovered while the scripted
+        // provider was still down. A real silently-stalled provider stays
+        // broken on retry, so stall entries are now PEEKED not SHIFTED: the
+        // entry stays queued and every subsequent request stalls too, until
+        // a non-stall entry is scripted (true recovery) or the client gives
+        // up. To script recovery, stop stalling by switching to another entry
+        // via respondFn or reorder the script.
+        queue.unshift(resp); // keep the stall at the head: provider stays down
         res.statusCode = 200;
         res.setHeader('content-type', 'text/event-stream');
+        openStalls.add(res);
+        res.on('close', () => openStalls.delete(res));
         return; // never write chunks, never call [DONE], never end
       }
 
@@ -164,6 +181,13 @@ export async function startFakeOpenAI(script?: FakeScriptResponse[]): Promise<Fa
     append(responses: FakeScriptResponse[]) {
       queue.push(...responses);
     },
-    close: () => new Promise<void>((resolveClose) => server.close(() => resolveClose())),
+    close: () => new Promise<void>((resolveClose) => {
+      // Destroy any still-open stalled sockets first: server.close()'s
+      // callback waits for open connections and would hang the test
+      // teardown against a permanently-stalled fake provider.
+      for (const s of [...openStalls]) { try { s.destroy(); } catch { /* already gone */ } }
+      openStalls.clear();
+      server.close(() => resolveClose());
+    }),
   };
 }

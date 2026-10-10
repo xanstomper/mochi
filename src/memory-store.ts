@@ -34,8 +34,13 @@ function randomId(): string {
   return Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4);
 }
 
-export function addFact(statement: string, category: MemoryFact['category'] = 'fact', source = 'session'): MemoryFact {
+export function addFact(statement: string, category: MemoryFact['category'] = 'fact', source = 'session'): MemoryFact | null {
   ensure();
+  // MCH-42 (cross-run dedup): reject near-duplicates of an existing fact so
+  // repeated sessions don't bloat memory.jsonl with the same sentence.
+  for (const f of loadFacts()) {
+    if (memorySimilarity(statement, f.statement) >= DEDUP_THRESHOLD) return null;
+  }
   const fact: MemoryFact = {
     id: randomId(),
     ts: Date.now(),
@@ -92,9 +97,74 @@ export function forgetFact(query: string): number {
   return removed;
 }
 
-/** Render facts as a prompt section. */
-export function memoryDigest(): string {
+/** MCH-42 (memory v2): tokenize into a lowercase word set minus stopwords. */
+const MEMORY_STOPWORDS = new Set(['the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'to', 'of', 'in', 'on', 'for', 'and', 'or', 'it', 'this', 'that', 'with', 'as', 'at', 'by', 'from', 'not', 'no']);
+
+function tokenize(text: string): Set<string> {
+  const out = new Set<string>();
+  for (const w of text.toLowerCase().match(/[a-z0-9_.\-/]{2,}/g) ?? []) {
+    if (!MEMORY_STOPWORDS.has(w)) out.add(w);
+  }
+  return out;
+}
+
+/** MCH-42: Jaccard similarity between two texts' token sets. */
+export function memorySimilarity(a: string, b: string): number {
+  const ta = tokenize(a), tb = tokenize(b);
+  if (ta.size === 0 || tb.size === 0) return 0;
+  let inter = 0;
+  for (const w of ta) if (tb.has(w)) inter++;
+  return inter / (ta.size + tb.size - inter);
+}
+
+/** MCH-42 (cross-run dedup): near-duplicate detection threshold. */
+const DEDUP_THRESHOLD = 0.55;
+
+/** MCH-42: semantic recall — score facts against the current task context.
+ *  score = 0.5*jaccard(task, statement) + 0.3*success_ratio + 0.2*recency.
+ *  Returns facts sorted by score desc, capped at maxFacts. */
+export function recallFacts(context: string, maxFacts = 15): MemoryFact[] {
   const facts = loadFacts();
+  const now = Date.now();
+  const HALF_LIFE_MS = 14 * 24 * 3600 * 1000; // 14-day recency half-life
+  const scored = facts.map((f) => {
+    const sim = memorySimilarity(context, f.statement);
+    const succ = f.attempts > 0 ? f.success_count / f.attempts : 0.5;
+    const recency = Math.exp(-Math.LN2 * ((now - f.ts) / HALF_LIFE_MS));
+    return { fact: f, score: 0.5 * sim + 0.3 * succ + 0.2 * recency };
+  });
+  return scored
+    .sort((a, b) => b.score - a.score)
+    .slice(0, maxFacts)
+    .map((s) => s.fact);
+}
+
+/** MCH-42 (auto-decay): facts untouched for 60 days with zero successes are
+ *  pruned on every digest render — stale memory should not cost prompt bytes
+ *  forever. Returns number pruned. */
+export function decayFacts(maxAgeMs = 60 * 24 * 3600 * 1000): number {
+  const facts = loadFacts();
+  const cutoff = Date.now() - maxAgeMs;
+  const live = facts.filter((f) => f.ts >= cutoff || f.success_count > 0 || f.attempts === 0);
+  if (live.length !== facts.length) {
+    writeFileSync(MEMORY_FILE, live.map((f) => JSON.stringify(f)).join('\n') + '\n');
+  }
+  return facts.length - live.length;
+}
+
+/** Render facts as a prompt section, with MCH-42 upgrades:
+ *  - auto-decay pass (60-day stale pruning) before rendering
+ *  - ranked by semantic relevance when task context is provided */
+export function memoryDigest(taskContext?: string): string {
+  decayFacts();
+  let facts: MemoryFact[];
+  if (taskContext && taskContext.trim().length > 20) {
+    facts = recallFacts(taskContext);
+  } else {
+    facts = loadFacts();
+    // Even without context, cap the digest so memory can't eat the prompt.
+    if (facts.length > 20) facts = facts.slice(0, 20);
+  }
   if (facts.length === 0) return '';
   const lines: string[] = ['# DURABLE MEMORY (project facts)', ''];
   for (const f of facts) {

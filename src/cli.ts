@@ -1033,6 +1033,36 @@ async function main() {
     console.log(JSON.stringify(runtime.config, null, 2));
     return;
   }
+  if (first === 'hooks') {
+    // MCH-37: user-facing hooks management — init a hooks.json template,
+    // list discovered hooks, or test-fire one. Claude Code-hooks parity.
+    const { HookManager } = await import('./hooks.js');
+    const { existsSync, writeFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const wsDir = resolve(findProjectRoot(runtime.cwd), '.mochi');
+    const sub = positional[1];
+    if (sub === 'init') {
+      const tpl = {
+        before_shell: 'echo "$MOCHI_ARGS" | grep -q "rm -rf" && { echo "blocked: rm -rf is not allowed"; exit 1; } || exit 0',
+        after_edit: 'echo "edit happened: $MOCHI_TOOL"',
+      };
+      const target = resolve(runtime.cwd, 'hooks.json');
+      if (existsSync(target)) { console.log('hooks.json already exists at ' + target); return; }
+      writeFileSync(target, JSON.stringify(tpl, null, 2) + '\n');
+      console.log('Wrote ' + target + ' with a starter template (before_shell blocks rm -rf). Edit to taste.');
+      return;
+    }
+    const mgr = new HookManager(wsDir);
+    const names = mgr.list();
+    if (names.length === 0) {
+      console.log('No hooks configured. Run `mochi hooks init` to create hooks.json, or see `mochi hooks --help`.');
+    } else {
+      console.log('Hooks configured:');
+      for (const n of names) console.log('  ' + n);
+      console.log('\nHook env vars: MOCHI_TOOL, MOCHI_ARGS (JSON), MOCHI_AGENT. Exit non-zero in a before_* hook to veto the action.');
+    }
+    return;
+  }
   if (first === 'providers') {
     const { PROVIDERS } = await import('./providers.js');
     for (const p of PROVIDERS) console.log(p.id.padEnd(14) + ' ' + p.name);
@@ -1082,10 +1112,12 @@ async function main() {
     const info = readDaemonInfo(runtime.workspace.dir);
     const isRunning = daemonRunning(runtime.workspace.dir);
     const report = await doctorReport({
+      version: VERSION,
+      probeProvider: flags.probe === true || positional[1] === 'probe' || flags.verbose === true,
       provider: runtime.config.model.provider,
       baseUrl: runtime.config.model.baseUrl ?? '',
       model: runtime.config.model.model,
-      apiKey: runtime.config.model.apiKey ?? null,
+      apiKey: (runtime.config.model as unknown as { apiKey?: string }).apiKey ?? null,
       workspaceDir: wsDir,
       daemon: { running: isRunning, port: info?.port },
     });

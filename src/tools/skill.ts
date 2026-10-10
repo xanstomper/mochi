@@ -1,6 +1,6 @@
 import { statSync } from 'node:fs';
 import type { Tool } from './types.js';
-import { loadAllSkills, readSkillBody } from '../skills.js';
+import { loadAllSkills, readSkillBody, recordSkillUsage } from '../skills.js';
 import type { Skill } from '../skills.js';
 
 // The `skill` tool lets the model load a reusable, task-specific instruction
@@ -55,6 +55,11 @@ export const skillTool: Tool = {
     const skill = findSkill(ctx.cwd, name);
     if (!skill) return `No skill named '${name}'. Run \`skill list\` to see available skills.`;
     skillLoadCounts.set(name, (skillLoadCounts.get(name) ?? 0) + 1);
+    // MCH-40: persist the load so usage-ranked relevance can boost skills
+    // that actually get used. Best-effort; never blocks the load.
+    try {
+      recordSkillUsage(ctx.cwd, name);
+    } catch { /* stats optional */ }
     const cacheKey = `${ctx.cwd}::${name}`;
     const previous = skillBodyCache.get(cacheKey);
     let stat: { mtimeNs: bigint; size: bigint } | undefined;

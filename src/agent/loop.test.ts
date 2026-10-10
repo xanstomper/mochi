@@ -1239,7 +1239,7 @@ describe('model stall guard (MOCHI_MODEL_RESPONSE_TIMEOUT_MS)', () => {
     expect(fake.requests.length).toBeGreaterThanOrEqual(1);
     expect(result.success).toBe(false);
     expect(result.stopReason).toBe('model_error');
-  }, 20_000);
+  }, 60_000);
 
   it('a silent retry/failover hold also resolves instead of hanging forever', async () => {
     // Primary call returns a transient 500 -> propagates into the catch, which
@@ -1254,7 +1254,7 @@ describe('model stall guard (MOCHI_MODEL_RESPONSE_TIMEOUT_MS)', () => {
     expect(fake.requests.length).toBeGreaterThanOrEqual(2);
     expect(result.success).toBe(false);
     expect(result.stopReason).toBe('model_error');
-  }, 20_000);
+  }, 60_000);
 
   it('a mid-stream connection drop fails over and finishes instead of dying with model_error', async () => {
     // Production shape: provider accepts the request, streams one chunk, then

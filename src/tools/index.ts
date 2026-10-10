@@ -67,6 +67,7 @@ import { tuiBuilderTool } from './tui-builder.js';
 import { mcpManageTool } from './mcp-manage.js';
 import { markdownTool } from './markdown.js';
 import { colorTool } from './color.js';
+import { acceptPlanTool } from './accept-plan.js';
 
 export const ALL_TOOLS: Tool[] = [
   readTool, writeTool, editTool, deleteTool, shellTool, searchTool, globTool, outlineTool, astSliceTool,
@@ -85,6 +86,7 @@ export const ALL_TOOLS: Tool[] = [
   notesTool, tuiBuilderTool, mcpManageTool, markdownTool, colorTool,
   toolFactoryTool,
   browserTool,
+  acceptPlanTool,
 ];
 
 export const ALL_TOOLS_MAP = new Map<string, Tool>(ALL_TOOLS.map((t) => [t.def.name, t]));
@@ -139,7 +141,8 @@ export function buildTools(config: MochiConfig, allowed?: string[]): Map<string,
       name === 'skill_manage' ||
       name === 'codebase_map' ||
       name === 'security_audit' ||
-      name === 'tool_factory';
+      name === 'tool_factory' ||
+      name === 'accept_plan';
     if (allowed && !allowed.includes(name) && !alwaysInclude) continue;
     // Keep default advertised schema clean and focused on engineering primitives.
     // Auxiliary tools remain executable via ALL_TOOLS_MAP without cluttering the prompt.

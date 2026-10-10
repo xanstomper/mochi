@@ -1150,9 +1150,14 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     }
     for (let i = 0; i < h; i++) {
       let line = rows[i] ?? '';
-      // Strict boundary clamp to prevent terminal auto-wrap on the right edge or bottom-right corner.
-      // For the very last row of the screen, clamp to Math.max(1, w - 1) to avoid bottom-corner wrap scroll.
-      const maxCol = i === h - 1 ? Math.max(1, w - 1) : w;
+      // Strict boundary clamp to prevent terminal auto-wrap on the right edge.
+      // Every row (INCLUDING the last) may be exactly w visible columns: the
+      // composer's bottom rule └────┘ is w wide and always lands on the last
+      // row, so clamping the last row to w-1 ellipsized the corner `┘` into
+      // `…` — the "broken rectangle" glitch (2026-10-10). No wrap happens at
+      // exactly-w because the next frame write is an explicit CUP escape
+      // (`\x1b[r;cH`), which cancels any pending auto-wrap.
+      const maxCol = w;
       if (visibleLen(line) > maxCol) {
         line = ellipsize(line, maxCol);
       }

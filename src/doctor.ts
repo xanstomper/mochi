@@ -6,16 +6,19 @@ import { existsSync, statSync, readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { hasSqlite, sqliteSource } from './sqlite.js';
 import { listJobs } from './cron.js';
+import { loadSkillFile, staleSkills, skillConflicts } from './skills.js';
 import { SessionStore } from './session-store.js';
 import { runRetention } from './retention.js';
 
 export interface SkillHealthEntry {
   name: string;
-  status: 'ok' | 'empty' | 'missing-frontmatter' | 'orphaned';
+  status: 'ok' | 'empty' | 'missing-frontmatter' | 'orphaned' | 'stale' | 'conflict';
   path: string;
 }
 
 export interface DoctorReport {
+  version: string;
+  providerReachable?: boolean;
   runtime: { node: string; sqlite: boolean };
   model: {
     provider: string;
@@ -35,6 +38,8 @@ export interface DoctorReport {
 
 /** Build a health report for a workspace. Pure and testable. */
 export async function doctorReport(opts: {
+  version?: string;
+  probeProvider?: boolean;
   provider: string;
   baseUrl: string;
   model: string;
@@ -71,6 +76,7 @@ export async function doctorReport(opts: {
   const degradedSkills: SkillHealthEntry[] = [];
   const visitedPaths = new Set<string>();
   let totalSkills = 0;
+  const allDiscoveredSkills: import('./skills.js').Skill[] = [];
 
   for (const sDir of candidateDirs) {
     if (!existsSync(sDir)) continue;
@@ -85,6 +91,9 @@ export async function doctorReport(opts: {
         degradedSkills.push({ name, status: 'empty', path: skillPath });
       } else if (!raw.includes('name:') && !raw.startsWith('---')) {
         degradedSkills.push({ name, status: 'missing-frontmatter', path: skillPath });
+      } else {
+        const parsed = loadSkillFile(skillPath).skill;
+        if (parsed) allDiscoveredSkills.push(parsed);
       }
     };
 
@@ -112,7 +121,34 @@ export async function doctorReport(opts: {
   }
   const healthySkills = totalSkills - degradedSkills.length;
 
+  // MCH-34: provider reachability — a key being SET says nothing about the
+  // endpoint actually answering. One cheap models-list ping (2s budget) so
+  // 'mochi doctor' catches dead endpoints, not just missing env vars.
+  let providerReachable: boolean | undefined;
+  if (opts.probeProvider && opts.baseUrl && (opts.apiKey || opts.provider === 'ollama' || opts.provider === 'llamacpp')) {
+    try {
+      const ctl = new AbortController();
+      const t = setTimeout(() => ctl.abort(), 2000);
+      const res = await fetch(new URL('models', opts.baseUrl.endsWith('/') ? opts.baseUrl : opts.baseUrl + '/').href, { signal: ctl.signal, headers: opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {} });
+      clearTimeout(t);
+      providerReachable = res.ok;
+    } catch {
+      providerReachable = false;
+    }
+    if (providerReachable === false) problems.push(`Provider endpoint ${opts.baseUrl} did not answer within 2s — runs will stall/fail over.`);
+  }
+
+  // MCH-40 (skills v2): staleness + semantic conflicts across ALL skills found.
+  const staleList = staleSkills(allDiscoveredSkills);
+  const conflicts = skillConflicts(allDiscoveredSkills);
+  for (const n of staleList) degradedSkills.push({ name: n, status: 'stale' as SkillHealthEntry['status'], path: '' });
+  for (const c of conflicts) degradedSkills.push({ name: `${c.a} ~ ${c.b}`, status: 'conflict' as SkillHealthEntry['status'], path: '' });
+  if (staleList.length > 0) problems.push(`${staleList.length} skill(s) stale (>90d): ${staleList.slice(0, 5).join(', ')}.`);
+  if (conflicts.length > 0) problems.push(`${conflicts.length} skill conflict(s) (>0.8 overlap): ${conflicts.slice(0, 3).map((c) => c.a + ' ~ ' + c.b).join(', ')}.`);
+
   const report: DoctorReport = {
+    version: opts.version ?? 'unknown',
+    providerReachable,
     runtime: { node: process.version, sqlite },
     model: { provider: opts.provider, keySet: Boolean(opts.apiKey), keySource: opts.apiKey ? 'env/config' : 'unset', baseUrl: opts.baseUrl, model: opts.model },
     index: { sqlite, codegraph: sqlite ? 'ready' : 'unavailable' },
@@ -145,10 +181,11 @@ export function formatDoctor(r: DoctorReport): string {
     ? 'no skills installed'
     : `${r.skills.healthy}/${r.skills.total} healthy${r.skills.degraded.length > 0 ? ` (${r.skills.degraded.length} degraded)` : ''}`;
   return [
-    `Mochi doctor on node ${r.runtime.node}`,
+    `Mochi doctor v${r.version} on node ${r.runtime.node}`,
     '',
     `  model         ${r.model.provider} @ ${r.model.baseUrl}  (${r.model.model})`,
     `  api key       ${ok(r.model.keySet)} ${r.model.keySource}`,
+    `  reachability  ${r.providerReachable === undefined ? 'n/a (use --probe)' : r.providerReachable ? 'ok    endpoint answers' : 'MISS  endpoint did not answer (2s)'}`,
     `  sqlite        ${ok(r.runtime.sqlite)} ${r.runtime.sqlite ? `${sqliteSource() || 'driver'} available` : 'no driver — sessions/index/search off'}`,
     `  codegraph     ${ok(r.index.codegraph === 'ready')} ${r.index.codegraph}`,
     `  sessions      ${ok(r.sessions.sqlite)} ${r.sessions.sqlite ? 'FTS5 enabled' : 'disabled'}`,

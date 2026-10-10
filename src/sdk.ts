@@ -16,6 +16,7 @@
 //    workspace state, cron, and the SSE stream with the running daemon.
 import { Runtime } from './runtime.js';
 import { SessionStore } from './session-store.js';
+import { addFact, recallFacts } from './memory-store.js';
 import type { MochiConfig } from './types.js';
 
 export interface RunResult {
@@ -93,6 +94,16 @@ export class Mochi {
     return new SessionStore(this.rt.cwd).list(limit).map((s) => ({ id: s.id, objective: s.objective, updated: s.updatedAt }));
   }
 
+  /** Persist a durable memory fact (MCH-42 store: dedup + scoring). */
+  remember(statement: string, category: 'fact' | 'preference' | 'convention' | 'history' = 'fact'): boolean {
+    return addFact(statement, category) !== null;
+  }
+
+  /** Semantic recall of relevant memory facts for a context. */
+  recall(context: string, limit = 15): Array<{ statement: string; category: string }> {
+    return recallFacts(context, limit).map((f) => ({ statement: f.statement, category: f.category }));
+  }
+
   /** Raw Runtime escape hatch for anything the typed surface lacks. */
   get runtime(): Runtime { return this.rt; }
 }
@@ -114,6 +125,26 @@ export class RemoteMochi {
   async status(): Promise<Record<string, unknown>> {
     const res = await fetch(`${this.base()}/api/status`, { headers: this.headers() });
     return res.json() as Promise<Record<string, unknown>>;
+  }
+
+  /** One-shot prompt against the daemon (same semantics as local prompt()). */
+  async prompt(task: string): Promise<RunResult> {
+    const r = await this.post('/api/prompt', { task });
+    return {
+      summary: String(r.summary ?? ''),
+      status: String(r.status ?? 'unknown'),
+      success: !!r.success,
+      tokensUsed: Number(r.tokensUsed ?? 0),
+      costUsd: Number(r.costUsd ?? 0),
+      durationMs: Number(r.durationMs ?? 0),
+      filesModified: Array.isArray(r.filesModified) ? (r.filesModified as string[]) : [],
+    };
+  }
+
+  /** Typed convenience over status(). */
+  async statusTyped(): Promise<{ ready: boolean; tasks: number; activeAgents: number }> {
+    const s = await this.status();
+    return { ready: !!s.ready, tasks: Number(s.tasks ?? 0), activeAgents: Number(s.activeAgents ?? 0) };
   }
 
   async goal(objective: string): Promise<Record<string, unknown>> { return this.post('/api/goal', { objective }); }
