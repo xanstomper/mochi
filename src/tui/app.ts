@@ -1530,6 +1530,26 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     }
     if (line === '/skills' || line.startsWith('/skills ') || line === '/skill' || line.startsWith('/skill ')) {
       const specific = (line.startsWith('/skills ') ? line.slice(8) : line.startsWith('/skill ') ? line.slice(7) : '').trim();
+      if (specific === 'repo' || specific.startsWith('repo ')) {
+        // /skills repo [<name>] — browse the shared skill-library registry:
+        // registered sources and their categorized packs, with an install action.
+        const { loadRegistry } = await import('../features/skill-registry.js');
+        const want = specific === 'repo' ? '' : specific.slice(5).trim();
+        const reg = loadRegistry();
+        const names = Object.keys(reg.sources).sort();
+        if (!names.length) { push('system', 'No skill sources registered. Add one with: mochi skills repo add <name> <source>'); scheduleRender(); return; }
+        if (!want) {
+          const items = names.map((n) => `${T.cyan}${n.padEnd(20)}${T.reset}  ${T.grayDark}${reg.sources[n].source}${T.reset}`);
+          state.menuSelected = 0;
+          const idx = await openMenu('Skill Sources (shared library)', items);
+          if (idx < 0 || idx >= names.length) return;
+          const chosen = names[idx];
+          await renderSourcePacks(chosen);
+        } else {
+          await renderSourcePacks(want);
+        }
+        return;
+      }
       if (specific === 'audit') {
         // /skills audit — health view: counts, agent-created vs bundled,
         // usage counters, last curator report. Proves the skill tree is
@@ -2156,6 +2176,44 @@ if (line === '/branch' || line.startsWith('/branch ')) {
       push('system', `=== Skill: ${chosen.name} ===\n${body || chosen.description}`);
       scheduleRender();
     }
+  }
+
+  /** /skills repo — show a source's categorized packs; selecting installs it. */
+  async function renderSourcePacks(sourceName: string) {
+    const { getSource, discoverPacks, resolvePackDir } = await import('../features/skill-registry.js');
+    const { resolveSourceDir, importSkills } = await import('../features/skill-importer.js');
+    const src = getSource(sourceName);
+    if (!src) { push('error', `No skill source '${sourceName}'.`); scheduleRender(); return; }
+    const res = await resolveSourceDir(src.source);
+    if (!res.dir) { push('error', `Source '${sourceName}' unresolvable: ${res.error || 'n/a'}`); scheduleRender(); return; }
+    const packs = discoverPacks(res.dir, src.catalogFile);
+    if (!packs.length) { push('system', `Source '${sourceName}' has no discoverable packs.`); scheduleRender(); return; }
+    const items = packs.map((p) => {
+      const tag = p.category ? `${T.lime}${p.category}${T.reset} ` : '';
+      const desc = (p.description || '').slice(0, 46);
+      return `${tag}${T.cyan}${p.name.padEnd(20)}${T.reset}  ${T.grayDark}${desc}${T.reset}`;
+    });
+    items.push(`${T.grayDark}← back to sources${T.reset}`);
+    state.menuSelected = 0;
+    const idx = await openMenu(`Packs in '${sourceName}' (${packs.length})`, items);
+    if (idx < 0) return;
+    if (idx >= packs.length) {
+      // back to the sources list
+      return;
+    }
+    const chosen = packs[idx];
+    const srcDir = res.dir!; // res.dir null-checked above
+    const pd = resolvePackDir(srcDir, chosen.name, src.catalogFile);
+    await run(async () => {
+      const rep = await importSkills({ source: pd ?? srcDir, origin: src.name });
+      if (rep.imported.length) {
+        push('system', `Installed skill '${chosen.name}' from '${sourceName}'.`);
+        return `Installed ${rep.imported.map((i) => i.name).join(', ')} from '${sourceName}'.`;
+      }
+      const reasons = rep.skipped.map((s) => s.reason).join('; ') || rep.errors.join('; ');
+      push('system', `Skill '${chosen.name}' not newly installed${reasons ? ` (${reasons})` : ''}.`);
+      return `Skill '${chosen.name}' not newly installed${reasons ? ` (${reasons})` : ''}.`;
+    }, false);
   }
 
   function formatTimeAgo(ts: number): string {

@@ -813,18 +813,39 @@ async function main() {
       return;
     }
     if (sub === 'install') {
-      // mochi skills install <pack>[@<repo>] — install a named pack from a
-      // registered source. Resolves the pack to a subdir by catalog/name, then
-      // reuses the importer's non-destructive copy into ~/.mochi/skills.
+      // mochi skills install <pack>[@<repo>] [--category <cat>] [--force]
+      // Installs a named pack (pack@repo) OR the whole source (bare repo). With
+      // --category, it installs only the packs in the source that match `cat` —
+      // the "grab a whole skill category" surface.
       const { getSource, resolvePackDir, discoverPacks } = await import('./features/skill-registry.js');
       const { importSkills, resolveSourceDir } = await import('./features/skill-importer.js');
       const target = positional[2];
-      if (!target) { console.log('Usage: mochi skills install <pack>[@<repo>] [--force]'); return; }
+      if (!target) { console.log('Usage: mochi skills install <pack>[@<repo>] [--category <cat>] [--force]'); return; }
       const [packId, repoName] = target.split('@');
       const src = repoName ? getSource(repoName) : getSource(packId);
       if (!src) { console.error(repoName ? `No skill source '${repoName}'.` : `No pack source — use 'mochi skills install <pack>@<repo>' or 'mochi skills repo add' first.`); return; }
       const res = await resolveSourceDir(src.source, { update: !!flags.update });
       if (!res.dir) { console.error(`Source '${src.name}' unresolvable: ${res.error || 'n/a'}`); return; }
+      // Category mode: install every pack that matches the given category.
+      if (flags.category) {
+        const cat = String(flags.category).toLowerCase();
+        const packs = discoverPacks(res.dir, src.catalogFile).filter((p) => (p.category || '').toLowerCase() === cat);
+        if (!packs.length) {
+          console.error(`No packs with category '${cat}' in '${src.name}'.`);
+          return;
+        }
+        let installed = 0, skipped = 0, errs = 0;
+        for (const p of packs) {
+          const pd = resolvePackDir(res.dir, p.name, src.catalogFile);
+          if (!pd) { errs++; console.error(`error  pack '${p.name}' unresolvable in source`); continue; }
+          const rep = await importSkills({ source: pd, origin: src.name, force: !!flags.force });
+          for (const it of rep.imported) { installed++; console.log(`installed  ${it.name}  -> ${it.to}`); }
+          for (const s of rep.skipped) { skipped++; console.log(`skipped    ${s.name}  (${s.reason})`); }
+          for (const e of rep.errors) { errs++; console.error(`error      ${e}`); }
+        }
+        console.log(`\n${installed} installed, ${skipped} skipped, ${errs} errors (source: ${src.name}, category: ${cat}).`);
+        return;
+      }
       const resolvedPackId = repoName ? packId : null;
       const targetDir = resolvedPackId ? resolvePackDir(res.dir, resolvedPackId, src.catalogFile) : res.dir;
       if (resolvedPackId && !targetDir) {
