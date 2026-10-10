@@ -1,6 +1,6 @@
 {
-  "when": "2026-10-10T23:17:26.111Z",
-  "rounds": 2,
+  "when": "2026-10-10T23:35:29.910Z",
+  "rounds": 1,
   "results": [
     {
       "harness": "mochi",
@@ -8,7 +8,7 @@
       "name": "feature-add-test",
       "ok": true,
       "detail": "printed 5",
-      "ms": 46716,
+      "ms": 9857,
       "exit": 0,
       "timedOut": false
     },
@@ -18,7 +18,7 @@
       "name": "feature-add-test",
       "ok": false,
       "detail": "add.js missing",
-      "ms": 4080,
+      "ms": 3715,
       "exit": 1,
       "timedOut": false
     },
@@ -28,7 +28,7 @@
       "name": "feature-add-test",
       "ok": false,
       "detail": "add.js missing",
-      "ms": 1833,
+      "ms": 1554,
       "exit": 1,
       "timedOut": false
     },
@@ -38,7 +38,7 @@
       "name": "feature-add-test",
       "ok": false,
       "detail": "add.js missing",
-      "ms": 1058,
+      "ms": 930,
       "exit": 1,
       "timedOut": false
     },
@@ -48,7 +48,7 @@
       "name": "feature-add-test",
       "ok": false,
       "detail": "add.js missing",
-      "ms": 7209,
+      "ms": 3378,
       "exit": 1,
       "timedOut": false
     },
@@ -58,7 +58,7 @@
       "name": "feature-add-test",
       "ok": false,
       "detail": "add.js missing",
-      "ms": 7369,
+      "ms": 3432,
       "exit": 55,
       "timedOut": false
     },
@@ -68,7 +68,7 @@
       "name": "feature-add-test",
       "ok": true,
       "detail": "printed 5",
-      "ms": 9423,
+      "ms": 8117,
       "exit": 0,
       "timedOut": false
     },
@@ -78,7 +78,7 @@
       "name": "bugfix-off-by-one",
       "ok": true,
       "detail": "prints 10",
-      "ms": 20009,
+      "ms": 28619,
       "exit": 0,
       "timedOut": false
     },
@@ -88,7 +88,7 @@
       "name": "bugfix-off-by-one",
       "ok": false,
       "detail": "prints \"NaN\"",
-      "ms": 6292,
+      "ms": 4485,
       "exit": 1,
       "timedOut": false
     },
@@ -98,7 +98,7 @@
       "name": "bugfix-off-by-one",
       "ok": false,
       "detail": "prints \"NaN\"",
-      "ms": 2482,
+      "ms": 1848,
       "exit": 1,
       "timedOut": false
     },
@@ -108,7 +108,7 @@
       "name": "bugfix-off-by-one",
       "ok": false,
       "detail": "prints \"NaN\"",
-      "ms": 1042,
+      "ms": 968,
       "exit": 1,
       "timedOut": false
     },
@@ -118,7 +118,7 @@
       "name": "bugfix-off-by-one",
       "ok": false,
       "detail": "prints \"NaN\"",
-      "ms": 6753,
+      "ms": 5165,
       "exit": 1,
       "timedOut": false
     },
@@ -128,7 +128,7 @@
       "name": "bugfix-off-by-one",
       "ok": false,
       "detail": "prints \"NaN\"",
-      "ms": 5641,
+      "ms": 6558,
       "exit": 55,
       "timedOut": false
     },
@@ -138,7 +138,7 @@
       "name": "bugfix-off-by-one",
       "ok": true,
       "detail": "prints 10",
-      "ms": 10144,
+      "ms": 9884,
       "exit": 0,
       "timedOut": false
     },
@@ -148,7 +148,7 @@
       "name": "refactor-rename",
       "ok": true,
       "detail": "renamed + prints 11",
-      "ms": 27747,
+      "ms": 19496,
       "exit": 0,
       "timedOut": false
     },
@@ -158,7 +158,7 @@
       "name": "refactor-rename",
       "ok": false,
       "detail": "old name still present",
-      "ms": 4438,
+      "ms": 8409,
       "exit": 1,
       "timedOut": false
     },
@@ -168,7 +168,7 @@
       "name": "refactor-rename",
       "ok": false,
       "detail": "old name still present",
-      "ms": 2133,
+      "ms": 2115,
       "exit": 1,
       "timedOut": false
     },
@@ -178,7 +178,7 @@
       "name": "refactor-rename",
       "ok": false,
       "detail": "old name still present",
-      "ms": 1095,
+      "ms": 928,
       "exit": 1,
       "timedOut": false
     },
@@ -188,7 +188,7 @@
       "name": "refactor-rename",
       "ok": false,
       "detail": "old name still present",
-      "ms": 5139,
+      "ms": 6064,
       "exit": 1,
       "timedOut": false
     },
@@ -198,7 +198,7 @@
       "name": "refactor-rename",
       "ok": false,
       "detail": "old name still present",
-      "ms": 5580,
+      "ms": 4948,
       "exit": 55,
       "timedOut": false
     },
@@ -208,7 +208,7 @@
       "name": "refactor-rename",
       "ok": true,
       "detail": "renamed + prints 11",
-      "ms": 11464,
+      "ms": 10350,
       "exit": 0,
       "timedOut": false
     },
@@ -218,7 +218,7 @@
       "name": "codebase-question",
       "ok": true,
       "detail": "both facts correct",
-      "ms": 9033,
+      "ms": 7298,
       "exit": 0,
       "timedOut": false
     },
@@ -228,7 +228,7 @@
       "name": "codebase-question",
       "ok": false,
       "detail": "answer.txt missing",
-      "ms": 6061,
+      "ms": 9213,
       "exit": 1,
       "timedOut": false
     },
@@ -238,7 +238,7 @@
       "name": "codebase-question",
       "ok": false,
       "detail": "answer.txt missing",
-      "ms": 2475,
+      "ms": 3001,
       "exit": 1,
       "timedOut": false
     },
@@ -248,7 +248,7 @@
       "name": "codebase-question",
       "ok": false,
       "detail": "answer.txt missing",
-      "ms": 1010,
+      "ms": 1023,
       "exit": 1,
       "timedOut": false
     },
@@ -258,7 +258,7 @@
       "name": "codebase-question",
       "ok": false,
       "detail": "answer.txt missing",
-      "ms": 7662,
+      "ms": 5683,
       "exit": 1,
       "timedOut": false
     },
@@ -268,7 +268,7 @@
       "name": "codebase-question",
       "ok": false,
       "detail": "answer.txt missing",
-      "ms": 7055,
+      "ms": 5263,
       "exit": 55,
       "timedOut": false
     },
@@ -278,388 +278,80 @@
       "name": "codebase-question",
       "ok": true,
       "detail": "both facts correct",
-      "ms": 9498,
-      "exit": 0,
-      "timedOut": false
-    },
-    {
-      "harness": "mochi",
-      "task": "f1",
-      "name": "feature-add-test",
-      "ok": true,
-      "detail": "printed 5",
-      "ms": 24744,
-      "exit": 0,
-      "timedOut": false
-    },
-    {
-      "harness": "codex",
-      "task": "f1",
-      "name": "feature-add-test",
-      "ok": false,
-      "detail": "add.js missing",
-      "ms": 5843,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "claude",
-      "task": "f1",
-      "name": "feature-add-test",
-      "ok": false,
-      "detail": "add.js missing",
-      "ms": 2384,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "crush",
-      "task": "f1",
-      "name": "feature-add-test",
-      "ok": false,
-      "detail": "add.js missing",
-      "ms": 1360,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "opencode",
-      "task": "f1",
-      "name": "feature-add-test",
-      "ok": false,
-      "detail": "add.js missing",
-      "ms": 8322,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "gemini",
-      "task": "f1",
-      "name": "feature-add-test",
-      "ok": false,
-      "detail": "add.js missing",
-      "ms": 6316,
-      "exit": 55,
-      "timedOut": false
-    },
-    {
-      "harness": "jcode",
-      "task": "f1",
-      "name": "feature-add-test",
-      "ok": true,
-      "detail": "printed 5",
-      "ms": 13735,
-      "exit": 0,
-      "timedOut": false
-    },
-    {
-      "harness": "mochi",
-      "task": "b1",
-      "name": "bugfix-off-by-one",
-      "ok": true,
-      "detail": "prints 10",
-      "ms": 32804,
-      "exit": 0,
-      "timedOut": false
-    },
-    {
-      "harness": "codex",
-      "task": "b1",
-      "name": "bugfix-off-by-one",
-      "ok": false,
-      "detail": "prints \"NaN\"",
-      "ms": 12447,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "claude",
-      "task": "b1",
-      "name": "bugfix-off-by-one",
-      "ok": false,
-      "detail": "prints \"NaN\"",
-      "ms": 1558,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "crush",
-      "task": "b1",
-      "name": "bugfix-off-by-one",
-      "ok": false,
-      "detail": "prints \"NaN\"",
-      "ms": 3814,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "opencode",
-      "task": "b1",
-      "name": "bugfix-off-by-one",
-      "ok": false,
-      "detail": "prints \"NaN\"",
-      "ms": 7207,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "gemini",
-      "task": "b1",
-      "name": "bugfix-off-by-one",
-      "ok": false,
-      "detail": "prints \"NaN\"",
-      "ms": 8035,
-      "exit": 55,
-      "timedOut": false
-    },
-    {
-      "harness": "jcode",
-      "task": "b1",
-      "name": "bugfix-off-by-one",
-      "ok": true,
-      "detail": "prints 10",
-      "ms": 11122,
-      "exit": 0,
-      "timedOut": false
-    },
-    {
-      "harness": "mochi",
-      "task": "r1",
-      "name": "refactor-rename",
-      "ok": true,
-      "detail": "renamed + prints 11",
-      "ms": 30143,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "codex",
-      "task": "r1",
-      "name": "refactor-rename",
-      "ok": false,
-      "detail": "old name still present",
-      "ms": 4297,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "claude",
-      "task": "r1",
-      "name": "refactor-rename",
-      "ok": false,
-      "detail": "old name still present",
-      "ms": 2238,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "crush",
-      "task": "r1",
-      "name": "refactor-rename",
-      "ok": false,
-      "detail": "old name still present",
-      "ms": 1119,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "opencode",
-      "task": "r1",
-      "name": "refactor-rename",
-      "ok": false,
-      "detail": "old name still present",
-      "ms": 5088,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "gemini",
-      "task": "r1",
-      "name": "refactor-rename",
-      "ok": false,
-      "detail": "old name still present",
-      "ms": 5056,
-      "exit": 55,
-      "timedOut": false
-    },
-    {
-      "harness": "jcode",
-      "task": "r1",
-      "name": "refactor-rename",
-      "ok": true,
-      "detail": "renamed + prints 11",
-      "ms": 10436,
-      "exit": 0,
-      "timedOut": false
-    },
-    {
-      "harness": "mochi",
-      "task": "q1",
-      "name": "codebase-question",
-      "ok": true,
-      "detail": "both facts correct",
-      "ms": 9290,
-      "exit": 0,
-      "timedOut": false
-    },
-    {
-      "harness": "codex",
-      "task": "q1",
-      "name": "codebase-question",
-      "ok": false,
-      "detail": "answer.txt missing",
-      "ms": 7071,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "claude",
-      "task": "q1",
-      "name": "codebase-question",
-      "ok": false,
-      "detail": "answer.txt missing",
-      "ms": 1955,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "crush",
-      "task": "q1",
-      "name": "codebase-question",
-      "ok": false,
-      "detail": "answer.txt missing",
-      "ms": 952,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "opencode",
-      "task": "q1",
-      "name": "codebase-question",
-      "ok": false,
-      "detail": "answer.txt missing",
-      "ms": 6262,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "gemini",
-      "task": "q1",
-      "name": "codebase-question",
-      "ok": false,
-      "detail": "answer.txt missing",
-      "ms": 4990,
-      "exit": 55,
-      "timedOut": false
-    },
-    {
-      "harness": "jcode",
-      "task": "q1",
-      "name": "codebase-question",
-      "ok": true,
-      "detail": "both facts correct",
-      "ms": 9133,
+      "ms": 9089,
       "exit": 0,
       "timedOut": false
     }
   ],
   "score": {
     "mochi": {
-      "pass": 8,
-      "total": 8,
+      "pass": 4,
+      "total": 4,
       "ms": [
-        9033,
-        9290,
-        20009,
-        24744,
-        27747,
-        30143,
-        32804,
-        46716
+        7298,
+        9857,
+        19496,
+        28619
       ]
     },
     "codex": {
       "pass": 0,
-      "total": 8,
+      "total": 4,
       "ms": [
-        4080,
-        4297,
-        4438,
-        5843,
-        6061,
-        6292,
-        7071,
-        12447
+        3715,
+        4485,
+        8409,
+        9213
       ]
     },
     "claude": {
       "pass": 0,
-      "total": 8,
+      "total": 4,
       "ms": [
-        1558,
-        1833,
-        1955,
-        2133,
-        2238,
-        2384,
-        2475,
-        2482
+        1554,
+        1848,
+        2115,
+        3001
       ]
     },
     "crush": {
       "pass": 0,
-      "total": 8,
+      "total": 4,
       "ms": [
-        952,
-        1010,
-        1042,
-        1058,
-        1095,
-        1119,
-        1360,
-        3814
+        928,
+        930,
+        968,
+        1023
       ]
     },
     "opencode": {
       "pass": 0,
-      "total": 8,
+      "total": 4,
       "ms": [
-        5088,
-        5139,
-        6262,
-        6753,
-        7207,
-        7209,
-        7662,
-        8322
+        3378,
+        5165,
+        5683,
+        6064
       ]
     },
     "gemini": {
       "pass": 0,
-      "total": 8,
+      "total": 4,
       "ms": [
-        4990,
-        5056,
-        5580,
-        5641,
-        6316,
-        7055,
-        7369,
-        8035
+        3432,
+        4948,
+        5263,
+        6558
       ]
     },
     "jcode": {
-      "pass": 8,
-      "total": 8,
+      "pass": 4,
+      "total": 4,
       "ms": [
-        9133,
-        9423,
-        9498,
-        10144,
-        10436,
-        11122,
-        11464,
-        13735
+        8117,
+        9089,
+        9884,
+        10350
       ]
     }
   }
