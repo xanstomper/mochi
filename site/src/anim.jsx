@@ -106,3 +106,87 @@ export function BenchChart({ rows, unit, lower = true, fmt }) {
     </div>
   );
 }
+
+// ---- Nous-grade primitives ----
+
+// scroll-linked parallax: returns ref; element translates on scroll
+export function useParallax(strength = 60) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let raf;
+    const onScroll = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const r = el.getBoundingClientRect();
+        const mid = r.top + r.height / 2 - window.innerHeight / 2;
+        el.style.transform = `translateY(${(-mid / window.innerHeight) * strength}px)`;
+      });
+    };
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => { window.removeEventListener('scroll', onScroll); cancelAnimationFrame(raf); };
+  }, [strength]);
+  return ref;
+}
+
+// per-char staggered rise — giant display type reveal
+export function SplitText({ text, className = '', delay = 0 }) {
+  const ref = useReveal(0.2);
+  return (
+    <span ref={ref} className={'split ' + className} aria-label={text}>
+      {text.split('').map((c, i) => (
+        <span key={i} aria-hidden="true" className="split-ch" style={{ transitionDelay: delay + i * 22 + 'ms' }}>
+          {c === ' ' ? '\u00A0' : c}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+// Bayer-dithered gradient canvas — the Nous halftone block, in our pink
+export function DitherBlock({ className = '', from = '#F2A7B8', to = '#FBF6EE', height = 420 }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const cv = ref.current;
+    if (!cv) return;
+    const w = cv.width = cv.offsetWidth;
+    const h = cv.height = cv.offsetHeight;
+    const ctx = cv.getContext('2d');
+    const g = ctx.createLinearGradient(0, 0, w, h);
+    g.addColorStop(0, from); g.addColorStop(1, to);
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+    const img = ctx.getImageData(0, 0, w, h);
+    const lum = new Float32Array(w * h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      // diagonal gradient position 0..1 — keeps full palette range regardless of input colors
+      lum[y*w+x] = (x / w * 0.65 + y / h * 0.35);
+    }
+    // 4x4 Bayer matrix
+    const M = [[0,8,2,10],[12,4,14,6],[3,11,1,9],[15,7,13,5]];
+    const white = [251,246,238], pink = [242,167,184], deep = [217,122,147], ink = [78,55,44];
+    const pal = [ink, deep, pink, white];
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const t = lum[y*w+x] + (M[y%4][x%4] / 16 - 0.5) * 0.28;
+      const idx = Math.max(0, Math.min(3, Math.floor(t * 4)));
+      const c = pal[idx];
+      const o = (y*w+x)*4;
+      img.data[o]=c[0]; img.data[o+1]=c[1]; img.data[o+2]=c[2]; img.data[o+3]=255;
+    }
+    ctx.putImageData(img, 0, 0);
+  }, [from, to]);
+  return <canvas ref={ref} className={'dither ' + className} style={{ width: '100%', height }} aria-hidden="true" />;
+}
+
+// infinite marquee strip
+export function Marquee({ items, speed = 30, className = '' }) {
+  const row = items.concat(items);
+  return (
+    <div className={'marquee ' + className} aria-hidden="true">
+      <div className="marquee-track" style={{ animationDuration: speed + 's' }}>
+        {row.map((t, i) => <span key={i} className="marquee-item">{t}<i>✦</i></span>)}
+      </div>
+    </div>
+  );
+}

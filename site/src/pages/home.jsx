@@ -1,210 +1,191 @@
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import Mochi from '../Mascot.jsx';
-import { Reveal, CountUp, BenchChart } from '../anim.jsx';
-import { FeatureGrid } from '../Features.jsx';
+import { Reveal, CountUp, SplitText, useParallax, DitherBlock, Marquee } from '../anim.jsx';
 import RepoBrowser from '../RepoBrowser.jsx';
 
-function HeroTerm() {
-  const lines = [
-    { cls: '', pre: true, text: '"add a rate limiter to the auth service"' },
-    { cls: 'dim', text: '  goal decomposed → 3 tasks · team: lead, coder, tester' },
-    { cls: '', text: '  ├─ lead     mapped auth surfaces, cut scope to 2 files' },
-    { cls: '', text: '  ├─ coder    token-bucket limiter in src/middleware/' },
-    { cls: '', text: '  └─ tester   6 integration cases, all green' },
-    { cls: 'g', text: '✔ verified · tests passing · git checkpoint created' },
-  ];
-  const [n, setN] = useState(0);
-  useEffect(() => {
-    if (n >= lines.length) return;
-    const t = setTimeout(() => setN(n + 1), n === 0 ? 600 : 300);
-    return () => clearTimeout(t);
-  }, [n]);
+const EYEBROW = ({ children }) => <div className="eyebrow">{children}</div>;
+
+function Hero() {
   return (
-    <div className="term">
-      <div className="bar"><i></i><i></i><i></i><span>mochi — session</span></div>
-      <pre>
-        {lines.slice(0, n).map((l, i) => (
-          <div key={i} className={l.cls} style={{ opacity: 1, animation: 'fadeUp .45s cubic-bezier(.34,1.3,.5,1)' }}>
-            {l.pre && <><span className="c">$ </span><span className="p">mochi</span> </>}
-            {l.text}
-          </div>
-        ))}
-        {n >= lines.length && (
-          <div style={{ animation: 'fadeUp .45s cubic-bezier(.34,1.3,.5,1)' }}>
-            <span className="c">$ </span><span className="p">mochi</span> trace <span className="g">g_8f42</span><span className="c">   # replay every step</span>
-          </div>
-        )}
-        <span className="cursor"></span>
-      </pre>
-    </div>
+    <section className="hero2">
+      <div className="wrap">
+        <EYEBROW>OPEN SOURCE • MIT • 0 DEPENDENCIES</EYEBROW>
+        <h1 className="giant">
+          <SplitText text="MOCHI" />
+        </h1>
+        <p className="giant-sub">
+          <span className="gi">The terminal coding agent</span><br />
+          <span className="gi pink">that gets out of your way.</span>
+        </p>
+        <p className="lede">
+          Goals decompose into task DAGs. Role-diverse teams execute them. A persistent
+          daemon keeps them running. Every run replays trace-for-trace — all on 18 MB of RAM.
+        </p>
+        <div className="cta-pair">
+          <a className="btn-loud" href="https://github.com/xanstomper/mochi">INSTALL VIA TERMINAL</a>
+          <a className="btn-quiet" href="benchmarks.html">READ THE BENCHMARKS</a>
+        </div>
+      </div>
+      <div className="hero-visual"><DitherBlock height={380} /></div>
+      <Marquee
+        speed={36}
+        items={[
+          '18.2 MB RESIDENT', '38.2 MS TO FIRST INPUT', '16 AGENT ROLES',
+          '31 RELEASES', '1200 TESTS PASSING', 'ZERO RUNTIME DEPS', 'RUST COMPUTE CORE',
+        ]}
+      />
+    </section>
   );
 }
 
-function Sparkle({ className }) {
+function Stat({ n, d, dec = 0, suffix = '', label, note }) {
   return (
-    <svg className={'sparkle ' + className} width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 2l2.2 7.8L22 12l-7.8 2.2L12 22l-2.2-7.8L2 12l7.8-2.2z" />
-    </svg>
+    <Reveal className="gstat">
+      <div className="gstat-n"><CountUp target={n} decimals={dec} suffix={suffix} /></div>
+      <div className="gstat-label">{label}</div>
+      <div className="gstat-note">{note}</div>
+      <div className="gstat-d">{d}</div>
+    </Reveal>
   );
 }
 
-// harness flow: goal -> DAG -> team -> verify -> trace, animated arrows
+function Numbers() {
+  return (
+    <section className="gnums">
+      <div className="wrap">
+        <EYEBROW>RECEIPTS, NOT VIBES</EYEBROW>
+        <div className="gstat-grid">
+          <Stat n={18.2} dec={1} suffix=" MB" label="RESIDENT MEMORY" note="single session" d="21× lighter than Claude Code — measured, not claimed" />
+          <Stat n={38.2} dec={1} suffix=" ms" label="TIME TO FIRST INPUT" note="cold start" d="fastest of nine agents tested, same task set" />
+          <Stat n={16} label="AGENT ROLES" note="orchestrated per goal" d="planner, builder, verifier, critic, memory, and more" />
+          <Stat n={1200} suffix="+" label="TESTS PASSING" note="0 failing" d="real integration tests against live providers" />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function Manifest() {
+  const ref = useParallax(40);
+  return (
+    <section className="manifest">
+      <div className="wrap manifest-grid">
+        <Reveal as="div" className="manifest-copy">
+          <EYEBROW>THE POINT</EYEBROW>
+          <h2 className="big2">Powerful agents should belong to everyone.</h2>
+          <p>
+            Mochi is a working argument that an autonomous coding agent doesn't need a
+            datacenter, a subscription, or 140 MB of RSS. It needs a small kernel, honest
+            verification, and a memory that survives the session.
+          </p>
+          <p>
+            Every release is dogfooded by the agent itself — regressions found by running
+            real tasks, not by wishing. What ships is what survived.
+          </p>
+          <a className="btn-quiet" href="docs.html">READ THE DOCS →</a>
+        </Reveal>
+        <div className="manifest-visual">
+          <div className="mochi-orbit" ref={ref}>
+            <Mochi size={300} className="bob" />
+          </div>
+          <div className="orbit-ring r1" />
+          <div className="orbit-ring r2" />
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function Flow() {
   const steps = [
-    ['goal', 'you state a goal'],
-    ['dag', 'decomposed into a task DAG'],
-    ['team', 'role-diverse swarm executes'],
-    ['verify', 'verifiers + outcome judge'],
-    ['trace', 'durable, replayable trace'],
+    ['01', 'GOAL', 'You describe the outcome. Plain language, no ceremony.'],
+    ['02', 'DAG', 'Mochi decomposes it into a dependency graph of concrete tasks.'],
+    ['03', 'TEAM', 'Sixteen specialized roles pick up tasks in parallel — planner, builder, verifier, critic.'],
+    ['04', 'VERIFY', 'Every artifact is re-checked against the filesystem, independent of the builder\'s claims.'],
+    ['05', 'REPLAY', 'The whole run persists trace-for-trace. Rewind, inspect, resume.'],
   ];
-  const [step, setStep] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => setStep(s => (s + 1) % steps.length), 1600);
-    return () => clearInterval(t);
-  }, []);
   return (
-    <div className="flow">
-      {steps.map(([k, d], i) => (
-        <React.Fragment key={k}>
-          {i > 0 && <span className={'flow-arrow' + (step >= i ? ' on' : '')}></span>}
-          <div className={'flow-node' + (step === i ? ' hot' : step > i ? ' done' : '')}>
-            <b>{k}</b><span>{d}</span>
-          </div>
-        </React.Fragment>
-      ))}
-    </div>
+    <section className="flow2">
+      <div className="wrap">
+        <EYEBROW>HOW A GOAL BECOMES A MERGE</EYEBROW>
+        {steps.map(([n, t, d], i) => (
+          <Reveal key={n} className={'flow-row' + (i < steps.length - 1 ? ' ruled' : '')} delay={i * 60}>
+            <span className="flow-n">{n}</span>
+            <span className="flow-t">{t}</span>
+            <span className="flow-d">{d}</span>
+          </Reveal>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function Screens() {
+  return (
+    <section className="screens">
+      <div className="wrap">
+        <EYEBROW>THE SURFACE</EYEBROW>
+        <h2 className="big2">Terminal velocity.</h2>
+        <p className="lede">A 60 fps TUI with streaming diffs, live task trees, and zero flicker. Runs over SSH. Runs in tmux. Runs on your phone's SSH client at 2 a.m.</p>
+        <div className="term2">
+          <div className="term2-bar"><i /><i /><i /><span>mochi — zsh — 80×24</span></div>
+          <pre className="term2-body"><span className="t-dim">$</span> mochi "migrate auth to passkeys, keep tests green"
+<span className="t-pink">◆ planning</span> 3 tasks · 2 parallel tracks
+<span className="t-dim">│</span> <span className="t-dim">t1</span> inventory credential flows … <span className="t-green">✓ 412 ms</span>
+<span className="t-dim">│</span> <span className="t-dim">t2</span> add passkey registration route … <span className="t-green">✓ 1.9 s</span>
+<span className="t-dim">│</span> <span className="t-dim">t3</span> migrate session store … <span className="t-amber">◐ verifying</span>
+<span className="t-pink">◆ verification</span> 1200 passed · 0 failed
+<span className="t-green">✓ done</span> — replay: <span className="t-dim">.mochi/runs/2026-10-10T14:32Z</span></pre>
+        </div>
+        <div className="tri">
+          <Reveal className="tri-card"><div className="tri-k">TUI</div><h3>Terminal Velocity</h3><p>Streaming everything. Keyboard-first. 60 fps.</p><a href="docs.html">INSTALL VIA TERMINAL →</a></Reveal>
+          <Reveal className="tri-card" delay={60}><div className="tri-k">DAEMON</div><h3>Runs While You Sleep</h3><p>A persistent daemon executes long goals across sessions and resumes cleanly.</p><a href="docs.html">MEET THE DAEMON →</a></Reveal>
+          <Reveal className="tri-card" delay={120}><div className="tri-k">MEMORY</div><h3>Learns Your Codebase</h3><p>Procedural memory persists what worked. Every session starts smarter than the last.</p><a href="docs.html">HOW MEMORY WORKS →</a></Reveal>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function RepoSec() {
+  return (
+    <section className="reposec" id="repo">
+      <div className="wrap">
+        <EYEBROW>NOTHING HIDDEN</EYEBROW>
+        <h2 className="big2">The whole repo, right here.</h2>
+        <p className="lede">Every file, readable without leaving the page. This is the actual main branch, fetched live.</p>
+      </div>
+      <div className="wrap rb-window"><RepoBrowser compact /></div>
+    </section>
+  );
+}
+
+function Coda() {
+  return (
+    <section className="coda">
+      <DitherBlock height={300} from="#4E372C" to="#F2A7B8" />
+      <div className="wrap coda-inner">
+        <h2 className="giant2"><SplitText text="SMALL IS THE FEATURE" /></h2>
+        <div className="cta-pair center">
+          <a className="btn-loud" href="https://github.com/xanstomper/mochi">STAR ON GITHUB</a>
+          <a className="btn-quiet invert" href="changelog.html">31 RELEASES AND COUNTING</a>
+        </div>
+      </div>
+    </section>
   );
 }
 
 function Home() {
   return (
     <>
-      <section className="hero">
-        <div className="wrap grid2">
-          <div>
-            <Reveal as="div" className="tag">🍡 Terminal-native · Rust core · zero runtime dependencies</Reveal>
-            <Reveal as="h1" delay={1}>The coding agent that gets <em>out of your way</em>.</Reveal>
-            <Reveal as="p" delay={2} className="sub">
-              Mochi is a minimal, fast, autonomous coding agent for the terminal. Goals decompose into
-              task DAGs, role-diverse teams execute them, a persistent daemon keeps them running, and
-              every run replays trace-for-trace — all on 18&nbsp;MB of RAM.
-            </Reveal>
-            <Reveal as="div" delay={3} className="cta">
-              <a className="btn primary" href="docs.html#install">Install</a>
-              <a className="btn soft" href="benchmarks.html">Benchmarks</a>
-            </Reveal>
-          </div>
-          <Reveal delay={1} className="hero-art">
-            <Sparkle className="s1" />
-            <Sparkle className="s2" />
-            <Sparkle className="s3" />
-            <Mochi size={300} mood="wink" className="bob" />
-          </Reveal>
-        </div>
-      </section>
-
-      <div className="wrap strip">
-        {[
-          [18.2, 1, ' MB', 'single-session memory · 21× lighter than Claude Code'],
-          [38.2, 1, ' ms', 'time to first input · fastest of nine agents tested'],
-          [16, 0, '', 'specialized agent roles orchestrated per goal'],
-          [30, 0, '+', 'bundled skills covering languages, protocols, workflows'],
-        ].map(([num, dec, unit, lbl], i) => (
-          <Reveal as="div" className="stat" delay={i} key={i}>
-            <div className="num"><CountUp target={num} decimals={dec} suffix={unit} /></div>
-            <div className="lbl">{lbl}</div>
-          </Reveal>
-        ))}
-      </div>
-
-      <section className="sec" id="repo" style={{ paddingTop: 30 }}>
-        <div className="wrap">
-          <div className="sec-head"><Reveal as="div">
-            <span className="kicker">Source</span>
-            <h2>The whole repo, right here.</h2>
-            <p>Browse every file of mochi without leaving the page. <a href="source.html">Full browser →</a></p>
-          </Reveal></div>
-          <Reveal delay={1}>
-            <div className="rb-window">
-              <RepoBrowser compact />
-            </div>
-          </Reveal>
-        </div>
-      </section>
-
-      <section className="sec" id="flow">
-        <div className="wrap">
-          <div className="sec-head"><Reveal as="div">
-            <span className="kicker">How a run works</span>
-            <h2>From goal to verified trace.</h2>
-          </Reveal></div>
-          <Reveal delay={1}><Flow /></Reveal>
-        </div>
-      </section>
-
-      <section className="sec" id="features" style={{ paddingTop: 40 }}>
-        <div className="wrap">
-          <div className="sec-head"><Reveal as="div">
-            <span className="kicker">What's inside</span>
-            <h2>A complete agent, not a wrapper.</h2>
-            <p>Mochi is built from scratch — no framework, no Electron, no runtime dependencies. Every layer below is clickable: see what it means and exactly how it works.</p>
-          </Reveal></div>
-          <FeatureGrid />
-        </div>
-      </section>
-
-      <section className="sec" id="roles" style={{ paddingTop: 0 }}>
-        <div className="wrap">
-          <div className="sec-head"><Reveal as="div">
-            <span className="kicker">Teams</span>
-            <h2>Sixteen specialists. One goal.</h2>
-            <p><code>mochi team "…"</code> spawns a swarm where every agent has a real job, a scoped tool allowlist, and a model tier matched to the work. Full table in the <a href="docs.html#roles">docs</a>.</p>
-          </Reveal></div>
-          <div className="grid3">
-            {[
-              ['reasoning', 'lead / architect / debugger', 'Decompose goals, design contracts, root-cause failures. Read-heavy, decision-heavy, no blind edits.'],
-              ['coding', 'coder / devops / frontend / backend', 'Full write access with surgical patch tools, headless test verification, and checkpointed edits.'],
-              ['review / fast', 'reviewer / researcher / tester', 'Read-only auditors and fast-tier test engineers — the swarm self-checks before it reports done.'],
-            ].map(([k, h, p], i) => (
-              <Reveal as="div" className="card" delay={i} key={i}>
-                <span className="k">{k}</span>
-                <h3><span className="dot"></span>{h}</h3>
-                <p>{p}</p>
-              </Reveal>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section className="sec" id="why" style={{ paddingTop: 0 }}>
-        <div className="wrap">
-          <div className="sec-head"><Reveal as="div">
-            <span className="kicker">Benchmarks</span>
-            <h2>Numbers first place in every row.</h2>
-            <p>Measured across nine terminal agents — 10 launches per metric, PSS profiling, high-resolution PTY timing. <a href="benchmarks.html">Full methodology →</a></p>
-          </Reveal></div>
-          <Reveal delay={1}>
-            <BenchChart unit="MB" rows={[
-              ['Mochi', 18.2, true], ['jcode', 27.8], ['Codex CLI', 140.0],
-              ['Cursor Agent', 214.9], ['OpenCode', 371.5], ['Claude Code', 386.6],
-            ]} />
-          </Reveal>
-          <Reveal as="p" delay={2} className="bench-note">PSS memory · 1 active session · lower is better</Reveal>
-        </div>
-      </section>
-
-      <section className="cta-sec">
-        <div className="wrap">
-          <Reveal><Mochi size={130} className="bob" /></Reveal>
-          <Reveal as="h2" delay={1}>Give your terminal a real agent.</Reveal>
-          <Reveal as="p" delay={2}>Node 22+ or Bun. Zero runtime dependencies. Under a minute to build.</Reveal>
-          <Reveal as="div" delay={3} className="cta" style={{ justifyContent: 'center' }}>
-            <a className="btn primary" href="docs.html#install">Get started</a>
-            <a className="btn soft" href="source.html">Browse the source</a>
-          </Reveal>
-        </div>
-      </section>
+      <Hero />
+      <Numbers />
+      <Manifest />
+      <Flow />
+      <Screens />
+      <RepoSec />
+      <Coda />
     </>
   );
 }

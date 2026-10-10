@@ -1,21 +1,21 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import RepoBrowser from '../RepoBrowser.jsx';
+import { Marquee, Reveal } from '../anim.jsx';
 
 function Source() {
   return (
     <>
       <div className="pagehead">
         <div className="wrap">
-          <h1 style={{ display: 'flex', alignItems: 'center', gap: 14 }}>Repository <span className="hd-mascot">🍡</span></h1>
-          <p>
-            The entire mochi codebase — every source file, readable right here. Collapsible folders, instant filter, syntax highlighting.{' '}
-            <a href="https://github.com/xanstomper/mochi" target="_blank" rel="noopener">Open on GitHub ↗</a>
-          </p>
+          <div className="eyebrow">NOTHING HIDDEN — READ EVERYTHING</div>
+          <h1>Source</h1>
+          <p className="lede">Every file of mochi, fetched live from the main branch. Search it, open it, read it — without leaving the page.</p>
         </div>
       </div>
-      <div className="wrap srcwrap">
-        <RepoBrowser />
+      <Marquee speed={32} items={['REPO: XANSTOMPER/MOCHI', 'BRANCH: MAIN', 'LIVE FROM GITHUB', 'MIT LICENSE', 'ZERO DEPENDENCIES']} />
+      <div className="wrap" style={{ padding: '48px 24px 90px' }}>
+        <div className="rb-window"><RepoBrowser /></div>
       </div>
     </>
   );

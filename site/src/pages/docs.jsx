@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import Mochi from '../Mascot.jsx';
-import { Reveal } from '../anim.jsx';
+import { Reveal, Marquee } from '../anim.jsx';
 
 const SKILLS = {
   'AI Architectures & Protocols': ['gpt-5-agent', 'o3-reasoning', 'deep-research', 'anthropic-research', 'cursor-workflow', 'devin-mode', 'github-copilot', 'vscode-copilot', 'gemini-learning', 'claude-design', 'hermes-workflow'],
@@ -44,6 +44,15 @@ const SIDEBAR = [
 function Docs() {
   const [toolTab, setToolTab] = useState('Editing');
   return (
+    <>
+      <div className="pagehead">
+        <div className="wrap">
+          <div className="eyebrow">THE MANUAL</div>
+          <h1>Docs</h1>
+          <p className="lede">Architecture, roles, memory, the daemon, and every skill — the complete map of the machine.</p>
+        </div>
+      </div>
+      <Marquee speed={36} items={['16 AGENT ROLES', 'DAG TASK PLANNER', 'PERSISTENT DAEMON', 'PROCEDURAL MEMORY', 'REPLAY EVERY RUN', 'ZERO DEPENDENCIES']} />
     <div className="wrap layout">
       <aside className="sidebar rv in">
         {SIDEBAR.map(([g, items]) => (
@@ -179,6 +188,7 @@ mochi daemon cron add "0 9 * * *" "triage open issues"`}</pre>
         </p>
       </main>
     </div>
+    </>
   );
 }
 createRoot(document.getElementById('root')).render(<Docs />);

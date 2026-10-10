@@ -1,7 +1,7 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import Mochi from '../Mascot.jsx';
-import { Reveal, BenchChart, CountUp } from '../anim.jsx';
+import { Reveal, Marquee, BenchChart, CountUp } from '../anim.jsx';
 
 const MEM = [
   ['Mochi', 18.2, true], ['jcode', 27.8], ['Pi', 34.4], ['Codex CLI', 140.0],
@@ -42,10 +42,12 @@ function Benchmarks() {
     <>
       <div className="pagehead">
         <div className="wrap">
+          <div className="eyebrow">MEASURED, NOT VIBES</div>
           <h1 style={{ display: 'flex', alignItems: 'center', gap: 14 }}>Benchmarks <Mochi size={46} mood="happy" className="mascot bob" /></h1>
           <p>Measured, not vibes. Ten launches per agent, cross-verified against published <code>--version</code> timings where available. Methodology, raw logs, and the benchmark suite lives in the repo's <a href="https://github.com/xanstomper/mochi/blob/main/docs/BENCHMARKS.md" target="_blank" rel="noopener">BENCHMARKS.md</a>.</p>
-        </div>
+              </div>
       </div>
+      <Marquee speed={34} items={['18.2 MB RESIDENT', '38.2 MS TTFI', '21× LIGHTER', '4.5× FASTER START', '1.6× MORE STABLE', '9 AGENTS TESTED']} />
 
       <Headline />
 
