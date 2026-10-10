@@ -99,8 +99,10 @@ function available(h) {
   return probe.status === 0 || !probe.error;
 }
 
-function runHarness(h, taskId, task, baseDir) {
-  const dir = join(baseDir, `${h}-${taskId}`);
+function runHarness(h, taskId, task, baseDir, round) {
+  // Fresh dir per (round, harness, task) — round 2+ must not race round 1's leftovers.
+  const dir = join(baseDir, `r${round}-${h}-${taskId}`);
+  rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'arena', type: 'commonjs' }));
   if (task.setup) task.setup(dir);
@@ -127,7 +129,7 @@ for (let round = 0; round < rounds; round++) {
     if (!task) { console.error(`unknown task ${t}`); process.exit(2); }
     for (const h of harnesses) {
       process.stdout.write(`round ${round + 1} ${h.padEnd(9)} ${t} ... `);
-      const r = runHarness(h, t, task, baseDir);
+      const r = runHarness(h, t, task, baseDir, round);
       results.push(r);
       console.log(`${r.ok ? 'PASS' : 'FAIL'}  ${(r.ms / 1000).toFixed(1)}s  ${r.detail}${r.timedOut ? ' [TIMEOUT]' : ''}`);
     }
