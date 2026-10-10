@@ -22,7 +22,11 @@ export interface MemoryFact {
 }
 
 const MEMORY_DIR = resolve(homedir(), '.mochi');
-const MEMORY_FILE = resolve(MEMORY_DIR, 'memory.jsonl');
+// MCH-59: env override so tests / multi-profile runs can redirect the store
+// without touching the real memory.jsonl.
+const MEMORY_FILE = process.env['MOCHI_MEMORY_FILE']
+  ? resolve(process.env['MOCHI_MEMORY_FILE'])
+  : resolve(MEMORY_DIR, 'memory.jsonl');
 const MAX_FAILS = 3;
 
 function ensure(): void {
@@ -121,17 +125,25 @@ export function memorySimilarity(a: string, b: string): number {
 const DEDUP_THRESHOLD = 0.55;
 
 /** MCH-42: semantic recall — score facts against the current task context.
- *  score = 0.5*jaccard(task, statement) + 0.3*success_ratio + 0.2*recency.
+ *  score = w_sim*jaccard + w_succ*success_ratio + w_rec*recency, where the
+ *  weights shift by category (MCH-59): preferences/conventions are explicit
+ *  user directives, so similarity matters less and they surface even on a
+ *  weak match; plain facts must earn their slot via strong similarity.
  *  Returns facts sorted by score desc, capped at maxFacts. */
 export function recallFacts(context: string, maxFacts = 15): MemoryFact[] {
   const facts = loadFacts();
   const now = Date.now();
   const HALF_LIFE_MS = 14 * 24 * 3600 * 1000; // 14-day recency half-life
+  const W = (c: MemoryFact['category']): { sim: number; base: number } =>
+    c === 'preference' ? { sim: 0.3, base: 0.12 }
+    : c === 'convention' ? { sim: 0.4, base: 0.06 }
+    : { sim: 0.5, base: 0 };
   const scored = facts.map((f) => {
     const sim = memorySimilarity(context, f.statement);
     const succ = f.attempts > 0 ? f.success_count / f.attempts : 0.5;
     const recency = Math.exp(-Math.LN2 * ((now - f.ts) / HALF_LIFE_MS));
-    return { fact: f, score: 0.5 * sim + 0.3 * succ + 0.2 * recency };
+    const w = W(f.category);
+    return { fact: f, score: w.base + w.sim * sim + 0.3 * succ + 0.2 * recency };
   });
   return scored
     .sort((a, b) => b.score - a.score)
