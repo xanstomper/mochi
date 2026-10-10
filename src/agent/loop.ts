@@ -338,6 +338,9 @@ export class Agent {
   private preEditCheckpoint?: CheckpointResult;
   private checkpointFailed = false;
   private executionRegistry = new ExecutionRegistry({ dedupeWindowMs: 1500 });
+  /** MCH-64: tool_call_ids already spec-executed mid-stream this response, so
+   *  the post-stream execution path skips them (results already in context). */
+  private midStreamExecutedIds = new Set<string>();
   private recentToolSignatures: string[] = [];
   private cycleNudges = 0;
   private lastSig = '';
@@ -950,6 +953,31 @@ Continue from 'Next:', do not redo completed progress.`,
         let inThinkTag = false;
         let streamBuf = '';
         let looped = false;
+        // MCH-64: mid-stream speculative tool execution. Tool-call args stream
+        // in deltas; the moment one call's args JSON parses AND the canonical
+        // tool is read-only, fire runMoolCall immediately (fire-and-forget,
+        // awaited after the stream). The real execution after the stream hits
+        // the ExecutionRegistry replay path (same executionId = completed
+        // record served from cache), so the read's output arrives with ZERO
+        // added latency and no duplicated tool messages. Mutating tools are
+        // NEVER spec-executed (order/atomicity). Bounds: max 8 per response,
+        // and the pre-stream spam guards still apply inside runMoolCall.
+        this.midStreamExecutedIds.clear();
+        const midStreamAcc = new Map<number, { id: string; name: string; args: string }>();
+        const midStreamPromises: Promise<void>[] = [];
+        const maybeSpecExec = (tcIndex: number) => {
+          if (this.midStreamExecutedIds.size >= 8) return;
+          const acc = midStreamAcc.get(tcIndex);
+          if (!acc || !acc.name || !acc.id) return;
+          if (this.midStreamExecutedIds.has(acc.id)) return;
+          // Only fire when the args buffer is complete JSON.
+          try { JSON.parse(acc.args); } catch { return; }
+          const canonical = TOOL_ALIASES[acc.name] || acc.name;
+          if (!this.isReadOnly(canonical)) return;
+          this.midStreamExecutedIds.add(acc.id);
+          const call: ToolCall = { id: acc.id, type: 'function', function: { name: acc.name, arguments: acc.args } };
+          midStreamPromises.push(this.specExecCall(call));
+        };
         // Detect pathological streamed repetition: a free/low-tier model can
         // emit the same boilerplate block (e.g. "## Focus: implementation")
         // hundreds of times in one response, which floods the transcript and
@@ -1012,6 +1040,19 @@ Continue from 'Next:', do not redo completed progress.`,
             this.events.emit({ type: 'agent:log' as any, agentId: this.id, message: `[heartbeat] model thinking ${elapsedS}s… (still alive, ${this.context.effectiveContextTokens()} ctx tokens)` });
           }
           chunks.push(chunk);
+          // MCH-64: accumulate streaming tool-call args and spec-execute the
+          // moment a read-only call's JSON is complete.
+          if (chunk.toolCalls) {
+            for (const stc of chunk.toolCalls as any[]) {
+              const idx = stc.index ?? 0;
+              const acc = midStreamAcc.get(idx) ?? { id: stc.id ?? '', name: '', args: '' };
+              if (!acc.id && stc.id) acc.id = stc.id;
+              acc.name = acc.name || stc.function?.name || '';
+              acc.args += stc.function?.arguments || '';
+              midStreamAcc.set(idx, acc);
+              maybeSpecExec(idx);
+            }
+          }
           if (chunk.reasoningContent) {
             const rChunk = chunk.reasoningContent || '';
             // Phrase tracking FIRST: reasoning loops must feed the repetition
@@ -1215,6 +1256,14 @@ Continue from 'Next:', do not redo completed progress.`,
           }
         }
         let tool_calls = [...callsByIndex.values()].map((a) => ({ id: a.id, type: 'function' as const, function: { name: a.name, arguments: a.args } }));
+        // MCH-64: wait for any mid-stream speculative executions to settle.
+        // The calls REMAIN in tool_calls (the assistant message must pair with
+        // every tool_call_id); their post-stream runMoolCall hits the
+        // ExecutionRegistry replay path and appends the cached result with
+        // zero re-execution latency.
+        if (midStreamPromises.length > 0) {
+          await Promise.all(midStreamPromises);
+        }
         if (tool_calls.length === 0 && content) {
           const extracted = this.extractToolCallsFromText(content);
           if (extracted.length > 0) {
@@ -2564,6 +2613,41 @@ Continue from 'Next:', do not redo completed progress.`,
     return synthesizeSubagentResults(results);
   }
 
+
+  /**
+   * MCH-64: mid-stream SPECULATIVE execution of a read-only tool call. Runs
+   * the tool into the ExecutionRegistry ONLY (same executionId the real
+   * call will use) — no context writes, no events beyond tool:called/
+   * completed so the TUI shows work as it happens. The post-stream
+   * runMoolCall then registers the same executionId, hits the replay path
+   * (execution-registry.ts explicit-replay branch) and appends the cached
+   * tool message in correct assistant->tool order with zero re-execution.
+   * Any failure here is swallowed: the real execution still runs normally.
+   */
+  private async specExecCall(tc: ToolCall): Promise<void> {
+    try {
+      if (this.abortSignal?.aborted) return;
+      const toolName = TOOL_ALIASES[tc.function.name] || tc.function.name;
+      const args = normalizeToolArgs(toolName, this.parseArgs(tc.function.arguments));
+      const rec = this.executionRegistry.register({ toolName, args, executionId: tc.id });
+      if (rec.duplicate) return; // already done/in-flight elsewhere — real path handles it
+      const ctx: ToolContext = {
+        cwd: this.cwd,
+        workspace: this.workspace,
+        config: this.config,
+        events: this.events,
+        agentId: this.id,
+        abortSignal: this.abortSignal,
+        readCache: this.readCache,
+        callerEmittedEvent: true,
+      };
+      const { output, error } = await executeTool(tc.function.name, args, ctx, this.tools);
+      if (error) this.executionRegistry.markFailed(rec.executionId, error);
+      else this.executionRegistry.markCompleted(rec.executionId, { output });
+    } catch {
+      // Speculation must never break the run: the real execution retries it.
+    }
+  }
 
   private async runMoolCall(tc: ToolCall): Promise<void> {
     if (this.abortSignal?.aborted) return;
