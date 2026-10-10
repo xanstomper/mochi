@@ -172,6 +172,9 @@ function HeroSection() {
           </div>
         </AnimatedContent>
       </div>
+      <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 10 }}>
+        <StatsTicker />
+      </div>
     </section>
   );
 }
@@ -438,7 +441,6 @@ export default function Home() {
       <SkyBackground />
       <FloatingDecorations />
       <HeroSection />
-      <StatsTicker />
       <CapabilitiesSection />
       <StatsSection />
       <FlowSection />

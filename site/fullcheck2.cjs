@@ -6,14 +6,12 @@ const { chromium } = require('playwright');
   await p.waitForTimeout(3000);
   const info = await p.evaluate(() => {
     const ticker = document.querySelector('.stats-ticker');
-    const hero = document.querySelector('.hero');
     const tickerR = ticker?.getBoundingClientRect();
+    const hero = document.querySelector('.hero');
     const heroR = hero?.getBoundingClientRect();
-    const tickerParent = ticker?.parentElement;
-    const tickerZ = ticker ? getComputedStyle(ticker).zIndex : 'none';
-    const parentZ = tickerParent ? getComputedStyle(tickerParent).zIndex : 'none';
-    const tickerBg = ticker ? getComputedStyle(ticker).backgroundColor : 'none';
-    return { tickerR, heroR, tickerZ, parentZ, tickerBg, parentTag: tickerParent?.tagName, parentClass: tickerParent?.className };
+    const sections = [...document.querySelectorAll('section')].map(s => s.className || s.id);
+    const pageH = document.documentElement.scrollHeight;
+    return { tickerExists: !!ticker, tickerR, heroR, sections, pageH };
   });
   console.log(JSON.stringify(info, null, 1));
   await b.close();

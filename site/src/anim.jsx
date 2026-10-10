@@ -35,7 +35,7 @@ export function SplitText({
   let charIndex = 0;
 
   return (
-    <Tag ref={ref} className={className} aria-label={text}>
+    <Tag ref={ref} className={`${className} ${inView ? 'in' : ''}`} aria-label={text}>
       {words.map((word, wi) => (
         <span key={wi} className="split-word" aria-hidden="true">
           {word.split('').map((ch, ci) => {
@@ -44,10 +44,7 @@ export function SplitText({
               <span
                 key={ci}
                 className="split-char"
-                style={{
-                  animationDelay: inView ? `${delay + idx * stagger}s` : undefined,
-                  animationPlayState: inView ? 'running' : 'paused',
-                }}
+                style={{ transitionDelay: `${delay + idx * stagger}s` }}
               >
                 {ch}
               </span>
@@ -86,16 +83,13 @@ export function BlurText({
 
   const words = text.split(' ');
   return (
-    <Tag ref={ref} className={className} aria-label={text}>
+    <Tag ref={ref} className={`${className} ${inView ? 'in' : ''}`} aria-label={text}>
       {words.map((word, i) => (
         <span
           key={i}
           className="blur-word"
           aria-hidden="true"
-          style={{
-            animationDelay: inView ? `${delay + i * stagger}s` : undefined,
-            animationPlayState: inView ? 'running' : 'paused',
-          }}
+          style={{ transitionDelay: `${delay + i * stagger}s` }}
         >
           {word}
           {i < words.length - 1 && '\u00A0'}
