@@ -906,7 +906,10 @@ Continue from 'Next:', do not redo completed progress.`,
       const ceiling = Math.floor(this.config.safety.contextBudgetTokens * 0.8);
       const floor = Math.min(this.config.safety.contextBudgetTokens * 0.6, ceiling);
       const msgCount = (this.context as any).messages?.length ?? 0;
-      if (i > 0 && msgCount >= 10 && this.context.effectiveContextTokens() > floor) {
+      // Batch token count via the Rust runtime (1 stdio round-trip instead of
+      // N FFI calls); falls back to the sync estimate when native is absent.
+      const ctxTokens = await (this.context as any).estimateTokensAsync();
+      if (i > 0 && msgCount >= 10 && ctxTokens > floor) {
         // MCH-30: CC-style two-stage pressure response. Stage 1 (cheap):
         // shrink old tool outputs in place — keeps every turn's structure, no
         // model call, no history rewrite. Stage 2 (only if still over floor):
@@ -3838,10 +3841,11 @@ Continue from 'Next:', do not redo completed progress.`,
    *  convenience probe, not arbitrary execution. */
   private extractTaskRunCommand(task: Task): string | null {
     const text = `${task.title} ${task.description ?? ''}`;
-    // "run node run.js" / "run it with node add.test.js and make sure…" —
-    // capture the runner + path tokens, stop at the next clause.
+    // "run node run.js" / "run it with node add.test.js and make sure…" /
+    // 'then run "node run.js" and confirm…' — capture runner + path tokens,
+    // stop at the next clause or closing quote.
     const m = text.match(
-      /(?:\brun\b(?: it)?(?: with| using)?\b[: ]*)((?:node|python3?|bash|sh|npm +test|npm +run +[\w:@/-]+|make)(?: +[\w./:@=-]+)*?)(?=,| and\b| then\b| to\b| so\b| make\b|$)/i,
+      /(?:\brun\b(?: it)?(?: with| using)?\b[: ]*["']?)((?:node|python3?|bash|sh|npm +test|npm +run +[\w:@/-]+|make)(?: +[\w./:@=-]+)*?)(?=["']?(?:,| and\b| then\b| to\b| so\b| make\b|$))/i,
     );
     const cmd = (m?.[1] ?? '').trim();
     if (!cmd || cmd.length > 80) return null;

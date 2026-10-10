@@ -147,6 +147,23 @@ export async function nativePlanCompaction(messages: PlanRequestMessage[], keep 
   }
 }
 
+/** Ask Rust to batch-count tokens over the message history (each entry
+ *  pre-stringified by the caller). Returns null on any failure so the caller
+ *  falls back to the TS implementation. */
+export async function nativeTokensCount(serializedMessages: string[]): Promise<number | null> {
+  const payload = JSON.stringify({ op: 'tokens', messages: serializedMessages });
+  if (payload.length > 4_000_000) return null;
+  const line = await writeLine(payload);
+  if (!line) return null;
+  try {
+    const obj = JSON.parse(line) as { op?: string; tokens?: number };
+    if (obj.op !== 'tokens' || typeof obj.tokens !== 'number') return null;
+    return obj.tokens;
+  } catch {
+    return null;
+  }
+}
+
 /** Best-effort shutdown for tests and daemon exit. */
 export function closeRustRuntime(): void {
   try { proc?.stdin?.write('{"op":"exit"}\n'); } catch { /* already gone */ }

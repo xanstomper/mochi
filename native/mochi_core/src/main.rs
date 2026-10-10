@@ -307,6 +307,19 @@ fn run_plan_protocol() {
                     }
                 }
             }
+            "tokens" => {
+                // Batch token count over the whole message history: real
+                // per-byte BPE work, off the JS hot path. Sum over the same
+                // JSON.stringify(m) shape the TS estimateTokens() walks so
+                // parity holds.
+                let objs = json_array_objects(line, "messages");
+                let mut total: usize = 0;
+                for o in &objs {
+                    total += tokenizer.count_tokens(o);
+                }
+                let _ = writeln!(out, "{{\"op\":\"tokens\",\"tokens\":{}}}", total);
+                let _ = out.flush();
+            }
             "exit" => break,
             _ => {
                 let _ = writeln!(out, "{{\"op\":\"error\",\"message\":\"unknown op\"}}");

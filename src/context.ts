@@ -5,7 +5,7 @@ import { MemoryStore, type MemoryEntry } from './memory.js';
 import { selectRelevant } from './relevance.js';
 import { loadAllSkills, formatSkillsForPrompt, type Skill, bundledSkillsDir, discoverSkills, loadSkillUsage, usageBoostMap } from './skills.js';
 import { nativeCountTokens } from './native/core.js';
-import { nativePlanCompaction } from './native/agent-protocol.js';
+import { nativePlanCompaction, nativeTokensCount } from './native/agent-protocol.js';
 import type { PlanRequestMessage } from './native/agent-protocol.js';
 import { classifyTaskKind, kindHint, isSimpleScriptTask } from './taskkind.js';
 import type { ChatMessage, MochiConfig, RepoInfo, Task, ToolDefinition } from './types.js';
@@ -316,6 +316,20 @@ export class ContextEngine {
     let sum = 0;
     for (const m of this.messages) sum += approxTokens(JSON.stringify(m));
     return sum;
+  }
+
+  /** Async sibling of estimateTokens(): delegates the whole-history batch
+   *  count to the Rust runtime over stdio (one round-trip instead of N
+   *  FFI calls) and falls back to the sync TS walk when the native runtime
+   *  is unavailable. Same ballpark answer either way — this feeds budget
+   *  checks, not exact billing. */
+  async estimateTokensAsync(): Promise<number> {
+    if (this.messages.length > 24) {
+      const serialized = this.messages.map((m) => JSON.stringify(m));
+      const native = await nativeTokensCount(serialized);
+      if (native !== null) return native;
+    }
+    return this.estimateTokens();
   }
 
   private loadMemory(query = ''): string {
