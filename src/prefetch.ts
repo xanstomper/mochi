@@ -12,7 +12,7 @@
 import { repoMap } from './repo-map.js';
 import { predictNextFiles } from './speculative.js';
 import { loadReadCache } from './read-cache-store.js';
-import { statSync, existsSync } from 'node:fs';
+import { statSync, existsSync, readFileSync } from 'node:fs';
 import { resolve, relative } from 'node:path';
 
 export interface PrefetchEntry {
@@ -103,4 +103,34 @@ export function prefetchText(workspaceDir: string, recentlyTouched: string[] = [
   if (entries.length === 0) return '';
   const lines = entries.map((e) => `- ${e.file}  [${e.signals.join('+')}]`);
   return `PREFETCHED CONTEXT (likely-next files, fused signals: structural PageRank + co-change history + cross-session read telemetry — read these proactively if your task touches them):\n${lines.join('\n')}`;
+}
+
+/**
+ * MCH-51: physically warm a ReadCache with the predicted files' contents.
+ * Entries use the same (mtimeMs, size) validation contract as the read tool,
+ * so a warmed entry behaves exactly like a first-hand read: if the file
+ * changes, the cache misses and the tool re-reads from disk. Never throws.
+ */
+export function warmReadCache(
+  workspaceDir: string,
+  cache: Map<string, { mtimeMs: number; size: number; content: string }>,
+  recentlyTouched: string[] = [],
+  limit = 8,
+): number {
+  try {
+    let warmed = 0;
+    for (const e of prefetchFiles(workspaceDir, recentlyTouched, limit)) {
+      try {
+        const abs = resolve(workspaceDir, e.file);
+        const st = statSync(abs);
+        if (!st.isFile() || st.size > 1_500_000) continue;
+        if (cache.has(abs)) continue;
+        cache.set(abs, { mtimeMs: st.mtimeMs, size: st.size, content: readFileSync(abs, 'utf8') });
+        warmed++;
+      } catch { /* per-file: skip */ }
+    }
+    return warmed;
+  } catch {
+    return 0;
+  }
 }

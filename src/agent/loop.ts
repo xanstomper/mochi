@@ -559,6 +559,11 @@ export class Agent {
       if (pfText) {
         this.context.addMessage({ role: 'system', content: pfText });
       }
+      // MCH-51: physically warm the read cache so the first read of each
+      // predicted file is an in-memory hit (mtime/size-validated, so a
+      // mid-task edit still re-reads from disk).
+      const { warmReadCache } = await import('../prefetch.js');
+      warmReadCache(this.workspace.dir, this.readCache);
     } catch { /* prefetch must never affect task start */ }
     if (this.planMode) {
       this.context.addMessage({

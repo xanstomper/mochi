@@ -1,9 +1,9 @@
 // MCH-50: prefetch fusion tests.
 import { describe, it, expect, afterAll } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { prefetchFiles, prefetchText } from './prefetch.js';
+import { prefetchFiles, prefetchText, warmReadCache } from './prefetch.js';
 import { ensureLanguage, getFunctionSynapse } from './codegraph.js';
 
 let dir = '';
@@ -39,6 +39,21 @@ describe('prefetch fusion (MCH-50)', () => {
     if (!dir) dir = mkdtempSync(join(tmpdir(), 'mochi-pf2-'));
     const text = prefetchText(dir, []);
     expect(typeof text).toBe('string'); // may be '' if no codegraph, but never throws
+  });
+
+  it('warmReadCache populates validated cache entries', async () => {
+    if (!dir) dir = mkdtempSync(join(tmpdir(), 'mochi-pf2-'));
+    writeFileSync(join(dir, 'warmme.ts'), 'export const warm = 1;\n');
+    const cache = new Map<string, { mtimeMs: number; size: number; content: string }>();
+    const warmed = warmReadCache(dir, cache, [], 5);
+    expect(warmed).toBeGreaterThanOrEqual(0);
+    // every warmed entry must carry the current stat signature
+    for (const [p, entry] of Array.from(cache)) {
+      const st = statSync(p);
+      expect(entry.mtimeMs).toBe(st.mtimeMs);
+      expect(entry.size).toBe(st.size);
+      expect(entry.content.length).toBeGreaterThan(0);
+    }
   });
 
   it('excludes files outside the workspace and missing files', () => {
