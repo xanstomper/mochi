@@ -3838,10 +3838,12 @@ Continue from 'Next:', do not redo completed progress.`,
    *  convenience probe, not arbitrary execution. */
   private extractTaskRunCommand(task: Task): string | null {
     const text = `${task.title} ${task.description ?? ''}`;
-    const matches = [...text.matchAll(/\brun\b[: ]+(?:`([^`]+)`|([\w./-]+(?: +[\w./"'-]+)*))/gi)];
-    if (matches.length === 0) return null;
-    const last = matches[matches.length - 1];
-    const cmd = (last[1] ?? last[2] ?? '').trim().replace(/[.,;]$/, '');
+    // "run node run.js" / "run it with node add.test.js and make sure…" —
+    // capture the runner + path tokens, stop at the next clause.
+    const m = text.match(
+      /(?:\brun\b(?: it)?(?: with| using)?\b[: ]*)((?:node|python3?|bash|sh|npm +test|npm +run +[\w:@/-]+|make)(?: +[\w./:@=-]+)*?)(?=,| and\b| then\b| to\b| so\b| make\b|$)/i,
+    );
+    const cmd = (m?.[1] ?? '').trim();
     if (!cmd || cmd.length > 80) return null;
     if (/[;&|<>`$()]/.test(cmd)) return null;
     return /^(node|python3?|bash|sh|npm (test|run [\w:@/-]+)|make)\b/.test(cmd) ? cmd : null;
