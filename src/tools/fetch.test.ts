@@ -56,7 +56,7 @@ describe('fetchTool', () => {
     await startServer();
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-fetch-'));
     const ctx = makeCtx(dir);
-    const result = await fetchTool.execute({ url: `${baseUrl}/` }, ctx);
+    const result = await fetchTool.execute({ url: `${baseUrl}/`, allow_private: true }, ctx);
     expect(result).toContain('hello from test server');
     expect(result).toContain('HTTP 200');
   });
@@ -64,7 +64,33 @@ describe('fetchTool', () => {
   it('performs a POST request with body', async () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-fetch-'));
     const ctx = makeCtx(dir);
-    const result = await fetchTool.execute({ url: `${baseUrl}/post`, method: 'POST', body: 'payload123' }, ctx);
+    const result = await fetchTool.execute({ url: `${baseUrl}/post`, method: 'POST', body: 'payload123', allow_private: true }, ctx);
     expect(result).toContain('echo:payload123');
+  });
+
+  it('blocks private/loopback hosts by default (SSRF guard)', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-fetch-'));
+    const ctx = makeCtx(dir);
+    for (const bad of ['http://127.0.0.1:9/x', 'http://localhost/x', 'http://169.254.169.254/latest/meta-data/', 'http://10.0.0.1/x', 'http://192.168.1.1/x', 'http://172.16.0.1/x']) {
+      let threw = false;
+      try {
+        await fetchTool.execute({ url: bad }, ctx);
+      } catch {
+        threw = true;
+      }
+      expect(threw).toBe(true);
+    }
+  });
+
+  it('blocks non-http protocols', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-fetch-'));
+    const ctx = makeCtx(dir);
+    let threw = false;
+    try {
+      await fetchTool.execute({ url: 'file:///etc/passwd' }, ctx);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
   });
 });

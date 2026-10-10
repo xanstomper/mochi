@@ -46,6 +46,9 @@ export interface FakeScriptResponse {
    *  transport error ("terminated" / ECONNRESET) mid-generation — the shape
    *  that production surfaces as "The operation was aborted". */
   dropConn?: boolean;
+  /** Delay before starting the SSE response (ms). Lets tests prove a slow
+   *  (but healthy) response is not aborted by a stale prior stall timer. */
+  delayMs?: number;
   /** Custom responder: return a full response computed FROM THE REQUEST BODY.
    *  When set on a scripted entry it wins over content/toolCalls and is only
    *  consumed when the router picks this entry (lets benches route by shape,
@@ -83,10 +86,10 @@ export async function startFakeOpenAI(script?: FakeScriptResponse[]): Promise<Fa
   const openStalls = new Set<any>();
   const defaultResp: FakeScriptResponse = { content: 'done', finishReason: 'stop', promptTokens: 1, completionTokens: 1 };
 
-  const server: Server = createServer((req, res) => {
+  const server: Server = createServer(async (req, res) => {
     let body = '';
     req.on('data', (c: Buffer) => { body += c.toString('utf8'); });
-    req.on('end', () => {
+    req.on('end', async () => {
       if (req.method !== 'POST' || !(req.url ?? '').endsWith('/chat/completions')) {
         res.statusCode = 404;
         res.setHeader('content-type', 'application/json');
@@ -104,6 +107,9 @@ export async function startFakeOpenAI(script?: FakeScriptResponse[]): Promise<Fa
         return;
       }
 
+      if (resp.delayMs) {
+        await new Promise<void>((r) => setTimeout(r, resp.delayMs));
+      }
       if (resp.stall) {
         // Simulate a silent provider hold: open a 200 SSE response, write
         // nothing, and leave it open. The client must recover via its own

@@ -1333,12 +1333,17 @@ Continue from 'Next:', do not redo completed progress.`,
       // a clean `__timedOut` marker instead of an infinite hang.
       const boundedGather = async (messages: any) => {
         newCallController(); // fresh controller per invocation
-        const stall = new Promise<{ __timedOut: true }>((r) => setTimeout(() => {
-          activeCallSignal.abort(new Error(`model_response_timeout_${MODEL_RESPONSE_TIMEOUT_MS}`));
-          r({ __timedOut: true });
-        }, MODEL_RESPONSE_TIMEOUT_MS));
-        const raced = await Promise.race([gatherStream(messages), stall]);
-        clearTimeout((stall as any)._t as any);
+        const stall = (resolve: (v: { __timedOut: true }) => void) => {
+          const t = setTimeout(() => {
+            activeCallSignal.abort(new Error(`model_response_timeout_${MODEL_RESPONSE_TIMEOUT_MS}`));
+            resolve({ __timedOut: true });
+          }, MODEL_RESPONSE_TIMEOUT_MS);
+          return t;
+        };
+        let t: ReturnType<typeof setTimeout> | undefined;
+        const stallP = new Promise<{ __timedOut: true }>((r) => { t = stall(r); });
+        const raced = await Promise.race([gatherStream(messages), stallP]);
+        if (t !== undefined) clearTimeout(t);
         return raced;
       };
       try {

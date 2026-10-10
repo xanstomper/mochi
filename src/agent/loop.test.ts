@@ -1269,6 +1269,22 @@ describe('model stall guard (MOCHI_MODEL_RESPONSE_TIMEOUT_MS)', () => {
     expect(result.success).toBe(true);
     expect(result.stopReason).toBe('completed');
   }, 30_000);
+
+  it('clears the stall timer on success: a later response is not aborted by an earlier gather timer', async () => {
+    // P0 regression guard: boundedGather previously left the stall timer
+    // alive after a successful gather, so a LATER healthy stream was aborted
+    // ("model_response_timeout" failover) when the stale timer fired. The
+    // first response completes well within STALL_MS; the second arrives after
+    // STALL_MS has long passed — with the bug present it gets aborted.
+    const { result, fake } = await runAgainst([
+      { content: 'first', toolCalls: [{ id: 'call_t1', function: { name: 'todo', arguments: JSON.stringify({ action: 'add', title: 'x' }) } }], finishReason: 'tool_calls' },
+      { delayMs: 2200 },
+      { content: 'ok', finishReason: 'stop' },
+    ]);
+    expect(result.success).toBe(true);
+    expect(result.stopReason).toBe('completed');
+    expect(fake.requests.length).toBeGreaterThanOrEqual(2);
+  }, 30_000);
 });
 
 describe('stream repetition guards (reasoning floods + K-phrase cycles)', () => {

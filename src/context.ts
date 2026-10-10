@@ -460,7 +460,7 @@ ${this.toolGuidelines(tools)}
 - **Insightful & Professional**: Provide clear technical insights without unnecessary fluff, but always communicate your plans, findings, and outcomes.
 - **Clean Markdown Formatting**: Use concise GitHub-flavored markdown with code snippets, paths, and clear bullet points where helpful.
 
-${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSection(this.projectRoot)}${memoryDigest(task ? `${task.title} ${task.description}` : undefined)}${feedbackDigest()}${detectCircle(this.messages).stopDirective}
+${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSection(this.projectRoot)}${memoryDigest(task ? `${task.title} ${task.description}` : undefined)}${feedbackDigest()}
 `.trim();
   }
 
@@ -573,6 +573,14 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
     if (this.state.knownErrors.length) lines.push(`Known errors: ${this.state.knownErrors.join('; ')}`);
     if (this.state.importantDecisions.length) lines.push(`Important decisions: ${this.state.importantDecisions.join('; ')}`);
     if (this.state.constraints.length) lines.push(`Constraints: ${this.state.constraints.join('; ')}`);
+    // MCH-85: the loop-detector stop directive is history-dependent (it trips
+    // and un-trips as the conversation evolves). It used to sit inside the
+    // STABLE system prompt, where every trip/untrip flipped bytes in the
+    // leading prefix and invalidated the provider's KV prefix cache for the
+    // whole conversation. It now rides the trailing volatile state message,
+    // which is appended after history anyway and is expected to change.
+    const circle = detectCircle(this.messages).stopDirective;
+    if (circle) lines.push(circle);
     return lines.join('\n');
   }
 

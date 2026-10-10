@@ -138,7 +138,26 @@ export class ToolDispatcher {
         results.set(call.id, this.canceledResponse(call, 'abort signal fired mid-batch'));
         continue;
       }
-      const res = await this.registry.execute(call.name, call.arguments, context, call.id);
+      let res;
+      try {
+        res = await this.registry.execute(call.name, call.arguments, context, call.id);
+      } catch (err) {
+        // A throwing tool must not escape the batch: mark the execution failed
+        // (so duplicate-suppression state doesn't stay in-flight) and continue
+        // with the remaining mutating calls.
+        res = {
+          callId: call.id,
+          name: call.name,
+          output: '',
+          error: err instanceof Error ? err.message : String(err),
+          durationMs: 0,
+          truncated: false,
+          rawTokensEstimate: 0,
+        };
+        this.executions.markFailed(executionId, res);
+        results.set(call.id, res);
+        continue;
+      }
       this.executions.markCompleted(executionId, res);
 
       // Instant post-edit diagnostic collection
