@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mochi — Minimal, fast, autonomous coding agent</title>
+<meta name="description" content="Mochi is a minimal, fast, autonomous coding agent for the terminal. Rust core, TypeScript frontend, goals, task DAGs, teams, and a persistent daemon.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍡</text></svg>">
+<style>
+  :root{
+    --bg:#0b0d10; --bg2:#101317; --panel:#14181d; --border:#232a32;
+    --text:#e6eaee; --muted:#8b95a1; --accent:#e8a04c; --accent2:#f0c48a;
+    --green:#5fce8b; --mono:'SF Mono',ui-monospace,Menlo,Consolas,monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--text);font-family:Inter,-apple-system,'Segoe UI',sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased}
+  a{color:var(--accent2);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+  nav{position:sticky;top:0;background:rgba(11,13,16,.85);backdrop-filter:blur(10px);border-bottom:1px solid var(--border);z-index:10}
+  nav .wrap{display:flex;align-items:center;justify-content:space-between;height:60px}
+  .logo{font-family:var(--mono);font-weight:700;font-size:18px;color:var(--text)}
+  .logo span{color:var(--accent)}
+  nav .links{display:flex;gap:22px;font-size:14px}
+  nav .links a{color:var(--muted)}
+  nav .links a:hover{color:var(--text);text-decoration:none}
+  .btn{display:inline-block;background:var(--accent);color:#14181d;font-weight:600;padding:9px 18px;border-radius:8px;font-size:14px}
+  .btn:hover{text-decoration:none;background:var(--accent2)}
+  .btn.ghost{background:transparent;color:var(--text);border:1px solid var(--border)}
+  .btn.ghost:hover{border-color:var(--accent)}
+  header{padding:96px 0 72px;text-align:center;background:radial-gradient(ellipse 60% 50% at 50% 0%,rgba(232,160,76,.09),transparent)}
+  header h1{font-size:52px;font-weight:800;letter-spacing:-1px;line-height:1.15}
+  header h1 em{font-style:normal;color:var(--accent)}
+  header p.sub{color:var(--muted);font-size:19px;max-width:680px;margin:18px auto 32px}
+  pre{font-family:var(--mono);background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:18px 22px;text-align:left;max-width:640px;margin:0 auto;font-size:14px;color:#c9d3dc;overflow-x:auto}
+  pre .c{color:var(--muted)} pre .p{color:var(--accent)}
+  section{padding:64px 0;border-top:1px solid var(--border)}
+  h2{font-size:28px;font-weight:700;margin-bottom:8px}
+  .lead{color:var(--muted);margin-bottom:36px;font-size:16px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px}
+  .card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:22px}
+  .card h3{font-size:16px;margin-bottom:8px}
+  .card p{color:var(--muted);font-size:14px}
+  .card .tag{font-family:var(--mono);font-size:11px;color:var(--accent);text-transform:uppercase;letter-spacing:1px}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th,td{padding:10px 14px;text-align:left;border-bottom:1px solid var(--border)}
+  th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.5px}
+  td.m{font-family:var(--mono);color:var(--text)}
+  td.best{color:var(--green);font-weight:600}
+  td{color:var(--muted)}
+  .note{font-size:12px;color:var(--muted);margin-top:12px}
+  code{font-family:var(--mono);background:var(--panel);border:1px solid var(--border);border-radius:5px;padding:1px 6px;font-size:.9em;color:var(--accent2)}
+  footer{padding:40px 0;border-top:1px solid var(--border);color:var(--muted);font-size:13px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px}
+  @media(max-width:640px){header h1{font-size:36px}}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="logo" href="#">mochi<span>.</span></a>
+    <div class="links">
+      <a href="#features">Features</a>
+      <a href="#benchmarks">Benchmarks</a>
+      <a href="#docs">Docs</a>
+      <a href="https://github.com/xanstomper/mochi">GitHub</a>
+    </div>
+    <a class="btn" href="#install">Get Started</a>
+  </div>
+</nav>
+
+<header class="wrap">
+  <h1>The coding agent that's<br><em>small, fast, and yours.</em></h1>
+  <p class="sub">Mochi is a minimal, autonomous coding agent for the terminal — goals, task DAGs, teams, a persistent daemon, and deep run traces on a zero-dependency Rust core.</p>
+  <pre><span class="c">$</span> npm install && npm run build
+<span class="c">$</span> <span class="p">mochi</span> "add a rate limiter to the auth service"</pre>
+  <p style="margin-top:28px">
+    <a class="btn" href="#install">Install</a>
+    <a class="btn ghost" href="https://github.com/xanstomper/mochi" style="margin-left:10px">View Source ↗</a>
+  </p>
+</header>
+
+<section id="features">
+  <div class="wrap">
+    <h2>Everything a harness needs. Nothing it doesn't.</h2>
+    <p class="lead">From-scratch re-imagining of the terminal coding-agent harness — best ideas from Pi plus first-class autonomy primitives.</p>
+    <div class="grid">
+      <div class="card"><span class="tag">Rust Core</span><h3>Native performance core</h3><p>Tokenization, budget math, compaction planning, and agent-loop decisions run in a zero-dependency Rust crate — with parity-tested TS fallbacks everywhere.</p></div>
+      <div class="card"><span class="tag">Autonomy</span><h3>Goals, DAGs & teams</h3><p>Persistent goals, task DAG scheduler, role-diverse agent teams, and independent verifiers that judge outcomes before anything ships.</p></div>
+      <div class="card"><span class="tag">Daemon</span><h3>Persistent agent over HTTP</h3><p><code>mochi daemon start</code> and drive it from anywhere: jobs, approvals, resume, and recurring cron-scheduled agent runs.</p></div>
+      <div class="card"><span class="tag">Context</span><h3>Adaptive context engine</h3><p>Token budgets, compaction, project memory, and intelligent retrieval across files, symbols, references, imports, and git history.</p></div>
+      <div class="card"><span class="tag">Safety</span><h3>Budgets & permissions</h3><p>Token, cost, time, tool, model, and agent limits. Safe / ask / auto permission system with git checkpoint & rollback.</p></div>
+      <div class="card"><span class="tag">Observability</span><h3>Deep run traces</h3><p><code>mochi trace &lt;goalId&gt;</code> replays any run end to end. Full-text session history in SQLite+FTS5.</p></div>
+      <div class="card"><span class="tag">Polyglot</span><h3>15-language registry</h3><p>Tree-sitter codegraph plus native Rust/C++ accelerators in the edit/patch hot paths. 15+ languages indexed.</p></div>
+      <div class="card"><span class="tag">Zero deps</span><h3>Zero runtime JS dependencies</h3><p>Runs under Node 22 or Bun — or build a standalone native binary that needs no runtime at all.</p></div>
+      <div class="card"><span class="tag">Model-agnostic</span><h3>Any OpenAI-compatible model</h3><p>Capability-profile routing (fast / coding / reasoning / review), budget-aware fallback, and multi-key credential pools on 401/429/403.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="benchmarks">
+  <div class="wrap">
+    <h2>Fastest agent on the board.</h2>
+    <p class="lead">Standardized PSS memory and latency benchmarks against other terminal agents. [1st] in every row.</p>
+    <table>
+      <tr><th>Metric</th><th>Mochi (Rust core)</th><th>jcode</th><th>Cursor Agent</th><th>Claude Code</th><th>OpenCode</th></tr>
+      <tr><td>1 session (PSS)</td><td class="m best">18.2 MB [1st]</td><td class="m">27.8 MB</td><td class="m">214.9 MB</td><td class="m">386.6 MB</td><td class="m">371.5 MB</td></tr>
+      <tr><td>10 sessions (PSS)</td><td class="m best">84.5 MB [1st]</td><td class="m">117.0 MB</td><td class="m">1632.4 MB</td><td class="m">2300.6 MB</td><td class="m">3237.2 MB</td></tr>
+      <tr><td>Time to First Frame</td><td class="m best">11.2 ms [1st]</td><td class="m">14.0 ms</td><td class="m">1949.7 ms</td><td class="m">3436.9 ms</td><td class="m">1035.9 ms</td></tr>
+      <tr><td>Time to First Input</td><td class="m best">38.2 ms [1st]</td><td class="m">48.7 ms</td><td class="m">1978.7 ms</td><td class="m">3512.8 ms</td><td class="m">1047.9 ms</td></tr>
+      <tr><td>Compaction cut calc</td><td class="m best">0.12 ms [1st]</td><td class="m">0.45 ms</td><td class="m">14.5 ms</td><td class="m">35.0 ms</td><td class="m">19.8 ms</td></tr>
+    </table>
+    <p class="note">Full methodology, PTY probe scripts, and 9-agent comparison tables in <a href="https://github.com/xanstomper/mochi/blob/main/docs/BENCHMARKS.md">docs/BENCHMARKS.md</a>.</p>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <h2>Install in 30 seconds.</h2>
+    <p class="lead">Requires Node 22+ or Bun. Zero runtime dependencies.</p>
+    <pre><span class="c"># clone &amp; build</span>
+git clone https://github.com/xanstomper/mochi.git && cd mochi
+npm install && npm run build
+
+<span class="c"># one-shot agent run</span>
+<span class="p">mochi</span> "add a rate limiter to the auth service"
+
+<span class="c"># persistent daemon</span>
+<span class="p">mochi</span> daemon start --host 0.0.0.0
+<span class="p">mochi</span> daemon send "finish the auth flow"
+
+<span class="c"># role-diverse agent team</span>
+<span class="p">mochi</span> team "ship the payments refactor"
+
+<span class="c"># replay any run end to end</span>
+<span class="p">mochi</span> trace &lt;goalId&gt;</pre>
+  </div>
+</section>
+
+<section id="docs">
+  <div class="wrap">
+    <h2>Documentation.</h2>
+    <p class="lead">Deep dives for every layer of the harness.</p>
+    <div class="grid">
+      <a class="card" href="https://github.com/xanstomper/mochi/blob/main/docs/ARCHITECTURE.md" style="display:block"><span class="tag">Architecture</span><h3>Technical Architecture Blueprint →</h3><p>Dual-engine Rust Core + TypeScript TUI, compaction protocols, and event loops.</p></a>
+      <a class="card" href="https://github.com/xanstomper/mochi/blob/main/docs/CAPABILITIES.md" style="display:block"><span class="tag">Capabilities</span><h3>Complete Capabilities Reference →</h3><p>16 specialized agent roles, 30+ native tools, 30+ skills, MCP/ACP protocols.</p></a>
+      <a class="card" href="https://github.com/xanstomper/mochi/blob/main/docs/BENCHMARKS.md" style="display:block"><span class="tag">Benchmarks</span><h3>Empirical Benchmarks →</h3><p>PSS memory, TTFF, TTFI, and compaction latency vs other agents.</p></a>
+      <a class="card" href="https://github.com/xanstomper/mochi/blob/main/docs/CLI_REFERENCE.md" style="display:block"><span class="tag">CLI</span><h3>CLI & Interface Reference →</h3><p>CLI flags, daemon endpoints, slash commands, and keybindings.</p></a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap" style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;width:100%">
+    <span>mochi — minimal, fast, autonomous.</span>
+    <span><a href="https://github.com/xanstomper/mochi">github.com/xanstomper/mochi</a></span>
+  </div>
+</footer>
+
+</body>
+</html>
