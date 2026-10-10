@@ -551,6 +551,15 @@ export class Agent {
         this.context.addMessage({ role: 'system', content: mapText });
       }
     } catch { /* repo-map must never affect task start */ }
+    // MCH-50: prefetch — fused structural+temporal+runtime prediction of the
+    // files this task will likely read next.
+    try {
+      const { prefetchText } = await import('../prefetch.js');
+      const pfText = prefetchText(this.workspace.dir);
+      if (pfText) {
+        this.context.addMessage({ role: 'system', content: pfText });
+      }
+    } catch { /* prefetch must never affect task start */ }
     if (this.planMode) {
       this.context.addMessage({
         role: 'system',
