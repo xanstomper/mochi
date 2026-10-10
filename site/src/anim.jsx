@@ -203,11 +203,11 @@ export function GooeyBorder({ children, className = '', speed = 4, thickness = 2
 }
 
 // smooth infinite marquee — track duplicates content, CSS translates -50%
-export function Marquee2({ items, speed = 30, className = '', separator = '✦' }) {
+export function Marquee2({ items, speed = 30, className = '', separator = '✦', reverse = false }) {
   const row = items.concat(items).concat(items); // 3x for wide screens
   return (
     <div className={'marquee2 ' + className} aria-hidden="true">
-      <div className="marquee2-track" style={{ animationDuration: speed + 's' }}>
+      <div className="marquee2-track" style={{ animationDuration: speed + 's', animationDirection: reverse ? 'reverse' : 'normal' }}>
         {row.map((t, i) => (
           <span key={i} className="marquee2-item">{t}<i>{separator}</i></span>
         ))}
@@ -330,5 +330,17 @@ export function SlideAlternate({ items, className = '', itemClass = '' }) {
         </SlideIn>
       ))}
     </>
+  );
+}
+
+
+// fly-in from any direction with rotation — the "insane scroll typography" effect
+export function FlyIn({ from = 'left', rotate = 0, delay = 0, className = '', children, as: Tag = 'div' }) {
+  const ref = useReveal(0.08);
+  return (
+    <Tag ref={ref} className={'fly-in fly-' + from + (className ? ' ' + className : '')}
+      style={{ '--fly-rot': rotate + 'deg', transitionDelay: delay + 'ms' }}>
+      {children}
+    </Tag>
   );
 }

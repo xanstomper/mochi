@@ -183,7 +183,7 @@ const Iridescence = ({
   useEffect(() => {
     const root = rootRef.current;
     const canvas = canvasRef.current;
-    const gl = canvas?.getContext('webgl2', { alpha: true, premultipliedAlpha: true, antialias: false });
+    const gl = canvas?.getContext('webgl2', { alpha: true, premultipliedAlpha: true, antialias: false, preserveDrawingBuffer: true });
     if (!root || !canvas || !gl) return undefined;
 
     const vertex = compile(gl, gl.VERTEX_SHADER, VERTEX);

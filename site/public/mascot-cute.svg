@@ -1,0 +1,111 @@
+<svg width="520" height="520" viewBox="0 0 520 520" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Mochi mascot — cute round mochi">
+  <defs>
+    <!-- soft background radial -->
+    <radialGradient id="halo" cx="50%" cy="46%" r="55%">
+      <stop offset="0%" stop-color="#FADCE3" stop-opacity=".95"/>
+      <stop offset="60%" stop-color="#F2A7B8" stop-opacity=".35"/>
+      <stop offset="100%" stop-color="#F2A7B8" stop-opacity="0"/>
+    </radialGradient>
+    <!-- body shade -->
+    <radialGradient id="bodyShade" cx="38%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#FFFBF5"/>
+      <stop offset="55%" stop-color="#FDF0E4"/>
+      <stop offset="100%" stop-color="#F3DFC9"/>
+    </radialGradient>
+    <!-- cheek -->
+    <radialGradient id="cheek" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#F2A7B8" stop-opacity=".85"/>
+      <stop offset="100%" stop-color="#F2A7B8" stop-opacity=".2"/>
+    </radialGradient>
+    <!-- tongue -->
+    <radialGradient id="tongue" cx="50%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#F7B9C4"/>
+      <stop offset="100%" stop-color="#E9899B"/>
+    </radialGradient>
+  </defs>
+
+  <!-- halo behind the blob -->
+  <circle cx="260" cy="258" r="215" fill="url(#halo)"/>
+
+  <!-- floating sparkles & hearts -->
+  <g fill="#E8B04B" opacity=".85">
+    <path d="M96 120 l6 12 12 6 -12 6 -6 12 -6-12 -12-6 12-6z"/>
+    <path d="M420 328 l5 10 10 5 -10 5 -5 10 -5-10 -10-5 10-5z" opacity=".6"/>
+  </g>
+  <g fill="#F2A7B8">
+    <path d="M80 330 c0 -9 7 -14 16 -14 c9 0 14 7 14 14 c0 12 -12 20 -14 22 c-2 -2 -16 -10 -16 -22z"/>
+    <path d="M438 122 c0 -7 6 -11 13 -11 c7 0 11 6 11 11 c0 9 -10 15 -12 17 c-1 -2 -12 -8 -12 -17z" opacity=".7"/>
+  </g>
+  <!-- tiny starbursts -->
+  <g stroke="#D97A93" stroke-width="3" stroke-linecap="round" opacity=".75">
+    <path d="M150 96 l12 0 M156 90 l0 12"/>
+    <path d="M382 424 l12 0 M388 418 l0 12"/>
+    <path d="M420 220 l10 0 M425 215 l0 10" opacity=".5"/>
+  </g>
+
+  <!-- little arm helpers -->
+  <g>
+    <!-- left arm -->
+    <path d="M150 330 C132 322 118 316 110 320" stroke="#8A6F5B" stroke-width="7" stroke-linecap="round" fill="none"/>
+    <ellipse cx="108" cy="322" rx="13" ry="11" fill="#FDF0E4" stroke="#8A6F5B" stroke-width="5"/>
+    <!-- right arm (waving) -->
+    <path d="M366 320 C384 310 398 302 408 296" stroke="#8A6F5B" stroke-width="7" stroke-linecap="round" fill="none"/>
+    <ellipse cx="412" cy="293" rx="13" ry="11" fill="#FDF0E4" stroke="#8A6F5B" stroke-width="5"/>
+    <!-- wave motion lines -->
+    <g stroke="#D97A93" stroke-width="4" stroke-linecap="round" opacity=".6">
+      <path d="M428 268 q6 -4 4 -10 M438 282 q8 -4 6 -12"/>
+    </g>
+  </g>
+
+  <!-- feet -->
+  <ellipse cx="196" cy="472" rx="20" ry="13" fill="#8A6F5B" opacity=".25"/>
+  <ellipse cx="330" cy="474" rx="20" ry="13" fill="#8A6F5B" opacity=".25"/>
+
+  <!-- main body: soft round mochi blob -->
+  <path
+    d="M260 74 C350 74 404 128 410 216 C416 306 384 390 300 430 C216 468 120 420 98 336 C76 250 110 150 186 104 C216 88 238 74 260 74 Z"
+    fill="url(#bodyShade)" stroke="#8A6F5B" stroke-width="9" stroke-linejoin="round"
+  />
+
+  <!-- top squish highlight -->
+  <path d="M168 170 C196 122 252 104 318 118" stroke="#fff" stroke-width="13" stroke-linecap="round" opacity=".8"/>
+
+  <!-- leaf sprout on top -->
+  <g>
+    <path d="M260 78 C258 44 276 26 312 22 C308 58 290 82 260 78 Z" fill="#A9C97E" stroke="#8A6F5B" stroke-width="6" stroke-linejoin="round"/>
+    <path d="M260 78 C282 62 296 44 310 26" stroke="#8A6F5B" stroke-width="4" stroke-linecap="round" opacity=".4"/>
+  </g>
+
+  <!-- blush -->
+  <ellipse cx="182" cy="312" rx="34" ry="20" fill="url(#cheek)"/>
+  <ellipse cx="338" cy="312" rx="34" ry="20" fill="url(#cheek)"/>
+
+  <!-- eyes -->
+  <g>
+    <!-- left -->
+    <ellipse cx="216" cy="282" rx="21" ry="27" fill="#3E342C"/>
+    <ellipse cx="222" cy="272" rx="8" ry="10" fill="#fff"/>
+    <circle cx="209" cy="292" r="4" fill="#fff" opacity=".8"/>
+    <!-- right -->
+    <ellipse cx="304" cy="282" rx="21" ry="27" fill="#3E342C"/>
+    <ellipse cx="310" cy="272" rx="8" ry="10" fill="#fff"/>
+    <circle cx="297" cy="292" r="4" fill="#fff" opacity=".8"/>
+  </g>
+
+  <!-- happy mouth -->
+  <path d="M214 340 C246 384 278 384 306 340" stroke="#3E342C" stroke-width="8" stroke-linecap="round" fill="none"/>
+  <!-- tongue peek -->
+  <path d="M252 366 C258 384 276 384 280 366" fill="url(#tongue)" stroke="#E9899B" stroke-width="3" stroke-linejoin="round"/>
+
+  <!-- tiny eyebrows -->
+  <path d="M200 234 q16 -14 34 -8" stroke="#8A6F5B" stroke-width="6" stroke-linecap="round" fill="none"/>
+  <path d="M288 226 q16 -8 32 6" stroke="#8A6F5B" stroke-width="6" stroke-linecap="round" fill="none"/>
+
+  <!-- freckles -->
+  <g fill="#8A6F5B" opacity=".45">
+    <circle cx="166" cy="352" r="3.4"/>
+    <circle cx="182" cy="362" r="3.4"/>
+    <circle cx="350" cy="352" r="3.4"/>
+    <circle cx="334" cy="362" r="3.4"/>
+  </g>
+</svg>

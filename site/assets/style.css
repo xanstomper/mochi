@@ -40,7 +40,9 @@ header.site .wrap{display:flex;align-items:center;height:64px;gap:34px}
 header.site nav{display:flex;gap:10px;font-size:14px;font-weight:600}
 header.site nav a{color:var(--muted);padding:8px 16px;border-radius:99px;transition:color .2s,background .25s,transform .25s var(--bounce),box-shadow .25s}
 header.site nav a:hover{color:var(--mocha-deep);background:var(--cream2);transform:translateY(-2px);box-shadow:0 4px 14px -6px rgba(138,111,91,.35)}
-header.site nav a[aria-current="page"]{color:#fff;background:linear-gradient(135deg,var(--pink),#EEB4C4);box-shadow:0 4px 16px -6px rgba(242,167,184,.65)}
+header.site nav a[aria-current="page"]{color:var(--pink-deep);font-weight:800;position:relative;background:transparent;box-shadow:none}
+header.site nav a[aria-current="page"]::after{content:'';position:absolute;bottom:2px;left:14px;right:14px;height:3px;background:var(--pink);border-radius:2px;animation:nav-underline .4s cubic-bezier(.22,1,.36,1)}
+@keyframes nav-underline{from{transform:scaleX(0)}to{transform:scaleX(1)}}
 header.site .spacer{flex:1}
 .gh{display:flex;align-items:center;gap:7px;font-size:13.5px;font-weight:600;color:var(--mocha)}
 .gh:hover{color:var(--mocha-deep)}
@@ -398,7 +400,9 @@ body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:9999;o
 .lede{font-size:16px;line-height:1.75;color:var(--mocha);max-width:560px;margin:0 0 34px}
 
 /* hero */
-.hero2{padding:64px 0 0;position:relative;overflow:hidden}
+.hero2{padding:80px 0 0;position:relative;overflow:hidden;min-height:100vh;min-height:100svh;display:flex;flex-direction:column;justify-content:center;box-sizing:border-box}
+.hero2 .hero-inner{flex:1;display:flex;flex-direction:column;justify-content:center}
+.hero2 .hero-ticker{position:relative;border-top:1px solid rgba(78,55,44,.15);background:rgba(251,246,238,.72);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);padding:14px 0;margin-top:auto}
 .hero2::before{content:"";position:absolute;top:-320px;left:-200px;width:900px;height:900px;border-radius:50%;
   background:radial-gradient(circle,rgba(242,167,184,.32),transparent 65%);pointer-events:none}
 .hero2 .wrap{position:relative;z-index:1}
@@ -820,3 +824,32 @@ body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:9999;o
 
 /* text over iridescence needs weight */
 body { position: relative; }
+
+
+/* ============ FLY-IN — insane scroll typography ============ */
+.fly-in {
+  opacity: 0;
+  transition: opacity .7s cubic-bezier(.22,1,.36,1),
+              transform .9s cubic-bezier(.16,1,.3,1);
+  will-change: transform, opacity;
+}
+.fly-left   { transform: translateX(-140px) rotate(var(--fly-rot, 0deg)); }
+.fly-right  { transform: translateX(140px)  rotate(var(--fly-rot, 0deg)); }
+.fly-top    { transform: translateY(-120px) rotate(var(--fly-rot, 0deg)); }
+.fly-bottom { transform: translateY(120px)  rotate(var(--fly-rot, 0deg)); }
+.fly-pop    { transform: scale(.6)            rotate(var(--fly-rot, 0deg)); }
+.fly-in.in  { opacity: 1; transform: translate(0,0) scale(1) rotate(0deg); }
+
+/* big statement text that slams in */
+.statement {
+  font-size: clamp(2.4rem, 6vw, 5.5rem);
+  font-weight: 900;
+  line-height: 1.02;
+  letter-spacing: -.03em;
+  text-transform: uppercase;
+}
+.statement .pink { color: var(--pink-deep); }
+.statement-outline {
+  -webkit-text-stroke: 2px var(--mocha);
+  color: transparent;
+}
