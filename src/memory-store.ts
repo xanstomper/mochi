@@ -95,6 +95,27 @@ export function recordFactAttempt(id: string, success: boolean): void {
   if (touched) writeFileSync(memoryFile(), facts.map((f) => JSON.stringify(f)).join('\n') + '\n');
 }
 
+// MCH-63: fact outcome attribution. recordFactAttempt existed but was NEVER
+// called — facts never learned from outcomes, so dead-end pruning (MAX_FAILS)
+// and the success-ratio term in recallFacts were dead code. Track which fact
+// ids the digest actually surfaced this run (module-level, mirroring the
+// MCH-57 skill-attribution pattern); the loop drains the set at finish() and
+// records success/failure per surfaced fact.
+const surfacedFactIds = new Set<string>();
+
+/** Internal: called by memoryDigest for every fact it renders. */
+function noteFactSurfaced(id: string): void {
+  surfacedFactIds.add(id);
+}
+
+/** Drain the surfaced-facts set (loop calls once at finish). */
+export function takeSurfacedFactIds(): string[] {
+  const out: string[] = [];
+  surfacedFactIds.forEach((id) => out.push(id));
+  surfacedFactIds.clear();
+  return out;
+}
+
 /** Forget a fact by id or by statement substring. */
 export function forgetFact(query: string): number {
   ensure();
@@ -184,6 +205,7 @@ export function memoryDigest(taskContext?: string): string {
   if (facts.length === 0) return '';
   const lines: string[] = ['# DURABLE MEMORY (project facts)', ''];
   for (const f of facts) {
+    noteFactSurfaced(f.id); // MCH-63: so the run outcome can be attributed back
     const tag = `[${f.category}]`;
     lines.push(`- ${tag} ${f.statement}`);
   }

@@ -3734,6 +3734,15 @@ Continue from 'Next:', do not redo completed progress.`,
       for (const name of getSkillsLoadedThisRun()) recordSkillUsage(this.workspace.dir, name, success === true);
       clearSkillsLoadedThisRun();
     } catch { /* skill outcome attribution must never affect task completion */ }
+    // MCH-63: attribute run outcome to every durable fact surfaced this run —
+    // the missing half of the fact lifecycle. Success -> success_count++ per
+    // fact; failure -> attempts++ with last_failed, so 3 failed runs on a fact
+    // auto-prune it (MAX_FAILS) and the success-ratio term in recallFacts
+    // starts ranking live facts over dead ones. Mirrors MCH-57 skill wins.
+    try {
+      const { takeSurfacedFactIds, recordFactAttempt } = await import('../memory-store.js');
+      for (const id of takeSurfacedFactIds()) recordFactAttempt(id, success === true);
+    } catch { /* fact attribution must never affect task completion */ }
     this.mcpClose?.();
     this.mcpClose = undefined;
     this.budget?.recordAgentEnd();
