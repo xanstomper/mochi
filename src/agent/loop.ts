@@ -4004,6 +4004,16 @@ Continue from 'Next:', do not redo completed progress.`,
       try {
         if (this.readCache.size > 0) saveReadCache(this.workspace.dir, this.readCache);
       } catch { /* read-cache persistence must never affect task completion */ }
+      // MCH-84: report read-cache effectiveness so the user sees the savings.
+      try {
+        const stats = this.readCache as ReadCache & { __hits?: number; __misses?: number };
+        const hits = stats.__hits ?? 0;
+        const misses = stats.__misses ?? 0;
+        if (hits + misses >= 3) {
+          const pct = Math.round((hits / (hits + misses)) * 100);
+          this.events.emit({ type: 'agent:log', agentId: this.id, message: `[cache] read-cache: ${hits}/${hits + misses} hits (${pct}%) — ${misses} disk read(s), ${hits} served from memory` });
+        }
+      } catch { /* cache telemetry must never affect task completion */ }
       // MCH-61: close the prefetch effectiveness loop — compare this run's
       // predictions against what was actually read (warmed entries excluded).
       try {

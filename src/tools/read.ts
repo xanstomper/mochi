@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve, extname } from 'node:path';
 import { homedir } from 'node:os';
-import type { Tool } from './types.js';
+import type { Tool, ReadCache } from './types.js';
 import { clipToolOutput, DEFAULT_TOOL_RESULT_MAX_CHARS } from './output-budget.js';
 import { nativeSkeletonizeSource } from '../native/core.js';
 import { extractCodeOutline } from './outline.js';
@@ -26,16 +26,25 @@ export const readTool: Tool = {
     // Per-run cache: only read non-firstTime from disk once per unchanged
     // (mtime, size) signature. Files that changed mid-run are re-read, so this
     // is a pure win for repeated reads of the same file within a task.
+    // MCH-84: hits/misses counted on the cache object itself (loop.ts reports
+    // the hit rate at finish); exact repeat reads (same path+range served from
+    // cache) are condensed to a stub so the model doesn't re-pay full tokens.
     let content: string;
     const stat = statSync(fullPath);
     const cache = ctx.readCache;
+    let cacheHit = false;
     if (cache) {
       const hit = cache.get(fullPath);
       if (hit && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size) {
         content = hit.content;
+        cacheHit = true;
+        const stats = cache as ReadCache & { __hits?: number; __misses?: number; __lastRead?: string };
+        stats.__hits = (stats.__hits ?? 0) + 1;
       } else {
         content = readFileSync(fullPath, 'utf8');
         cache.set(fullPath, { mtimeMs: stat.mtimeMs, size: stat.size, content });
+        const stats = cache as ReadCache & { __hits?: number; __misses?: number; __lastRead?: string };
+        stats.__misses = (stats.__misses ?? 0) + 1;
       }
     } else {
       content = readFileSync(fullPath, 'utf8');
@@ -63,6 +72,17 @@ export const readTool: Tool = {
     // files from blowing up the prompt context on naive read calls.
     const DEFAULT_READ_LINES = 300;
     const limit = args.limit ? Math.max(1, Number(args.limit)) : Math.min(lines.length, DEFAULT_READ_LINES);
+    // MCH-84: exact repeat read (cache hit AND same path+range as the previous
+    // read) condenses to a one-line stub — the model already has the full
+    // content in context; re-injecting it doubles tokens for zero information.
+    if (cacheHit) {
+      const stats = cache as ReadCache & { __lastRead?: string };
+      const sig = `${fullPath}:${offset}:${limit}`;
+      if (stats.__lastRead === sig) {
+        return `[mochi:cache-hit] ${rawPath} lines ${offset}-${offset - 1 + limit} — identical to your previous read, content unchanged (mtime/size verified). Reuse it from context; re-read with a different offset/limit if you need another range.`;
+      }
+      stats.__lastRead = sig;
+    }
     const slice = lines.slice(offset - 1, offset - 1 + limit);
     const numbered = slice.map((l, i) => `${(offset + i).toString().padStart(4, ' ')} | ${l}`).join('\n');
     // Char-level guard on top of the line window (minified lines are huge).
