@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import Mochi from '../Mascot.jsx';
-import { Reveal, CountUp, SplitText, useParallax, DitherBlock, Marquee } from '../anim.jsx';
+import { Reveal, CountUp, SplitText, useParallax, DitherBlock, Marquee, GooeyBorder, Typewriter, TiltCard, ScrollProgress, Magnetic } from '../anim.jsx';
 import RepoBrowser from '../RepoBrowser.jsx';
 
 const EYEBROW = ({ children }) => <div className="eyebrow">{children}</div>;
@@ -9,6 +9,7 @@ const EYEBROW = ({ children }) => <div className="eyebrow">{children}</div>;
 function Hero() {
   return (
     <section className="hero2">
+      <ScrollProgress />
       <div className="wrap">
         <EYEBROW>OPEN SOURCE • MIT • 0 DEPENDENCIES</EYEBROW>
         <h1 className="giant">
@@ -19,12 +20,25 @@ function Hero() {
           <span className="gi pink">that gets out of your way.</span>
         </p>
         <p className="lede">
-          Goals decompose into task DAGs. Role-diverse teams execute them. A persistent
-          daemon keeps them running. Every run replays trace-for-trace — all on 18 MB of RAM.
+          <Typewriter
+            phrases={[
+              'Goals decompose into task DAGs.',
+              'Sixteen roles execute in parallel.',
+              'A persistent daemon keeps them running.',
+              'Every run replays trace-for-trace.',
+              'All on 18 MB of RAM.',
+            ]}
+            speed={40}
+            pause={1600}
+          />
         </p>
         <div className="cta-pair">
-          <a className="btn-loud" href="https://github.com/xanstomper/mochi">INSTALL VIA TERMINAL</a>
-          <a className="btn-quiet" href="benchmarks.html">READ THE BENCHMARKS</a>
+          <Magnetic strength={0.25}>
+            <a className="btn-loud" href="https://github.com/xanstomper/mochi">INSTALL VIA TERMINAL</a>
+          </Magnetic>
+          <Magnetic strength={0.2}>
+            <a className="btn-quiet" href="benchmarks.html">READ THE BENCHMARKS</a>
+          </Magnetic>
         </div>
       </div>
       <div className="hero-visual"><DitherBlock height={380} /></div>
@@ -72,7 +86,9 @@ function Manifest() {
     <section className="manifest">
       <div className="wrap manifest-grid">
         <Reveal as="div" className="manifest-copy">
-          <EYEBROW>THE POINT</EYEBROW>
+          <GooeyBorder className="manifest-gooey" speed={6} thickness={2}>
+            <div className="manifest-inner">
+              <EYEBROW>THE POINT</EYEBROW>
           <h2 className="big2">Powerful agents should belong to everyone.</h2>
           <p>
             Mochi is a working argument that an autonomous coding agent doesn't need a
@@ -83,7 +99,9 @@ function Manifest() {
             Every release is dogfooded by the agent itself — regressions found by running
             real tasks, not by wishing. What ships is what survived.
           </p>
-          <a className="btn-quiet" href="docs.html">READ THE DOCS →</a>
+              <a className="btn-quiet" href="docs.html">READ THE DOCS →</a>
+            </div>
+          </GooeyBorder>
         </Reveal>
         <div className="manifest-visual">
           <div className="mochi-orbit" ref={ref}>
@@ -128,6 +146,7 @@ function Screens() {
         <EYEBROW>THE SURFACE</EYEBROW>
         <h2 className="big2">Terminal velocity.</h2>
         <p className="lede">A 60 fps TUI with streaming diffs, live task trees, and zero flicker. Runs over SSH. Runs in tmux. Runs on your phone's SSH client at 2 a.m.</p>
+        <TiltCard max={3}>
         <div className="term2">
           <div className="term2-bar"><i /><i /><i /><span>mochi — zsh — 80×24</span></div>
           <pre className="term2-body"><span className="t-dim">$</span> mochi "migrate auth to passkeys, keep tests green"
@@ -138,6 +157,7 @@ function Screens() {
 <span className="t-pink">◆ verification</span> 1200 passed · 0 failed
 <span className="t-green">✓ done</span> — replay: <span className="t-dim">.mochi/runs/2026-10-10T14:32Z</span></pre>
         </div>
+        </TiltCard>
         <div className="tri">
           <Reveal className="tri-card"><div className="tri-k">TUI</div><h3>Terminal Velocity</h3><p>Streaming everything. Keyboard-first. 60 fps.</p><a href="docs.html">INSTALL VIA TERMINAL →</a></Reveal>
           <Reveal className="tri-card" delay={60}><div className="tri-k">DAEMON</div><h3>Runs While You Sleep</h3><p>A persistent daemon executes long goals across sessions and resumes cleanly.</p><a href="docs.html">MEET THE DAEMON →</a></Reveal>
@@ -168,8 +188,12 @@ function Coda() {
       <div className="wrap coda-inner">
         <h2 className="giant2"><SplitText text="SMALL IS THE FEATURE" /></h2>
         <div className="cta-pair center">
-          <a className="btn-loud" href="https://github.com/xanstomper/mochi">STAR ON GITHUB</a>
-          <a className="btn-quiet invert" href="changelog.html">31 RELEASES AND COUNTING</a>
+          <Magnetic strength={0.25}>
+            <a className="btn-loud" href="https://github.com/xanstomper/mochi">STAR ON GITHUB</a>
+          </Magnetic>
+          <Magnetic strength={0.2}>
+            <a className="btn-quiet invert" href="changelog.html">31 RELEASES AND COUNTING</a>
+          </Magnetic>
         </div>
       </div>
     </section>

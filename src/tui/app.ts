@@ -1353,7 +1353,8 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         push('user', `/plan ${obj}`);
         push('goal', `Plan: ${obj}`);
         scheduleRender();
-        await run(async () => runtime.plan(obj), true);
+        const planText = await run(async () => runtime.plan(obj), true);
+        await reviewPlan(obj, typeof planText === 'string' ? planText : '');
       }
       return;
     }
@@ -1809,12 +1810,14 @@ if (line === '/branch' || line.startsWith('/branch ')) {
     /** Message queue: messages typed while a task runs; drained on completion. */
   const messageQueue: string[] = [];
 
-  async function run(fn: () => Promise<string>, echo = true) {
+  async function run(fn: () => Promise<string>, echo = true): Promise<string> {
     state.busy = true;
     startSpinner();
     scheduleRender();
+    let out = '';
     try {
       const result = await fn();
+      out = result;
       if (echo) push('assistant', result);
     } catch (e) {
       // Provider failures get a clean one-liner instead of a raw error dump,
@@ -1849,6 +1852,44 @@ if (line === '/branch' || line.startsWith('/branch ')) {
         push('system', `◇ sending queued message (${messageQueue.length + 1} total were queued)`);
         await handleCommand(next);
       }
+    }
+    return out;
+  }
+
+  /** MCH-65: plan review UX. After /plan renders, show a diff vs the prior
+   *  cached plan for this objective (if any) and offer one-key approve /
+   *  edit / reject. Approve chains straight into /approve; edit asks for a
+   *  replacement objective and re-plans; reject clears the pending plan. */
+  async function reviewPlan(objective: string, planText: string) {
+    try {
+      const { findPriorPlan } = await import('../plan-cache.js');
+      const prior = findPriorPlan(runtime.workspace.dir, objective);
+      if (prior) {
+        const prevTaskCount = prior.plan.split('\n').filter((l) => l.startsWith('- [ ]')).length;
+        const newTaskCount = planText.split('\n').filter((l) => l.startsWith('- [ ]')).length;
+        push('system', `◇ diff vs prior plan (${new Date(prior.savedAt).toLocaleString()}): ${prevTaskCount} → ${newTaskCount} tasks`);
+      } else {
+        push('system', '◇ no prior plan cached for this objective (first run)');
+      }
+    } catch { /* plan-cache unavailable — skip diff line */ }
+    const choice = await openMenu(
+      'Plan review',
+      ['[A]pprove — execute now', '[E]dit — revise objective and re-plan', '[R]eject — discard plan'],
+    );
+    if (choice === 0) {
+      push('user', '/approve');
+      await run(async () => runtime.approvePlan(), true);
+    } else if (choice === 1) {
+      const revised = await ask('Revised objective (Enter to keep, empty to cancel):');
+      if (revised && revised.trim()) {
+        push('user', `/plan ${revised.trim()}`);
+        scheduleRender();
+        const t = await run(async () => runtime.plan(revised.trim()), true);
+        await reviewPlan(revised.trim(), typeof t === 'string' ? t : '');
+      }
+    } else if (choice === 2) {
+      runtime.workspace.writeJson('state/pending-goal.json', {});
+      push('system', '✓ plan rejected — pending goal cleared');
     }
   }
 
@@ -2624,6 +2665,10 @@ if (line === '/branch' || line.startsWith('/branch ')) {
         if (ch0 === '\x1b') { i++; closeMenu(-1); continue; }
         const n = parseInt(ch0, 10);
         if (!Number.isNaN(n) && n >= 0 && n < state.menuItems.length) { i++; state.menuSelected = n; lastFrame = []; scheduleRender(); continue; }
+        // MCH-65: bracket-letter shortcuts — items like '[A]pprove' select
+        // and activate directly on that letter (case-insensitive).
+        const letterIdx = state.menuItems.findIndex((it) => it.toLowerCase().startsWith(`[${ch0.toLowerCase()}]`));
+        if (letterIdx >= 0) { i++; closeMenu(letterIdx); continue; }
         i++;
         continue;
       }

@@ -190,3 +190,121 @@ export function Marquee({ items, speed = 30, className = '' }) {
     </div>
   );
 }
+
+// ---- voltagent/awesome-design-md + framer-grade gooey primitives ----
+
+// animated conic-gradient border (gooey pink border — the "cool pink border effect" made alive)
+export function GooeyBorder({ children, className = '', speed = 4, thickness = 2.5 }) {
+  return (
+    <div className={'gooey-wrap ' + className} style={{ '--gspeed': speed + 's', '--gthick': thickness + 'px' }}>
+      <div className="gooey-inner">{children}</div>
+    </div>
+  );
+}
+
+// smooth infinite marquee — track duplicates content, CSS translates -50%
+export function Marquee2({ items, speed = 30, className = '', separator = '✦' }) {
+  const row = items.concat(items).concat(items); // 3x for wide screens
+  return (
+    <div className={'marquee2 ' + className} aria-hidden="true">
+      <div className="marquee2-track" style={{ animationDuration: speed + 's' }}>
+        {row.map((t, i) => (
+          <span key={i} className="marquee2-item">{t}<i>{separator}</i></span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// typewriter effect — cycles through phrases
+export function Typewriter({ phrases, speed = 45, pause = 1800, className = '' }) {
+  const [text, setText] = useState('');
+  const [idx, setIdx] = useState(0);
+  const [deleting, setDeleting] = useState(false);
+  useEffect(() => {
+    const cur = phrases[idx % phrases.length];
+    let t;
+    if (!deleting && text === cur) {
+      t = setTimeout(() => setDeleting(true), pause);
+    } else if (deleting && text === '') {
+      setDeleting(false);
+      setIdx(i => (i + 1) % phrases.length);
+    } else {
+      t = setTimeout(() => {
+        setText(cur.slice(0, text.length + (deleting ? -1 : 1)));
+      }, deleting ? speed / 2 : speed);
+    }
+    return () => clearTimeout(t);
+  }, [text, deleting, idx, phrases, speed, pause]);
+  return (
+    <span className={'typewriter ' + className}>
+      {text}
+      <span className="tw-caret">▊</span>
+    </span>
+  );
+}
+
+// 3D tilt on hover — premium card interaction
+export function TiltCard({ children, className = '', max = 8 }) {
+  const ref = useRef(null);
+  const onMove = (e) => {
+    const el = ref.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const x = (e.clientX - r.left) / r.width - 0.5;
+    const y = (e.clientY - r.top) / r.height - 0.5;
+    el.style.transform = `perspective(900px) rotateX(${-y * max}deg) rotateY(${x * max}deg) scale(1.02)`;
+  };
+  const onLeave = () => {
+    const el = ref.current;
+    if (el) el.style.transform = 'perspective(900px) rotateX(0) rotateY(0) scale(1)';
+  };
+  return (
+    <div ref={ref} className={'tilt ' + className} onMouseMove={onMove} onMouseLeave={onLeave}>
+      {children}
+    </div>
+  );
+}
+
+// scroll progress bar — thin pink line at top of page
+export function ScrollProgress() {
+  const ref = useRef(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let raf;
+    const onScroll = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const h = document.documentElement.scrollHeight - window.innerHeight;
+        el.style.width = (h > 0 ? (window.scrollY / h) * 100 : 0) + '%';
+      });
+    };
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => { window.removeEventListener('scroll', onScroll); cancelAnimationFrame(raf); };
+  }, []);
+  return <div ref={ref} className="scroll-progress" />;
+}
+
+// magnetic hover — element drifts toward cursor
+export function Magnetic({ children, className = '', strength = 0.3 }) {
+  const ref = useRef(null);
+  const onMove = (e) => {
+    const el = ref.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const x = e.clientX - r.left - r.width / 2;
+    const y = e.clientY - r.top - r.height / 2;
+    el.style.transform = `translate(${x * strength}px, ${y * strength}px)`;
+  };
+  const onLeave = () => {
+    const el = ref.current;
+    if (el) el.style.transform = 'translate(0,0)';
+  };
+  return (
+    <div ref={ref} className={'magnetic ' + className} onMouseMove={onMove} onMouseLeave={onLeave}>
+      {children}
+    </div>
+  );
+}

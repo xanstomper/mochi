@@ -482,3 +482,278 @@ body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:9999;o
 .pagehead::after{content:"";position:absolute;right:-140px;top:-140px;width:480px;height:480px;border-radius:50%;
   background:radial-gradient(circle,rgba(242,167,184,.25),transparent 65%);pointer-events:none}
 .pagehead h1{font-size:clamp(3rem,8vw,6.5rem)!important;letter-spacing:-.04em;line-height:.95!important;text-transform:uppercase}
+
+
+/* ============ GOOEY BORDER + ANIMATION SYSTEM ============ */
+
+/* register custom angle property for smooth conic rotation */
+@property --gangle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+/* gooey animated border wrapper */
+.gooey-wrap {
+  position: relative;
+  border-radius: var(--rad2, 14px);
+  padding: var(--gthick, 2.5px);
+  background: conic-gradient(
+    from var(--gangle),
+    var(--pink) 0deg,
+    var(--pink-deep) 60deg,
+    var(--amber, #E8B04B) 120deg,
+    var(--pink) 180deg,
+    var(--pink-deep) 240deg,
+    var(--pink) 300deg,
+    var(--pink) 360deg
+  );
+  animation: gooey-rotate var(--gspeed, 4s) linear infinite;
+  overflow: hidden;
+}
+.gooey-wrap::before {
+  content: "";
+  position: absolute;
+  inset: -50%;
+  background: conic-gradient(
+    from calc(var(--gangle) + 180deg),
+    transparent 0deg,
+    rgba(242,167,184,.4) 90deg,
+    transparent 180deg,
+    rgba(217,122,147,.3) 270deg,
+    transparent 360deg
+  );
+  animation: gooey-rotate calc(var(--gspeed, 4s) * 1.5) linear infinite reverse;
+  pointer-events: none;
+}
+.gooey-inner {
+  position: relative;
+  background: var(--card, #FFFDF9);
+  border-radius: calc(var(--rad2, 14px) - var(--gthick, 2.5px));
+  overflow: hidden;
+  z-index: 1;
+}
+@keyframes gooey-rotate {
+  to { --gangle: 360deg; }
+}
+
+/* legacy fallback for browsers without @property */
+@supports not (background: conic-gradient(from var(--gangle), red, blue)) {
+  .gooey-wrap { animation: gooey-hue 3s linear infinite; }
+  @keyframes gooey-hue { to { filter: hue-rotate(360deg); } }
+}
+
+/* ============ SMOOTH MARQUEE2 ============ */
+.marquee2 {
+  overflow: hidden;
+  border-top: 1.5px solid var(--line);
+  border-bottom: 1.5px solid var(--line);
+  background: #fff;
+  padding: 16px 0;
+  position: relative;
+}
+.marquee2-track {
+  display: flex;
+  width: max-content;
+  animation: mq2 linear infinite;
+  will-change: transform;
+}
+.marquee2:hover .marquee2-track { animation-play-state: paused; }
+.marquee2-item {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .14em;
+  color: var(--mocha);
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.marquee2-item i {
+  color: var(--pink);
+  margin: 0 28px;
+  font-style: normal;
+  font-size: 10px;
+}
+@keyframes mq2 {
+  from { transform: translateX(0); }
+  to { transform: translateX(-33.333%); }
+}
+
+/* ============ TYPEWRITER ============ */
+.typewriter {
+  font-family: var(--mono);
+  color: var(--pink-deep);
+  font-weight: 600;
+}
+.tw-caret {
+  display: inline-block;
+  animation: tw-blink 1s step-end infinite;
+  color: var(--pink);
+  margin-left: 1px;
+}
+@keyframes tw-blink { 50% { opacity: 0; } }
+
+/* ============ TILT CARD ============ */
+.tilt {
+  transition: transform .18s ease-out;
+  transform-style: preserve-3d;
+  will-change: transform;
+}
+
+/* ============ SCROLL PROGRESS ============ */
+.scroll-progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--pink), var(--pink-deep));
+  z-index: 10000;
+  transition: width .1s linear;
+  border-radius: 0 2px 2px 0;
+}
+
+/* ============ MAGNETIC ============ */
+.magnetic {
+  display: inline-flex;
+  transition: transform .25s cubic-bezier(.34,1.56,.64,1);
+  will-change: transform;
+}
+
+/* ============ LAYOUT FIXES ============ */
+
+/* rb-window: kill overflow clipping so repo browser breathes */
+.rb-window {
+  overflow: visible;
+  border-radius: var(--rad);
+  padding: 0;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+.rb-window .rb,
+.rb-window .rb-compact {
+  border: 1.5px solid var(--line);
+  border-radius: var(--rad);
+  overflow: hidden;
+  box-shadow: var(--shadow);
+  background: var(--card);
+}
+
+/* manifest grid: better proportions */
+.manifest-grid {
+  grid-template-columns: 1fr 1fr;
+  gap: 80px;
+}
+
+/* coda: remove awkward overlap */
+.coda {
+  margin-top: 0;
+  padding-top: 110px;
+}
+.coda-inner {
+  margin-top: -120px;
+  padding-bottom: 110px;
+}
+
+/* hero-visual: full-bleed dither, no awkward margin */
+.hero-visual {
+  margin-top: 0;
+  margin-left: -24px;
+  margin-right: -24px;
+}
+
+/* gstat-grid: hairline column separators stay inside wrap */
+.gstat-grid {
+  border-left: 1.5px solid var(--line);
+}
+
+/* tri cards: add gooey border on hover */
+.tri-card {
+  position: relative;
+  transition: background .25s, transform .22s cubic-bezier(.34,1.56,.64,1);
+}
+.tri-card:hover {
+  background: var(--cream2);
+  transform: translateY(-4px);
+}
+
+/* flow rows: subtle hover lift */
+.flow-row {
+  transition: background .2s, transform .2s;
+  border-radius: 8px;
+}
+.flow-row:hover {
+  background: rgba(242,167,184,.06);
+  transform: translateX(6px);
+}
+
+/* term2: add gooey border effect */
+.term2 {
+  position: relative;
+  border-radius: var(--rad);
+  padding: 2.5px;
+  background: conic-gradient(
+    from var(--gangle),
+    var(--pink), var(--pink-deep), var(--amber), var(--pink)
+  );
+  animation: gooey-rotate 5s linear infinite;
+  border: none;
+  overflow: hidden;
+}
+.term2 > * {
+  position: relative;
+  z-index: 1;
+}
+.term2-bar {
+  background: var(--cream2);
+  border-radius: calc(var(--rad) - 2.5px) calc(var(--rad) - 2.5px) 0 0;
+}
+.term2-body {
+  border-radius: 0 0 calc(var(--rad) - 2.5px) calc(var(--rad) - 2.5px);
+}
+
+/* pagehead h1: split text animation support */
+.pagehead h1 .split-ch {
+  transform: translateY(110%);
+}
+.pagehead h1 .split.in .split-ch {
+  transform: translateY(0);
+}
+
+/* repo browser chrome bar: keep visible */
+.rb .rb-chrome {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--faint);
+  border-bottom: 1.5px solid var(--line);
+  background: var(--cream2);
+}
+
+/* responsive fixes for new layout */
+@media(max-width:920px){
+  .manifest-grid { grid-template-columns: 1fr; gap:40px; }
+  .flow-row { grid-template-columns: 60px 1fr; }
+  .flow-d { grid-column: 2; }
+  .tri { grid-template-columns: 1fr; }
+  .tri-card { border-right: none; border-bottom: 1.5px solid var(--line); }
+  .tri-card:last-child { border-bottom: none; }
+  .gstat-grid { grid-template-columns: 1fr 1fr; }
+  .gstat { border-right: none; }
+  .gstat:nth-child(odd) { border-right: 1.5px solid var(--line); }
+}
+@media(max-width:600px){
+  .gstat-grid { grid-template-columns: 1fr; }
+  .gstat { border-right: none !important; }
+  .giant { font-size: clamp(3.5rem, 20vw, 8rem); }
+  .giant2 { font-size: clamp(1.8rem, 10vw, 4rem); }
+  .cta-pair { flex-direction: column; align-items: flex-start; }
+  .hero2 { padding-top: 64px; }
+}
