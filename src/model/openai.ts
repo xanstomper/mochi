@@ -74,36 +74,63 @@ export function createOpenAIProvider(config: ProviderConfig) {
     }
   }
 
+  // MCH-71 (speed): cache-aware message serializer. The transcript is
+  // append-only across a run, so the mapped OpenAI payload for messages 0..N-1
+  // is identical every turn. Keep the last mapped array + the source messages
+  // it was derived from; on each request reuse the mapped prefix that matches
+  // by reference identity and only serialize the new tail. Saves a full
+  // O(messages) map + slice-scan per turn in long sessions.
+  let lastMapped: { src: ChatMessage[]; out: Record<string, unknown>[] } | null = null;
+
+  function mapMessages(messages: ChatMessage[]): Record<string, unknown>[] {
+    const out: Record<string, unknown>[] = [];
+    let reuseLen = 0;
+    if (lastMapped) {
+      const max = Math.min(lastMapped.src.length, messages.length - 1); // tail must be fresh (cache_control on last)
+      while (reuseLen < max && lastMapped.src[reuseLen] === messages[reuseLen]) reuseLen++;
+      if (reuseLen > 0) {
+        for (let i = 0; i < reuseLen; i++) out.push(lastMapped!.out[i]);
+      }
+    }
+    for (let i = reuseLen; i < messages.length; i++) {
+      const m = messages[i];
+      if (m.role === 'tool') {
+        out.push({ role: 'tool', tool_call_id: m.tool_call_id, content: m.content ?? '' });
+        continue;
+      }
+      if (m.role === 'assistant' && m.tool_calls) {
+        out.push({ role: 'assistant', content: m.content ?? null, tool_calls: m.tool_calls });
+        continue;
+      }
+      // Some OpenAI-compatible models (observed: qwen3.6-35b on
+      // freeinference.org) silently return an EMPTY response
+      // (finish=stop, 0 completion tokens) when a `system` message appears
+      // AFTER the user turn. Mochi appends runtime context (preflight,
+      // focus nudges) as mid-conversation system messages, which reliably
+      // killed those requests. Send mid-conversation system notices as
+      // user-role text with explicit framing instead — same information,
+      // compatible shape.
+      const seenUserTurn = messages.slice(0, i).some((x) => x.role === 'user');
+      if (m.role === 'system' && seenUserTurn) {
+        out.push({ role: 'user', content: `[system notice] ${m.content ?? ''}` });
+        continue;
+      }
+      const mapped: any = { role: m.role, content: m.content ?? '' };
+      if (m.role === 'system') mapped.cache_control = { type: 'ephemeral' };
+      // MCH-38 (speed): mark the LAST message so every turn's prefix is a
+      // cache breakpoint — with an append-only transcript, turns N+1 reuse
+      // turns 1..N from the provider prompt cache at ~10% of input cost.
+      if (i === messages.length - 1) mapped.cache_control = { type: 'ephemeral' };
+      out.push(mapped);
+    }
+    lastMapped = { src: messages.slice(), out };
+    return out;
+  }
+
   async function* streamChat(messages: ChatMessage[], tools: ToolDefinition[], options?: { temperature?: number; maxTokens?: number; signal?: AbortSignal }): AsyncGenerator<StreamChunk> {
     const body: Record<string, unknown> = {
       model,
-      messages: messages.map((m, i) => {
-        if (m.role === 'tool') {
-          return { role: 'tool', tool_call_id: m.tool_call_id, content: m.content ?? '' };
-        }
-        if (m.role === 'assistant' && m.tool_calls) {
-          return { role: 'assistant', content: m.content ?? null, tool_calls: m.tool_calls };
-        }
-        // Some OpenAI-compatible models (observed: qwen3.6-35b on
-        // freeinference.org) silently return an EMPTY response
-        // (finish=stop, 0 completion tokens) when a `system` message appears
-        // AFTER the user turn. Mochi appends runtime context (preflight,
-        // focus nudges) as mid-conversation system messages, which reliably
-        // killed those requests. Send mid-conversation system notices as
-        // user-role text with explicit framing instead — same information,
-        // compatible shape.
-        const seenUserTurn = messages.slice(0, i).some((x) => x.role === 'user');
-        if (m.role === 'system' && seenUserTurn) {
-          return { role: 'user', content: `[system notice] ${m.content ?? ''}` };
-        }
-        const mapped: any = { role: m.role, content: m.content ?? '' };
-        if (m.role === 'system') mapped.cache_control = { type: 'ephemeral' };
-        // MCH-38 (speed): mark the LAST message so every turn's prefix is a
-        // cache breakpoint — with an append-only transcript, turns N+1 reuse
-        // turns 1..N from the provider prompt cache at ~10% of input cost.
-        if (i === messages.length - 1) mapped.cache_control = { type: 'ephemeral' };
-        return mapped;
-      }),
+      messages: mapMessages(messages),
       stream: true,
       stream_options: { include_usage: true },
       ...(tools.length ? { tools: openAITools(tools), tool_choice: 'auto' } : {}),
