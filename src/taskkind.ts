@@ -81,8 +81,11 @@ export function isSimpleScriptTask(task: Task): boolean {
   if (text.length > 200) return false;
   if (/refactor|migrat|deploy|framework|architecture|security|database|schema|api endpoint/.test(text)) return false;
   // Simple shape: create file(s) and run, or rename/update-and-run mechanical
-  // edits. Node/python scripts, no package-manager or suite orchestration.
-  return /\b(create|write|make|rename|update)\b/.test(text) && /\brun\b|\bnode\b|\bpython\b/.test(text)
+  // edits, or fix-and-run ("fix sum.js ... run node run.js" — the b1 arena
+  // trace shows such tasks spiraling into node --test/npm test probes that
+  // cost 2-3 extra provider rounds). Node/python scripts, no package-manager
+  // or suite orchestration.
+  return /\b(create|write|make|rename|update|fix)\b/.test(text) && /\brun\b|\bnode\b|\bpython\b/.test(text)
     && !/\bnpm (test|run)|vitest|jest|pytest|cargo test/.test(text);
 }
 
