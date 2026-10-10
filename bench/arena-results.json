@@ -1,0 +1,108 @@
+{
+  "when": "2026-10-10T14:45:20.790Z",
+  "rounds": 1,
+  "results": [
+    {
+      "harness": "mochi",
+      "task": "f1",
+      "name": "feature-add-test",
+      "ok": true,
+      "detail": "printed 5",
+      "ms": 198361,
+      "exit": 0,
+      "timedOut": false
+    },
+    {
+      "harness": "jcode",
+      "task": "f1",
+      "name": "feature-add-test",
+      "ok": true,
+      "detail": "printed 5",
+      "ms": 9826,
+      "exit": 0,
+      "timedOut": false
+    },
+    {
+      "harness": "mochi",
+      "task": "b1",
+      "name": "bugfix-off-by-one",
+      "ok": true,
+      "detail": "prints 10",
+      "ms": 66279,
+      "exit": 0,
+      "timedOut": false
+    },
+    {
+      "harness": "jcode",
+      "task": "b1",
+      "name": "bugfix-off-by-one",
+      "ok": true,
+      "detail": "prints 10",
+      "ms": 9591,
+      "exit": 0,
+      "timedOut": false
+    },
+    {
+      "harness": "mochi",
+      "task": "r1",
+      "name": "refactor-rename",
+      "ok": true,
+      "detail": "renamed + prints 11",
+      "ms": 122088,
+      "exit": 0,
+      "timedOut": false
+    },
+    {
+      "harness": "jcode",
+      "task": "r1",
+      "name": "refactor-rename",
+      "ok": true,
+      "detail": "renamed + prints 11",
+      "ms": 10246,
+      "exit": 0,
+      "timedOut": false
+    },
+    {
+      "harness": "mochi",
+      "task": "q1",
+      "name": "codebase-question",
+      "ok": true,
+      "detail": "both facts correct",
+      "ms": 28987,
+      "exit": 0,
+      "timedOut": false
+    },
+    {
+      "harness": "jcode",
+      "task": "q1",
+      "name": "codebase-question",
+      "ok": true,
+      "detail": "both facts correct",
+      "ms": 8975,
+      "exit": 0,
+      "timedOut": false
+    }
+  ],
+  "score": {
+    "mochi": {
+      "pass": 4,
+      "total": 4,
+      "ms": [
+        28987,
+        66279,
+        122088,
+        198361
+      ]
+    },
+    "jcode": {
+      "pass": 4,
+      "total": 4,
+      "ms": [
+        8975,
+        9591,
+        9826,
+        10246
+      ]
+    }
+  }
+}
