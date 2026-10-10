@@ -1,0 +1,223 @@
+/* ── DREAMLIKE SKY ANIMATION ENGINE ───────────────────────────
+   Pure CSS — no canvas, no WebGL. Insanely detailed layered animation.
+   Layers: gradient → aurora → orbs → stars → shooting stars →
+           bubbles → sparkles → sprinkles → clouds → grain → vignette
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── BASE SKY GRADIENT ─────────────────────────────────────── */
+.sky-bg {
+  position: fixed; inset: 0; z-index: 0;
+  overflow: hidden; pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    #0a0a3e 0%,
+    #1a1a6e 8%,
+    #2d2a8a 18%,
+    #4a3fa8 28%,
+    #7c5cd6 40%,
+    #a855c7 52%,
+    #d946a3 62%,
+    #ec4899 70%,
+    #f472b6 78%,
+    #fb923c 88%,
+    #fde68a 96%,
+    #fef3c7 100%
+  );
+}
+
+/* ── AURORA BANDS ──────────────────────────────────────────── */
+.sky-aurora {
+  position: absolute; inset: 0; overflow: hidden;
+}
+.aurora-band {
+  position: absolute; border-radius: 50%;
+  filter: blur(50px); opacity: .2;
+  animation: auroraWave 20s ease-in-out infinite alternate;
+}
+.ab-1 {
+  width: 120vw; height: 40vh; top: 5%; left: -10%;
+  background: linear-gradient(90deg, transparent, rgba(103,232,249,.4), rgba(139,92,246,.3), transparent);
+  animation-duration: 25s;
+}
+.ab-2 {
+  width: 100vw; height: 35vh; top: 15%; left: 20%;
+  background: linear-gradient(90deg, transparent, rgba(236,72,153,.3), rgba(251,146,60,.2), transparent);
+  animation-duration: 30s; animation-delay: -10s;
+}
+.ab-3 {
+  width: 140vw; height: 30vh; top: 25%; left: -20%;
+  background: linear-gradient(90deg, transparent, rgba(196,181,253,.25), rgba(103,232,249,.15), transparent);
+  animation-duration: 22s; animation-delay: -5s;
+}
+@keyframes auroraWave {
+  0%   { transform: translateX(-5%) translateY(0) scaleY(1); }
+  50%  { transform: translateX(3%) translateY(-2%) scaleY(1.15); }
+  100% { transform: translateX(-2%) translateY(1%) scaleY(.9); }
+}
+
+/* ── GLOW ORBS ─────────────────────────────────────────────── */
+.sky-orb {
+  position: absolute; border-radius: 50%;
+  filter: blur(40px);
+  animation: orbDrift 20s ease-in-out infinite alternate;
+}
+@keyframes orbDrift {
+  0%   { transform: translate(0, 0) scale(1); }
+  33%  { transform: translate(30px, -40px) scale(1.1); }
+  66%  { transform: translate(-20px, 20px) scale(.95); }
+  100% { transform: translate(10px, -10px) scale(1.05); }
+}
+
+/* ── STAR FIELD ────────────────────────────────────────────── */
+.sky-stars {
+  position: absolute; inset: 0;
+}
+.sky-star {
+  position: absolute; border-radius: 50%;
+  background: #fff;
+  animation: starTwinkle 4s ease-in-out infinite;
+}
+.star-far  { opacity: .3; }
+.star-mid  { opacity: .5; }
+.star-near { opacity: .8; box-shadow: 0 0 6px rgba(255,255,255,.4); }
+@keyframes starTwinkle {
+  0%, 100% { opacity: .15; transform: scale(.8); }
+  50%       { opacity: .7;  transform: scale(1.2); }
+}
+
+/* ── SHOOTING STARS ────────────────────────────────────────── */
+.sky-shooting {
+  position: absolute; inset: 0;
+}
+.shooting-star {
+  position: absolute; height: 2px; border-radius: 2px;
+  background: linear-gradient(90deg, #fff, rgba(255,255,255,.5), transparent);
+  animation: shoot 1.5s ease-out forwards;
+  pointer-events: none;
+}
+@keyframes shoot {
+  0%   { opacity: 0; transform: rotate(var(--angle, 35deg)) translateX(0); }
+  10%  { opacity: 1; }
+  100% { opacity: 0; transform: rotate(var(--angle, 35deg)) translateX(300px); }
+}
+
+/* ── FLOATING BUBBLES ──────────────────────────────────────── */
+.sky-bubbles {
+  position: absolute; inset: 0;
+}
+.sky-bubble {
+  position: absolute; border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, rgba(255,255,255,.35), rgba(255,255,255,.05) 70%);
+  border: 1px solid rgba(255,255,255,.2);
+  animation: bubbleFloat 18s ease-in-out infinite;
+}
+@keyframes bubbleFloat {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  25%       { transform: translateY(-30px) rotate(3deg); }
+  50%       { transform: translateY(-15px) rotate(-2deg); }
+  75%       { transform: translateY(-40px) rotate(1deg); }
+}
+
+/* ── SPARKLE STARS (4-point) ───────────────────────────────── */
+.sky-sparkles {
+  position: absolute; inset: 0;
+}
+.sky-sparkle {
+  position: absolute;
+  animation: sparklePulse 5s ease-in-out infinite;
+  text-shadow: 0 0 15px currentColor, 0 0 30px currentColor;
+  line-height: 1;
+  user-select: none;
+}
+@keyframes sparklePulse {
+  0%, 100% { opacity: .1; transform: scale(.6) rotate(0deg); }
+  50%       { opacity: .9; transform: scale(1.1) rotate(15deg); }
+}
+
+/* ── SPRINKLE PILLS ────────────────────────────────────────── */
+.sky-sprinkles {
+  position: absolute; inset: 0;
+}
+.sky-sprinkle {
+  position: absolute; border-radius: 4px;
+  opacity: .5;
+  animation: sprinkleBob 8s ease-in-out infinite;
+}
+@keyframes sprinkleBob {
+  0%, 100% { transform: translateY(0) rotate(0deg); opacity: .3; }
+  50%       { transform: translateY(-20px) rotate(20deg); opacity: .7; }
+}
+
+/* ── CLOUD HORIZON ─────────────────────────────────────────── */
+.sky-clouds {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  height: 35vh; overflow: hidden;
+}
+.sky-cloud-h {
+  position: absolute; border-radius: 50%;
+  filter: blur(25px);
+}
+.sky-cloud-h.c1 {
+  width: 60vw; height: 25vh; bottom: -10vh; left: -5vw;
+  background: rgba(251,146,60,.25);
+  animation: cloudSway 15s ease-in-out infinite alternate;
+}
+.sky-cloud-h.c2 {
+  width: 50vw; height: 20vh; bottom: -8vh; left: 30vw;
+  background: rgba(236,72,153,.2);
+  animation: cloudSway 18s ease-in-out infinite alternate-reverse;
+}
+.sky-cloud-h.c3 {
+  width: 55vw; height: 22vh; bottom: -9vh; left: 55vw;
+  background: rgba(253,230,138,.22);
+  animation: cloudSway 12s ease-in-out infinite alternate;
+  animation-delay: -5s;
+}
+.sky-cloud-h.c4 {
+  width: 45vw; height: 18vh; bottom: -7vh; left: 15vw;
+  background: rgba(196,181,253,.18);
+  animation: cloudSway 20s ease-in-out infinite alternate-reverse;
+  animation-delay: -8s;
+}
+.sky-cloud-h.c5 {
+  width: 40vw; height: 15vh; bottom: -5vh; left: 70vw;
+  background: rgba(103,232,249,.15);
+  animation: cloudSway 16s ease-in-out infinite alternate;
+  animation-delay: -3s;
+}
+.sky-cloud-h.c6 {
+  width: 35vw; height: 12vh; bottom: -4vh; left: -2vw;
+  background: rgba(244,114,182,.18);
+  animation: cloudSway 14s ease-in-out infinite alternate-reverse;
+  animation-delay: -6s;
+}
+.sky-cloud-h.c7 {
+  width: 48vw; height: 16vh; bottom: -6vh; left: 40vw;
+  background: rgba(251,146,60,.15);
+  animation: cloudSway 22s ease-in-out infinite alternate;
+  animation-delay: -10s;
+}
+.sky-cloud-h.c8 {
+  width: 42vw; height: 14vh; bottom: -5vh; left: 20vw;
+  background: rgba(253,230,138,.18);
+  animation: cloudSway 17s ease-in-out infinite alternate-reverse;
+  animation-delay: -4s;
+}
+@keyframes cloudSway {
+  0%   { transform: translateX(-15px) scale(1); }
+  50%  { transform: translateX(10px) scale(1.03); }
+  100% { transform: translateX(20px) scale(.98); }
+}
+
+/* ── GRAIN OVERLAY ─────────────────────────────────────────── */
+.sky-grain {
+  position: absolute; inset: 0; opacity: .04;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 200px 200px;
+}
+
+/* ── VIGNETTE ──────────────────────────────────────────────── */
+.sky-vignette {
+  position: absolute; inset: 0;
+  background: radial-gradient(ellipse at center, transparent 50%, rgba(10,10,62,.3) 100%);
+}
