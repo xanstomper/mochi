@@ -409,6 +409,8 @@ export class Agent {
    *  "completed" on the run not ENDING on a failed command (Codex-style),
    *  while still allowing runs that recovered from earlier errors. */
   private lastToolError: string | null = null;
+  /** MCH-52: ordered tool names for this run, persisted on successful finish. */
+  private toolSeq: string[] = [];
   /** Phase 5 (VNext): stuck-signal counters surfaced in the volatile state
    *  prompt so the model can see its own loop pattern and break it. */
   private nudgeInjections = 0;
@@ -565,6 +567,12 @@ export class Agent {
       const { warmReadCache } = await import('../prefetch.js');
       warmReadCache(this.workspace.dir, this.readCache);
     } catch { /* prefetch must never affect task start */ }
+    // MCH-52: surface mined tool-route patterns from past successful runs.
+    try {
+      const { loadToolSeqs, toolPatternText } = await import('../tool-sequence.js');
+      const patText = toolPatternText(loadToolSeqs(this.workspace.dir));
+      if (patText) this.context.addMessage({ role: 'system', content: patText });
+    } catch { /* tool-seq injection must never affect task start */ }
     if (this.planMode) {
       this.context.addMessage({
         role: 'system',
@@ -2517,6 +2525,7 @@ Continue from 'Next:', do not redo completed progress.`,
   private async runMoolCall(tc: ToolCall): Promise<void> {
     if (this.abortSignal?.aborted) return;
     const toolName = TOOL_ALIASES[tc.function.name] || tc.function.name;
+    if (this.toolSeq.length < 40) this.toolSeq.push(toolName);
     // Consecutive-identical-call spam guard: the same tool + same args issued
     // 3 times in a row (across iterations) is the "todo spam" pattern — the
     // model loops re-announcing instead of progressing. Veto the 3rd+ with a
@@ -3710,6 +3719,11 @@ Continue from 'Next:', do not redo completed progress.`,
       try {
         if (this.readCache.size > 0) saveReadCache(this.workspace.dir, this.readCache);
       } catch { /* read-cache persistence must never affect task completion */ }
+      // MCH-52: persist this run's tool sequence for route-pattern mining.
+      try {
+        const { loadToolSeqs, saveToolSeq } = await import('../tool-sequence.js');
+        if (this.toolSeq.length > 0) saveToolSeq(this.workspace.dir, loadToolSeqs(this.workspace.dir), this.toolSeq);
+      } catch { /* tool-seq persistence must never affect task completion */ }
     }
     const durationMs = Math.round(performance.now() - this.startTime);
     this.events.emit({ type: 'agent:completed', id: this.id, taskId: task.id });
