@@ -1,5 +1,14 @@
 # Mochi Changelog
 
+## 0.22.0 — Speculative stack complete
+
+- **Repo map (MCH-49)** — `src/repo-map.ts`: Aider-style repo map built on the codegraph. Resolves `calls.callee` symbols to their defining files via the `symbols` table, builds file→file call adjacency, runs 30-iteration PageRank (damping 0.85), returns the top-15 structurally important files. Injected as a `REPO MAP` system message at task start. ~60ms warm on a 19k-line repo; ranks `loop.ts`, `codegraph.ts`, `events.ts`, `memory.ts` first.
+- **Prefetch fusion (MCH-50)** — `src/prefetch.ts`: fuses three independent signals into one ranked prefetch list — structural (repo-map PageRank), temporal (co-change history from git), runtime (cross-session read-cache telemetry). Max-of-signal scoring with a +0.15 bonus per agreeing signal; workspace-path normalization; exists/size validation; best-effort everywhere. Injected as `PREFETCHED CONTEXT` with per-file signal tags.
+- **Cache warming (MCH-51)** — `warmReadCache()`: physically preloads predicted files' contents into the per-run read cache at task start, using the exact same (mtimeMs, size) validation contract as the read tool, so correctness is identical — a mid-task edit still misses and re-reads from disk. 1.5MB cap, per-file try/catch.
+- **Tool-route mining (MCH-52)** — `src/tool-sequence.ts`: persists each successful run's ordered tool sequence (cap 120 seqs × 40 tools) to `.mochi/tool-seqs.json`, mines bigram transitions at next task start, and injects a `TOOL ROUTE PATTERNS` system hint listing the most common successful transitions. Pure observation — never gates any tool call.
+
+**Test suite: 1221 passed / 5 skipped. Both builds green.**
+
 ## 0.21.0 — Operation Frontier
 
 - **Predictive file pre-fetch (MCH-43)** — `predictNextFiles()` in `src/speculative.ts`: builds a co-change graph from the last 40 git commits (`git log --name-only`), skips mega-commits (>8 files — init imports and bulk renames carry no co-change signal), and predicts the top-5 likely-next files for the currently-touched set. The agent loop's speculative preflight now warms the read cache (absolute-path + mtime keyed) with those predictions BEFORE the agent asks, so first-touch reads are cache hits on familiar codebases.
