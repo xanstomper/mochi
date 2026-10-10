@@ -340,16 +340,21 @@ export function Marquee({ items, speed = 30, reverse = false, className = '' }) 
 
 
 /* ── BenchChart (backwards compat) ────────────────────────── */
-export function BenchChart({ data, max, colors = {} }) {
+export function BenchChart({ data, max, unit = '', rows }) {
+  // support both signatures: { data, max } and { rows: [[label, value, isMochi]], unit }
+  const chartData = rows
+    ? rows.map(r => ({ label: r[0], value: r[1], isMochi: !!r[2], display: r[1] + (unit ? ' ' + unit : '') }))
+    : data.map(d => ({ ...d, isMochi: d.color === 'pink' }));
+  const chartMax = max || Math.max(...chartData.map(x => x.value));
   return (
     <div className="bench-chart">
-      {data.map((d, i) => (
+      {chartData.map((d, i) => (
         <div key={i} className="bench-row">
           <span className="bench-label">{d.label}</span>
           <div className="bench-bar-wrap">
             <div
-              className={'bench-bar ' + (d.color || 'gray')}
-              style={{ width: (d.value / (max || Math.max(...data.map(x => x.value))) * 100) + '%' }}
+              className={'bench-bar ' + (d.isMochi ? 'pink' : 'gray')}
+              style={{ width: (d.value / chartMax * 100) + '%' }}
             >
               {d.display}
             </div>
