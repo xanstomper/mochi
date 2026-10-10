@@ -13,6 +13,7 @@ export default defineConfig({
         docs: 'docs.html',
         benchmarks: 'benchmarks.html',
         changelog: 'changelog.html',
+        source: 'source.html',
       },
     },
   },

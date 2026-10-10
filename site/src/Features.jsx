@@ -1,5 +1,5 @@
 // Clickable feature cards -> detail modal. Content = real repo facts.
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Reveal } from './anim.jsx';
 
 export const FEATURES = [
