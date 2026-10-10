@@ -5,77 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Changelog — Mochi</title>
 <meta name="description" content="Release history for Mochi, the autonomous coding agent for the terminal.">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect x='2.5' y='12.5' width='19' height='7' rx='2.5' fill='%23A9C97E'/><rect x='2.5' y='4.5' width='19' height='7' rx='2.5' stroke='%23A9C97E' stroke-opacity='.45' stroke-width='1.6' fill='none'/></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 96 96'><path d='M48 12 C70 12 84 28 84 50 C84 72 70 86 48 86 C26 86 12 72 12 50 C12 28 26 12 48 12 Z' fill='%23FDF0E4' stroke='%238A6F5B' stroke-width='3.4'/><ellipse cx='34' cy='44' rx='4' ry='5' fill='%235E4B3C'/><ellipse cx='62' cy='44' rx='4' ry='5' fill='%235E4B3C'/><path d='M42 55 Q48 62 54 55' stroke='%235E4B3C' stroke-width='3' stroke-linecap='round' fill='none'/><path d='M48 12 C50 6 56 3 62 5 C61 11 55 14 48 12 Z' fill='%23A9C97E' stroke='%238A6F5B' stroke-width='2.4'/></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/style.css">
-<style>
-.rv{opacity:0;transform:translateY(14px);transition:opacity .55s cubic-bezier(.2,.6,.2,1),transform .55s cubic-bezier(.2,.6,.2,1)}.rv.in{opacity:1;transform:none}
-.rel{max-width:720px;padding:44px 0;border-bottom:1px solid var(--border)}
-.rel:first-of-type{padding-top:12px}
-.rel .ver{display:flex;align-items:baseline;gap:14px;margin-bottom:6px}
-.rel .ver h2{font-size:22px;font-weight:720}
-.rel .ver .latest{font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.1em;color:var(--accent);border:1px solid var(--accent);border-radius:99px;padding:2px 9px;text-transform:uppercase}
-.rel .date{font-family:var(--mono);font-size:12px;color:var(--faint)}
-.rel ul{margin:14px 0 0 0;list-style:none}
-.rel li{padding:8px 0 8px 22px;position:relative;font-size:14.5px;color:var(--text);border-bottom:1px solid var(--border)}
-.rel li:last-child{border-bottom:none}
-.rel li::before{content:"";position:absolute;left:2px;top:16px;width:7px;height:7px;border-radius:2px;background:var(--accent);opacity:.55}
-.rel li b{color:var(--ink);font-weight:600}
-.rel li code{font-size:12px}
-</style>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script type="module" crossorigin src="/mochi/assets/changelog-Dboixg3C.js"></script>
+  <link rel="modulepreload" crossorigin href="/mochi/assets/Mascot-CfRqx86m.js">
+  <link rel="stylesheet" crossorigin href="/mochi/assets/Mascot-BAru_9_X.css">
 </head>
 <body>
-
-<div class="pagehead">
-  <div class="wrap">
-    <h1>Changelog</h1>
-    <p>Every release, in the maintainers' own words. The full, unabridged history lives in the repo's <a href="https://github.com/xanstomper/mochi/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG.md</a>.</p>
-  </div>
-</div>
-
-<div class="wrap" style="padding:24px 0 88px">
-
-  <article class="rel rv">
-    <div class="ver"><h2>0.11.1</h2><span class="latest">latest</span></div>
-    <div class="date">freeze-fix release</div>
-    <ul>
-      <li><b>Fixed the second live hard freeze: <code>glob</code>'s unbounded synchronous directory walk.</b> One broad <code>glob native/**/*.rs</code> from <code>$HOME</code> blocked the event loop for minutes. The walker is now async and hard-bounded (24 depth / 25k entries / 3s budget), skips heavyweight dirs, never follows symlinked directories, and surfaces truncation honestly instead of returning silent partial results.</li>
-      <li><b>Reasoning-stream loops now caught by the repetition guard.</b> Reasoning chunks bypassed the phrase/repetition tracker; a looping model triggered failover instead of flooding the transcript.</li>
-      <li><b>Fixed duplicated/stomped tool cards.</b> Two compounding defects — <code>tool:called</code> firing from both the loop and the executor, and a pending-card lookup deleted before read — made interleaved tool calls overwrite each other's cards. Routing now captures absolute line ids and collapses duplicate re-emits.</li>
-      <li><b>Finished the TUI render harness</b> (<code>src/tui/render-harness.ts</code>): typed, v2, covering reasoning floods, tool bursts, and post-cap trim churn — 0 events above 100 ms.</li>
-      <li>Regression tests for glob walk bounds, tool-card routing, collapse rules, and trim accounting.</li>
-    </ul>
-  </article>
-
-  <article class="rel rv">
-    <div class="ver"><h2>0.11.0</h2></div>
-    <div class="date">reliability overhaul</div>
-    <ul>
-      <li><b>The agent can no longer hang, freeze, or spin on token-draining loops.</b> Cumulative repeated-tool breaker (mutating-tools-only, so legit read-before-edit workflows survive), hard 3-minute stall guard on silent provider holds, SIGKILL fallback after SIGTERM on abort, subagent timeout fence, and event-layer rejection safety.</li>
-      <li><b>Fast, lean defaults.</b> Default reasoning lowered <code>max → medium</code>: a chat reply dropped from ~30 s / 139k tokens to ~2 s / 7k tokens. Suite green at 763/763.</li>
-      <li><b>TUI: Cline-style tool cards and a post-turn summary card</b> — every call framed with status, args, and first output; turn completion shows duration, tool count, files touched, tokens used.</li>
-      <li><b>Coordinated visual language:</b> 2-space grid gutter with role-colored markers; all themes redesigned around semantic role colors with a single source of truth.</li>
-      <li><b>The npm package now actually ships its runtime.</b> A <code>files</code> whitelist (<code>dist</code>, <code>native/bin</code>) fixed installs — verified by packing, clean-room install, and running the real bin. 693 files in the tarball instead of 1243.</li>
-      <li><b>Live network tests are opt-in</b> (<code>MOCHI_LIVE=1</code>): default runs are deterministic and never touch the network. Full suite: 855 passed, 4 skipped, 0 failures.</li>
-      <li><b>Consolidated duplicated Wikipedia lookups</b> into <code>src/wiki.ts</code> — byte-identical behavior, 48 fewer duplicated lines, new 10-test suite.</li>
-      <li><b>Real shared SSE encoder</b> (<code>src/sse-encode.ts</code>) — production and tests emit identical bytes, verified with 8 round-trip tests.</li>
-      <li>Toolchain consistency: Node 22-only CI matrix, <code>.nvmrc</code>, engine-strict, and a tarball guard that fails if compiled output is missing.</li>
-    </ul>
-  </article>
-
-  <article class="rel rv">
-    <div class="ver"><h2>0.10.7</h2></div>
-    <div class="date">interactive reasoning control</div>
-    <ul>
-      <li><b>Interactive <code>/reasoning</code> command</b> with menu selector — switch between <code>low</code>, <code>medium</code>, <code>high</code>, and <code>max</code> compute mid-session; active level shown live in the TUI status bar.</li>
-    </ul>
-  </article>
-
-  <p class="rv" style="max-width:720px;padding:28px 0;font-size:14px;color:var(--faint)">Older releases and full technical detail: <a href="https://github.com/xanstomper/mochi/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG.md in the repo</a>.</p>
-</div>
-
+<div id="root"></div>
 <script src="assets/site.js"></script>
 </body>
 </html>

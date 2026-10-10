@@ -5,116 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Mochi — Autonomous coding agent for the terminal</title>
 <meta name="description" content="Mochi — Minimal Orchestrative Coding Harness Intelligence. A minimal, fast, autonomous coding agent for the terminal: goals, task DAGs, agent teams, a persistent daemon, and deep run traces on a zero-dependency Rust core.">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect x='2.5' y='12.5' width='19' height='7' rx='2.5' fill='%23A9C97E'/><rect x='2.5' y='4.5' width='19' height='7' rx='2.5' stroke='%23A9C97E' stroke-opacity='.45' stroke-width='1.6' fill='none'/></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 96 96'><path d='M48 12 C70 12 84 28 84 50 C84 72 70 86 48 86 C26 86 12 72 12 50 C12 28 26 12 48 12 Z' fill='%23FDF0E4' stroke='%238A6F5B' stroke-width='3.4'/><ellipse cx='34' cy='44' rx='4' ry='5' fill='%235E4B3C'/><ellipse cx='62' cy='44' rx='4' ry='5' fill='%235E4B3C'/><path d='M42 55 Q48 62 54 55' stroke='%235E4B3C' stroke-width='3' stroke-linecap='round' fill='none'/><path d='M48 12 C50 6 56 3 62 5 C61 11 55 14 48 12 Z' fill='%23A9C97E' stroke='%238A6F5B' stroke-width='2.4'/></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/style.css">
-<style>.rv{opacity:0;transform:translateY(16px);transition:opacity .6s cubic-bezier(.2,.6,.2,1),transform .6s cubic-bezier(.2,.6,.2,1)}.rv.in{opacity:1;transform:none}.rv.d1{transition-delay:.07s}.rv.d2{transition-delay:.14s}.rv.d3{transition-delay:.21s}</style>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script type="module" crossorigin src="/mochi/assets/index-Bh_Era5d.js"></script>
+  <link rel="modulepreload" crossorigin href="/mochi/assets/Mascot-CfRqx86m.js">
+  <link rel="stylesheet" crossorigin href="/mochi/assets/Mascot-BAru_9_X.css">
 </head>
 <body>
-
-<section class="hero">
-  <div class="wrap grid2">
-    <div>
-      <div class="tag rv">Terminal-native · Rust core · zero runtime dependencies</div>
-      <h1 class="rv d1">The coding agent that gets out of your way.</h1>
-      <p class="rv d2 sub">Mochi is a minimal, fast, autonomous coding agent for the terminal. Goals decompose into task DAGs, role-diverse teams execute them, a persistent daemon keeps them running, and every run replays trace-for-trace — all on 18 MB of RAM.</p>
-      <div class="rv d3 cta">
-        <a class="btn primary" href="docs.html#install">Install</a>
-        <a class="btn ghost" href="benchmarks.html">Benchmarks</a>
-      </div>
-    </div>
-    <div class="rv d2 win">
-      <div class="bar"><i></i><i></i><i></i><span>mochi — session</span></div>
-<pre><span class="c">$</span> <span class="p">mochi</span> "add a rate limiter to the auth service"
-
-<span class="dim">  goal decomposed → 3 tasks · team: lead, coder, tester</span>
-  ├─ <span class="p">lead</span>     mapped auth surfaces, cut scope to 2 files
-  ├─ <span class="p">coder</span>    token-bucket limiter in src/middleware/
-  └─ <span class="p">tester</span>   6 integration cases, all green
-
-<span class="g">✔ verified</span> <span class="dim">· tests passing · git checkpoint created</span>
-<span class="dim">$</span> <span class="p">mochi</span> trace <span class="g">g_8f42</span>   <span class="c"># replay every step</span></pre>
-    </div>
-  </div>
-</section>
-
-<div class="strip">
-  <div class="wrap">
-    <div class="cell rv"><div class="num">18.2<em>MB</em></div><div class="lbl">single-session memory · 21.2× lighter than Claude Code</div></div>
-    <div class="cell rv d1"><div class="num">38.2<em>ms</em></div><div class="lbl">time to first input · fastest of nine agents tested</div></div>
-    <div class="cell rv d2"><div class="num">16</div><div class="lbl">specialized agent roles orchestrated per goal</div></div>
-    <div class="cell rv d3"><div class="num">0</div><div class="lbl">runtime JavaScript dependencies</div></div>
-  </div>
-</div>
-
-<section class="sec" id="features">
-  <div class="wrap">
-    <div class="sec-head rv">
-      <div class="kicker">What's inside</div>
-      <h2>A complete harness, not a wrapper.</h2>
-      <p>Mochi is built from scratch — no framework, no Electron, no runtime dependencies. The hot paths run in compiled Rust; everything else stays thin.</p>
-    </div>
-    <div class="grid3">
-      <div class="card rv"><span class="k">ENGINE</span><h3>Compiled Rust core</h3><p>Tokenization, budget math, compaction planning, and loop decisions execute natively via N-API. Every path has a parity-tested TypeScript fallback for cold installs.</p></div>
-      <div class="card rv d1"><span class="k">ORCHESTRATION</span><h3>Goals → DAGs → teams</h3><p>Persistent goals decompose into task DAGs and run through role-diverse swarms with independent verifiers and an outcome judge before anything lands.</p></div>
-      <div class="card rv d2"><span class="k">RUNTIME</span><h3>Persistent daemon</h3><p>One background process serves jobs, approvals, resume, and cron-scheduled agent runs over HTTP — drive it from scripts, editors, or CI.</p></div>
-      <div class="card rv"><span class="k">CONTEXT</span><h3>Adaptive context engine</h3><p>Token budgets with compaction planning, project memory that survives sessions, and retrieval across files, symbols, references, and git history.</p></div>
-      <div class="card rv d1"><span class="k">INTELLIGENCE</span><h3>AST-native tooling</h3><p>Tree-sitter codegraph over 15 languages: find callers, resolve type hierarchies, rewrite symbols without anchor drift, measure complexity.</p></div>
-      <div class="card rv d2"><span class="k">SAFETY</span><h3>Budgets &amp; checkpoints</h3><p>Token, cost, time, tool, model, and agent limits. Safe/ask/auto permissions. Git checkpoint and rollback under every destructive action.</p></div>
-      <div class="card rv"><span class="k">OBSERVABILITY</span><h3>Deep run traces</h3><p>Every run is durable and replayable end-to-end, with deep redaction. Full-text session search across all history in SQLite+FTS5.</p></div>
-      <div class="card rv d1"><span class="k">MODELS</span><h3>Provider-agnostic</h3><p>Any OpenAI-compatible endpoint, with capability routing (fast / coding / reasoning / review), budget-aware fallback, and multi-key rotation on 401/429/403.</p></div>
-      <div class="card rv d2"><span class="k">LEARNING</span><h3>Harness that learns</h3><p>Project memory carries cross-session engineering facts; successful recovery strategies are recorded locally and reused on the next failure.</p></div>
-    </div>
-  </div>
-</section>
-
-<section class="sec" id="roles">
-  <div class="wrap">
-    <div class="sec-head rv">
-      <div class="kicker">Teams</div>
-      <h2>Sixteen specialists. One goal.</h2>
-      <p><code>mochi team "…"</code> spawns a swarm where every agent has a real job, a scoped tool allowlist, and a model tier matched to the work. Full table in the <a href="docs.html#roles">docs</a>.</p>
-    </div>
-    <div class="grid3">
-      <div class="card rv"><span class="k">reasoning</span><h3>lead / architect / debugger</h3><p>Decompose goals, design contracts, root-cause failures. Read-heavy, decision-heavy, no blind edits.</p></div>
-      <div class="card rv d1"><span class="k">coding</span><h3>coder / devops / frontend / backend</h3><p>Full write access with surgical patch tools, headless test verification, and checkpointed edits.</p></div>
-      <div class="card rv d2"><span class="k">review / fast</span><h3>reviewer / researcher / tester</h3><p>Read-only auditors and fast-tier test engineers — the swarm self-checks before it reports done.</p></div>
-    </div>
-  </div>
-</section>
-
-<section class="sec" id="why">
-  <div class="wrap">
-    <div class="sec-head rv">
-      <div class="kicker">Benchmarks</div>
-      <h2>Numbers first place in every row.</h2>
-      <p>Measured across nine terminal agents — 10 launches per metric, PSS profiling, high-resolution PTY timing. <a href="benchmarks.html">Full methodology →</a></p>
-    </div>
-    <div class="bench rv">
-      <div class="row me" data-v="18.2"><span class="n">Mochi</span><span class="t"><span class="f"></span></span><span class="v"></span></div>
-      <div class="row" data-v="27.8"><span class="n">jcode</span><span class="t"><span class="f"></span></span><span class="v"></span></div>
-      <div class="row" data-v="140.0"><span class="n">Codex CLI</span><span class="t"><span class="f"></span></span><span class="v"></span></div>
-      <div class="row" data-v="214.9"><span class="n">Cursor Agent</span><span class="t"><span class="f"></span></span><span class="v"></span></div>
-      <div class="row" data-v="371.5"><span class="n">OpenCode</span><span class="t"><span class="f"></span></span><span class="v"></span></div>
-      <div class="row" data-v="386.6"><span class="n">Claude Code</span><span class="t"><span class="f"></span></span><span class="v"></span></div>
-    </div>
-    <p class="rv" style="font-size:13px;color:var(--faint);font-family:var(--mono)">PSS memory · 1 active session · lower is better</p>
-  </div>
-</section>
-
-<section class="sec" style="border-bottom:none">
-  <div class="wrap" style="text-align:center;padding:16px 0 8px">
-    <h2 class="rv" style="font-size:clamp(24px,3vw,32px)">Give your terminal a harness.</h2>
-    <p class="rv d1" style="color:var(--muted);margin:12px 0 26px">Node 22+ or Bun. Zero runtime dependencies. Under a minute to build.</p>
-    <div class="rv d2" style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
-      <a class="btn primary" href="docs.html#install">Get started</a>
-      <a class="btn ghost" href="https://github.com/xanstomper/mochi" target="_blank" rel="noopener">Read the source</a>
-    </div>
-  </div>
-</section>
-
+<div id="root"></div>
 <script src="assets/site.js"></script>
 </body>
 </html>

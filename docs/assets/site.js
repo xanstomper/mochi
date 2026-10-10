@@ -1,29 +1,35 @@
-// shared chrome: header, footer, scroll reveal, bench bar animation
+// shared chrome: header, footer, bg blobs, reveal, bench bars — React flavor via site.js keep-it-simple DOM (same as before, pastel-tuned)
 (function(){
-  var path = location.pathname.replace(/\/index\.html$/,'/').replace(/\.html$/,'/');
-  var pages = [
-    ['index.html','Home','/'],
-    ['docs.html','Docs','docs.html'],
-    ['benchmarks.html','Benchmarks','benchmarks.html'],
-    ['changelog.html','Changelog','changelog.html']
-  ];
+  var path=location.pathname.replace(/\/index\.html$/,'/').replace(/\.html$/,'/');
+  var inSub=path.indexOf('/mochi')>-1;
   var REPO='https://github.com/xanstomper/mochi';
+  var pages=[['/',(inSub?'/mochi/':'/'),'Home'],['docs.html','docs.html','Docs'],['benchmarks.html','benchmarks.html','Benchmarks'],['changelog.html','changelog.html','Changelog']];
 
-  // mark (two stacked planes = harness layers: Rust core under TS front)
-  var mark='<svg class="mark" viewBox="0 0 24 24" fill="none"><rect x="2.5" y="12.5" width="19" height="7" rx="2.5" fill="#A9C97E"/><rect x="2.5" y="4.5" width="19" height="7" rx="2.5" stroke="#A9C97E" stroke-opacity=".45" stroke-width="1.6"/></svg>';
+  // mascot mini (nav-size) — same artwork as React <Mochi>, dependency-free
+  var mark='<svg class="mascot-nav" viewBox="0 0 96 96" fill="none">'
+    +'<path d="M48 12 C70 12 84 28 84 50 C84 72 70 86 48 86 C26 86 12 72 12 50 C12 28 26 12 48 12 Z" fill="#FDF0E4" stroke="#8A6F5B" stroke-width="3.4"/>'
+    +'<ellipse cx="34" cy="44" rx="4" ry="5" fill="#5E4B3C"/><ellipse cx="62" cy="44" rx="4" ry="5" fill="#5E4B3C"/>'
+    +'<ellipse cx="24" cy="54" rx="6" ry="3.6" fill="#F2A7B8" opacity=".6"/><ellipse cx="72" cy="54" rx="6" ry="3.6" fill="#F2A7B8" opacity=".6"/>'
+    +'<path d="M42 55 Q48 62 54 55" stroke="#5E4B3C" stroke-width="3" stroke-linecap="round" fill="none"/>'
+    +'<path d="M48 12 C50 6 56 3 62 5 C61 11 55 14 48 12 Z" fill="#A9C97E" stroke="#8A6F5B" stroke-width="2.4"/>'
+    +'</svg>';
 
+  var root=inSub?'/mochi/':'/';
   var nav=pages.map(function(p){
-    var active=(path==='/'&&p[2]==='/')||(p[2]!=='/'&&path.indexOf('/'+p[2].replace('.html',''))>-1&&p[2]!=='/');
-    var homeActive=(path==='/'||path==='/mochi/'||path==='/mochi')&&p[2]==='/';
-    var cur=(p[2]==='/'?homeActive:active)?' aria-current="page"':'';
-    var href=p[2]==='/'?(path.indexOf('/mochi')>-1?'/mochi/':'/'):p[2];
-    return '<a href="'+href+'"'+cur+'>'+p[1]+'</a>';
+    var cur=(p[0]==='/'? (path==='/'||path==='/mochi/') : path.indexOf('/'+p[1].replace('.html',''))>-1&&p[1]!=='docs.html'?false:false)||false;
+    // simpler: compute active explicitly
+    var active;
+    if(p[1]==='/') active=(path==='/'||path==='/mochi/'||path==='/mochi');
+    else if(p[1]==='docs.html') active=/docs(\.html|\/)?$/.test(location.pathname);
+    else if(p[1]==='benchmarks.html') active=/benchmarks(\.html|\/)?$/.test(location.pathname);
+    else active=/changelog(\.html|\/)?$/.test(location.pathname);
+    return '<a href="'+p[1]+'"'+(active?' aria-current="page"':'')+'>'+p[2]+'</a>';
   }).join('');
 
   var header=document.createElement('header');
   header.className='site';
   header.innerHTML='<div class="wrap">'
-    +'<a class="wordmark" href="'+(path.indexOf('/mochi')>-1?'/mochi/':'/')+'">'+mark+'mochi</a>'
+    +'<a class="wordmark" href="'+root+'">'+mark+'mochi</a>'
     +'<nav>'+nav+'</nav>'
     +'<span class="spacer"></span>'
     +'<a class="gh" href="'+REPO+'" target="_blank" rel="noopener">'
@@ -31,10 +37,15 @@
     +'xanstomper/mochi</a></div>';
   document.body.insertBefore(header,document.body.firstChild);
 
+  // ambient blobs
+  var bg=document.createElement('div');
+  bg.className='bgfx';bg.innerHTML='<i></i><i></i><i></i>';
+  document.body.insertBefore(bg,document.body.firstChild);
+
   var footer=document.createElement('footer');
   footer.className='site';
   footer.innerHTML='<div class="wrap"><div class="cols">'
-    +'<div><a class="wordmark" href="'+(path.indexOf('/mochi')>-1?'/mochi/':'/')+'" style="font-size:15px">'+mark+'mochi</a>'
+    +'<div><a class="wordmark" href="'+root+'" style="font-size:15px">'+mark+'mochi</a>'
     +'<p>Minimal Orchestrative Coding Harness Intelligence — a minimal, fast, autonomous coding agent for the terminal, built on a zero-dependency Rust core.</p></div>'
     +'<div><h6>Product</h6><a href="index.html#features">Features</a><a href="index.html#roles">Agent roles</a><a href="benchmarks.html">Benchmarks</a><a href="docs.html#install">Install</a></div>'
     +'<div><h6>Documentation</h6><a href="docs.html#architecture">Architecture</a><a href="docs.html#tools">Tools</a><a href="docs.html#cli">CLI reference</a><a href="docs.html#daemon">Daemon</a></div>'
@@ -42,13 +53,13 @@
     +'</div><div class="legal"><span>© 2026 mochi — open source.</span><span>Rust core · TypeScript frontend · zero runtime dependencies</span></div></div>';
   document.body.appendChild(footer);
 
-  // scroll reveal
+  // reveal
   var io=new IntersectionObserver(function(es){
     es.forEach(function(e){if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}});
   },{threshold:.1,rootMargin:'0px 0px -30px 0px'});
   document.querySelectorAll('.rv').forEach(function(el){io.observe(el);});
 
-  // benchmark bars
+  // bench bars
   var bio=new IntersectionObserver(function(es){
     es.forEach(function(e){
       if(!e.isIntersecting)return;
