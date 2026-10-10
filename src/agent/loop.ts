@@ -2430,6 +2430,11 @@ Continue from 'Next:', do not redo completed progress.`,
       await this.hooks.runAfter('after_shell', { tool: toolName });
     }
     if (error) {
+      await this.hooks.runAfter('on_error', {
+        tool: toolName,
+        error: String(error),
+        durationMs: String(durationMs),
+      });
       this.errors.push(error);
       this.context.addKnownError(error);
       const classified = classifyErrorPattern(error);
