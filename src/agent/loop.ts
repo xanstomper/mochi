@@ -528,6 +528,18 @@ export class Agent {
         content: `PRIOR SESSION CONTEXT (resume): ${priorAttempts.length} earlier attempt(s) on this task already failed. Do NOT repeat them:\n${lines.join('\n')}\nStart from a different hypothesis.`,
       });
     }
+    // MCH-47: warm-start from the plan cache — if a similar task previously
+    // succeeded with an accepted plan, surface it as a starting hypothesis.
+    try {
+      const { findPriorPlan } = await import('../plan-cache.js');
+      const priorPlan = findPriorPlan(this.workspace.dir, task.title, task.description ?? '');
+      if (priorPlan) {
+        this.context.addMessage({
+          role: 'system',
+          content: `PRIOR SUCCESS CONTEXT: a similar task ("${priorPlan.taskTitle}") previously succeeded with this plan:\n${priorPlan.plan.slice(0, 1500)}\nUse it as a starting point if it still fits the current code; verify assumptions before reusing it.`,
+        });
+      }
+    } catch { /* plan-cache warm-start must never affect task start */ }
     if (this.planMode) {
       this.context.addMessage({
         role: 'system',
@@ -3660,6 +3672,15 @@ Continue from 'Next:', do not redo completed progress.`,
           }
         }
       } catch { /* auto-draft must never affect task completion */ }
+      // MCH-47: persist a successful plan so similar future tasks warm-start.
+      // planAcceptedText is only set when the model submitted via accept_plan.
+      try {
+        const planText = this.planAcceptedText?.trim();
+        if (planText && planText.length > 40) {
+          const { recordPlanSuccess } = await import('../plan-cache.js');
+          recordPlanSuccess(this.workspace.dir, task.title, task.description ?? '', planText);
+        }
+      } catch { /* plan-cache must never affect task completion */ }
     }
     const durationMs = Math.round(performance.now() - this.startTime);
     this.events.emit({ type: 'agent:completed', id: this.id, taskId: task.id });
