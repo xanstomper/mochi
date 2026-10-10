@@ -400,7 +400,7 @@ body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:9999;o
 .lede{font-size:16px;line-height:1.75;color:var(--mocha);max-width:560px;margin:0 0 34px}
 
 /* hero */
-.hero2{padding:80px 0 0;position:relative;overflow:hidden;min-height:100vh;min-height:100svh;display:flex;flex-direction:column;justify-content:center;box-sizing:border-box}
+.hero2{padding:80px 0 0;position:relative;overflow:hidden;min-height:calc(100vh - 65px);min-height:calc(100svh - 65px);display:flex;flex-direction:column;justify-content:center;box-sizing:border-box}
 .hero2 .hero-inner{flex:1;display:flex;flex-direction:column;justify-content:center}
 .hero2 .hero-ticker{position:absolute;bottom:0;left:0;right:0;border-top:1px solid rgba(78,55,44,.2);background:rgba(251,246,238,.88);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);padding:16px 0;z-index:5;box-shadow:0 -4px 24px rgba(78,55,44,.08)}
 .hero2::before{content:"";position:absolute;top:-320px;left:-200px;width:900px;height:900px;border-radius:50%;
