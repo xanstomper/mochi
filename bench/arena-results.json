@@ -1,5 +1,5 @@
 {
-  "when": "2026-10-10T23:07:38.704Z",
+  "when": "2026-10-10T23:17:26.111Z",
   "rounds": 2,
   "results": [
     {
@@ -8,7 +8,7 @@
       "name": "feature-add-test",
       "ok": true,
       "detail": "printed 5",
-      "ms": 41442,
+      "ms": 46716,
       "exit": 0,
       "timedOut": false
     },
@@ -18,297 +18,17 @@
       "name": "feature-add-test",
       "ok": false,
       "detail": "add.js missing",
-      "ms": 9452,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "claude",
-      "task": "f1",
-      "name": "feature-add-test",
-      "ok": false,
-      "detail": "add.js missing",
-      "ms": 3479,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "crush",
-      "task": "f1",
-      "name": "feature-add-test",
-      "ok": false,
-      "detail": "add.js missing",
-      "ms": 1428,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "opencode",
-      "task": "f1",
-      "name": "feature-add-test",
-      "ok": false,
-      "detail": "add.js missing",
-      "ms": 11298,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "gemini",
-      "task": "f1",
-      "name": "feature-add-test",
-      "ok": false,
-      "detail": "add.js missing",
-      "ms": 7810,
-      "exit": 55,
-      "timedOut": false
-    },
-    {
-      "harness": "jcode",
-      "task": "f1",
-      "name": "feature-add-test",
-      "ok": true,
-      "detail": "printed 5",
-      "ms": 19864,
-      "exit": 0,
-      "timedOut": false
-    },
-    {
-      "harness": "mochi",
-      "task": "b1",
-      "name": "bugfix-off-by-one",
-      "ok": true,
-      "detail": "prints 10",
-      "ms": 28605,
-      "exit": 0,
-      "timedOut": false
-    },
-    {
-      "harness": "codex",
-      "task": "b1",
-      "name": "bugfix-off-by-one",
-      "ok": false,
-      "detail": "prints \"NaN\"",
       "ms": 4080,
       "exit": 1,
       "timedOut": false
     },
     {
       "harness": "claude",
-      "task": "b1",
-      "name": "bugfix-off-by-one",
-      "ok": false,
-      "detail": "prints \"NaN\"",
-      "ms": 1693,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "crush",
-      "task": "b1",
-      "name": "bugfix-off-by-one",
-      "ok": false,
-      "detail": "prints \"NaN\"",
-      "ms": 859,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "opencode",
-      "task": "b1",
-      "name": "bugfix-off-by-one",
-      "ok": false,
-      "detail": "prints \"NaN\"",
-      "ms": 4377,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "gemini",
-      "task": "b1",
-      "name": "bugfix-off-by-one",
-      "ok": false,
-      "detail": "prints \"NaN\"",
-      "ms": 5619,
-      "exit": 55,
-      "timedOut": false
-    },
-    {
-      "harness": "jcode",
-      "task": "b1",
-      "name": "bugfix-off-by-one",
-      "ok": true,
-      "detail": "prints 10",
-      "ms": 9306,
-      "exit": 0,
-      "timedOut": false
-    },
-    {
-      "harness": "mochi",
-      "task": "r1",
-      "name": "refactor-rename",
-      "ok": true,
-      "detail": "renamed + prints 11",
-      "ms": 31554,
-      "exit": 0,
-      "timedOut": false
-    },
-    {
-      "harness": "codex",
-      "task": "r1",
-      "name": "refactor-rename",
-      "ok": false,
-      "detail": "old name still present",
-      "ms": 3359,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "claude",
-      "task": "r1",
-      "name": "refactor-rename",
-      "ok": false,
-      "detail": "old name still present",
-      "ms": 1582,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "crush",
-      "task": "r1",
-      "name": "refactor-rename",
-      "ok": false,
-      "detail": "old name still present",
-      "ms": 932,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "opencode",
-      "task": "r1",
-      "name": "refactor-rename",
-      "ok": false,
-      "detail": "old name still present",
-      "ms": 4168,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "gemini",
-      "task": "r1",
-      "name": "refactor-rename",
-      "ok": false,
-      "detail": "old name still present",
-      "ms": 4463,
-      "exit": 55,
-      "timedOut": false
-    },
-    {
-      "harness": "jcode",
-      "task": "r1",
-      "name": "refactor-rename",
-      "ok": true,
-      "detail": "renamed + prints 11",
-      "ms": 11423,
-      "exit": 0,
-      "timedOut": false
-    },
-    {
-      "harness": "mochi",
-      "task": "q1",
-      "name": "codebase-question",
-      "ok": true,
-      "detail": "both facts correct",
-      "ms": 8918,
-      "exit": 0,
-      "timedOut": false
-    },
-    {
-      "harness": "codex",
-      "task": "q1",
-      "name": "codebase-question",
-      "ok": false,
-      "detail": "answer.txt missing",
-      "ms": 3581,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "claude",
-      "task": "q1",
-      "name": "codebase-question",
-      "ok": false,
-      "detail": "answer.txt missing",
-      "ms": 1874,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "crush",
-      "task": "q1",
-      "name": "codebase-question",
-      "ok": false,
-      "detail": "answer.txt missing",
-      "ms": 880,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "opencode",
-      "task": "q1",
-      "name": "codebase-question",
-      "ok": false,
-      "detail": "answer.txt missing",
-      "ms": 4183,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "gemini",
-      "task": "q1",
-      "name": "codebase-question",
-      "ok": false,
-      "detail": "answer.txt missing",
-      "ms": 3877,
-      "exit": 55,
-      "timedOut": false
-    },
-    {
-      "harness": "jcode",
-      "task": "q1",
-      "name": "codebase-question",
-      "ok": true,
-      "detail": "both facts correct",
-      "ms": 11349,
-      "exit": 0,
-      "timedOut": false
-    },
-    {
-      "harness": "mochi",
-      "task": "f1",
-      "name": "feature-add-test",
-      "ok": true,
-      "detail": "printed 5",
-      "ms": 31017,
-      "exit": 0,
-      "timedOut": false
-    },
-    {
-      "harness": "codex",
       "task": "f1",
       "name": "feature-add-test",
       "ok": false,
       "detail": "add.js missing",
-      "ms": 5268,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "claude",
-      "task": "f1",
-      "name": "feature-add-test",
-      "ok": false,
-      "detail": "add.js missing",
-      "ms": 1764,
+      "ms": 1833,
       "exit": 1,
       "timedOut": false
     },
@@ -318,157 +38,157 @@
       "name": "feature-add-test",
       "ok": false,
       "detail": "add.js missing",
-      "ms": 840,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "opencode",
-      "task": "f1",
-      "name": "feature-add-test",
-      "ok": false,
-      "detail": "add.js missing",
-      "ms": 4019,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "gemini",
-      "task": "f1",
-      "name": "feature-add-test",
-      "ok": false,
-      "detail": "add.js missing",
-      "ms": 3880,
-      "exit": 55,
-      "timedOut": false
-    },
-    {
-      "harness": "jcode",
-      "task": "f1",
-      "name": "feature-add-test",
-      "ok": true,
-      "detail": "printed 5",
-      "ms": 9006,
-      "exit": 0,
-      "timedOut": false
-    },
-    {
-      "harness": "mochi",
-      "task": "b1",
-      "name": "bugfix-off-by-one",
-      "ok": true,
-      "detail": "prints 10",
-      "ms": 37095,
-      "exit": 0,
-      "timedOut": false
-    },
-    {
-      "harness": "codex",
-      "task": "b1",
-      "name": "bugfix-off-by-one",
-      "ok": false,
-      "detail": "prints \"NaN\"",
-      "ms": 8710,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "claude",
-      "task": "b1",
-      "name": "bugfix-off-by-one",
-      "ok": false,
-      "detail": "prints \"NaN\"",
-      "ms": 2111,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "crush",
-      "task": "b1",
-      "name": "bugfix-off-by-one",
-      "ok": false,
-      "detail": "prints \"NaN\"",
-      "ms": 7957,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "opencode",
-      "task": "b1",
-      "name": "bugfix-off-by-one",
-      "ok": false,
-      "detail": "prints \"NaN\"",
-      "ms": 17830,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "gemini",
-      "task": "b1",
-      "name": "bugfix-off-by-one",
-      "ok": false,
-      "detail": "prints \"NaN\"",
-      "ms": 8485,
-      "exit": 55,
-      "timedOut": false
-    },
-    {
-      "harness": "jcode",
-      "task": "b1",
-      "name": "bugfix-off-by-one",
-      "ok": true,
-      "detail": "prints 10",
-      "ms": 18842,
-      "exit": 0,
-      "timedOut": false
-    },
-    {
-      "harness": "mochi",
-      "task": "r1",
-      "name": "refactor-rename",
-      "ok": true,
-      "detail": "renamed + prints 11",
-      "ms": 44154,
-      "exit": 0,
-      "timedOut": false
-    },
-    {
-      "harness": "codex",
-      "task": "r1",
-      "name": "refactor-rename",
-      "ok": false,
-      "detail": "old name still present",
-      "ms": 4341,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "claude",
-      "task": "r1",
-      "name": "refactor-rename",
-      "ok": false,
-      "detail": "old name still present",
-      "ms": 1977,
-      "exit": 1,
-      "timedOut": false
-    },
-    {
-      "harness": "crush",
-      "task": "r1",
-      "name": "refactor-rename",
-      "ok": false,
-      "detail": "old name still present",
       "ms": 1058,
       "exit": 1,
       "timedOut": false
     },
     {
       "harness": "opencode",
+      "task": "f1",
+      "name": "feature-add-test",
+      "ok": false,
+      "detail": "add.js missing",
+      "ms": 7209,
+      "exit": 1,
+      "timedOut": false
+    },
+    {
+      "harness": "gemini",
+      "task": "f1",
+      "name": "feature-add-test",
+      "ok": false,
+      "detail": "add.js missing",
+      "ms": 7369,
+      "exit": 55,
+      "timedOut": false
+    },
+    {
+      "harness": "jcode",
+      "task": "f1",
+      "name": "feature-add-test",
+      "ok": true,
+      "detail": "printed 5",
+      "ms": 9423,
+      "exit": 0,
+      "timedOut": false
+    },
+    {
+      "harness": "mochi",
+      "task": "b1",
+      "name": "bugfix-off-by-one",
+      "ok": true,
+      "detail": "prints 10",
+      "ms": 20009,
+      "exit": 0,
+      "timedOut": false
+    },
+    {
+      "harness": "codex",
+      "task": "b1",
+      "name": "bugfix-off-by-one",
+      "ok": false,
+      "detail": "prints \"NaN\"",
+      "ms": 6292,
+      "exit": 1,
+      "timedOut": false
+    },
+    {
+      "harness": "claude",
+      "task": "b1",
+      "name": "bugfix-off-by-one",
+      "ok": false,
+      "detail": "prints \"NaN\"",
+      "ms": 2482,
+      "exit": 1,
+      "timedOut": false
+    },
+    {
+      "harness": "crush",
+      "task": "b1",
+      "name": "bugfix-off-by-one",
+      "ok": false,
+      "detail": "prints \"NaN\"",
+      "ms": 1042,
+      "exit": 1,
+      "timedOut": false
+    },
+    {
+      "harness": "opencode",
+      "task": "b1",
+      "name": "bugfix-off-by-one",
+      "ok": false,
+      "detail": "prints \"NaN\"",
+      "ms": 6753,
+      "exit": 1,
+      "timedOut": false
+    },
+    {
+      "harness": "gemini",
+      "task": "b1",
+      "name": "bugfix-off-by-one",
+      "ok": false,
+      "detail": "prints \"NaN\"",
+      "ms": 5641,
+      "exit": 55,
+      "timedOut": false
+    },
+    {
+      "harness": "jcode",
+      "task": "b1",
+      "name": "bugfix-off-by-one",
+      "ok": true,
+      "detail": "prints 10",
+      "ms": 10144,
+      "exit": 0,
+      "timedOut": false
+    },
+    {
+      "harness": "mochi",
+      "task": "r1",
+      "name": "refactor-rename",
+      "ok": true,
+      "detail": "renamed + prints 11",
+      "ms": 27747,
+      "exit": 0,
+      "timedOut": false
+    },
+    {
+      "harness": "codex",
       "task": "r1",
       "name": "refactor-rename",
       "ok": false,
       "detail": "old name still present",
-      "ms": 5272,
+      "ms": 4438,
+      "exit": 1,
+      "timedOut": false
+    },
+    {
+      "harness": "claude",
+      "task": "r1",
+      "name": "refactor-rename",
+      "ok": false,
+      "detail": "old name still present",
+      "ms": 2133,
+      "exit": 1,
+      "timedOut": false
+    },
+    {
+      "harness": "crush",
+      "task": "r1",
+      "name": "refactor-rename",
+      "ok": false,
+      "detail": "old name still present",
+      "ms": 1095,
+      "exit": 1,
+      "timedOut": false
+    },
+    {
+      "harness": "opencode",
+      "task": "r1",
+      "name": "refactor-rename",
+      "ok": false,
+      "detail": "old name still present",
+      "ms": 5139,
       "exit": 1,
       "timedOut": false
     },
@@ -478,7 +198,7 @@
       "name": "refactor-rename",
       "ok": false,
       "detail": "old name still present",
-      "ms": 4754,
+      "ms": 5580,
       "exit": 55,
       "timedOut": false
     },
@@ -488,7 +208,7 @@
       "name": "refactor-rename",
       "ok": true,
       "detail": "renamed + prints 11",
-      "ms": 11637,
+      "ms": 11464,
       "exit": 0,
       "timedOut": false
     },
@@ -498,7 +218,7 @@
       "name": "codebase-question",
       "ok": true,
       "detail": "both facts correct",
-      "ms": 11901,
+      "ms": 9033,
       "exit": 0,
       "timedOut": false
     },
@@ -508,7 +228,7 @@
       "name": "codebase-question",
       "ok": false,
       "detail": "answer.txt missing",
-      "ms": 4951,
+      "ms": 6061,
       "exit": 1,
       "timedOut": false
     },
@@ -518,7 +238,7 @@
       "name": "codebase-question",
       "ok": false,
       "detail": "answer.txt missing",
-      "ms": 1901,
+      "ms": 2475,
       "exit": 1,
       "timedOut": false
     },
@@ -528,7 +248,7 @@
       "name": "codebase-question",
       "ok": false,
       "detail": "answer.txt missing",
-      "ms": 1656,
+      "ms": 1010,
       "exit": 1,
       "timedOut": false
     },
@@ -538,7 +258,7 @@
       "name": "codebase-question",
       "ok": false,
       "detail": "answer.txt missing",
-      "ms": 6738,
+      "ms": 7662,
       "exit": 1,
       "timedOut": false
     },
@@ -548,7 +268,7 @@
       "name": "codebase-question",
       "ok": false,
       "detail": "answer.txt missing",
-      "ms": 5842,
+      "ms": 7055,
       "exit": 55,
       "timedOut": false
     },
@@ -558,7 +278,287 @@
       "name": "codebase-question",
       "ok": true,
       "detail": "both facts correct",
-      "ms": 10992,
+      "ms": 9498,
+      "exit": 0,
+      "timedOut": false
+    },
+    {
+      "harness": "mochi",
+      "task": "f1",
+      "name": "feature-add-test",
+      "ok": true,
+      "detail": "printed 5",
+      "ms": 24744,
+      "exit": 0,
+      "timedOut": false
+    },
+    {
+      "harness": "codex",
+      "task": "f1",
+      "name": "feature-add-test",
+      "ok": false,
+      "detail": "add.js missing",
+      "ms": 5843,
+      "exit": 1,
+      "timedOut": false
+    },
+    {
+      "harness": "claude",
+      "task": "f1",
+      "name": "feature-add-test",
+      "ok": false,
+      "detail": "add.js missing",
+      "ms": 2384,
+      "exit": 1,
+      "timedOut": false
+    },
+    {
+      "harness": "crush",
+      "task": "f1",
+      "name": "feature-add-test",
+      "ok": false,
+      "detail": "add.js missing",
+      "ms": 1360,
+      "exit": 1,
+      "timedOut": false
+    },
+    {
+      "harness": "opencode",
+      "task": "f1",
+      "name": "feature-add-test",
+      "ok": false,
+      "detail": "add.js missing",
+      "ms": 8322,
+      "exit": 1,
+      "timedOut": false
+    },
+    {
+      "harness": "gemini",
+      "task": "f1",
+      "name": "feature-add-test",
+      "ok": false,
+      "detail": "add.js missing",
+      "ms": 6316,
+      "exit": 55,
+      "timedOut": false
+    },
+    {
+      "harness": "jcode",
+      "task": "f1",
+      "name": "feature-add-test",
+      "ok": true,
+      "detail": "printed 5",
+      "ms": 13735,
+      "exit": 0,
+      "timedOut": false
+    },
+    {
+      "harness": "mochi",
+      "task": "b1",
+      "name": "bugfix-off-by-one",
+      "ok": true,
+      "detail": "prints 10",
+      "ms": 32804,
+      "exit": 0,
+      "timedOut": false
+    },
+    {
+      "harness": "codex",
+      "task": "b1",
+      "name": "bugfix-off-by-one",
+      "ok": false,
+      "detail": "prints \"NaN\"",
+      "ms": 12447,
+      "exit": 1,
+      "timedOut": false
+    },
+    {
+      "harness": "claude",
+      "task": "b1",
+      "name": "bugfix-off-by-one",
+      "ok": false,
+      "detail": "prints \"NaN\"",
+      "ms": 1558,
+      "exit": 1,
+      "timedOut": false
+    },
+    {
+      "harness": "crush",
+      "task": "b1",
+      "name": "bugfix-off-by-one",
+      "ok": false,
+      "detail": "prints \"NaN\"",
+      "ms": 3814,
+      "exit": 1,
+      "timedOut": false
+    },
+    {
+      "harness": "opencode",
+      "task": "b1",
+      "name": "bugfix-off-by-one",
+      "ok": false,
+      "detail": "prints \"NaN\"",
+      "ms": 7207,
+      "exit": 1,
+      "timedOut": false
+    },
+    {
+      "harness": "gemini",
+      "task": "b1",
+      "name": "bugfix-off-by-one",
+      "ok": false,
+      "detail": "prints \"NaN\"",
+      "ms": 8035,
+      "exit": 55,
+      "timedOut": false
+    },
+    {
+      "harness": "jcode",
+      "task": "b1",
+      "name": "bugfix-off-by-one",
+      "ok": true,
+      "detail": "prints 10",
+      "ms": 11122,
+      "exit": 0,
+      "timedOut": false
+    },
+    {
+      "harness": "mochi",
+      "task": "r1",
+      "name": "refactor-rename",
+      "ok": true,
+      "detail": "renamed + prints 11",
+      "ms": 30143,
+      "exit": 1,
+      "timedOut": false
+    },
+    {
+      "harness": "codex",
+      "task": "r1",
+      "name": "refactor-rename",
+      "ok": false,
+      "detail": "old name still present",
+      "ms": 4297,
+      "exit": 1,
+      "timedOut": false
+    },
+    {
+      "harness": "claude",
+      "task": "r1",
+      "name": "refactor-rename",
+      "ok": false,
+      "detail": "old name still present",
+      "ms": 2238,
+      "exit": 1,
+      "timedOut": false
+    },
+    {
+      "harness": "crush",
+      "task": "r1",
+      "name": "refactor-rename",
+      "ok": false,
+      "detail": "old name still present",
+      "ms": 1119,
+      "exit": 1,
+      "timedOut": false
+    },
+    {
+      "harness": "opencode",
+      "task": "r1",
+      "name": "refactor-rename",
+      "ok": false,
+      "detail": "old name still present",
+      "ms": 5088,
+      "exit": 1,
+      "timedOut": false
+    },
+    {
+      "harness": "gemini",
+      "task": "r1",
+      "name": "refactor-rename",
+      "ok": false,
+      "detail": "old name still present",
+      "ms": 5056,
+      "exit": 55,
+      "timedOut": false
+    },
+    {
+      "harness": "jcode",
+      "task": "r1",
+      "name": "refactor-rename",
+      "ok": true,
+      "detail": "renamed + prints 11",
+      "ms": 10436,
+      "exit": 0,
+      "timedOut": false
+    },
+    {
+      "harness": "mochi",
+      "task": "q1",
+      "name": "codebase-question",
+      "ok": true,
+      "detail": "both facts correct",
+      "ms": 9290,
+      "exit": 0,
+      "timedOut": false
+    },
+    {
+      "harness": "codex",
+      "task": "q1",
+      "name": "codebase-question",
+      "ok": false,
+      "detail": "answer.txt missing",
+      "ms": 7071,
+      "exit": 1,
+      "timedOut": false
+    },
+    {
+      "harness": "claude",
+      "task": "q1",
+      "name": "codebase-question",
+      "ok": false,
+      "detail": "answer.txt missing",
+      "ms": 1955,
+      "exit": 1,
+      "timedOut": false
+    },
+    {
+      "harness": "crush",
+      "task": "q1",
+      "name": "codebase-question",
+      "ok": false,
+      "detail": "answer.txt missing",
+      "ms": 952,
+      "exit": 1,
+      "timedOut": false
+    },
+    {
+      "harness": "opencode",
+      "task": "q1",
+      "name": "codebase-question",
+      "ok": false,
+      "detail": "answer.txt missing",
+      "ms": 6262,
+      "exit": 1,
+      "timedOut": false
+    },
+    {
+      "harness": "gemini",
+      "task": "q1",
+      "name": "codebase-question",
+      "ok": false,
+      "detail": "answer.txt missing",
+      "ms": 4990,
+      "exit": 55,
+      "timedOut": false
+    },
+    {
+      "harness": "jcode",
+      "task": "q1",
+      "name": "codebase-question",
+      "ok": true,
+      "detail": "both facts correct",
+      "ms": 9133,
       "exit": 0,
       "timedOut": false
     }
@@ -568,98 +568,98 @@
       "pass": 8,
       "total": 8,
       "ms": [
-        8918,
-        11901,
-        28605,
-        31017,
-        31554,
-        37095,
-        41442,
-        44154
+        9033,
+        9290,
+        20009,
+        24744,
+        27747,
+        30143,
+        32804,
+        46716
       ]
     },
     "codex": {
       "pass": 0,
       "total": 8,
       "ms": [
-        3359,
-        3581,
         4080,
-        4341,
-        4951,
-        5268,
-        8710,
-        9452
+        4297,
+        4438,
+        5843,
+        6061,
+        6292,
+        7071,
+        12447
       ]
     },
     "claude": {
       "pass": 0,
       "total": 8,
       "ms": [
-        1582,
-        1693,
-        1764,
-        1874,
-        1901,
-        1977,
-        2111,
-        3479
+        1558,
+        1833,
+        1955,
+        2133,
+        2238,
+        2384,
+        2475,
+        2482
       ]
     },
     "crush": {
       "pass": 0,
       "total": 8,
       "ms": [
-        840,
-        859,
-        880,
-        932,
+        952,
+        1010,
+        1042,
         1058,
-        1428,
-        1656,
-        7957
+        1095,
+        1119,
+        1360,
+        3814
       ]
     },
     "opencode": {
       "pass": 0,
       "total": 8,
       "ms": [
-        4019,
-        4168,
-        4183,
-        4377,
-        5272,
-        6738,
-        11298,
-        17830
+        5088,
+        5139,
+        6262,
+        6753,
+        7207,
+        7209,
+        7662,
+        8322
       ]
     },
     "gemini": {
       "pass": 0,
       "total": 8,
       "ms": [
-        3877,
-        3880,
-        4463,
-        4754,
-        5619,
-        5842,
-        7810,
-        8485
+        4990,
+        5056,
+        5580,
+        5641,
+        6316,
+        7055,
+        7369,
+        8035
       ]
     },
     "jcode": {
       "pass": 8,
       "total": 8,
       "ms": [
-        9006,
-        9306,
-        10992,
-        11349,
-        11423,
-        11637,
-        18842,
-        19864
+        9133,
+        9423,
+        9498,
+        10144,
+        10436,
+        11122,
+        11464,
+        13735
       ]
     }
   }
