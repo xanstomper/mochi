@@ -349,8 +349,12 @@ export class Agent {
   private chatToolRounds = 0; // tool-call rounds issued for a chat task
   private consecutiveToolErrors = new Map<string, { error: string; count: number }>();
   /** MCH-60: error-signature -> last tool that produced it + total count, so a
-   *  shared root cause alternating across tools still trips an advisory. */
-  private crossToolFailures = new Map<string, { toolName: string; count: number }>();
+   *  shared root cause alternating across tool names still trips the advisory. */
+  private crossToolErrorSig = new Map<string, { tool: string; count: number }>();
+  /** MCH-61: prefetch effectiveness ledger — this run's prediction list and
+   *  the cache keys warmed at start (warm ≠ read; excluded from hit counts). */
+  private prefetchLedger: import('../prefetch.js').PrefetchEntry[] = [];
+  private prefetchWarmed = new Set<string>();
   private readCache: ReadCache;
   private planMode: boolean;
   private planVetoes = 0;
@@ -559,19 +563,25 @@ export class Agent {
     // MCH-50: prefetch — fused structural+temporal+runtime prediction of the
     // files this task will likely read next.
     try {
-      const { prefetchText } = await import('../prefetch.js');
+      const pf = await import('../prefetch.js');
       // MCH-54: seed the temporal signal with this run's actual read footprint
       // (main loop) — subagents start with an empty footprint, which is fine.
       const touched = Array.from(this.readCache.keys()).slice(-10);
-      const pfText = prefetchText(this.workspace.dir, touched);
+      // MCH-61: compute entries once so the effectiveness ledger can compare
+      // predictions against what the run actually read.
+      this.prefetchLedger = pf.prefetchFiles(this.workspace.dir, touched, 8);
+      const pfText = this.prefetchLedger.length > 0
+        ? `PREFETCHED CONTEXT (likely-next files, fused signals: structural PageRank + co-change history + cross-session read telemetry — read these proactively if your task touches them):\n${this.prefetchLedger.map((e) => `- ${e.file}  [${e.signals.join('+')}]`).join('\n')}`
+        : '';
       if (pfText) {
         this.context.addMessage({ role: 'system', content: pfText });
       }
       // MCH-51: physically warm the read cache so the first read of each
       // predicted file is an in-memory hit (mtime/size-validated, so a
       // mid-task edit still re-reads from disk).
-      const { warmReadCache } = await import('../prefetch.js');
-      warmReadCache(this.workspace.dir, this.readCache);
+      pf.warmReadCache(this.workspace.dir, this.readCache);
+      // MCH-61: warmed entries are NOT reads — exclude them from the ledger.
+      this.prefetchWarmed = new Set(Array.from(this.readCache.keys()));
     } catch { /* prefetch must never affect task start */ }
     // MCH-52: surface mined tool-route patterns from past successful runs.
     try {
@@ -2768,16 +2778,16 @@ Continue from 'Next:', do not redo completed progress.`,
       // MCH-60: cross-tool failure loop — track the error signature regardless
       // of which tool produced it. A model alternating shell->patch->shell
       // with the same root cause never trips the per-tool counter above.
-      const crossPrev = this.crossToolFailures.get(errSig);
-      if (crossPrev !== undefined && crossPrev.toolName !== toolName) {
+      const crossPrev = this.crossToolErrorSig.get(errSig);
+      if (crossPrev !== undefined && crossPrev.tool !== toolName) {
         crossPrev.count++;
         if (crossPrev.count === 2) {
-          recoveryHint += `\n[HARNESS ADVISORY: This same failure signature has now appeared across multiple different tools (last: '${crossPrev.toolName}', now: '${toolName}'). The root cause is shared — stop retrying either tool and re-diagnose from the first error message.]`;
+          recoveryHint += `\n[HARNESS ADVISORY: This same failure signature has now appeared across multiple different tools (last: '${crossPrev.tool}', now: '${toolName}'). The root cause is shared — stop retrying either tool and re-diagnose from the first error message.]`;
         }
       } else if (crossPrev) {
         crossPrev.count++;
       }
-      this.crossToolFailures.set(errSig, crossPrev ?? { toolName, count: 1 });
+      this.crossToolErrorSig.set(errSig, crossPrev ?? { tool: toolName, count: 1 });
       const prevError = this.consecutiveToolErrors.get(toolName);
       if (prevError && prevError.error === errSig) {
         prevError.count++;
@@ -3758,6 +3768,16 @@ Continue from 'Next:', do not redo completed progress.`,
       try {
         if (this.readCache.size > 0) saveReadCache(this.workspace.dir, this.readCache);
       } catch { /* read-cache persistence must never affect task completion */ }
+      // MCH-61: close the prefetch effectiveness loop — compare this run's
+      // predictions against what was actually read (warmed entries excluded).
+      try {
+        if (this.prefetchLedger.length > 0) {
+          const { recordPrefetchOutcome } = await import('../prefetch.js');
+          const warmedAbs = new Set(Array.from(this.prefetchWarmed));
+          const actualReads = Array.from(this.readCache.keys()).filter((k) => !warmedAbs.has(k));
+          recordPrefetchOutcome(this.workspace.dir, this.prefetchLedger, actualReads);
+        }
+      } catch { /* prefetch ledger must never affect task completion */ }
       // MCH-52: persist this run's tool sequence for route-pattern mining.
       try {
         const { loadToolSeqs, saveToolSeq } = await import('../tool-sequence.js');

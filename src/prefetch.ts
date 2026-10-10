@@ -12,8 +12,8 @@
 import { repoMap } from './repo-map.js';
 import { predictNextFiles } from './speculative.js';
 import { loadReadCache } from './read-cache-store.js';
-import { statSync, existsSync, readFileSync } from 'node:fs';
-import { resolve, relative } from 'node:path';
+import { statSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { resolve, relative, join } from 'node:path';
 
 export interface PrefetchEntry {
   file: string;      // relative path
@@ -30,6 +30,81 @@ function normRel(workspaceDir: string, p: string): string | null {
     return rel.split('\\').join('/');
   } catch {
     return null;
+  }
+}
+
+// MCH-61: prefetch effectiveness ledger. MCH-50's fusion weights are static —
+// but signal quality differs per repo (a monorepo's co-change graph may be
+// noise while PageRank is gold). Track, per signal, how often a prefetched
+// file was ACTUALLY read during the run; persist to .mochi/prefetch-stats.json
+// and use hit-rates to reweight the fusion on the next task. Best-effort.
+
+const STATS_FILE = 'prefetch-stats.json';
+const DEFAULT_WEIGHTS: Record<string, number> = { structure: 1, cochange: 1, cache: 1 };
+
+interface PrefetchStats {
+  // signal -> { predicted, hit } cumulative counts
+  [signal: string]: { predicted: number; hit: number };
+}
+
+function statsPath(workspaceDir: string): string {
+  return join(workspaceDir, '.mochi', STATS_FILE);
+}
+
+function loadStats(workspaceDir: string): PrefetchStats {
+  try {
+    const raw = readFileSync(statsPath(workspaceDir), 'utf8');
+    const parsed = JSON.parse(raw) as PrefetchStats;
+    return typeof parsed === 'object' && parsed ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveStats(workspaceDir: string, stats: PrefetchStats): void {
+  try {
+    writeFileSync(statsPath(workspaceDir), JSON.stringify(stats));
+  } catch { /* stats must never break the run */ }
+}
+
+/** Record which prefetched files the run actually read. Call once at finish.
+ *  files = the prediction list entries; actuallyRead = absolute paths read. */
+export function recordPrefetchOutcome(
+  workspaceDir: string,
+  entries: PrefetchEntry[],
+  actuallyReadAbs: Iterable<string>,
+): void {
+  try {
+    const readSet = new Set(Array.from(actuallyReadAbs).map((p) => resolve(p)));
+    const stats = loadStats(workspaceDir);
+    for (const e of entries) {
+      const hit = readSet.has(resolve(workspaceDir, e.file)) ? 1 : 0;
+      for (const sig of e.signals) {
+        const s = stats[sig] ?? { predicted: 0, hit: 0 };
+        s.predicted += 1;
+        s.hit += hit;
+        stats[sig] = s;
+      }
+    }
+    saveStats(workspaceDir, stats);
+  } catch { /* never throw */ }
+}
+
+/** Signal weights from observed hit-rates (Laplace-smoothed, clamped 0.4..1.6,
+ *  shrunk toward 1 when data is thin: weight = 1 + (rate - 0.3) * min(n/20, 1) * 2). */
+export function prefetchSignalWeights(workspaceDir: string): Record<string, number> {
+  try {
+    const stats = loadStats(workspaceDir);
+    const out: Record<string, number> = { ...DEFAULT_WEIGHTS };
+    for (const [sig, s] of Object.entries(stats)) {
+      if (s.predicted < 5) continue; // too thin to trust
+      const rate = s.hit / s.predicted;
+      const conf = Math.min(s.predicted / 20, 1);
+      out[sig] = Math.max(0.4, Math.min(1.6, 1 + (rate - 0.3) * 2 * conf));
+    }
+    return out;
+  } catch {
+    return { ...DEFAULT_WEIGHTS };
   }
 }
 
@@ -55,15 +130,17 @@ export function prefetchFiles(
     scores.set(rel, cur);
   };
 
+  // MCH-61: per-signal weights from the observed hit-rate ledger (defaults 1).
+  const weights = prefetchSignalWeights(workspaceDir);
   // 1. Structural: repo-map ranks (already 0..1).
   try {
-    for (const e of repoMap(workspaceDir, 20)) bump(e.file, e.rank, 'structure');
+    for (const e of repoMap(workspaceDir, 20)) bump(e.file, e.rank * (weights.structure ?? 1), 'structure');
   } catch { /* no codegraph */ }
 
   // 2. Temporal: co-change predictions for recently touched files.
   try {
     const co = predictNextFiles(workspaceDir, recentlyTouched, 10);
-    co.forEach((f, i) => bump(f, Math.max(0.3, 0.75 - i * 0.05), 'cochange'));
+    co.forEach((f, i) => bump(f, Math.max(0.3, 0.75 - i * 0.05) * (weights.cochange ?? 1), 'cochange'));
   } catch { /* no git */ }
 
   // 3. Runtime: files repeatedly read across sessions (cross-session cache).
@@ -71,7 +148,7 @@ export function prefetchFiles(
     const cache = loadReadCache(workspaceDir);
     // More hits (entries) = more valuable; scale by entry size rank.
     const entries = Array.from(cache.entries()).sort((a, b) => (b[1].content?.length ?? 0) - (a[1].content?.length ?? 0));
-    entries.forEach(([f], i) => bump(f, Math.max(0.2, 0.6 - i * 0.04), 'cache'));
+    entries.forEach(([f], i) => bump(f, Math.max(0.2, 0.6 - i * 0.04) * (weights.cache ?? 1), 'cache'));
   } catch { /* no cache */ }
 
   // Fusion bonus: each additional agreeing signal adds 0.15.
