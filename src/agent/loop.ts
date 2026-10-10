@@ -351,6 +351,10 @@ export class Agent {
   private transientAbortRetries = 0;
   private rateLimitRetries = 0;
   private cooldownRetries = 0;
+  /** Bounded retry budget for model-response stalls (timeouts). Stalls first
+   *  attempt provider failover, then retry with backoff; only when both the
+   *  failover pool and this budget are exhausted does the task finish. */
+  private stallRetries = 0;
   /** Phase 5 (VNext): stuck-signal counters surfaced in the volatile state
    *  prompt so the model can see its own loop pattern and break it. */
   private nudgeInjections = 0;
@@ -1103,8 +1107,33 @@ Continue from 'Next:', do not redo completed progress.`,
       try {
         const raced = await boundedGather(packet.messages);
         if ('__timedOut' in raced) {
+          // Stall guard fired: the provider accepted the request but streamed
+          // nothing within MODEL_RESPONSE_TIMEOUT_MS. Previously this finished
+          // the task as failed immediately — now treat it like any other
+          // transient provider failure: failover → retry → checkpoint+finish
+          // only when the bounded budget is exhausted.
+          this.stallRetries++;
           this.events.emit({ type: 'agent:log', agentId: this.id, message: `[model] no data for ${MODEL_RESPONSE_TIMEOUT_MS / 1000}s; aborting this response to avoid a mid-task stall.` });
-          return this.finish(task, false, 'Model stream stalled (no response) — will not hang the task.', 'model_error');
+
+          const alt = this.pickAlternateModel();
+          if (alt) {
+            this.events.emit({ type: 'agent:log', agentId: this.id, message: `[model-stall] Failing over to model ${alt}` });
+            this.setActiveModel(alt);
+            continue;
+          }
+
+          if (this.switchToNextProvider()) {
+            continue;
+          }
+
+          if (this.stallRetries <= 2) {
+            const backoff = 2500 * this.stallRetries;
+            this.events.emit({ type: 'agent:log', agentId: this.id, message: `[model-stall] No alternate model. Retrying in ${backoff / 1000}s (attempt ${this.stallRetries}/2)...` });
+            await new Promise(r => setTimeout(r, backoff));
+            continue;
+          }
+
+          return this.finish(task, false, 'Model stream stalled (no response) — retries exhausted. Try again or switch models.', 'model_error');
         } else {
           response = raced;
         }
@@ -1128,8 +1157,28 @@ Continue from 'Next:', do not redo completed progress.`,
           // recovers".
           const retryRaced = await boundedGather(retryPacket.messages);
           if ('__timedOut' in retryRaced) {
-            this.events.emit({ type: 'agent:log', agentId: this.id, message: `[model] retry stalled ${MODEL_RESPONSE_TIMEOUT_MS / 1000}s; giving up on this response.` });
-            return this.finish(task, false, 'Model stream stalled on retry — will not hang the task. Try again or switch models.', 'model_error');
+            this.events.emit({ type: 'agent:log', agentId: this.id, message: `[model] retry stalled ${MODEL_RESPONSE_TIMEOUT_MS / 1000}s; treating as transient provider failure.` });
+            this.stallRetries++;
+
+            const alt = this.pickAlternateModel();
+            if (alt) {
+              this.events.emit({ type: 'agent:log', agentId: this.id, message: `[model-stall] Failing over to model ${alt}` });
+              this.setActiveModel(alt);
+              continue;
+            }
+
+            if (this.switchToNextProvider()) {
+              continue;
+            }
+
+            if (this.stallRetries <= 2) {
+              const backoff = 2500 * this.stallRetries;
+              this.events.emit({ type: 'agent:log', agentId: this.id, message: `[model-stall] No alternate model. Retrying in ${backoff / 1000}s (attempt ${this.stallRetries}/2)...` });
+              await new Promise(r => setTimeout(r, backoff));
+              continue;
+            }
+
+            return this.finish(task, false, 'Model stream stalled on retry — retries exhausted. Try again or switch models.', 'model_error');
           }
           response = retryRaced;
         } catch (retryErr) {
