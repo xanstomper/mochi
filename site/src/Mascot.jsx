@@ -43,9 +43,6 @@ export default function Mochi({ size = 240, mood = 'happy', className = '' }) {
             <path d="M40 50 Q48 59 56 50" stroke="#5E4B3C" strokeWidth="2.4" strokeLinecap="round" fill="none" />
           </g>
         : <Face blink={blink} />}
-      {/* stubby arms */}
-      <path d="M14 56 Q8 60 10 66" stroke="#8A6F5B" strokeWidth="2.4" strokeLinecap="round" fill="none" />
-      <path d="M82 56 Q88 60 86 66" stroke="#8A6F5B" strokeWidth="2.4" strokeLinecap="round" fill="none" />
     </svg>
   );
 }
