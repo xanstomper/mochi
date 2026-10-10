@@ -221,3 +221,64 @@
   position: absolute; inset: 0;
   background: radial-gradient(ellipse at center, transparent 50%, rgba(10,10,62,.3) 100%);
 }
+
+/* ── COMET TRAILS ──────────────────────────────────────────── */
+.sky-comets {
+  position: absolute; inset: 0; overflow: hidden;
+}
+.comet {
+  position: absolute; height: 2px; border-radius: 2px;
+  background: linear-gradient(90deg, rgba(255,255,255,.8), rgba(103,232,249,.4), transparent);
+  animation: cometFly 3s ease-out forwards;
+  pointer-events: none;
+}
+@keyframes cometFly {
+  0%   { opacity: 0; transform: translateX(0) rotate(var(--angle, 30deg)); }
+  5%   { opacity: 1; }
+  100% { opacity: 0; transform: translateX(500px) rotate(var(--angle, 30deg)); }
+}
+
+/* ── NEBULA PULSE ──────────────────────────────────────────── */
+.sky-nebula {
+  position: absolute; inset: 0;
+}
+.nebula {
+  position: absolute; border-radius: 50%;
+  filter: blur(80px);
+  animation: nebulaPulse 15s ease-in-out infinite;
+}
+.nebula.n1 {
+  width: 50vw; height: 50vw; top: 10%; left: 20%;
+  background: radial-gradient(circle, rgba(139,92,246,.12) 0%, transparent 70%);
+  animation-duration: 18s;
+}
+.nebula.n2 {
+  width: 40vw; height: 40vw; top: 40%; left: 50%;
+  background: radial-gradient(circle, rgba(236,72,153,.1) 0%, transparent 70%);
+  animation-duration: 22s; animation-delay: -8s;
+}
+.nebula.n3 {
+  width: 60vw; height: 60vw; top: 20%; left: -10%;
+  background: radial-gradient(circle, rgba(103,232,249,.08) 0%, transparent 70%);
+  animation-duration: 25s; animation-delay: -5s;
+}
+@keyframes nebulaPulse {
+  0%, 100% { opacity: .5; transform: scale(1); }
+  50%       { opacity: 1;  transform: scale(1.15); }
+}
+
+/* ── STARDUST PARTICLES ────────────────────────────────────── */
+.sky-dust {
+  position: absolute; inset: 0;
+}
+.dust {
+  position: absolute; width: 2px; height: 2px; border-radius: 50%;
+  background: rgba(255,255,255,.4);
+  animation: dustFloat 20s linear infinite;
+}
+@keyframes dustFloat {
+  0%   { transform: translateY(100vh) translateX(0); opacity: 0; }
+  10%  { opacity: .5; }
+  90%  { opacity: .5; }
+  100% { transform: translateY(-10vh) translateX(50px); opacity: 0; }
+}

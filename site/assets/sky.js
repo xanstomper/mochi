@@ -165,6 +165,46 @@
   }
   sky.appendChild(clouds);
 
+  // ── 9b. comet trails ─────────────────────────────────────
+  var comets = document.createElement('div');
+  comets.className = 'sky-comets';
+  function spawnComet() {
+    var c = document.createElement('div');
+    c.className = 'comet';
+    c.style.cssText =
+      'top:' + rand(5, 50) + '%;' +
+      'left:' + rand(0, 40) + '%;' +
+      'width:' + rand(100, 300) + 'px;' +
+      '--angle:' + rand(20, 45) + 'deg;';
+    comets.appendChild(c);
+    setTimeout(function() { c.remove(); }, 3000);
+  }
+  (function loopComets() {
+    spawnComet();
+    setTimeout(loopComets, rand(3000, 8000));
+  })();
+  sky.appendChild(comets);
+
+  // ── 9c. nebula pulses ────────────────────────────────────
+  var nebula = document.createElement('div');
+  nebula.className = 'sky-nebula';
+  nebula.innerHTML = '<div class="nebula n1"></div><div class="nebula n2"></div><div class="nebula n3"></div>';
+  sky.appendChild(nebula);
+
+  // ── 9d. stardust particles ───────────────────────────────
+  var dust = document.createElement('div');
+  dust.className = 'sky-dust';
+  for (var d = 0; d < 30; d++) {
+    var particle = document.createElement('div');
+    particle.className = 'dust';
+    particle.style.cssText =
+      'left:' + rand(0, 100) + '%;' +
+      'animation-duration:' + rand(15, 30) + 's;' +
+      'animation-delay:-' + rand(0, 30) + 's;';
+    dust.appendChild(particle);
+  }
+  sky.appendChild(dust);
+
   // ── 10. grain overlay ────────────────────────────────────
   var grain = document.createElement('div');
   grain.className = 'sky-grain';
@@ -174,6 +214,33 @@
   var vignette = document.createElement('div');
   vignette.className = 'sky-vignette';
   sky.appendChild(vignette);
+
+  // ── 12. parallax mouse tracking ──────────────────────────
+  var mouseX = 0, mouseY = 0;
+  var currentX = 0, currentY = 0;
+  document.addEventListener('mousemove', function(e) {
+    mouseX = (e.clientX / window.innerWidth - 0.5) * 2;
+    mouseY = (e.clientY / window.innerHeight - 0.5) * 2;
+  });
+  function updateParallax() {
+    currentX += (mouseX - currentX) * 0.03;
+    currentY += (mouseY - currentY) * 0.03;
+    var stars = sky.querySelector('.sky-stars');
+    var bubbles = sky.querySelector('.sky-bubbles');
+    var orbs = sky.querySelectorAll('.sky-orb');
+    if (stars) {
+      stars.style.transform = 'translate(' + (currentX * -15) + 'px,' + (currentY * -10) + 'px)';
+    }
+    if (bubbles) {
+      bubbles.style.transform = 'translate(' + (currentX * -30) + 'px,' + (currentY * -20) + 'px)';
+    }
+    orbs.forEach(function(orb, i) {
+      var depth = (i % 3 + 1) * 8;
+      orb.style.transform = 'translate(' + (currentX * -depth) + 'px,' + (currentY * -depth * 0.6) + 'px)';
+    });
+    requestAnimationFrame(updateParallax);
+  }
+  requestAnimationFrame(updateParallax);
 
   // ── inject ───────────────────────────────────────────────
   document.body.insertBefore(sky, document.body.firstChild);
