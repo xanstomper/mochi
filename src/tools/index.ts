@@ -45,6 +45,7 @@ import { renameSymbolTool } from './rename-symbol.js';
 import { replTool } from './repl.js';
 import { blastRadiusTool } from './blast-radius.js';
 import { sessionRecallTool } from './session-recall.js';
+import { recallOutputTool } from './recall-output.js';
 import { bgTaskTool } from './bg-task.js';
 import { outlineTool } from './outline.js';
 import { mergeConflictTool } from './merge-conflict.js';
@@ -72,7 +73,7 @@ import { acceptPlanTool } from './accept-plan.js';
 export const ALL_TOOLS: Tool[] = [
   readTool, writeTool, editTool, deleteTool, shellTool, searchTool, globTool, outlineTool, astSliceTool,
   compilePromptTool,
-  gitTool, inspectTool, memoryTool, sessionRecallTool, todoTool, skillTool, subagentTool, patchTool,
+  gitTool, inspectTool, memoryTool, sessionRecallTool, recallOutputTool, todoTool, skillTool, subagentTool, patchTool,
   bgTaskTool, fetchTool, diffTool, treeTool, regexReplaceTool, deepwikiTool, clipboardTool, sqlCodebaseTool,
   searchReplaceMultiTool, analyzeCodeTool, verifyTool, perfTool,
   webSearchTool, getDiagnosticsTool, mkdirTool, moveFileTool, copyFileTool,

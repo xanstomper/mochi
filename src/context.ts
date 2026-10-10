@@ -17,6 +17,7 @@ import { contractSection } from './contract.js';
 import { memoryDigest } from './memory-store.js';
 import { feedbackDigest } from './feedback.js';
 import { detectCircle } from './circle.js';
+import { archiveToolOutput } from './tools/output-archive.js';
 import { evaluateOwl } from './cognitive/owl.js';
 import { formatEnvironmentBlock } from './core/env-profiler.js';
 import { condenseOutput } from './core/output-condenser.js';
@@ -736,6 +737,11 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
       if (m.role !== 'tool') continue;
       const c = typeof m.content === 'string' ? m.content : '';
       if (c.length < SHRINK_THRESHOLD || c.includes(MARK)) continue;
+      // MCH-66: archive the full text before shrinking so recall_output can
+      // retrieve it without re-running the tool.
+      try {
+        archiveToolOutput(this.projectRoot, m.name ?? 'tool', c);
+      } catch { /* archive is best-effort */ }
       const shrunk = c.slice(0, KEEP_HEAD) + MARK + (c.length > KEEP_HEAD + KEEP_TAIL ? c.slice(-KEEP_TAIL) : '');
       saved += c.length - shrunk.length;
       m.content = shrunk;
