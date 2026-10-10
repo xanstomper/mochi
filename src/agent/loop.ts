@@ -557,7 +557,10 @@ export class Agent {
     // files this task will likely read next.
     try {
       const { prefetchText } = await import('../prefetch.js');
-      const pfText = prefetchText(this.workspace.dir);
+      // MCH-54: seed the temporal signal with this run's actual read footprint
+      // (main loop) — subagents start with an empty footprint, which is fine.
+      const touched = Array.from(this.readCache.keys()).slice(-10);
+      const pfText = prefetchText(this.workspace.dir, touched);
       if (pfText) {
         this.context.addMessage({ role: 'system', content: pfText });
       }
@@ -2358,6 +2361,16 @@ Continue from 'Next:', do not redo completed progress.`,
         content: `[Shared Context / Scratchpad from Parent Agent]:\n${scratchpad}`,
       });
     }
+    // MCH-54: give spawned subagents the speculative stack — seed the child's
+    // context with the parent's fused prefetch hints (parent's read footprint
+    // drives the co-change signal, so children land pre-oriented on the files
+    // the parent was actually working in). Best-effort.
+    try {
+      const { prefetchText } = await import('../prefetch.js');
+      const touched = Array.from(this.readCache.keys()).slice(-10);
+      const childHint = prefetchText(this.workspace.dir, touched);
+      if (childHint) childContext.addMessage({ role: 'system', content: childHint });
+    } catch { /* subagent prefetch must never affect spawning */ }
 
     const childAbort = new AbortController();
     const combinedAbort = this.abortSignal
