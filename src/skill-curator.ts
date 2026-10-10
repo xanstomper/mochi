@@ -16,6 +16,7 @@ import { readdirSync, existsSync, readFileSync, statSync, mkdirSync, writeFileSy
 import { join, dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import {skillsRoot, archiveRoot, loadUsage, safeSlug, parseFrontmatter, renderSkill} from './skill-manager.js';
+import { lintSkillDoc, formatSkillLint } from './skill-lint.js';
 
 export interface CuratorConfig {
   enabled: boolean;
@@ -328,6 +329,7 @@ export function autoDraftSkill(
       if (skillSimilarity(name.toLowerCase(), `${opts.pattern} ${opts.strategy}`.toLowerCase()) > 0.5) return null;
     }
     const lessons = (opts.lessons ?? []).filter((l) => l && l.length > 3).slice(0, 5);
+    const description = `Auto-drafted procedure for recurring pattern: ${opts.pattern.slice(0, 80)}`;
     const body = [
       `# Auto-drafted: ${opts.pattern}`,
       '',
@@ -343,7 +345,16 @@ export function autoDraftSkill(
       '- This skill was auto-drafted from run telemetry (MCH-44). Refine or delete via skill_manage.',
     ].filter(Boolean).join('\n');
     mkdirSync(skillDir, { recursive: true });
-    writeFileSync(path, renderSkill({ name: slug, description: `Auto-drafted procedure for recurring pattern: ${opts.pattern.slice(0, 80)}`, category: 'auto', body }));
+    // MCH-67: quality gate — reject drafts that fail the lint before they
+    // pollute the skill library / retrieval index.
+    try {
+      const gate = lintSkillDoc(slug, description, body);
+      if (!gate.ok) {
+        recordCuratorRun(projectDir, `skill draft "${slug}" rejected by quality gate:\n${formatSkillLint(gate)}`);
+        return null;
+      }
+    } catch { /* gate is best-effort — never block drafting on gate failure */ }
+    writeFileSync(path, renderSkill({ name: slug, description, category: 'auto', body }));
     return slug;
   } catch {
     return null;
