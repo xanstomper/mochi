@@ -208,22 +208,22 @@ function Home() {
     <>
       <div className="iridescence-bg" aria-hidden="true">
         <Iridescence
-          color="#E8A0B4"
+          color="#D98CA6"
           speed={1.0}
-          scale={1.2}
+          scale={1.3}
           detail={8}
           warp={1.4}
-          hueShift={15}
-          saturation={0.9}
-          brightness={0.9}
-          contrast={0.9}
+          hueShift={10}
+          saturation={0.55}
+          brightness={0.6}
+          contrast={0.7}
           mouseReact={true}
           amplitude={0.12}
           stir={0.5}
-          sheen={0.3}
+          sheen={0.25}
           clickSwirl={true}
-          grain={0.05}
-          opacity={0.55}
+          grain={0.04}
+          opacity={0.32}
           resolution={1}
         />
       </div>

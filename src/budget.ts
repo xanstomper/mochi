@@ -23,6 +23,8 @@ export interface BudgetSnapshot {
   remainingDurationMs: number;
   phase: BudgetPhase;
   ratio: number;
+  /** MCH-79: per-model token/cost breakdown for the summary card. */
+  byModel: Array<{ model: string; tokens: number; costUsd: number; calls: number }>;
 }
 
 export const DEFAULT_COST_PER_TOKEN: Record<string, { prompt: number; completion: number } | number> = {
@@ -81,6 +83,8 @@ export class BudgetEngine {
   private usedToolCalls = 0;
   private usedModelCalls = 0;
   private usedAgents = 0;
+  /** MCH-79: per-model token/cost ledger. */
+  private byModel = new Map<string, { tokens: number; costUsd: number; calls: number }>();
 
   constructor(safety: SafetyConfig) {
     this.limits = {
@@ -100,6 +104,12 @@ export class BudgetEngine {
   recordTokens(tokens: number, model: string) {
     this.usedTokens += tokens;
     this.usedCostUsd += estimateCostUsd(tokens, model);
+    // MCH-79: per-model ledger for the /usage cost breakdown.
+    const e = this.byModel.get(model) ?? { tokens: 0, costUsd: 0, calls: 0 };
+    e.tokens += tokens;
+    e.costUsd += estimateCostUsd(tokens, model);
+    e.calls += 1;
+    this.byModel.set(model, e);
   }
 
   recordToolCall() {
@@ -164,6 +174,10 @@ export class BudgetEngine {
       remainingDurationMs: this.remainingDurationMs(),
       phase: this.phase(),
       ratio: this.ratio(),
+      // MCH-79: ranked highest-cost-first for the summary card.
+      byModel: Array.from(this.byModel.entries())
+        .map(([model, e]) => ({ model, tokens: e.tokens, costUsd: e.costUsd, calls: e.calls }))
+        .sort((a, b) => b.costUsd - a.costUsd),
     };
   }
 

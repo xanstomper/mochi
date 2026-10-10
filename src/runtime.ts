@@ -33,6 +33,8 @@ export class Runtime {
   goals: GoalEngine;
   private hooks: HookManager;
   readonly usage: UsageStore;
+  /** MCH-79: run-level budget ledger — exposed so /usage can show a per-model cost breakdown. */
+  budget?: BudgetEngine;
   private abortController: AbortController;
   private abortSignal: AbortSignal;
   activeSessionId?: string;
@@ -45,6 +47,8 @@ export class Runtime {
     this.workspace = new Workspace(projectRoot, this.config.projectDir);
     this.workspace.ensure();
     this.goals = new GoalEngine(this.config, this.workspace, this.events, projectRoot);
+    // MCH-79: capture the run-level BudgetEngine so /usage can show per-model cost.
+    this.goals.onBudget = (b) => { this.budget = b as BudgetEngine; };
     this.hooks = new HookManager(this.workspace.dir);
     this.usage = new UsageStore(this.workspace.dir);
     // A run-level abort: a user hitting Ctrl-C (or a daemon shutdown) aborts

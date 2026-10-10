@@ -1468,12 +1468,24 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         const summary = runtime.usage.summary();
         const recent = runtime.usage.recent();
         const cachePct = state.totalTokens > 0 ? Math.round((state.cacheTokens / state.totalTokens) * 100) : 0;
+        // MCH-79: live per-model breakdown from the budget engine, ranked by cost.
+        let byModelBlock = '';
+        try {
+          const snap = runtime.budget?.snapshot(runtime.config.model.model);
+          const rows = snap?.byModel ?? [];
+          if (rows.length > 0) {
+            byModelBlock = '\n\nBy Model (this run, cost-ranked):\n' + rows
+              .map((r) => `  ${r.model}: ${r.tokens.toLocaleString()} tok · $${r.costUsd.toFixed(4)} · ${r.calls} call${r.calls === 1 ? '' : 's'}`)
+              .join('\n');
+          }
+        } catch { /* budget ledger is best-effort */ }
         return (
           `Token & Cost Performance:\n` +
           `  Total Tokens: ${state.totalTokens.toLocaleString()} (${state.cacheTokens.toLocaleString()} cached • ${cachePct}% KV cache hit rate)\n` +
           `  Total Cost: $${state.totalCost.toFixed(4)} USD\n` +
-          `  Active Model: ${runtime.config.model.model}\n\n` +
-          `Historical Usage:\n${summary}\n\nRecent Turns:\n${recent}`
+          `  Active Model: ${runtime.config.model.model}\n` +
+          byModelBlock +
+          `\n\nHistorical Usage:\n${summary}\n\nRecent Turns:\n${recent}`
         );
       });
       return;

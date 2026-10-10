@@ -44,6 +44,10 @@ export class GoalEngine {
   /** MCH-74: live agents keyed by task id — lets the TUI steer a RUNNING agent. */
   private liveAgents = new Map<string, import('../agent/loop.js').Agent>();
 
+  /** MCH-79: optional hook that receives the run's BudgetEngine at run start
+   *  so the host (Runtime) can surface a live per-model cost breakdown. */
+  onBudget?: (b: import('../budget.js').BudgetEngine) => void;
+
   /** MCH-74: push mid-run guidance to every live agent of this engine.
    *  Returns the number of agents that received it (0 = nothing running). */
   steerActive(text: string): number {
@@ -201,6 +205,9 @@ Return ONLY the JSON array, no markdown.`;
     this.goalStats = { tokens: 0, duration: 0 };
     const budget = new BudgetEngine(this.config.safety);
     budget.start();
+    // MCH-79: expose the run's budget ledger so the TUI /usage card can show
+    // a live per-model token/cost breakdown.
+    this.onBudget?.(budget);
     // Capture repo check failures BEFORE any agent edits. A verify failure
     // that matches this baseline afterwards is pre-existing debt, not agent
     // breakage, and must not fail the task (the 47k-token "failed" write-a-
