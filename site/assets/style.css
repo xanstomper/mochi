@@ -798,17 +798,8 @@ body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:9999;o
   z-index: -2;
   pointer-events: none;
 }
-/* readability veil — soft cream wash over the shader so text pops */
-.iridescence-veil {
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  background: linear-gradient(180deg,
-    rgba(251,246,238,.28) 0%,
-    rgba(251,246,238,.18) 50%,
-    rgba(251,246,238,.32) 100%);
-}
+/* veil removed — text-shadow handles legibility, shader stays vivid */
+.iridescence-veil { display: none; }
 
 /* ============ SCROLL SLIDE-IN ============ */
 .slide-in {
