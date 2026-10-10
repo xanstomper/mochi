@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import Mochi from '../Mascot.jsx';
-import { Reveal, CountUp, SplitText, useParallax, DitherBlock, Marquee, GooeyBorder, Typewriter, TiltCard, ScrollProgress, Magnetic } from '../anim.jsx';
+import { Reveal, CountUp, SplitText, useParallax, DitherBlock, Marquee2, GooeyBorder, Typewriter, TiltCard, ScrollProgress, Magnetic, SlideIn, SlideAlternate } from '../anim.jsx';
+import Iridescence from '../Iridescence.jsx';
 import RepoBrowser from '../RepoBrowser.jsx';
 
 const EYEBROW = ({ children }) => <div className="eyebrow">{children}</div>;
@@ -43,8 +44,8 @@ function Hero() {
           </Magnetic>
         </div>
       </div>
-      <Marquee
-        speed={36}
+      <Marquee2
+        speed={24}
         items={[
           '18.2 MB RESIDENT', '38.2 MS TO FIRST INPUT', '16 AGENT ROLES',
           '31 RELEASES', '1200 TESTS PASSING', 'ZERO RUNTIME DEPS', 'RUST COMPUTE CORE',
@@ -71,12 +72,12 @@ function Numbers() {
     <section className="gnums">
       <div className="wrap">
         <EYEBROW>RECEIPTS, NOT VIBES</EYEBROW>
-        <div className="gstat-grid">
-          <Stat n={18.2} dec={1} suffix=" MB" label="RESIDENT MEMORY" note="single session" d="21× lighter than Claude Code — measured, not claimed" />
-          <Stat n={38.2} dec={1} suffix=" ms" label="TIME TO FIRST INPUT" note="cold start" d="fastest of nine agents tested, same task set" />
-          <Stat n={16} label="AGENT ROLES" note="orchestrated per goal" d="planner, builder, verifier, critic, memory, and more" />
-          <Stat n={1200} suffix="+" label="TESTS PASSING" note="0 failing" d="real integration tests against live providers" />
-        </div>
+        <SlideAlternate className="gstat-grid" itemClass="gstat" items={[
+          <><div className="gstat-n"><CountUp target={18.2} decimals={1} suffix=" MB" /></div><div className="gstat-label">RESIDENT MEMORY</div><div className="gstat-note">single session</div><div className="gstat-d">21× lighter than Claude Code — measured, not claimed</div></>,
+          <><div className="gstat-n"><CountUp target={38.2} decimals={1} suffix=" ms" /></div><div className="gstat-label">TIME TO FIRST INPUT</div><div className="gstat-note">cold start</div><div className="gstat-d">fastest of nine agents tested, same task set</div></>,
+          <><div className="gstat-n"><CountUp target={16} /></div><div className="gstat-label">AGENT ROLES</div><div className="gstat-note">orchestrated per goal</div><div className="gstat-d">planner, builder, verifier, critic, memory, and more</div></>,
+          <><div className="gstat-n"><CountUp target={1200} suffix="+" /></div><div className="gstat-label">TESTS PASSING</div><div className="gstat-note">0 failing</div><div className="gstat-d">real integration tests against live providers</div></>,
+        ]} />
       </div>
     </section>
   );
@@ -91,7 +92,7 @@ function Manifest() {
           <GooeyBorder className="manifest-gooey" speed={6} thickness={2}>
             <div className="manifest-inner">
               <EYEBROW>THE POINT</EYEBROW>
-          <h2 className="big2">Powerful agents should belong to everyone.</h2>
+          <SlideIn from="left"><h2 className="big2">Powerful agents should belong to everyone.</h2></SlideIn>
           <p>
             Mochi is a working argument that an autonomous coding agent doesn't need a
             datacenter, a subscription, or 140 MB of RSS. It needs a small kernel, honest
@@ -130,11 +131,11 @@ function Flow() {
       <div className="wrap">
         <EYEBROW>HOW A GOAL BECOMES A MERGE</EYEBROW>
         {steps.map(([n, t, d], i) => (
-          <Reveal key={n} className={'flow-row' + (i < steps.length - 1 ? ' ruled' : '')} delay={i * 60}>
+          <SlideIn key={n} from={i % 2 === 0 ? 'left' : 'right'} delay={i * 60} className={'flow-row' + (i < steps.length - 1 ? ' ruled' : '')}>
             <span className="flow-n">{n}</span>
             <span className="flow-t">{t}</span>
             <span className="flow-d">{d}</span>
-          </Reveal>
+          </SlideIn>
         ))}
       </div>
     </section>
@@ -146,8 +147,8 @@ function Screens() {
     <section className="screens">
       <div className="wrap">
         <EYEBROW>THE SURFACE</EYEBROW>
-        <h2 className="big2">Terminal velocity.</h2>
-        <p className="lede" style={{marginBottom:24}}>A 60 fps TUI with streaming diffs, live task trees, and zero flicker. Runs over SSH. Runs in tmux. Runs on your phone's SSH client at 2 a.m.</p>
+        <SlideIn from="left"><h2 className="big2">Terminal velocity.</h2></SlideIn>
+        <SlideIn from="right" delay={80}><p className="lede" style={{marginBottom:24}}>A 60 fps TUI with streaming diffs, live task trees, and zero flicker. Runs over SSH. Runs in tmux. Runs on your phone's SSH client at 2 a.m.</p></SlideIn>
         <TiltCard max={3}>
         <div className="term2">
           <div className="term2-bar"><i /><i /><i /><span>mochi — zsh — 80×24</span></div>
@@ -161,9 +162,9 @@ function Screens() {
         </div>
         </TiltCard>
         <div className="tri">
-          <Reveal className="tri-card"><div className="tri-k">TUI</div><h3>Terminal Velocity</h3><p>Streaming everything. Keyboard-first. 60 fps.</p><a href="docs.html">INSTALL VIA TERMINAL →</a></Reveal>
-          <Reveal className="tri-card" delay={60}><div className="tri-k">DAEMON</div><h3>Runs While You Sleep</h3><p>A persistent daemon executes long goals across sessions and resumes cleanly.</p><a href="docs.html">MEET THE DAEMON →</a></Reveal>
-          <Reveal className="tri-card" delay={120}><div className="tri-k">MEMORY</div><h3>Learns Your Codebase</h3><p>Procedural memory persists what worked. Every session starts smarter than the last.</p><a href="docs.html">HOW MEMORY WORKS →</a></Reveal>
+          <SlideIn from="left" className="tri-card"><div className="tri-k">TUI</div><h3>Terminal Velocity</h3><p>Streaming everything. Keyboard-first. 60 fps.</p><a href="docs.html">INSTALL VIA TERMINAL →</a></SlideIn>
+          <SlideIn from="right" delay={80} className="tri-card"><div className="tri-k">DAEMON</div><h3>Runs While You Sleep</h3><p>A persistent daemon executes long goals across sessions and resumes cleanly.</p><a href="docs.html">MEET THE DAEMON →</a></SlideIn>
+          <SlideIn from="left" delay={160} className="tri-card"><div className="tri-k">MEMORY</div><h3>Learns Your Codebase</h3><p>Procedural memory persists what worked. Every session starts smarter than the last.</p><a href="docs.html">HOW MEMORY WORKS →</a></SlideIn>
         </div>
       </div>
     </section>
@@ -205,6 +206,28 @@ function Coda() {
 function Home() {
   return (
     <>
+      <div className="iridescence-bg" aria-hidden="true">
+        <Iridescence
+          color="#F2A7B8"
+          speed={0.7}
+          scale={1.4}
+          detail={7}
+          warp={1.2}
+          hueShift={10}
+          saturation={0.55}
+          brightness={1.1}
+          contrast={0.85}
+          mouseReact={true}
+          amplitude={0.08}
+          stir={0.4}
+          sheen={0.25}
+          clickSwirl={true}
+          grain={0.04}
+          opacity={0.5}
+          resolution={0.75}
+        />
+      </div>
+      <div className="iridescence-veil" aria-hidden="true" />
       <Hero />
       <Numbers />
       <Manifest />

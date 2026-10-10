@@ -308,3 +308,27 @@ export function Magnetic({ children, className = '', strength = 0.3 }) {
     </div>
   );
 }
+
+
+// scroll-triggered side-slide — text slides in from left/right
+export function SlideIn({ from = 'left', delay = 0, className = '', children, as: Tag = 'div' }) {
+  const ref = useReveal(0.1);
+  return (
+    <Tag ref={ref} className={'slide-in slide-' + from + (delay ? ' d' + delay : '') + (className ? ' ' + className : '')}>
+      {children}
+    </Tag>
+  );
+}
+
+// alternating slide for lists — odd items left, even right
+export function SlideAlternate({ items, className = '', itemClass = '' }) {
+  return (
+    <>
+      {items.map((item, i) => (
+        <SlideIn key={i} from={i % 2 === 0 ? 'left' : 'right'} delay={i * 80} className={itemClass}>
+          {item}
+        </SlideIn>
+      ))}
+    </>
+  );
+}

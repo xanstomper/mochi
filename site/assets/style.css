@@ -789,3 +789,43 @@ body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:9999;o
   from { transform: translate(0,0) scale(1); }
   to { transform: translate(40px,30px) scale(1.15); }
 }
+
+
+/* ============ IRIDESCENCE GLOBAL BACKGROUND ============ */
+.iridescence-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+}
+/* readability veil — soft cream wash over the shader so text pops */
+.iridescence-veil {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(180deg,
+    rgba(251,246,238,.88) 0%,
+    rgba(251,246,238,.82) 50%,
+    rgba(251,246,238,.9) 100%);
+}
+
+/* ============ SCROLL SLIDE-IN ============ */
+.slide-in {
+  opacity: 0;
+  transition: opacity .9s cubic-bezier(.22,1,.36,1),
+              transform .9s cubic-bezier(.22,1,.36,1);
+  will-change: transform, opacity;
+}
+.slide-left  { transform: translateX(-80px); }
+.slide-right { transform: translateX(80px); }
+.slide-in.in { opacity: 1; transform: translateX(0); }
+/* stagger delays */
+.slide-in.d60  { transition-delay: .06s; }
+.slide-in.d120 { transition-delay: .12s; }
+.slide-in.d180 { transition-delay: .18s; }
+.slide-in.d240 { transition-delay: .24s; }
+.slide-in.d320 { transition-delay: .32s; }
+
+/* text over iridescence needs weight */
+body { position: relative; }
