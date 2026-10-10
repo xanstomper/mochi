@@ -10,16 +10,18 @@ function Hero() {
   return (
     <section className="hero2">
       <ScrollProgress />
+      <div className="bg-blob b1" />
+      <div className="bg-blob b2" />
       <div className="wrap">
         <EYEBROW>OPEN SOURCE • MIT • 0 DEPENDENCIES</EYEBROW>
         <h1 className="giant">
           <SplitText text="MOCHI" />
         </h1>
-        <p className="giant-sub">
+        <p className="giant-sub" style={{marginBottom:16}}>
           <span className="gi">The terminal coding agent</span><br />
           <span className="gi pink">that gets out of your way.</span>
         </p>
-        <p className="lede">
+        <p className="lede" style={{marginBottom:24}}>
           <Typewriter
             phrases={[
               'Goals decompose into task DAGs.',
@@ -41,7 +43,6 @@ function Hero() {
           </Magnetic>
         </div>
       </div>
-      <div className="hero-visual"><DitherBlock height={380} /></div>
       <Marquee
         speed={36}
         items={[
@@ -49,6 +50,7 @@ function Hero() {
           '31 RELEASES', '1200 TESTS PASSING', 'ZERO RUNTIME DEPS', 'RUST COMPUTE CORE',
         ]}
       />
+      <div className="hero-visual"><Reveal className="dither-reveal"><DitherBlock height={380} /></Reveal></div>
     </section>
   );
 }
@@ -145,7 +147,7 @@ function Screens() {
       <div className="wrap">
         <EYEBROW>THE SURFACE</EYEBROW>
         <h2 className="big2">Terminal velocity.</h2>
-        <p className="lede">A 60 fps TUI with streaming diffs, live task trees, and zero flicker. Runs over SSH. Runs in tmux. Runs on your phone's SSH client at 2 a.m.</p>
+        <p className="lede" style={{marginBottom:24}}>A 60 fps TUI with streaming diffs, live task trees, and zero flicker. Runs over SSH. Runs in tmux. Runs on your phone's SSH client at 2 a.m.</p>
         <TiltCard max={3}>
         <div className="term2">
           <div className="term2-bar"><i /><i /><i /><span>mochi — zsh — 80×24</span></div>
@@ -174,7 +176,7 @@ function RepoSec() {
       <div className="wrap">
         <EYEBROW>NOTHING HIDDEN</EYEBROW>
         <h2 className="big2">The whole repo, right here.</h2>
-        <p className="lede">Every file, readable without leaving the page. This is the actual main branch, fetched live.</p>
+        <p className="lede" style={{marginBottom:24}}>Every file, readable without leaving the page. This is the actual main branch, fetched live.</p>
       </div>
       <div className="wrap rb-window"><RepoBrowser compact /></div>
     </section>

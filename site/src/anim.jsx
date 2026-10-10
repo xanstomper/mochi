@@ -133,11 +133,11 @@ export function useParallax(strength = 60) {
 
 // per-char staggered rise — giant display type reveal
 export function SplitText({ text, className = '', delay = 0 }) {
-  const ref = useReveal(0.2);
   return (
-    <span ref={ref} className={'split ' + className} aria-label={text}>
+    <span className={'split ' + className} aria-label={text}>
       {text.split('').map((c, i) => (
-        <span key={i} aria-hidden="true" className="split-ch" style={{ transitionDelay: delay + i * 22 + 'ms' }}>
+        <span key={i} aria-hidden="true" className="split-ch"
+          style={{ animationDelay: delay + i * 70 + 'ms' }}>
           {c === ' ' ? '\u00A0' : c}
         </span>
       ))}
