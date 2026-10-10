@@ -22,16 +22,20 @@ export interface MemoryFact {
 }
 
 const MEMORY_DIR = resolve(homedir(), '.mochi');
-// MCH-59: env override so tests / multi-profile runs can redirect the store
-// without touching the real memory.jsonl.
-const MEMORY_FILE = process.env['MOCHI_MEMORY_FILE']
-  ? resolve(process.env['MOCHI_MEMORY_FILE'])
-  : resolve(MEMORY_DIR, 'memory.jsonl');
+// MCH-59/60: resolved lazily — module load order in bundled test runs makes
+// const-time binding unreliable (a sibling's static import can bind the env
+// override before the test sets it). Reading the env at call time fixes both
+// test isolation and multi-profile redirection.
+function memoryFile(): string {
+  return process.env['MOCHI_MEMORY_FILE']
+    ? resolve(process.env['MOCHI_MEMORY_FILE'])
+    : resolve(MEMORY_DIR, 'memory.jsonl');
+}
 const MAX_FAILS = 3;
 
 function ensure(): void {
   if (!existsSync(MEMORY_DIR)) mkdirSync(MEMORY_DIR, { recursive: true });
-  if (!existsSync(MEMORY_FILE)) writeFileSync(MEMORY_FILE, '');
+  if (!existsSync(memoryFile())) writeFileSync(memoryFile(), '');
 }
 
 function randomId(): string {
@@ -54,14 +58,14 @@ export function addFact(statement: string, category: MemoryFact['category'] = 'f
     attempts: 0,
     success_count: 0,
   };
-  appendFileSync(MEMORY_FILE, JSON.stringify(fact) + '\n');
+  appendFileSync(memoryFile(), JSON.stringify(fact) + '\n');
   return fact;
 }
 
 export function loadFacts(): MemoryFact[] {
   ensure();
   let raw = '';
-  try { raw = readFileSync(MEMORY_FILE, 'utf8'); } catch { return []; }
+  try { raw = readFileSync(memoryFile(), 'utf8'); } catch { return []; }
   const out: MemoryFact[] = [];
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
@@ -70,7 +74,7 @@ export function loadFacts(): MemoryFact[] {
   // Auto-prune facts that failed too many times
   const live = out.filter((f) => (f.attempts - f.success_count) < MAX_FAILS);
   if (live.length !== out.length) {
-    writeFileSync(MEMORY_FILE, live.map((f) => JSON.stringify(f)).join('\n') + '\n');
+    writeFileSync(memoryFile(), live.map((f) => JSON.stringify(f)).join('\n') + '\n');
   }
   return live;
 }
@@ -88,7 +92,7 @@ export function recordFactAttempt(id: string, success: boolean): void {
     else f.last_failed = Date.now();
     touched = true;
   }
-  if (touched) writeFileSync(MEMORY_FILE, facts.map((f) => JSON.stringify(f)).join('\n') + '\n');
+  if (touched) writeFileSync(memoryFile(), facts.map((f) => JSON.stringify(f)).join('\n') + '\n');
 }
 
 /** Forget a fact by id or by statement substring. */
@@ -97,7 +101,7 @@ export function forgetFact(query: string): number {
   const facts = loadFacts();
   const remaining = facts.filter((f) => !f.id.startsWith(query) && !f.statement.includes(query));
   const removed = facts.length - remaining.length;
-  writeFileSync(MEMORY_FILE, remaining.map((f) => JSON.stringify(f)).join('\n') + '\n');
+  writeFileSync(memoryFile(), remaining.map((f) => JSON.stringify(f)).join('\n') + '\n');
   return removed;
 }
 
@@ -159,7 +163,7 @@ export function decayFacts(maxAgeMs = 60 * 24 * 3600 * 1000): number {
   const cutoff = Date.now() - maxAgeMs;
   const live = facts.filter((f) => f.ts >= cutoff || f.success_count > 0 || f.attempts === 0);
   if (live.length !== facts.length) {
-    writeFileSync(MEMORY_FILE, live.map((f) => JSON.stringify(f)).join('\n') + '\n');
+    writeFileSync(memoryFile(), live.map((f) => JSON.stringify(f)).join('\n') + '\n');
   }
   return facts.length - live.length;
 }
