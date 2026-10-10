@@ -83,21 +83,24 @@ describe('usageText', () => {
 });
 
 describe('statusBar rows', () => {
-  it('row1 shows model, usage, and Plan/Act toggle', () => {
+  it('row1 shows model and usage; plan/act toggle moved to bars row (MCH-70)', () => {
     const row = statusBarRow1(baseStatus(), 90);
     const plain = row.replace(/\x1b\[[0-9;]*m/g, '');
     expect(plain).toContain('deepseek-v4-flash');
     expect(plain).toContain('(12,345) $0.42');
-    expect(plain).toContain('○ Plan');
-    expect(plain).toContain('● Act');
-    expect(plain).toContain('(Tab)');
+    expect(plain).not.toContain('(Tab)');
   });
 
-  it('row1 highlights plan mode', () => {
-    const row = statusBarRow1(baseStatus({ mode: 'plan' }), 90);
+  it('row1 keeps compact toggle at narrow width', () => {
+    const row = statusBarRow1(baseStatus({ mode: 'plan' }), 60);
     const plain = row.replace(/\x1b\[[0-9;]*m/g, '');
     expect(plain).toContain('● Plan');
-    expect(plain).toContain('○ Act');
+  });
+
+  it('row1 highlights plan mode via compact toggle at narrow width', () => {
+    const row = statusBarRow1(baseStatus({ mode: 'plan' }), 60);
+    const plain = row.replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).toContain('● Plan');
   });
 
   it('row1 shows agent-mode overlay when active', () => {
