@@ -3736,7 +3736,10 @@ Continue from 'Next:', do not redo completed progress.`,
       try {
         const { loadToolSeqs, saveToolSeq } = await import('../tool-sequence.js');
         if (this.toolSeq.length > 0) saveToolSeq(this.workspace.dir, loadToolSeqs(this.workspace.dir), this.toolSeq);
-      } catch { /* tool-seq persistence must never affect task completion */ }
+        // MCH-55: habitual opening routes become auto-drafted skills.
+        const { draftSkillFromToolRoutes } = await import('../skill-curator.js');
+        await draftSkillFromToolRoutes(this.workspace.dir);
+      } catch { /* tool-route persistence must never affect task completion */ }
     }
     const durationMs = Math.round(performance.now() - this.startTime);
     this.events.emit({ type: 'agent:completed', id: this.id, taskId: task.id });

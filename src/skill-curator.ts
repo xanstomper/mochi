@@ -351,6 +351,50 @@ export function autoDraftSkill(
 }
 
 
+// ─── Tool-route → skill bridge (MCH-55) ─────────────────────────────────
+// Mines the persisted tool sequences (MCH-52) for a repeated OPENING route
+// (first 4 tool calls). When the same opening appears >= minCount times
+// across successful runs, auto-draft a skill whose body IS the route —
+// the harness's habitual successful workflow becomes a named, reusable
+// procedure without any model authoring effort.
+
+/** Returns the drafted skill slug, or null when no route is habitual yet. */
+export async function draftSkillFromToolRoutes(
+  workspaceDir: string,
+  opts: { minCount?: number; prefixLen?: number } = {},
+): Promise<string | null> {
+  try {
+    const { loadToolSeqs } = await import('./tool-sequence.js');
+    const seqs = loadToolSeqs(workspaceDir).seqs.filter((t) => t.length >= 4);
+    if (seqs.length < (opts.minCount ?? 3)) return null;
+    const prefixLen = opts.prefixLen ?? 4;
+    const counts = new Map<string, number>();
+    for (const tools of seqs) {
+      const key = tools.slice(0, prefixLen).join(' -> ');
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    let best: string | null = null;
+    let bestCount = opts.minCount ?? 3;
+    for (const [route, n] of Array.from(counts)) {
+      if (n >= bestCount) { best = route; bestCount = n; }
+    }
+    if (!best) return null;
+    // Dedupe consecutive identical tools in the route body for readability.
+    const steps = best.split(' -> ').filter((t, i, a) => i === 0 || t !== a[i - 1]);
+    return autoDraftSkill(workspaceDir, {
+      pattern: `tool-route ${best}`,
+      strategy: steps.map((t, i) => `${i + 1}. ${t}`).join(' '),
+      successes: bestCount,
+      lessons: steps.map((t, i) => `Call \`${t}\` as step ${i + 1} of the habitual opening route.`),
+      taskTitle: `Habitual opening route (${bestCount} successful runs)`,
+      minSuccesses: opts.minCount ?? 3,
+    });
+  } catch {
+    return null;
+  }
+}
+
+
 // ─── Skill Regression Doctor (MCH-20) ──────────────────────────────────
 
 export interface SkillDoctorFailure {
