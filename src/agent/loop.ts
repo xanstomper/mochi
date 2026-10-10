@@ -2534,13 +2534,29 @@ Continue from 'Next:', do not redo completed progress.`,
       while (cursor < tasks.length) {
         const i = cursor++;
         const t = tasks[i];
+        // MCH-62: retry-once for failed subagents. A transient free-tier
+        // rate-limit or a timeout otherwise permanently kills the workstream —
+        // the pool slot frees, the parent gets "[FAILED]", and the sibling
+        // fanout loses that lane's output. One retry with a DIFFERENT rotated
+        // primary (offset by the task count so it lands on a distinct
+        // endpoint than both the first attempt and other siblings) and a
+        // reduced timeout recovers most transient failures without doubling
+        // worst-case latency. Retry never re-runs a SUCCESSFUL child.
         try {
           const lane = (t as { lane?: string }).lane;
           const val = await this.spawnSubagent(t.prompt, { role: t.role, timeoutMs: t.timeoutMs, scratchpad: t.scratchpad, lane, failoverIndex: i });
           results[i] = `[Subagent #${i + 1} (${t.role ?? 'coder'})]: ${val}`;
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          results[i] = `[Subagent #${i + 1} (${t.role ?? 'coder'}) FAILED]: ${msg}`;
+          try {
+            const lane = (t as { lane?: string }).lane;
+            const retryTimeout = t.timeoutMs && t.timeoutMs > 0 ? Math.max(30_000, Math.floor(t.timeoutMs / 2)) : undefined;
+            const val = await this.spawnSubagent(t.prompt, { role: t.role, timeoutMs: retryTimeout, scratchpad: t.scratchpad, lane, failoverIndex: i + tasks.length });
+            results[i] = `[Subagent #${i + 1} (${t.role ?? 'coder'}, retried after: ${msg.slice(0, 120)})]: ${val}`;
+          } catch (err2) {
+            const msg2 = err2 instanceof Error ? err2.message : String(err2);
+            results[i] = `[Subagent #${i + 1} (${t.role ?? 'coder'}) FAILED]: ${msg2} (first attempt: ${msg.slice(0, 120)})`;
+          }
         }
       }
     };
