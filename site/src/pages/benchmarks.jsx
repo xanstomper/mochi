@@ -35,8 +35,8 @@ function Benchmarks() {
     <>
       <div className="pagehead">
         <div className="wrap">
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 24, flexWrap: 'wrap' }}>
-            <div style={{ flex: '1 1 480px' }}>
+          <div className="pagehead-row">
+            <div className="pagehead-col">
               <AnimatedContent direction="bottom" delay={0.1}>
                 <div className="hero-eyebrow">
                   <span className="sparkle" />
@@ -45,9 +45,9 @@ function Benchmarks() {
               </AnimatedContent>
               <SplitText
                 text="See How Mochi Compares."
-                className="hero-title"
+                className="hero-title pagehead-title"
                 as="h1"
-                style={{ fontSize: 48 }}
+                style={{ fontSize: 48, maxWidth: 620 }}
                 delay={0.3}
                 stagger={0.015}
               />

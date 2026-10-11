@@ -5,9 +5,9 @@ import Footer from '../Footer.jsx';
 import { Marquee, Reveal, AnimatedContent, SplitText } from '../anim.jsx';
 
 const FEATURES = [
-  { icon: '🌐', title: 'Open Source', desc: 'Transparent, community-driven, and always open. →' },
-  { icon: '🤝', title: 'Contribute', desc: 'Help us improve Mochi with code, ideas, and feedback. →' },
-  { icon: '💬', title: 'Join the Community', desc: 'Get support, share your projects, and connect with other builders. →' },
+  { icon: '🌐', title: 'Open Source', desc: 'Transparent, community-driven, and always open.\u00A0→' },
+  { icon: '🤝', title: 'Contribute', desc: 'Help us improve Mochi with code, ideas, and feedback.\u00A0→' },
+  { icon: '💬', title: 'Join the Community', desc: 'Get support, share your projects, and connect with other builders.\u00A0→' },
 ];
 
 function Source() {
@@ -22,12 +22,12 @@ function Source() {
             </div>
           </AnimatedContent>
           <div style={{ display: 'flex', alignItems: 'center', gap: 24, flexWrap: 'wrap' }}>
-            <div style={{ flex: '1 1 480px' }}>
+            <div className="pagehead-col">
               <SplitText
                 text="Open Source and Always Free."
-                className="hero-title"
+                className="hero-title pagehead-title"
                 as="h1"
-                style={{ fontSize: 48 }}
+                style={{ fontSize: 48, maxWidth: 620 }}
                 delay={0.3}
                 stagger={0.015}
               />

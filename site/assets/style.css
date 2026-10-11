@@ -131,11 +131,10 @@ header.site {
   grid-template-columns: 52% 48%; align-items: center;
   position: relative; z-index: 1;
   padding: 100px 0 80px;
-  max-width: 1400px; margin: 0 auto;
-  gap: 0;
-  overflow: visible;
+  max-width: 1500px; margin: 0 auto;
+  gap: 60px;
 }
-.hero-copy { max-width: 100%; padding-left: 5vw; padding-right: 3vw; }
+.hero-copy { max-width: 700px; }
 .hero-eyebrow {
   font-family: var(--font-mono); font-size: 12px; font-weight: 700;
   text-transform: uppercase; letter-spacing: .16em;
@@ -162,7 +161,6 @@ header.site {
   padding-bottom: 8px;
 }
 .hero-title .accent-title { color: var(--purple); white-space: nowrap; }
-.hero-title-1 { white-space: nowrap; }
 .hero-sub {
   font-size: 18px; line-height: 1.75;
   color: var(--ink-soft); margin-bottom: 40px;
@@ -200,12 +198,44 @@ header.site {
 
 /* ── PAGE HEAD (sub-pages) ─────────────────────────────────── */
 .pagehead {
-  padding: 140px 5vw 40px;
-  max-width: 1400px;
+  padding: 160px 5vw 56px;
+  max-width: 1100px;
   margin: 0 auto;
   position: relative;
   z-index: 1;
 }
+.pagehead .pagehead-row { display: flex; align-items: flex-start; gap: 24px; flex-wrap: wrap; }
+.pagehead .pagehead-col { flex: 1 1 480px; }
+.pagehead .hero-title { font-size: clamp(36px, 4vw, 52px); margin-bottom: 24px; padding-bottom: 0; }
+.pagehead .lede { max-width: 620px; }
+
+/* ── REPO BROWSER ─────────────────────────────────────────── */
+.repo-meta{display:flex;gap:18px;flex-wrap:wrap;margin-top:14px;font-size:13px;color:var(--ink-soft)}
+.repo-meta span{display:flex;align-items:center;gap:5px;font-weight:600}
+.repo-meta code{background:var(--bg-soft, #F4F2FB);padding:2px 10px;border-radius:99px;font-size:12px}
+.src-grid{display:grid;grid-template-columns:320px 1fr;gap:18px;align-items:start}
+.src-side{position:sticky;top:100px;background:#fff;border:1.5px solid var(--line);border-radius:20px;overflow:hidden;display:flex;flex-direction:column;max-height:calc(100vh - 130px)}
+.src-filter{border:none;border-bottom:1.5px solid var(--line);background:var(--bg-soft, #F4F2FB);padding:12px 16px;font-family:var(--font-mono);font-size:12.5px;color:var(--ink);outline:none;border-radius:0}
+.src-filter::placeholder{color:var(--ink-soft);opacity:.5}
+.src-view{background:#fff;border:1.5px solid var(--line);border-radius:20px;min-height:400px;overflow:hidden}
+.src-path{font-family:var(--font-mono);font-size:12.5px;font-weight:600;color:var(--purple-dark);background:var(--bg-soft, #F4F2FB);padding:11px 18px;border-bottom:1.5px solid var(--line)}
+.src-code{border:none;border-radius:0;font-size:12px;line-height:1.75;max-height:calc(100vh - 180px);margin:0}
+.src-dir{display:flex;align-items:center;gap:7px;width:100%;border:none;background:var(--bg-soft, #F4F2FB);padding:8px 16px;font-family:var(--font-mono);font-size:11.5px;font-weight:700;color:var(--ink);cursor:pointer;border-bottom:1.5px solid var(--line);transition:background .15s}
+.src-dir:hover{background:var(--purple-light)}
+.src-dir .chev{display:inline-block;transition:transform .3s var(--ease);color:var(--purple-dark);font-size:10px}
+.src-dir.opn .chev{transform:rotate(90deg)}
+.src-dir em{font-style:normal;color:var(--ink-soft);font-weight:400;margin-left:auto;font-size:10px}
+.src-file{display:flex;align-items:center;gap:9px;width:100%;border:none;background:none;padding:6px 16px;font-family:var(--font-mono);font-size:12px;color:var(--ink);cursor:pointer;text-align:left;transition:background .15s,color .15s,padding-left .2s var(--ease);border-bottom:1px solid var(--line)}
+.f-icon{font-size:8.5px;font-weight:800;border-radius:5px;padding:2.5px 4.5px;min-width:20px;text-align:center;letter-spacing:-.02em;flex-shrink:0}
+.src-file .fname{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.src-file .fsize{font-size:10px;color:var(--ink-soft);flex-shrink:0}
+.src-file:hover{background:var(--bg-soft, #F4F2FB);color:var(--purple-dark);padding-left:22px}
+.src-file.on{background:var(--purple-light);color:var(--purple-dark);font-weight:600}
+.src-list{overflow-y:auto}
+.src-empty,.src-loading{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:80px 20px;color:var(--ink-soft);font-size:14px}
+.src-err{background:var(--purple-light);border:1.5px solid var(--purple);border-radius:20px;padding:16px 20px;font-size:14px;color:var(--purple-dark)}
+.rb-window{background:#fff;border:1.5px solid var(--line);border-radius:28px;padding:22px;box-shadow:0 8px 30px rgba(139,117,246,.08)}
+.rb-chrome{font-family:var(--font-mono);font-size:12px;font-weight:600;color:var(--ink-soft);margin-bottom:14px}
 
 /* ── CARDS ──────────────────────────────────────────────────── */
 .card {
@@ -239,9 +269,9 @@ header.site {
   margin-bottom: 10px;
 }
 .card-desc {
-  font-size: 14px;
+  font-size: 14.5px;
+  color: var(--ink-soft);
   line-height: 1.65;
-  color: var(--muted);
 }
 .grid3 {
   display: grid;
@@ -255,23 +285,21 @@ header.site {
   .grid3 { grid-template-columns: 1fr; }
 }
 
-.hero-copy { max-width: 560px; padding-left: 5vw; }
+.hero-copy { max-width: 700px; }
 .hero-mascot {
   position: relative;
   display: flex;
-  justify-content: flex-end;
+  justify-content: center;
   align-items: center;
   min-height: 480px;
-  overflow: visible;
 }
 .hero-mascot img {
-  width: 1400px;
-  max-width: none;
+  width: 920px;
+  max-width: 100%;
   height: auto;
   display: block;
   filter: drop-shadow(0 20px 40px rgba(139,117,246,.15));
-  margin-top: -60px;
-  margin-right: -80px;
+  margin-top: -40px;
 }
 /* Small mascot used inline next to headings */
 .mascot-inline {
@@ -361,16 +389,20 @@ header.site {
 .timeline-body {
   font-size: 14px;
   color: var(--ink-soft);
-  line-height: 1.7;
+  line-height: 1.75;
+  margin-bottom: 8px;
 }
-.timeline-body ul { padding-left: 20px; margin: 8px 0; }
-.timeline-body li { margin-bottom: 4px; }
+.timeline-body strong {
+  display: inline;
+  color: var(--ink);
+}
 .timeline-body code {
   background: var(--purple-light);
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 13px;
   color: var(--purple-dark);
+  white-space: nowrap;
 }
 
 /* ── FOOTER ─────────────────────────────────────────────────── */

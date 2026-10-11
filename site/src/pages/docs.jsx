@@ -4,12 +4,12 @@ import Footer from '../Footer.jsx';
 import { AnimatedContent, SplitText, Reveal } from '../anim.jsx';
 
 const DOC_CARDS = [
-  { icon: '🚀', title: 'Quick Start', desc: 'Get up and running in minutes with our simple setup guide. →' },
-  { icon: '🪟', title: 'Installation', desc: 'Step-by-step installation instructions for all platforms. →' },
-  { icon: '🎚️', title: 'Configuration', desc: 'Customize Mochi to fit your workflow. →' },
-  { icon: '📄', title: 'API Reference', desc: 'Complete API documentation and examples. →' },
-  { icon: '💡', title: 'Tutorials', desc: 'Learn through hands-on examples and projects. →' },
-  { icon: '❓', title: 'FAQ', desc: 'Common questions and troubleshooting. →' },
+  { icon: '🚀', title: 'Quick Start', desc: 'Get up and running in minutes with our simple setup guide.\u00A0→' },
+  { icon: '🪟', title: 'Installation', desc: 'Step-by-step installation instructions for all platforms.\u00A0→' },
+  { icon: '🎚️', title: 'Configuration', desc: 'Customize Mochi to fit your workflow.\u00A0→' },
+  { icon: '📄', title: 'API Reference', desc: 'Complete API documentation and examples.\u00A0→' },
+  { icon: '💡', title: 'Tutorials', desc: 'Learn through hands-on examples and projects.\u00A0→' },
+  { icon: '❓', title: 'FAQ', desc: 'Common questions and troubleshooting.\u00A0→' },
 ];
 
 const SKILLS = {
@@ -56,8 +56,8 @@ function Docs() {
     <>
       <div className="pagehead">
         <div className="wrap">
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 24, flexWrap: 'wrap' }}>
-            <div style={{ flex: '1 1 480px' }}>
+          <div className="pagehead-row">
+            <div className="pagehead-col">
               <AnimatedContent direction="bottom" delay={0.1}>
                 <div className="hero-eyebrow">
                   <span className="sparkle" />
@@ -66,9 +66,9 @@ function Docs() {
               </AnimatedContent>
               <SplitText
                 text="Read the Docs."
-                className="hero-title"
+                className="hero-title pagehead-title"
                 as="h1"
-                style={{ fontSize: 48 }}
+                style={{ fontSize: 48, maxWidth: 620 }}
                 delay={0.3}
                 stagger={0.015}
               />

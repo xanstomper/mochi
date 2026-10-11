@@ -988,26 +988,24 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
           ? `  ${T.gray}cache${T.reset} ${cache.text} ${T.lime}${fmt(state.cacheTokens)}${T.reset} ${T.gray}(${Math.round(cacheRate * 100)}%)${T.reset}`
           : `  ${T.gray}cache${T.reset} ${T.lime}${fmt(state.cacheTokens)}${T.reset}`;
       }
-      // MCH-70: plan/act toggle lives on THIS row (right-aligned), with the
-      // context bar beside it — row 1 is freed for model/badges.
+      // Plan/act toggle sits BESIDE the in/out text + bars (left-aligned
+      // after them), not right-aligned — reads as one continuous row.
       const planDot = state.uiMode === 'plan' ? `${T.plan}● Plan${T.reset}` : `${T.grayDark}○ Plan${T.reset}`;
       const actDot = state.uiMode === 'act' ? `${T.act}● Act${T.reset}` : `${T.grayDark}○ Act${T.reset}`;
       const toggle = `${planDot} ${actDot} ${T.grayDark}(Tab)${T.reset}`;
-      const toggleLen = visibleLen(toggle);
+      const miniToggle = `${planDot} ${actDot}`;
       let barsRowFull = ` ${T.gray}in${T.reset} ${T.cyan}${fmt(state.inTokens)}${T.reset} ${T.gray}out${T.reset} ${T.orange}${fmt(state.outTokens)}${T.reset}  ${ctx.text} ${T.gray}${Math.round(ctx.pct * 100)}%${T.reset}${cacheSeg}`;
       if (w < 55) {
         barsRowFull = ` ${T.gray}in${T.reset} ${T.cyan}${fmt(state.inTokens)}${T.reset} ${T.gray}out${T.reset} ${T.orange}${fmt(state.outTokens)}${T.reset}  ${ctx.text}`;
       }
-      // Right-align the toggle; shrink/omit the cache segment if tight.
       const baseLen = visibleLen(barsRowFull);
-      let rowContent = barsRowFull;
-      if (baseLen + toggleLen + 2 <= w) {
-        const pad = w - baseLen - toggleLen;
-        rowContent = `${barsRowFull}${' '.repeat(Math.max(1, pad))}${toggle}`;
-      } else if (baseLen + visibleLen(`${planDot} ${actDot}`) + 2 <= w) {
-        const mini = `${planDot} ${actDot}`;
-        const pad = w - baseLen - visibleLen(mini);
-        rowContent = `${barsRowFull}${' '.repeat(Math.max(1, pad))}${mini}`;
+      let rowContent: string;
+      if (baseLen + visibleLen(toggle) + 2 <= w) {
+        rowContent = `${barsRowFull}  ${toggle}`;
+      } else if (baseLen + visibleLen(miniToggle) + 2 <= w) {
+        rowContent = `${barsRowFull}  ${miniToggle}`;
+      } else {
+        rowContent = barsRowFull;
       }
       // Clamp: this row had no width budget and hard-wrapped in windowed mode.
       const barsRow = visibleLen(rowContent) > w ? ellipsize(rowContent, w) : rowContent;
