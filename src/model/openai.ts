@@ -3,6 +3,7 @@ import { ProviderError, describeModelError, parseRetryAfter } from '../utils/htt
 import { withRetries, classifyError } from './rate-limit.js';
 import { nextKey, retireKey } from './credential-pool.js';
 import { kvCache } from '../kv-cache.js';
+import { nativeAssembleStream } from '../native/agent-protocol.js';
 
 function logBackoff(attempt: number, delayMs: number, err: unknown): void {
   const detail = err instanceof Error ? err.message.split('\n')[0] : String(err);
@@ -324,6 +325,20 @@ export function createOpenAIProvider(config: ProviderConfig) {
     const chunks: StreamChunk[] = [];
     for await (const chunk of streamChat(messages, tools, options)) {
       chunks.push(chunk);
+    }
+    // Native assembly: hand the whole normalized chunk stream to the Rust
+    // runtime for the Map-fold (1 stdio round-trip, off the JS hot path).
+    // Falls back to the inlined TS fold when the runtime is unavailable.
+    const native = await nativeAssembleStream(chunks as unknown as Record<string, unknown>[]).catch(() => null);
+    if (native) {
+      const tool_calls = native.toolCalls.map((a) => ({ id: a.id, type: 'function' as const, function: { name: a.name, arguments: a.arguments } }));
+      return {
+        content: native.content,
+        reasoningContent: native.reasoning || undefined,
+        toolCalls: tool_calls.length ? tool_calls : undefined,
+        finishReason: native.finishReason ?? chunks[chunks.length - 1]?.finishReason,
+        usage: { promptTokens: native.promptTokens, completionTokens: native.completionTokens, totalTokens: native.promptTokens + native.completionTokens },
+      };
     }
     const content = chunks.map((c) => c.content || '').join('');
     const reasoningContent = chunks.map((c) => c.reasoningContent || '').join('') || undefined;

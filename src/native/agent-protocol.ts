@@ -164,6 +164,40 @@ export async function nativeTokensCount(serializedMessages: string[]): Promise<n
   }
 }
 
+/** Ask Rust to assemble a finished stream (chat() path): fold normalized
+ *  StreamChunk objects into {content, reasoning, toolCalls, finishReason,
+ *  usage}. Returns null on any failure so the caller falls back to the TS
+ *  Map-fold. */
+export interface AssembledStream {
+  content: string;
+  reasoning: string;
+  toolCalls: { id: string; name: string; arguments: string }[];
+  finishReason: string | null;
+  promptTokens: number;
+  completionTokens: number;
+}
+
+export async function nativeAssembleStream(chunks: Record<string, unknown>[]): Promise<AssembledStream | null> {
+  const payload = JSON.stringify({ op: 'accum', chunks });
+  if (payload.length > 4_000_000) return null;
+  const line = await writeLine(payload);
+  if (!line) return null;
+  try {
+    const obj = JSON.parse(line) as { op?: string } & AssembledStream;
+    if (obj.op !== 'accum') return null;
+    return {
+      content: obj.content ?? '',
+      reasoning: obj.reasoning ?? '',
+      toolCalls: Array.isArray(obj.toolCalls) ? obj.toolCalls : [],
+      finishReason: obj.finishReason ?? null,
+      promptTokens: obj.promptTokens ?? 0,
+      completionTokens: obj.completionTokens ?? 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Best-effort shutdown for tests and daemon exit. */
 export function closeRustRuntime(): void {
   try { proc?.stdin?.write('{"op":"exit"}\n'); } catch { /* already gone */ }

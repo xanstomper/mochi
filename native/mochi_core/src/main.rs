@@ -151,6 +151,139 @@ fn main() {
     println!("\x1b[32m✔ Done in {:.2?} • Cost: ${:.6} USD\x1b[0m", elapsed, cost);
 }
 
+/// Number field (i64-style): parse a bare numeric literal after "key":.
+fn json_number_field(src: &str, key: &str) -> Option<i64> {
+    let needle = format!("\"{}\"", key);
+    let mut search_from = 0usize;
+    while let Some(pos) = src[search_from..].find(&needle) {
+        let after = src[search_from + pos + needle.len()..].trim_start();
+        if let Some(rest) = after.strip_prefix(':') {
+            let rest = rest.trim_start();
+            let mut chars = rest.chars();
+            let mut num = String::new();
+            if let Some(c) = chars.next() {
+                if c == '-' || c.is_ascii_digit() {
+                    num.push(c);
+                    for c2 in chars {
+                        if c2.is_ascii_digit() { num.push(c2); } else { break; }
+                    }
+                    return num.parse().ok();
+                }
+            }
+            return None; // null or non-numeric
+        }
+        search_from += pos + needle.len();
+    }
+    None
+}
+
+/// Extract a balanced JSON object substring for "key" (e.g. "usage").
+fn json_object_field(src: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{}\"", key);
+    let pos = src.find(&needle)?;
+    let after = &src[pos + needle.len()..];
+    let open_rel = after.find('{')?;
+    let start = pos + needle.len() + open_rel;
+    let bytes = src.as_bytes();
+    let mut depth = 0i32;
+    let mut in_str = false;
+    let mut escaped = false;
+    let mut i = start;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_str {
+            if escaped { escaped = false; }
+            else if b == b'\\' { escaped = true; }
+            else if b == b'"' { in_str = false; }
+        } else {
+            match b {
+                b'"' => in_str = true,
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(src[start..=i].to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Extract a balanced JSON array substring for "key" (e.g. "toolCalls").
+/// String-aware and depth-tracking: element objects are the spans where the
+/// brace depth transitions 1→2, so nested objects and braces inside strings
+/// cannot corrupt the split.
+fn json_array_field(src: &str, key: &str) -> Option<Vec<String>> {
+    let needle = format!("\"{}\"", key);
+    let pos = src.find(&needle)?;
+    let after = &src[pos + needle.len()..];
+    let open_rel = after.find('[')?;
+    let start = pos + needle.len() + open_rel;
+    let bytes = src.as_bytes();
+    let mut depth = 0i32;
+    let mut in_str = false;
+    let mut escaped = false;
+    let mut i = start;
+    let mut out = Vec::new();
+    let mut elem_start: Option<usize> = None;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_str {
+            if escaped { escaped = false; }
+            else if b == b'\\' { escaped = true; }
+            else if b == b'"' { in_str = false; }
+        } else {
+            match b {
+                b'"' => in_str = true,
+                b'[' | b'{' => {
+                    depth += 1;
+                    if b == b'{' && depth == 2 {
+                        elem_start = Some(i);
+                    }
+                }
+                b']' | b'}' => {
+                    if b == b'}' && depth == 2 {
+                        if let Some(s) = elem_start {
+                            out.push(src[s..=i].to_string());
+                            elem_start = None;
+                        }
+                    }
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// JSON-escape a string for output (minimal: quote + the C0 escapes we emit).
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 // ── stdio plan protocol ─────────────────────────────────────────────────────
 // Minimal JSON-line handling without external crates. The protocol only needs
 // to parse one flat object per line with three string fields and an array of
@@ -209,7 +342,9 @@ fn json_usize_field(src: &str, key: &str) -> Option<usize> {
     None
 }
 
-/// Split the "messages" array into balanced-brace object substrings.
+/// Split the "messages" (or any object-array) field into balanced-brace
+/// object substrings. String-aware and depth-tracking like json_array_field,
+/// so braces inside message content (code!) cannot corrupt the split.
 fn json_array_objects(src: &str, key: &str) -> Vec<String> {
     let needle = format!("\"{}\"", key);
     let mut out = Vec::new();
@@ -218,27 +353,37 @@ fn json_array_objects(src: &str, key: &str) -> Vec<String> {
     let start = pos + needle.len() + open_rel + 1;
     let bytes = src.as_bytes();
     let mut depth = 0i32;
-    let mut obj_start = None;
+    let mut in_str = false;
+    let mut escaped = false;
+    let mut obj_start: Option<usize> = None;
     let mut i = start;
     while i < bytes.len() {
-        match bytes[i] {
-            b'{' => {
-                if depth == 0 {
-                    obj_start = Some(i);
-                }
-                depth += 1;
-            }
-            b'}' => {
-                depth -= 1;
-                if depth == 0 {
-                    if let Some(s) = obj_start {
-                        out.push(src[s..=i].to_string());
+        let b = bytes[i];
+        if in_str {
+            if escaped { escaped = false; }
+            else if b == b'\\' { escaped = true; }
+            else if b == b'"' { in_str = false; }
+        } else {
+            match b {
+                b'"' => in_str = true,
+                b'{' => {
+                    depth += 1;
+                    if depth == 1 {
+                        obj_start = Some(i);
                     }
-                    obj_start = None;
                 }
+                b'}' => {
+                    if depth == 1 {
+                        if let Some(s) = obj_start {
+                            out.push(src[s..=i].to_string());
+                        }
+                        obj_start = None;
+                    }
+                    depth -= 1;
+                }
+                b']' if depth == 0 => break,
+                _ => {}
             }
-            b']' if depth == 0 => break,
-            _ => {}
         }
         i += 1;
     }
@@ -318,6 +463,81 @@ fn run_plan_protocol() {
                     total += tokenizer.count_tokens(o);
                 }
                 let _ = writeln!(out, "{{\"op\":\"tokens\",\"tokens\":{}}}", total);
+                let _ = out.flush();
+            }
+            "accum" => {
+                // Stream assembly: fold raw OpenAI-style stream chunk objects
+                // into the final assembled response (content, reasoning,
+                // tool_calls stitched by index, usage). This is the per-chunk
+                // Map-fold chat() does in JS today; moving it here keeps the
+                // loop.ts port muscle growing on stateful, testable work.
+                let objs = json_array_objects(line, "chunks");
+                let mut content = String::new();
+                let mut reasoning = String::new();
+                // (index, id, name, arguments) — stitch by index like callsByIndex.
+                let mut calls: Vec<(i64, String, String, String)> = Vec::new();
+                let mut finish_reason: Option<String> = None;
+                let mut prompt_tokens: i64 = 0;
+                let mut completion_tokens: i64 = 0;
+                for o in &objs {
+                    // content delta
+                    if let Some(c) = json_string_field(o, "content") {
+                        content.push_str(&c);
+                    }
+                    // normalized StreamChunk carries reasoningContent
+                    if let Some(rc) = json_string_field(o, "reasoningContent") {
+                        reasoning.push_str(&rc);
+                    }
+                    if let Some(fr) = json_string_field(o, "finishReason") {
+                        finish_reason = Some(fr);
+                    }
+                    if let Some(u) = json_object_field(o, "usage") {
+                        if let Some(p) = json_number_field(&u, "promptTokens") { prompt_tokens = p; }
+                        if let Some(c) = json_number_field(&u, "completionTokens") { completion_tokens = c; }
+                    }
+                    // tool call deltas: {id, index, function:{name, arguments}}
+                    if let Some(tcs) = json_array_field(o, "toolCalls") {
+                        for tc in &tcs {
+                            let idx = json_number_field(tc, "index").unwrap_or(0) as i64;
+                            let id = json_string_field(tc, "id").unwrap_or_default();
+                            let (name, args) = match json_object_field(tc, "function") {
+                                Some(fn_obj) => (
+                                    json_string_field(&fn_obj, "name").unwrap_or_default(),
+                                    json_string_field(&fn_obj, "arguments").unwrap_or_default(),
+                                ),
+                                None => (String::new(), String::new()),
+                            };
+                            match calls.iter_mut().find(|(i, _, _, _)| *i == idx) {
+                                Some(entry) => {
+                                    if entry.1.is_empty() { entry.1 = id; }
+                                    if entry.2.is_empty() { entry.2 = name; }
+                                    entry.3.push_str(&args);
+                                }
+                                None => calls.push((idx, id, name, args)),
+                            }
+                        }
+                    }
+                }
+                // Emit assembled JSON (compact, no escapes beyond basics).
+                let mut out_s = String::from("{\"op\":\"accum\",\"content\":");
+                out_s.push_str(&json_escape(&content));
+                out_s.push_str(",\"reasoning\":");
+                out_s.push_str(&json_escape(&reasoning));
+                out_s.push_str(",\"toolCalls\":[");
+                for (n, (_, id, name, args)) in calls.iter().enumerate() {
+                    if n > 0 { out_s.push(','); }
+                    out_s.push_str(&format!(
+                        "{{\"id\":{},\"name\":{},\"arguments\":{}}}",
+                        json_escape(id), json_escape(name), json_escape(args)
+                    ));
+                }
+                out_s.push_str("],\"finishReason\":");
+                out_s.push_str(&finish_reason.as_deref().map(json_escape).unwrap_or_else(|| "null".into()));
+                out_s.push_str(&format!(
+                    ",\"promptTokens\":{},\"completionTokens\":{}}}",
+                    prompt_tokens, completion_tokens
+                ));
+                let _ = writeln!(out, "{}", out_s);
                 let _ = out.flush();
             }
             "exit" => break,
