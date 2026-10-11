@@ -127,8 +127,10 @@ describe('render width harness (windowed-overflow guard)', () => {
     for (const w of WIDTHS) {
       const r1 = statusBarRow1(model, w);
       expect(visibleLen(r1), `width ${w}: statusBarRow1 overflow: ${JSON.stringify(r1)}`).toBeLessThanOrEqual(w);
-      // Toggle must always be preserved
-      expect(r1).toMatch(/● (Act|A)/);
+      // MCH-70+: plan/act toggle moved off row 1 (bars row at wide widths,
+      // composer hint at narrow). Row 1 carries model/badges/context only.
+      // Guard: row 1 must still show the model and never drop the context bar.
+      expect(r1).toMatch(/deepseek|opencode/);
 
       const r2 = statusBarRow2(model, w);
       expect(visibleLen(r2), `width ${w}: statusBarRow2 overflow: ${JSON.stringify(r2)}`).toBeLessThanOrEqual(w);

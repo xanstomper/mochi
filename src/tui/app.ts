@@ -82,7 +82,7 @@ const COMMANDS = [
   { name: '/copy', hint: 'Copy last assistant message to clipboard (works without mouse)' },
   { name: '/model', hint: 'Select AI model provider & model' },
   { name: '/reasoning', hint: 'Adjust reasoning effort & compute (low, medium, high, max)' },
-  { name: '/theme', hint: 'Select color theme (15 styles)' },
+  { name: '/theme', hint: 'Select color theme (21 styles)' },
   { name: '/skills', hint: 'Browse & activate specialized engineering skills' },
   { name: '/mode', hint: 'Set execution mode (normal, spec, security, chaos)' },
   { name: '/providers', hint: 'List connected AI model providers' },
@@ -971,6 +971,16 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     const s1 = h - bottomRows;
     rows[s1] = statusBarRow1(statusModel, w);
     let cTop = s1 + 1;
+
+    // Composer hint with the plan/act dots inlined beside the key legend,
+    // color-coded by mode (plan=violet, act=act color).
+    const hintWithMode = (width: number): string => {
+      const base = ' ⏎ send · Tab plan/act · ESC stop · / for commands';
+      if (width < 60) return base;
+      const dot = state.uiMode === 'plan' ? `${T.plan}● Plan${T.reset}` : `${T.act}● Act${T.reset}`;
+      const dim = `${T.grayDark}${base.slice(1)}${T.reset}`;
+      return ` ${dot} ${T.grayDark}·${T.reset} ${dim}`;
+    };
     
     if (statusRows === 3) {
       const promptTotal = state.inTokens + state.cacheTokens;
@@ -1012,11 +1022,11 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       
       rows[s1 + 1] = barsRow;
       rows[s1 + 2] = statusBarRow2(statusModel, w);
-      rows[s1 + 3] = composerHintRow(' ⏎ send · Tab plan/act · ESC stop · / for commands', w);
+      rows[s1 + 3] = composerHintRow(hintWithMode(w), w);
       cTop = s1 + 4;
     } else {
       rows[s1 + 1] = statusBarRow2(statusModel, w);
-      rows[s1 + 2] = composerHintRow(' ⏎ send · Tab plan/act · ESC stop · / for commands', w);
+      rows[s1 + 2] = composerHintRow(hintWithMode(w), w);
       cTop = s1 + 3;
     }
 

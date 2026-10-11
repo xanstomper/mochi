@@ -3,10 +3,10 @@ import { THEMES, getTheme, getAllThemes, applyTheme, getCurrentTheme, themeSwatc
 import { setTheme, T } from './view.js';
 
 describe('mochi themes', () => {
-  it('defines 20 unique themes', () => {
-    expect(THEMES.length).toBe(20);
+  it('defines 21 unique themes', () => {
+    expect(THEMES.length).toBe(21);
     const ids = new Set(THEMES.map((t) => t.id));
-    expect(ids.size).toBe(20);
+    expect(ids.size).toBe(21);
   });
 
   it('every theme has all required color tokens and description', () => {
