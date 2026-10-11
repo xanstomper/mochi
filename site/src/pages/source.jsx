@@ -1,7 +1,6 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import RepoBrowser from '../RepoBrowser.jsx';
-import Mochi from '../Mascot.jsx';
 import Footer from '../Footer.jsx';
 import { Marquee, Reveal, AnimatedContent, SplitText } from '../anim.jsx';
 
@@ -56,20 +55,6 @@ function Source() {
                 </div>
               </AnimatedContent>
             </div>
-            <AnimatedContent direction="right" delay={0.4}>
-              <div style={{ position: 'relative', textAlign: 'center' }}>
-                <Mochi size={180} />
-                <div style={{
-                  fontFamily: 'var(--font-sans)',
-                  fontSize: 13,
-                  color: 'var(--purple-dark)',
-                  fontStyle: 'italic',
-                  marginTop: 8,
-                }}>
-                  built by the community ♡
-                </div>
-              </div>
-            </AnimatedContent>
           </div>
         </div>
       </div>
@@ -115,15 +100,6 @@ function Source() {
                 Read the Docs →
               </a>
             </div>
-          </div>
-          <div style={{
-            position: 'absolute',
-            right: -20,
-            bottom: -10,
-            zIndex: 0,
-            opacity: 0.9,
-          }}>
-            <Mochi size={220} />
           </div>
         </div>
       </div>

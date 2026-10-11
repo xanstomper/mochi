@@ -1,6 +1,5 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import Mochi from '../Mascot.jsx';
 import Footer from '../Footer.jsx';
 import { AnimatedContent, SplitText, Reveal } from '../anim.jsx';
 
@@ -79,20 +78,6 @@ function Docs() {
                 </p>
               </AnimatedContent>
             </div>
-            <AnimatedContent direction="right" delay={0.4}>
-              <div style={{ position: 'relative', textAlign: 'center' }}>
-                <Mochi size={140} />
-                <div style={{
-                  fontFamily: 'var(--font-sans)',
-                  fontSize: 13,
-                  color: 'var(--purple-dark)',
-                  fontStyle: 'italic',
-                  marginTop: 4,
-                }}>
-                  easy setup!
-                </div>
-              </div>
-            </AnimatedContent>
           </div>
 
           {/* Search bar */}

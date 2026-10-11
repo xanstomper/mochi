@@ -76,6 +76,41 @@ const TASKS = {
       return ok ? [true, 'both facts correct'] : [false, `wrong: ${JSON.stringify(t.trim().slice(0, 80))}`];
     },
   },
+  // Harder: multi-file refactor — rename a shared symbol across two modules
+  // plus its test, keeping behavior identical.
+  x1: {
+    name: 'multifile-refactor',
+    setup(dir) {
+      writeFileSync(join(dir, 'package.json'), '{"name":"x","version":"1.0.0"}\n');
+      writeFileSync(join(dir, 'util.js'), 'function fmtPrice(cents){ return (cents/100).toFixed(2); }\nmodule.exports={fmtPrice};\n');
+      writeFileSync(join(dir, 'cart.js'), 'const {fmtPrice}=require("./util.js");\nfunction renderCart(items){ return items.map(i=>fmtPrice(i.cents)).join(", "); }\nmodule.exports={renderCart};\n');
+      writeFileSync(join(dir, 'util.test.js'), 'const {fmtPrice}=require("./util.js");\nconsole.log(fmtPrice(1050));\n');
+    },
+    prompt: 'Rename the function fmtPrice to formatPrice in util.js, and update every file that uses it (cart.js, util.test.js). Run node util.test.js and make sure the output is 10.50.',
+    check(dir) {
+      const u = readFileSync(join(dir, 'util.js'), 'utf8');
+      const c = readFileSync(join(dir, 'cart.js'), 'utf8');
+      if (/fmtPrice/.test(u + c)) return [false, 'old name still present'];
+      const r = spawnSync('node', ['util.test.js'], { cwd: dir, encoding: 'utf8', timeout: 15000 });
+      return r.stdout.trim() === '10.50' ? [true, 'renamed + prints 10.50'] : [false, `prints ${JSON.stringify(r.stdout.trim().slice(0, 40))}`];
+    },
+  },
+  // Harder: cross-module bugfix — the bug lives in a different file than the
+  // failing one; agent must trace the call chain, then verify.
+  x2: {
+    name: 'cross-module-bugfix',
+    setup(dir) {
+      writeFileSync(join(dir, 'package.json'), '{"name":"x","version":"1.0.0"}\n');
+      writeFileSync(join(dir, 'inventory.js'), 'function itemCount(items){ return items.length; }\nmodule.exports={itemCount};\n');
+      writeFileSync(join(dir, 'order.js'), 'const {itemCount}=require("./inventory.js");\nfunction total(items){ let t=1; for(const i of items){ t += i.price * i.qty; } return t; }\nmodule.exports={total};\n');
+      writeFileSync(join(dir, 'order.test.js'), 'const {total}=require("./order.js");\nconsole.log(total([{price:2,qty:3},{price:5,qty:1}]));\n');
+    },
+    prompt: 'order.js prints the wrong total for order.test.js — it should print 11. Trace through inventory.js and order.js, fix the bug, then run node order.test.js and make sure the output is 11.',
+    check(dir) {
+      const r = spawnSync('node', ['order.test.js'], { cwd: dir, encoding: 'utf8', timeout: 15000 });
+      return r.stdout.trim() === '11' ? [true, 'prints 11'] : [false, `prints ${JSON.stringify(r.stdout.trim().slice(0, 40))}`];
+    },
+  },
 };
 
 // ---------- Harness adapters: { cmd(dir, prompt) -> spawnSync args } ----------

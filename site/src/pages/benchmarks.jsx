@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import Mochi from '../Mascot.jsx';
 import Footer from '../Footer.jsx';
 import { AnimatedContent, SplitText, Reveal, Marquee, BenchChart } from '../anim.jsx';
 
@@ -84,20 +83,6 @@ function Benchmarks() {
                 </div>
               </AnimatedContent>
             </div>
-            <AnimatedContent direction="right" delay={0.4}>
-              <div style={{ position: 'relative', textAlign: 'center' }}>
-                <Mochi size={140} />
-                <div style={{
-                  fontFamily: 'var(--font-sans)',
-                  fontSize: 13,
-                  color: 'var(--purple-dark)',
-                  fontStyle: 'italic',
-                  marginTop: 4,
-                }}>
-                  faster, smarter, lighter
-                </div>
-              </div>
-            </AnimatedContent>
           </div>
         </div>
       </div>

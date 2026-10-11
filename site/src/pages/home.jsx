@@ -95,7 +95,7 @@ function HeroSection() {
         </AnimatedContent>
         <SplitText
           text="A Softer Kind of"
-          className="hero-title"
+          className="hero-title hero-title-1"
           as="h1"
           delay={0.3}
           stagger={0.02}
