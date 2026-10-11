@@ -1,18 +1,10 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import Footer from '../Footer.jsx';
-import { AnimatedContent, SplitText, Reveal } from '../anim.jsx';
+import FilmGrain from '../FilmGrain.jsx';
+import { AnimatedContent, Reveal } from '../anim.jsx';
 
-const DOC_CARDS = [
-  { icon: '🚀', title: 'Quick Start', desc: 'Get up and running in minutes with our simple setup guide.\u00A0→' },
-  { icon: '🪟', title: 'Installation', desc: 'Step-by-step installation instructions for all platforms.\u00A0→' },
-  { icon: '🎚️', title: 'Configuration', desc: 'Customize Mochi to fit your workflow.\u00A0→' },
-  { icon: '📄', title: 'API Reference', desc: 'Complete API documentation and examples.\u00A0→' },
-  { icon: '💡', title: 'Tutorials', desc: 'Learn through hands-on examples and projects.\u00A0→' },
-  { icon: '❓', title: 'FAQ', desc: 'Common questions and troubleshooting.\u00A0→' },
-];
-
-const SKILLS = {
+  const SKILLS = {
   'AI Architectures & Protocols': ['gpt-5-agent', 'o3-reasoning', 'deep-research', 'anthropic-research', 'cursor-workflow', 'devin-mode', 'github-copilot', 'vscode-copilot', 'gemini-learning', 'claude-design', 'hermes-workflow'],
   'System Integration': ['mcp-setup', 'acp-setup', 'mochi-architecture', 'core-harness', 'tools-design', 'memory-design', 'replication-design'],
   'Domain Engineering': ['rust-engineer', 'golang-pro', 'python-expert', 'typescript-master', 'frontend-craft', 'backend-architecture', 'docker-containerization', 'database-optimizer', 'performance-profiling', 'security-audit', 'tdd-workflow', 'code-refactoring', 'code-review', 'api-design', 'git-wizard'],
@@ -54,6 +46,7 @@ function Docs() {
   const [toolTab, setToolTab] = React.useState('Editing');
   return (
     <>
+      <FilmGrain />
       <div className="pagehead">
         <div className="wrap">
           <div className="pagehead-row">
@@ -64,74 +57,14 @@ function Docs() {
                   DOCUMENTATION
                 </div>
               </AnimatedContent>
-              <SplitText
-                text="Read the Docs."
-                className="hero-title pagehead-title"
-                as="h1"
-                style={{ fontSize: 48, maxWidth: 620 }}
-                delay={0.3}
-                stagger={0.015}
-              />
+              <h1 className="pagehead-title">Everything Mochi can do.</h1>
               <AnimatedContent direction="bottom" delay={0.5}>
-                <p className="lede" style={{ marginTop: 16, maxWidth: 560 }}>
-                  Everything you need to get started, from quickstart guides to advanced configuration, all in one place.
+                <p className="lede" style={{ marginTop: 16, maxWidth: 620 }}>
+                  Installation, the 16 agent roles, every native tool, skills, MCP — the complete reference in one place.
                 </p>
               </AnimatedContent>
             </div>
           </div>
-
-          {/* Search bar */}
-          <AnimatedContent direction="bottom" delay={0.6}>
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 12,
-              background: 'var(--card-bg, #fff)',
-              border: '1.5px solid var(--line)',
-              borderRadius: 999,
-              padding: '14px 22px',
-              marginTop: 32,
-              maxWidth: 520,
-              boxShadow: '0 2px 12px rgba(139,117,246,.06)',
-            }}>
-              <span style={{ color: 'var(--muted)', fontSize: 18 }}>🔍</span>
-              <input
-                type="text"
-                placeholder="Search docs..."
-                style={{
-                  flex: 1,
-                  border: 'none',
-                  outline: 'none',
-                  background: 'transparent',
-                  fontSize: 15,
-                  color: 'var(--ink)',
-                  fontFamily: 'var(--font-sans)',
-                }}
-              />
-              <kbd style={{
-                background: 'var(--purple-light)',
-                color: 'var(--purple-dark)',
-                fontSize: 11,
-                fontWeight: 700,
-                padding: '4px 8px',
-                borderRadius: 6,
-                fontFamily: 'var(--font-mono, monospace)',
-              }}>⌘ K</kbd>
-            </div>
-          </AnimatedContent>
-        </div>
-      </div>
-
-      {/* Doc cards grid */}
-      <div className="wrap" style={{ padding: '24px 24px 60px' }}>
-        <div className="grid3">
-          {DOC_CARDS.map((c, i) => (
-            <Reveal as="div" className="card" delay={i} key={i}>
-              <span className="card-icon">{c.icon}</span>
-              <h3 className="card-title">{c.title}</h3>
-              <p className="card-desc">{c.desc}</p>
-            </Reveal>
-          ))}
         </div>
       </div>
 

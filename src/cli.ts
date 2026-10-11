@@ -699,7 +699,7 @@ async function main() {
     const { checkOnce, startAmbient } = await import('./ambient.js');
     if (flags.watch) {
       console.log(`Ambient watch started (Ctrl-C to stop). Proposals: ${resolve(cwd, '.mochi', 'ambient')}`);
-      const stop = startAmbient({
+      const stop = await startAmbient({
         cwd,
         onFailure: (r) => console.log(`[ambient] FAIL ${r.command} (exit ${r.exitCode}) -> ${r.proposalPath ?? '(none)'}`),
       });

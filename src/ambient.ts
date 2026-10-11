@@ -95,14 +95,48 @@ function writeProposal(cwd: string, report: AmbientReport): string {
 }
 
 /** Start a polling loop; returns a stop function. */
-export function startAmbient(opts: AmbientOpts): () => void {
+export async function startAmbient(opts: AmbientOpts): Promise<() => void> {
   let stopped = false;
+  let ticking = false;
+  let pending = false;
   const tick = async () => {
-    if (stopped) return;
+    if (stopped || ticking) { pending = true; return; }
+    ticking = true;
     try {
       await checkOnce(opts);
     } catch { /* never die */ }
+    ticking = false;
+    // If a file changed while we were checking, run once more immediately.
+    if (pending && !stopped) { pending = false; void tick(); }
   };
-  const id = setInterval(tick, (opts.intervalSec ?? 15) * 1000);
-  return () => { stopped = true; clearInterval(id); };
+
+  // MCH-104: file-watch trigger (in addition to the interval poll). A source
+  // save fires a check after a short debounce so `mochi ambient --watch`
+  // reacts instantly instead of waiting up to intervalSec for the next poll.
+  let debouncer: ReturnType<typeof setTimeout> | undefined;
+  let watcher: { close: () => void } | undefined;
+  try {
+    const { watch } = await import('node:fs');
+    let w: ReturnType<typeof watch>;
+    try {
+      w = watch(opts.cwd, { recursive: true }, (_event, file) => {
+        if (stopped || !file) return;
+        const f = String(file);
+        // Ignore our own state/proposal churn and dependency/vcs noise.
+        if (f.startsWith('.mochi/') || f.startsWith('.git/') || f.startsWith('node_modules/')) return;
+        if (!/\.(ts|tsx|js|jsx|mjs|cjs|py|rs|go|java|rb|c|cpp|h|hpp|json|toml|yaml|yml)$/.test(f)) return;
+        clearTimeout(debouncer);
+        debouncer = setTimeout(() => void tick(), 1500);
+      });
+      watcher = w;
+    } catch { /* recursive watch unsupported on this fs — poll-only fallback */ }
+  } catch { /* fs.watch unavailable */ }
+
+  const pollId = setInterval(tick, (opts.intervalSec ?? 15) * 1000);
+  return () => {
+    stopped = true;
+    clearInterval(pollId);
+    clearTimeout(debouncer);
+    watcher?.close();
+  };
 }

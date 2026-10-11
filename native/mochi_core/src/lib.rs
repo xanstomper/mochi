@@ -18,6 +18,7 @@ pub mod memory_index;
 pub mod patch_engine;
 pub mod planner;
 pub mod pty_manager;
+pub mod redact;
 pub mod repo;
 pub mod search;
 pub mod skills;
@@ -53,6 +54,7 @@ pub use memory_index::*;
 pub use patch_engine::*;
 pub use planner::*;
 pub use pty_manager::*;
+pub use redact::*;
 pub use repo::*;
 pub use search::*;
 pub use skills::*;
@@ -199,6 +201,35 @@ pub unsafe extern "C" fn mochi_hash_prompt(
     }
     let slice = unsafe { slice::from_raw_parts(data_ptr, data_len) };
     tokens::fnv1a_64_hash(slice)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mochi_redact_secrets(
+    input_ptr: *const c_char,
+    out_buf: *mut c_char,
+    out_cap: usize,
+) -> c_int {
+    if input_ptr.is_null() || out_buf.is_null() || out_cap == 0 {
+        return -1;
+    }
+    let Ok(input) = (unsafe { CStr::from_ptr(input_ptr) }).to_str() else {
+        return -1;
+    };
+    let redacted = redact::redact_secrets(input);
+    let c_res = match CString::new(redacted) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let bytes = c_res.as_bytes_with_nul();
+    let copy_len = bytes.len().min(out_cap);
+    let dst = unsafe { slice::from_raw_parts_mut(out_buf as *mut u8, copy_len) };
+    dst.copy_from_slice(&bytes[..copy_len]);
+    if copy_len > 0 {
+        dst[copy_len - 1] = 0;
+    }
+    // Return the required length (excluding the NUL) so the caller can detect
+    // truncation and retry with a bigger buffer.
+    (c_res.as_bytes().len()) as c_int
 }
 
 #[no_mangle]

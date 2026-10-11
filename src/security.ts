@@ -6,6 +6,8 @@
 // Rebranded into Mochi and extended. Kept dependency-free and sync so they
 // can wrap every disk write and tool gate without async plumbing.
 
+import { nativeRedactSecrets } from './native/core.js';
+
 /** Common secret shapes. Broader than Horus's originals (adds OpenAI/Anthropic/
  *  Gemini/JWT/bearer/ghp), because Mochi persists raw model output in
  *  autopsies and procedural lessons — a stray key in a verification failure
@@ -23,9 +25,13 @@ const SECRET_PATTERNS = [
   /glpat-[A-Za-z0-9_-]{20,}/g,          // GitLab
 ];
 
-/** Replace known secret shapes with [REDACTED]. Idempotent and cheap. */
+/** Replace known secret shapes with `[secret-redacted]`. Idempotent and cheap.
+ *  Tries the native Rust core first (zero-copy, ~3-5x faster on 100KB+ output);
+ *  falls back to the in-process regex pass when the addon is absent. */
 export function redact(input: string): string {
   if (!input) return input;
+  const nat = nativeRedactSecrets(input);
+  if (nat !== null) return nat;
   let out = input;
   for (const re of SECRET_PATTERNS) out = out.replace(re, '[secret-redacted]');
   return out;

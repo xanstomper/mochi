@@ -113,6 +113,10 @@ function initNativeCore() {
           args: [FFIType.cstring],
           returns: FFIType.i32,
         },
+        mochi_redact_secrets: {
+          args: [FFIType.cstring, FFIType.ptr, FFIType.usize],
+          returns: FFIType.i32,
+        },
       });
       if (bunLib) {
         ffiAvailable = true;
@@ -471,5 +475,53 @@ export function nativeSkeletonizeSource(source: string, ext = 'ts'): string | nu
       return null;
     }
   }
+  return null;
+}
+
+/**
+ * Fast in-process Rust secret-pattern redaction. Mirrors the patterns in
+ * `src/security.ts` byte-for-byte (sk-, sk-ant-, AIza, gh*, AKIA, JWT,
+ * Bearer, PRIVATE KEY, xox*, glpat-) and replaces every match with
+ * `[secret-redacted]`.
+ *
+ * Returns the redacted string, or `null` when the native core is unavailable
+ * (caller should fall back to the in-process TS implementation).
+ */
+export function nativeRedactSecrets(input: string): string | null {
+  initNativeCore();
+  if (!ffiAvailable || !input) return input ? null : '';
+
+  if (napiModule && typeof napiModule.redactSecrets === 'function') {
+    try {
+      const out = napiModule.redactSecrets(input);
+      return typeof out === 'string' ? out : null;
+    } catch {
+      return null;
+    }
+  }
+
+  if (bunLib) {
+    try {
+      // The C-ABI takes an out-buffer; size it to 2x input + slack (matches
+      // can only shorten the string to a fixed 16-byte literal, so 2x is
+      // overkill but safe for inputs that are mostly secrets).
+      const cap = Math.max(64, input.length * 2 + 64);
+      const buf = Buffer.alloc(cap);
+      const { ptr } = (globalThis as any).Bun;
+      const written = bunLib.symbols.mochi_redact_secrets(
+        Buffer.from(input + '\0'),
+        ptr(buf),
+        buf.length,
+      );
+      if (written < 0) return null;
+      // NUL-terminated copy
+      let end = buf.indexOf(0);
+      if (end < 0) end = Math.min(written, buf.length);
+      return buf.toString('utf8', 0, end);
+    } catch {
+      return null;
+    }
+  }
+
   return null;
 }

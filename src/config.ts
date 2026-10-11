@@ -26,7 +26,7 @@ const defaultConfig = (): MochiConfig => ({
     maxIterations: 40,
     maxRuntimeMinutes: 240,
     maxConcurrentAgents: 3,
-    contextBudgetTokens: 32_000,
+    contextBudgetTokens: 200_000,
   },
   permissions: {
     read: true,
