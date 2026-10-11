@@ -113,10 +113,19 @@ describe('isWeakVerification', () => {
 
 describe('cwdForScope', () => {
   const root = mkdtempSync(resolve(tmpdir(), 'mochi-cwdscope-'));
-  it('returns the subdirectory when fileScope is consistently under one', () => {
+  it('returns the subdirectory when fileScope is consistently under one that is its own project root', () => {
+    // cwdForScope only scopes into a subdirectory when it carries a project
+    // marker (package.json etc.) — a bare folder would break `npm test` there.
     const sub = resolve(root, 'pkg');
+    mkdirSync(sub, { recursive: true });
+    writeFileSync(resolve(sub, 'package.json'), '{}');
     const result = cwdForScope(root, ['pkg/foo.ts', 'pkg/bar.ts']);
     expect(result).toBe(sub);
+  });
+  it('returns the root when the subdirectory has no project marker', () => {
+    const bare = resolve(root, 'pkg-bare');
+    mkdirSync(bare, { recursive: true });
+    expect(cwdForScope(root, ['pkg-bare/foo.ts', 'pkg-bare/bar.ts'])).toBe(root);
   });
   it('returns undefined when fileScope is at the project root', () => {
     expect(cwdForScope(root, ['foo.ts', 'bar.ts'])).toBeUndefined();

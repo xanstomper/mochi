@@ -187,7 +187,11 @@ export function cwdForScope(cwd: string, fileScope: string[] | undefined): strin
   const markerHere = hasProjectMarker(dir);
   if (markerHere) return dir;
   const root = nearestProjectRoot(dir);
-  return root ? root : dir;
+  if (root) return root;
+  // No project marker in the scope dir or any ancestor within 8 levels: stay
+  // at cwd (commands like `npm test` need the root's runner). Returning
+  // `dir` here would scope into an unmarked folder where nothing runs.
+  return resolve(cwd);
 }
 
 /** Returns a version of `cmd` that runs from the given directory if it does
