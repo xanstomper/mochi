@@ -3993,6 +3993,20 @@ Continue from 'Next:', do not redo completed progress.`,
       // No diff, or not a git repo (git exits 128/129 with "not a git
       // repository") — nothing to review, and crucially NO model call.
       if (!diff.trim() || /exit_code: 12[89]/.test(diff) || /not a git repository/i.test(diff)) return { tail: 'no diff' };
+      // MCH-101: simple script tasks get a LOCAL review instead of a model
+      // round. The hygiene scan + accidental-deletion check catch the defects
+      // that matter for script-sized diffs (debug leftovers, pasted TODOs,
+      // deleted lines) at zero provider latency. Hard tasks keep the model.
+      if (isSimpleScriptTask(task)) {
+        const findings = scanDiffForHygiene(diff);
+        if (findings.length > 0) {
+          return {
+            issue: `Hygiene issues in the diff (fix before finishing):\n${renderHygieneFindings(findings)}`,
+            tail: `local review: ${findings.length} hygiene finding(s)`,
+          };
+        }
+        return { tail: 'local review: clean' };
+      }
       const testDensity = evaluateTestDensity(this.cwd, diff);
       const densityAdvice = (!testDensity.hasSufficientCoverage && testDensity.productionLinesChanged > 20)
         ? `\nTest Density Warning: ${testDensity.synthesisAdvice}\n`
