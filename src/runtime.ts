@@ -14,8 +14,9 @@ import { MemoryStore } from './memory/memory.js';
 import { RetrievalEngine } from './memory/retrieval.js';
 import { SpeculativeEngine, type SpeculativeResult } from './agent/speculative.js';
 import { BudgetEngine } from './budget.js';
-import {currentConfig, login as doLogin, selectProviderById, describeConfig, listModelsForProvider} from './model/model-manager.js';
+import {currentConfig, login as doLogin, selectProviderById, describeConfig, listModelsForProvider, addFallbackModel, removeFallbackModel, clearFallbackModels} from './model/model-manager.js';
 import { UsageStore } from './model/usage.js';
+import { TraceRecorder } from './observability/trace.js';
 import { buildTools } from './tools/index.js';
 import { applyMode, modeInstruction, MODE_IDS, isMode } from './modes.js';
 import { loadConfigFile, saveConfigFile } from './model/providers.js';
@@ -203,6 +204,7 @@ export class Runtime {
       : raw === 'low' || raw === 'easy' ? 'low'
       : raw === 'off' ? 'off'
       : raw === 'auto' ? 'auto'
+      : raw === 'med' || raw === 'medium' || raw === 'mid' ? 'medium'
       : 'medium';
     this.config.reasoning = normalized;
     process.env.MOCHI_REASONING = normalized;
@@ -615,9 +617,17 @@ export class Runtime {
     if (!goal) return `Goal not found: ${goalId}`;
     const tasks = this.workspace.loadTasks(goalId);
     if (!tasks.length) return `Goal ${goalId.slice(0, 8)} has no tasks to resume.`;
+    for (const t of tasks) {
+      if (t.status === 'failed' || t.status === 'running') {
+        t.status = 'pending';
+      }
+    }
+    if (!tasks.some((t) => t.status === 'pending') && tasks.length > 0) {
+      tasks[tasks.length - 1].status = 'pending';
+    }
     goal.status = 'active';
     this.workspace.saveGoal(goal);
-    const { TraceRecorder } = await import('./observability/trace.js');
+    this.workspace.saveTasks(goal.id, tasks);
     const recorder = new TraceRecorder(this.workspace.dir, goal.id).attach(this.events);
     try {
       const result = await this.goals.runGoal(goal, tasks, [], this.abortSignal);
@@ -847,6 +857,31 @@ export class Runtime {
     this.syncEngines();
     return describeConfig(this.config);
   }
+  addFallback(providerId: string, modelId?: string, apiKey?: string): string {
+    const saved = currentConfig();
+    this.config = addFallbackModel(saved, providerId, modelId, apiKey);
+    this.syncEngines();
+    return `Added fallback: ${providerId} (${modelId || 'default'})`;
+  }
+
+  removeFallback(providerId: string): string {
+    const saved = currentConfig();
+    this.config = removeFallbackModel(saved, providerId);
+    this.syncEngines();
+    return `Removed fallback: ${providerId}`;
+  }
+
+  clearFallbacks(): string {
+    const saved = currentConfig();
+    this.config = clearFallbackModels(saved);
+    this.syncEngines();
+    return `Cleared all fallback models.`;
+  }
+
+  getFallbacks(): NonNullable<MochiConfig['model']['failover']> {
+    return this.config.model.failover ?? [];
+  }
+
 
   /** Propagate a config swap to engines that captured the config object at
    *  construction. GoalEngine (and anything else holding a reference) would

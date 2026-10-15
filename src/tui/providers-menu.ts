@@ -90,6 +90,7 @@ function detailsText(p: Provider, activeId: string, envLookup: (k: string) => st
 export function oauthLoginHint(p: Provider): { label: string; command: string } | null {
   if (p.id === 'github-models') return { label: 'Login with GitHub OAuth', command: 'gh auth login' };
   if (p.id === 'huggingface') return { label: 'Login with Hugging Face', command: 'huggingface-cli login' };
+  if (p.id === 'antigravity' || p.id === 'google-antigravity') return { label: 'Login with Google Antigravity OAuth', command: 'mochi login antigravity' };
   return null;
 }
 

@@ -296,8 +296,8 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
         // re-emits its last ~200 chars after a long tool sequence produces
         // visibly duplicated paragraphs in the transcript and the user sees
         // the same sentence repeated dozens of times as more chunks arrive.
-        if (last.text === content) return false;
-        if (last.text.length > 0 && content.length > 0 && last.text.endsWith(content)) return false;
+        if (content.length >= 20 && last.text === content) return false;
+        if (content.length >= 20 && last.text.length > 0 && last.text.endsWith(content)) return false;
         if (last.text.length > 0 && content.length > 0 && content.startsWith(last.text)) {
           // Provider re-sent the entire accumulated buffer — replace.
           last.text = content;

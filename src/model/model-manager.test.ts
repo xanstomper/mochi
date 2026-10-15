@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import {
   login, setProvider, selectProviderById, currentConfig, listProviderIds,
   listModelsForProvider, describeConfig, maskApiKey,
+  addFallbackModel, removeFallbackModel, clearFallbackModels, modelContextBudget,
 } from './model-manager.js';
 import { saveConfigFile, loadConfigFile } from './providers.js';
 import type { MochiConfig } from '../types.js';
@@ -116,5 +117,42 @@ describe('list + describe', () => {
   it('currentConfig reads the persisted file', () => {
     setProvider(base(), { provider: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', apiKey: 'k' });
     expect(currentConfig().model?.model).toBe('deepseek-chat');
+  });
+});
+
+describe('fallback model management', () => {
+  it('adds and updates fallback models', () => {
+    let cfg = base();
+    cfg = addFallbackModel(cfg, 'anthropic', 'claude-sonnet-4-6');
+    expect(cfg.model.failover).toHaveLength(1);
+    expect(cfg.model.failover![0].provider).toBe('anthropic');
+    expect(cfg.model.failover![0].model).toBe('claude-sonnet-4-6');
+
+    cfg = addFallbackModel(cfg, 'anthropic', 'claude-opus-4-6');
+    expect(cfg.model.failover).toHaveLength(1);
+    expect(cfg.model.failover![0].model).toBe('claude-opus-4-6');
+
+    cfg = addFallbackModel(cfg, 'openai', 'gpt-4o');
+    expect(cfg.model.failover).toHaveLength(2);
+  });
+
+  it('removes and clears fallback models', () => {
+    let cfg = base();
+    cfg = addFallbackModel(cfg, 'anthropic', 'claude-sonnet-4-6');
+    cfg = addFallbackModel(cfg, 'openai', 'gpt-4o');
+    expect(cfg.model.failover).toHaveLength(2);
+
+    cfg = removeFallbackModel(cfg, 'anthropic');
+    expect(cfg.model.failover).toHaveLength(1);
+    expect(cfg.model.failover![0].provider).toBe('openai');
+
+    cfg = clearFallbackModels(cfg);
+    expect(cfg.model.failover).toHaveLength(0);
+  });
+
+  it('calculates full context budget for antigravity models', () => {
+    expect(modelContextBudget('gemini-3.8-flash', 'antigravity')).toBe(1_048_576);
+    expect(modelContextBudget('claude-sonnet-4-6', 'antigravity')).toBe(250_000);
+    expect(modelContextBudget('gpt-oss-120b', 'antigravity')).toBe(131_072);
   });
 });

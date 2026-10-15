@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import { resolve } from 'node:path';
 import {
-  codexAmbientToken, geminiAmbientToken, claudeAmbientToken, gcloudAmbientToken,
+  codexAmbientToken, geminiAmbientToken, claudeAmbientToken, gcloudAmbientToken, antigravityAmbientToken, tokenjuiceAmbientToken, kiloAmbientToken,
   type AmbientDeps,
 } from './ambient-auth.js';
 
@@ -92,5 +92,56 @@ describe('ambient-auth', () => {
     };
     const t = await gcloudAmbientToken(deps);
     expect(t?.token).toBe('adc-cli-token');
+  });
+
+  it('antigravity: reads omp agent.db credential when fresh', async () => {
+    const future = Date.now() + 3600_000;
+    const row = JSON.stringify({
+      access: 'ya29.antigravity-token',
+      refresh: '1//refresh-token',
+      expires: future,
+      projectId: 'aicode-consumers',
+      email: 'test@example.com',
+    });
+    const { deps } = memFs({ '.omp/agent/agent.db': 'sqlite-stub' });
+    const t = await antigravityAmbientToken({
+      ...deps,
+      execFile: async () => row,
+    });
+    expect(t?.token).toBe('ya29.antigravity-token');
+    expect(t?.source).toBe('omp-antigravity-oauth');
+    expect(t?.expiresAtMs).toBe(future);
+  });
+
+  it('antigravity: falls back to ~/.antigravity/oauth_creds.json when fresh', async () => {
+    const future = Math.floor(Date.now() / 1000) + 3600;
+    const { deps } = memFs({
+      '.antigravity/oauth_creds.json': JSON.stringify({ access_token: 'antigravity-json-token', expiry_date: future }),
+    });
+    const t = await antigravityAmbientToken(deps);
+    expect(t?.token).toBe('antigravity-json-token');
+    expect(t?.source).toBe('antigravity-oauth');
+  });
+
+  it('antigravity: returns undefined when absent', async () => {
+    const { deps } = memFs({});
+    const t = await antigravityAmbientToken(deps);
+    expect(t).toBeUndefined();
+  });
+
+  it('tokenjuice: reads ~/.omp/agent/tokenjuice.key', () => {
+    const { deps } = memFs({ '.omp/agent/tokenjuice.key': 'tj_secret_key_123' });
+    const t = tokenjuiceAmbientToken(deps);
+    expect(t?.token).toBe('tj_secret_key_123');
+    expect(t?.source).toBe('omp-tokenjuice-key');
+  });
+
+  it('kilo: reads ~/.omp/agent/agent.db where provider = kilo', async () => {
+    const future = Date.now() + 3600_000;
+    const row = JSON.stringify({ access: 'kilo-secret-token', expires: future });
+    const { deps } = memFs({ '.omp/agent/agent.db': 'sqlite-stub' });
+    const t = await kiloAmbientToken({ ...deps, execFile: async () => row });
+    expect(t?.token).toBe('kilo-secret-token');
+    expect(t?.source).toBe('omp-kilo-oauth');
   });
 });

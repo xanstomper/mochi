@@ -31,7 +31,7 @@ const ANSWER_MARKERS = [
 // json") that almost never need to touch the filesystem. Only honoured when the
 // objective is short and carries no edit/work marker, to avoid misrouting a real
 // coding command like "say it by writing a logger".
-const UTTERANCE_MARKERS = ['say ', 'return ', 'respond', 'print ', 'answer', 'reply', 'output ', 'return exactly'];
+const UTTERANCE_MARKERS = ['say ', 'return ', 'respond', 'print ', 'answer', 'reply', 'output ', 'return exactly', 'hello', 'hi', 'hey', 'count '];
 
 const WORK_MARKERS = [
   'create', 'write a', 'implement', 'build', 'add ', 'fix', 'refactor', 'change',

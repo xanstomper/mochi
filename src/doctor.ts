@@ -303,13 +303,15 @@ function editorHealth(): { vscodeInstalled: boolean; jetbrainsPluginPresent: boo
 async function ambientAuthHealth(): Promise<Array<{ provider: string; source: string; expiresAtMs?: number }>> {
   const out: Array<{ provider: string; source: string; expiresAtMs?: number }> = [];
   try {
-    const { codexAmbientToken, geminiAmbientToken, claudeAmbientToken, gcloudAmbientToken } = await import('./model/ambient-auth.js');
+    const { codexAmbientToken, geminiAmbientToken, claudeAmbientToken, gcloudAmbientToken, antigravityAmbientToken } = await import('./model/ambient-auth.js');
     const codex = await codexAmbientToken();
     if (codex) out.push({ provider: 'openai', source: codex.source, expiresAtMs: codex.expiresAtMs });
     const gemini = geminiAmbientToken() ?? (await gcloudAmbientToken());
     if (gemini) out.push({ provider: 'gemini/google', source: gemini.source, expiresAtMs: gemini.expiresAtMs });
     const claude = claudeAmbientToken();
     if (claude) out.push({ provider: 'anthropic', source: claude.source, expiresAtMs: claude.expiresAtMs });
+    const antigravity = await antigravityAmbientToken();
+    if (antigravity) out.push({ provider: 'antigravity', source: antigravity.source, expiresAtMs: antigravity.expiresAtMs });
   } catch { /* best-effort */ }
   return out;
 }

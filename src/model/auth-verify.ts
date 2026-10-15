@@ -9,6 +9,7 @@
 //   network       — timeout/DNS/reset/5xx: key MIGHT be fine; caller stores
 //                   with a warning instead of refusing honestly-good keys
 //                   on flaky networks.
+import { getAntigravityUserAgent } from './antigravity-oauth.js';
 
 export type KeyVerdict =
   | { ok: true }
@@ -46,6 +47,40 @@ async function get(url: string, headers: Record<string, string>, timeoutMs: numb
 export async function verifyApiKey(opts: VerifyKeyOpts): Promise<KeyVerdict> {
   const timeoutMs = opts.timeoutMs ?? 10_000;
   try {
+    if (opts.provider === 'antigravity' || opts.provider === 'google-antigravity') {
+      let token = opts.apiKey.trim();
+      if (token.startsWith('{')) {
+        try {
+          const parsed: unknown = JSON.parse(token);
+          if (parsed && typeof parsed === 'object') {
+            const rec = parsed as Record<string, unknown>;
+            if (typeof rec.access === 'string') token = rec.access;
+            else if (typeof rec.access_token === 'string') token = rec.access_token;
+          }
+        } catch { /* keep raw */ }
+      }
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), timeoutMs);
+      try {
+        const res = await fetch('https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'User-Agent': getAntigravityUserAgent(),
+          },
+          body: JSON.stringify({ metadata: { ideType: 'ANTIGRAVITY' } }),
+          signal: ctl.signal,
+        });
+        if (res.status === 200 || res.status === 429) return { ok: true };
+        if (res.status === 401 || res.status === 403) {
+          return { ok: false, reason: 'auth', message: `endpoint rejected token (HTTP ${res.status})` };
+        }
+        return { ok: false, reason: 'network', message: `endpoint answered HTTP ${res.status} (not a token verdict)` };
+      } finally {
+        clearTimeout(timer);
+      }
+    }
     if (opts.kind === 'anthropic') {
       const r = await get(joinUrl(opts.baseUrl, '/v1/models'), {
         'x-api-key': opts.apiKey,

@@ -63,9 +63,10 @@ describe('matchProviders', () => {
 });
 
 describe('oauthLoginHint (only real local flows are offered)', () => {
-  it('names the CLI command for github-models and huggingface, null elsewhere', () => {
+  it('names the CLI command for github-models, huggingface, and antigravity, null elsewhere', () => {
     expect(oauthLoginHint(providerById('github-models')!)).toEqual({ label: 'Login with GitHub OAuth', command: 'gh auth login' });
     expect(oauthLoginHint(providerById('huggingface')!)).toEqual({ label: 'Login with Hugging Face', command: 'huggingface-cli login' });
+    expect(oauthLoginHint(providerById('antigravity')!)).toEqual({ label: 'Login with Google Antigravity OAuth', command: 'mochi login antigravity' });
     expect(oauthLoginHint(providerById('openai')!)).toBeNull();
     expect(oauthLoginHint(providerById('upstage')!)).toBeNull();
   });

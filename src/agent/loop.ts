@@ -601,6 +601,7 @@ export class Agent {
     if (!abs) return false;
     const home = resolve(homedir());
     const wsRoot = resolve(this.workspace.root);
+    if (abs === wsRoot || abs.startsWith(wsRoot + sep)) return false;
     if (wsRoot === home || !wsRoot.startsWith(home + sep)) return false;
     const rel = relative(home, abs);
     if (rel.startsWith('..') || isAbsolute(rel)) return false;
@@ -2966,6 +2967,11 @@ Continue from 'Next:', do not redo completed progress.`,
     for (const fb of failovers) {
       const pId = (fb.provider || '').toLowerCase();
       if (!pId || this.triedFallbackProviders.has(pId)) continue;
+      let key = fb.apiKey;
+      if (!key) {
+        const prov = PROVIDERS.find((x) => x.id.toLowerCase() === pId);
+        if (prov?.envKey && process.env[prov.envKey]) key = process.env[prov.envKey];
+      }
       this.triedFallbackProviders.add(pId);
       this.triedFallbackProviders.add((this.config.model.provider || '').toLowerCase());
       const normModel = normalizeModelName(fb.model, fb.baseUrl);
@@ -2978,7 +2984,7 @@ Continue from 'Next:', do not redo completed progress.`,
         ...this.config.model,
         provider: fb.provider,
         baseUrl: fb.baseUrl,
-        apiKey: fb.apiKey,
+        apiKey: key || fb.apiKey,
         model: normModel,
         profiles: fb.profiles ?? {
           fast: normModel,

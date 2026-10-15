@@ -13,6 +13,7 @@ export interface Provider {
   envKey: string;
   models: string[];
   defaultModel: string;
+  contextWindow?: number;
   chatPath?: string;
   /** Key/OAuth console page (verified reachable — only filled where
    *  checked; the menu offers to open it. Absent = unknown, never guessed. */
@@ -30,6 +31,7 @@ export const PROVIDERS: Provider[] = [
   { id: 'openai', name: 'OpenAI', kind: 'openai', baseUrl: 'https://api.openai.com/v1', envKey: 'OPENAI_API_KEY', models: ['gpt-4o', 'gpt-4o-mini', 'gpt-5', 'gpt-5-nano', 'gpt-5.4', 'gpt-5.4-nano', 'o3', 'o4-mini'], defaultModel: 'gpt-5.4', consoleUrl: 'https://platform.openai.com/api-keys' },
   { id: 'anthropic', name: 'Anthropic', kind: 'anthropic', baseUrl: 'https://api.anthropic.com', envKey: 'ANTHROPIC_API_KEY', models: ['claude-sonnet-4-5', 'claude-opus-4-1', 'claude-haiku-4-5', 'claude-sonnet-4-6'], defaultModel: 'claude-sonnet-4-5', consoleUrl: 'https://console.anthropic.com/settings/keys' },
   { id: 'gemini', name: 'Google Gemini', kind: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com', envKey: 'GEMINI_API_KEY', models: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'], defaultModel: 'gemini-2.5-flash', consoleUrl: 'https://aistudio.google.com/apikey' },
+  { id: 'antigravity', name: 'Google Antigravity', kind: 'gemini', baseUrl: 'https://daily-cloudcode-pa.googleapis.com', envKey: 'ANTIGRAVITY_API_KEY', models: ['gemini-3.8-flash', 'claude-sonnet-4-6', 'claude-opus-4-6', 'gemini-3.7-flash', 'claude-sonnet-4-5', 'claude-opus-4-5', 'gemini-3.5-flash', 'gemini-3-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gpt-oss-120b', 'gemini-4-argon-disabled', 'tab_flash_lite_preview', 'tab_jump_flash_lite_preview'], defaultModel: 'gemini-3.8-flash', contextWindow: 1_048_576, consoleUrl: 'https://daily-cloudcode-pa.googleapis.com', keyHelp: 'Login via `mochi login antigravity` (OAuth browser flow) or ambient omp credentials.' },
   { id: 'deepseek', name: 'DeepSeek', kind: 'openai', baseUrl: 'https://api.deepseek.com/v1', envKey: 'DEEPSEEK_API_KEY', models: ['deepseek-chat', 'deepseek-reasoner'], defaultModel: 'deepseek-chat', consoleUrl: 'https://platform.deepseek.com/api_keys' },
   { id: 'openrouter', name: 'OpenRouter', kind: 'openai', baseUrl: 'https://openrouter.ai/api/v1', envKey: 'OPENROUTER_API_KEY', models: ['anthropic/claude-3.5-sonnet', 'openai/gpt-4o', 'google/gemini-2.0-flash'], defaultModel: 'anthropic/claude-3.5-sonnet', consoleUrl: 'https://openrouter.ai/keys' },
   { id: 'groq', name: 'Groq', kind: 'openai', baseUrl: 'https://api.groq.com/openai/v1', envKey: 'GROQ_API_KEY', models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'], defaultModel: 'llama-3.3-70b-versatile', consoleUrl: 'https://console.groq.com/keys' },
@@ -60,10 +62,26 @@ export const PROVIDERS: Provider[] = [
   { id: 'nebius', name: 'Nebius AI Studio', kind: 'openai', baseUrl: 'https://api.studio.nebius.ai/v1', envKey: 'NEBIUS_API_KEY', models: ['meta-llama/Meta-Llama-3.3-70B-Instruct', 'Qwen/Qwen3-235B-A22B'], defaultModel: 'meta-llama/Meta-Llama-3.3-70B-Instruct', keyHelp: 'Get a key at https://studio.nebius.com (API keys)', consoleUrl: 'https://studio.nebius.com/' },
   { id: 'novita', name: 'Novita AI', kind: 'openai', baseUrl: 'https://api.novita.ai/openai/v1', envKey: 'NOVITA_API_KEY', models: ['deepseek/deepseek-v4.1-flash', 'meta-llama/llama-3.1-8b-instruct'], defaultModel: 'deepseek/deepseek-v4.1-flash', keyHelp: 'Get a key at https://novita.ai (API Keys)', consoleUrl: 'https://novita.ai/' },
   { id: 'ai21', name: 'AI21 Labs (Jamba)', kind: 'openai', baseUrl: 'https://api.ai21.com/studio/v1', envKey: 'AI21_API_KEY', models: ['jamba-large', 'jamba-mini'], defaultModel: 'jamba-large', keyHelp: 'Get a key at https://studio.ai21.com (API keys)', consoleUrl: 'https://studio.ai21.com/' },
+  { id: 'tokenjuice', name: 'TokenJuice', kind: 'openai', baseUrl: 'https://api.tokenjuice.ai/v1', envKey: 'TOKENJUICE_API_KEY', models: ['deepseek-ai/DeepSeek-V4.1-Flash'], defaultModel: 'deepseek-ai/DeepSeek-V4.1-Flash', consoleUrl: 'https://api.tokenjuice.ai' },
+  { id: 'openai-codex', name: 'OpenAI Codex (ChatGPT Plus/Pro)', kind: 'openai', baseUrl: 'https://chatgpt.com/backend-api', envKey: 'OPENAI_CODEX_OAUTH_TOKEN', models: ['gpt-5.5', 'gpt-5.6-sol', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-5.4', 'gpt-5.4-nano', 'gpt-5', 'o3', 'o4-mini'], defaultModel: 'gpt-5.5', consoleUrl: 'https://chatgpt.com' },
+  { id: 'cline', name: 'ClinePass', kind: 'openai', baseUrl: 'https://api.cline.bot/api/v1', envKey: 'CLINE_API_KEY', models: ['kimi-k3', 'z-ai/glm-5.3-flash', 'claude-3-5-sonnet', 'deepseek-chat'], defaultModel: 'kimi-k3', consoleUrl: 'https://app.cline.bot' },
+  { id: 'kilo', name: 'Kilo Code (Gateway)', kind: 'openai', baseUrl: 'https://api.kilo.ai/api/gateway', envKey: 'KILO_API_KEY', models: ['claude-sonnet-4-6', 'anthropic/claude-opus-5', 'openai/gpt-5.1-codex', 'deepseek/deepseek-r1'], defaultModel: 'claude-sonnet-4-6', consoleUrl: 'https://kilo.ai' },
 ];
 
-export const providerById = (id: string): Provider | undefined => PROVIDERS.find((p) => p.id === id);
-export const providerByName = (name: string): Provider | undefined => PROVIDERS.find((p) => p.name.toLowerCase() === name.toLowerCase() || p.id === name.toLowerCase());
+export const providerById = (id: string): Provider | undefined => {
+  const norm = id.toLowerCase();
+  if (norm === 'google-antigravity') return PROVIDERS.find((p) => p.id === 'antigravity');
+  if (norm === 'cline-pass') return PROVIDERS.find((p) => p.id === 'cline');
+  if (norm === 'codex') return PROVIDERS.find((p) => p.id === 'openai-codex');
+  return PROVIDERS.find((p) => p.id === norm);
+};
+export const providerByName = (name: string): Provider | undefined => {
+  const norm = name.toLowerCase();
+  if (norm === 'google-antigravity') return PROVIDERS.find((p) => p.id === 'antigravity');
+  if (norm === 'cline-pass') return PROVIDERS.find((p) => p.id === 'cline');
+  if (norm === 'codex') return PROVIDERS.find((p) => p.id === 'openai-codex');
+  return PROVIDERS.find((p) => p.name.toLowerCase() === norm || p.id === norm);
+};
 
 export function configFilePath(): string {
   const override = process.env.MOCHI_CONFIG_PATH;

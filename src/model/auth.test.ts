@@ -76,8 +76,39 @@ describe('verifyApiKey (login must prove the key)', () => {
     expect(bad.ok).toBe(false);
     if (!bad.ok) expect(bad.reason).toBe('auth');
   });
-});
 
+  it('verifies Antigravity OAuth tokens via loadCodeAssist', async () => {
+    const origFetch = globalThis.fetch;
+    try {
+      let authHeader = '';
+      globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+        authHeader = (init?.headers as Record<string, string>)?.Authorization ?? '';
+        return new Response(JSON.stringify({ currentTier: { id: 'free-tier' } }), { status: 200 });
+      }) as typeof fetch;
+
+      const ok = await verifyApiKey({
+        provider: 'antigravity',
+        baseUrl: 'https://daily-cloudcode-pa.googleapis.com',
+        apiKey: 'ya29.valid-token',
+        kind: 'gemini',
+      });
+      expect(ok.ok).toBe(true);
+      expect(authHeader).toBe('Bearer ya29.valid-token');
+
+      globalThis.fetch = (async () => new Response('Unauthorized', { status: 401 })) as typeof fetch;
+      const bad = await verifyApiKey({
+        provider: 'antigravity',
+        baseUrl: 'https://daily-cloudcode-pa.googleapis.com',
+        apiKey: 'ya29.invalid-token',
+        kind: 'gemini',
+      });
+      expect(bad.ok).toBe(false);
+      if (!bad.ok) expect(bad.reason).toBe('auth');
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+});
 // ── stub OAuth device endpoints ────────────────────────────────────────────
 describe('oauth-device engine (unwired: needs a registered client_id)', () => {
   const svc = (script: Array<Record<string, unknown>>) => {

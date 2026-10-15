@@ -3,6 +3,7 @@ import { PROVIDERS } from './providers.js';
 import { createOpenAIProvider, type ProviderConfig } from './openai.js';
 import { createAnthropicProvider } from './anthropic.js';
 import { createGeminiProvider } from './gemini.js';
+import { createAntigravityProvider } from './antigravity.js';
 import { CapabilityRegistry, providerKey } from './capability.js';
 // isAbort (local abort classification) lives in rate-limit.ts alongside the
 // retry/backoff logic it complements; router reuses that single canonical
@@ -19,6 +20,8 @@ const ALIASES: Record<string, { baseUrl: string; defaultModel: string }> = {
   'go': { baseUrl: 'https://opencode.ai/zen/v1', defaultModel: 'deepseek-v4-flash' },
   'freeinference': { baseUrl: 'https://freeinference.org/v1', defaultModel: 'glm-5.3-flash' },
   'freeinference-org': { baseUrl: 'https://freeinference.org/v1', defaultModel: 'glm-5.3-flash' },
+  'antigravity': { baseUrl: 'https://daily-cloudcode-pa.googleapis.com', defaultModel: 'gemini-3.8-flash' },
+  'google-antigravity': { baseUrl: 'https://daily-cloudcode-pa.googleapis.com', defaultModel: 'gemini-3.8-flash' },
 };
 
 /**
@@ -40,9 +43,9 @@ export function normalizeModelName(rawModel: string, baseUrl?: string): string {
   // Qwen/…, Together's meta-llama/…) are exempt from stripping: stripping
   // deepseek/deepseek-v4.1-flash to deepseek-v4.1-flash 404s on Novita.
   const isOpenRouter = Boolean(baseUrl && baseUrl.includes('openrouter.ai'));
-  const needsVendorPrefix = Boolean(baseUrl && /openrouter\.ai|novita\.ai|nebius|together\.xyz|fireworks\.ai|deepinfra\.com|models\.github\.ai/i.test(baseUrl));
+  const needsVendorPrefix = Boolean(baseUrl && /openrouter\.ai|novita\.ai|nebius|together\.xyz|fireworks\.ai|deepinfra\.com|models\.github\.ai|kilo\.ai/i.test(baseUrl));
   if (!isOpenRouter && !needsVendorPrefix) {
-    m = m.replace(/^(?:freeinference|freeinforge|opencode-go|opencode|zen|go|openai|deepseek|zhipu|zai|anthropic|google|gemini)\//i, '');
+    m = m.replace(/^(?:freeinference|freeinforge|opencode-go|opencode|zen|go|openai|deepseek|zhipu|zai|anthropic|google|gemini|antigravity)\//i, '');
   }
 
   // Normalize whitespace, multiple dashes, and casing
@@ -114,6 +117,8 @@ const ALIAS_KIND: Record<string, 'anthropic' | 'gemini'> = {
   gemini: 'gemini',
   google: 'gemini',
   vertex: 'gemini',
+  antigravity: 'gemini',
+  'google-antigravity': 'gemini',
 };
 
 export function resolveProvider(config: ModelConfig): ProviderConfig {
@@ -213,6 +218,7 @@ function createRawProvider(config: ModelConfig, profile?: ModelProfile) {
   if (profile && config.profiles?.[profile]) {
     resolved.model = normalizeModelName(config.profiles[profile], resolved.baseUrl);
   }
+  if (name === 'antigravity' || name === 'google-antigravity') return createAntigravityProvider(resolved);
   if (kind === 'anthropic' || name === 'anthropic') return createAnthropicProvider(resolved);
   if (kind === 'gemini' || name === 'gemini' || name === 'google') return createGeminiProvider(resolved);
   return createOpenAIProvider(resolved);

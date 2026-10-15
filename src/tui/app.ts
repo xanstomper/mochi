@@ -15,6 +15,7 @@ import { TabManager, tabBarCells, tabBarHit, slugTitle } from './tabs.js';
 import { chromeLayout } from './chrome.js';
 import pkg from '../../package.json' with { type: 'json' };
 import { kvCache } from '../model/kv-cache.js';
+import { SessionHub } from '../state/session-hub.js';
 import { prefetchBadge } from '../core/prefetch.js';
 import { recordFeedback } from '../observability/feedback.js';
 import type { FeedbackVerdict } from '../observability/feedback.js';
@@ -98,6 +99,13 @@ const COMMANDS = [
   { name: '/copy', hint: 'Copy last assistant message to clipboard (works without mouse)' },
   { name: '/model', hint: 'Select AI model provider & model' },
   { name: '/reasoning', hint: 'Adjust reasoning effort & compute (low, medium, high, max)' },
+  { name: '/fallback', hint: 'Configure fallback / failover models' },
+  { name: '/account', hint: 'Switch or inspect active account (/account or /account <email>)' },
+  { name: '/accounts', hint: 'List available accounts for active provider' },
+  { name: '/switch', hint: 'Switch account for active provider' },
+  { name: '/resume', hint: 'Resume an interrupted session or goal (/resume or /resume <id>)' },
+  { name: '/collab', hint: 'Inter-session messaging hub (send to or list other tabs)' },
+  { name: '/send', hint: 'Send message to another session/tab (/send <tab#> <message>)' },
   { name: '/theme', hint: 'Select color theme (23 styles)' },
   { name: '/skills', hint: 'Browse, search & activate specialized engineering skills' },
   { name: '/mcp', hint: 'Search, add & manage MCP servers (1-command install)' },
@@ -533,6 +541,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     const next = tabs.close(closing);
     tabStates.delete(closing);
     tabRuntimes.delete(closing);
+    SessionHub.getInstance().unregister(closing);
     if (wasLast) {
       // Fresh slate in place: new runtime + clean checkpoint.
       const rt2 = Runtime.create({ cwd: runtime.cwd, config: runtime.config });
@@ -568,6 +577,19 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   /** Route one runtime's events into ITS tab's state (badges background tabs). */
   function subscribeTab(tabId: string, rt: Runtime): void {
     rt.events.onAll((e) => onRuntimeEventFor(tabId, e));
+    const hub = SessionHub.getInstance();
+    const tInfo = tabs.get(tabId);
+    hub.register(tabId, tInfo?.title || tabId);
+    hub.onMessage(tabId, (msg) => {
+      const st = tabStates.get(tabId);
+      if (st) {
+        pushTo(st, 'system', `◇ [Message from ${msg.from}]: ${msg.content}`);
+        if (tabId !== activeTabId) {
+          tabs.markUnread(tabId);
+        }
+        scheduleRender();
+      }
+    });
   }
 
   let pendingResolver: ((v: string) => void) | undefined;
@@ -1342,6 +1364,12 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       const roles = activeSubs.map((s) => `#${s.role}`).join(', ');
       extra.push(`◆ ${activeSubs.length} subagents (${roles})`);
     }
+    if (runtime.config.model.provider === 'antigravity') {
+      const activeAcct = activeAccountForKr('antigravity');
+      if (activeAcct && activeAcct !== 'default') {
+        extra.push(`account: ${activeAcct}`);
+      }
+    }
     const statusModel = {
       modelId: modelShort,
       totalTokens: state.inTokens + state.outTokens + state.cacheTokens,
@@ -1950,6 +1978,10 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       }
       return;
     }
+    if (line === '/fallback' || line.startsWith('/fallback ') || line === '/fallbacks' || line.startsWith('/fallbacks ')) {
+      await fallbackMenu();
+      return;
+    }
     if (line === '/theme' || line.startsWith('/theme ') || line === '/themes') {
       const specific = line.startsWith('/theme ') ? line.slice(7).trim() : '';
       if (specific) {
@@ -2137,8 +2169,32 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       scheduleRender();
       return;
     }
-    if (line === '/history' || line === '/sessions' || line === '/resume') {
+    if (line === '/history' || line === '/sessions') {
       await historySessionMenu();
+      return;
+    }
+    if (line === '/resume' || line.startsWith('/resume ')) {
+      const specific = line.slice(7).trim();
+      if (specific) {
+        await resumeById(specific);
+      } else {
+        await resumePickerMenu();
+      }
+      return;
+    }
+    if (line === '/account' || line.startsWith('/account ') || line === '/accounts' || line.startsWith('/accounts ') || line === '/switch' || line.startsWith('/switch ')) {
+      const specific = (
+        line.startsWith('/account ') ? line.slice(9)
+        : line.startsWith('/accounts ') ? line.slice(10)
+        : line.startsWith('/switch ') ? line.slice(8)
+        : ''
+      ).trim();
+      await accountMenu(specific || undefined);
+      return;
+    }
+    if (line === '/collab' || line.startsWith('/collab ') || line === '/send' || line.startsWith('/send ')) {
+      const rest = (line.startsWith('/collab ') ? line.slice(8) : line.startsWith('/send ') ? line.slice(6) : '').trim();
+      await collabMenu(rest || undefined);
       return;
     }
     if (line === '/expand' || line === '/inspector' || line === '/out' || line === '/output' || line === '/o') {
@@ -2605,11 +2661,16 @@ if (line === '/branch' || line.startsWith('/branch ')) {
     startSpinner();
     scheduleRender();
     let out = '';
+    const beforeAssistantCount = rs.lines.filter((l) => l.kind === 'assistant').length;
     try {
       const result = await fn();
       out = result;
       tabs.setStatus(tabId, 'done');
-      if (echo) pushTo(rs, 'assistant', result);
+      if (echo || rs.lines.filter((l) => l.kind === 'assistant').length === beforeAssistantCount) {
+        if (result && result.trim()) {
+          pushTo(rs, 'assistant', result);
+        }
+      }
       const elapsed = ((Date.now() - (rs.busyStartedAt || rs.startedAt)) / 1000).toFixed(1) + 's';
       sendSystemNotification('Task Complete', `Completed in ${elapsed}`, 'normal');
     } catch (e) {
@@ -3090,6 +3151,229 @@ if (line === '/branch' || line.startsWith('/branch ')) {
     const desc = runtime.setReasoning(chosen.level);
     push('system', `[REASON] Reasoning mode set to ${chosen.level.toUpperCase()} — ${desc}`);
     scheduleRender();
+  }
+
+  async function fallbackMenu() {
+    const primary = runtime.config.model;
+    const fallbacks = runtime.getFallbacks();
+    const actions: Array<{ label: string; run: () => Promise<void> }> = [
+      {
+        label: 'Add a fallback model...',
+        run: async () => {
+          const available = PROVIDERS.filter((p) => p.id !== primary.provider);
+          const provItems = available.map((p) => p.name.padEnd(20) + ' ' + p.id);
+          const pIdx = await openMenu('Select Fallback Provider', provItems);
+          if (pIdx < 0 || pIdx >= available.length) return;
+          const chosenProv = available[pIdx];
+          const mIdx = await openMenu(`Select Model for ${chosenProv.name}`, chosenProv.models);
+          if (mIdx < 0 || mIdx >= chosenProv.models.length) return;
+          const chosenModel = chosenProv.models[mIdx];
+          const msg = runtime.addFallback(chosenProv.id, chosenModel);
+          push('system', `✓ ${msg}`);
+          scheduleRender();
+        },
+      },
+      ...fallbacks.map((fb, idx) => ({
+        label: `Remove #${idx + 1}: ${fb.provider} (${fb.model})`,
+        run: async () => {
+          const msg = runtime.removeFallback(fb.provider);
+          push('system', `✓ ${msg}`);
+          scheduleRender();
+        },
+      })),
+      ...(fallbacks.length > 0 ? [{
+        label: 'Clear all fallbacks',
+        run: async () => {
+          const msg = runtime.clearFallbacks();
+          push('system', `✓ ${msg}`);
+          scheduleRender();
+        },
+      }] : []),
+    ];
+
+    const fbList = fallbacks.length ? fallbacks.map((f, i) => `${i + 1}. ${f.provider} (${f.model})`).join(' · ') : 'none';
+    const menuTitle = `Fallback Models (Primary: ${primary.provider}/${primary.model} · Active: ${fbList})`;
+    const actionIdx = await openMenu(menuTitle, actions.map((a) => a.label));
+    if (actionIdx >= 0 && actionIdx < actions.length) {
+      await actions[actionIdx].run();
+    }
+  }
+
+  async function collabMenu(arg?: string) {
+    const hub = SessionHub.getInstance();
+    const activeTab = tabs.activeTab();
+    const peers = hub.listPeers();
+
+    if (arg) {
+      const spaceIdx = arg.indexOf(' ');
+      if (spaceIdx < 0) {
+        push('error', 'Usage: /send <tabNumber|session|all> <message>');
+        scheduleRender();
+        return;
+      }
+      const targetStr = arg.slice(0, spaceIdx).trim();
+      const message = arg.slice(spaceIdx + 1).trim();
+      let targetId = targetStr;
+      if (targetStr !== 'all' && targetStr !== 'broadcast') {
+        const n = Number(targetStr);
+        if (Number.isInteger(n) && n >= 1 && n <= tabs.count()) {
+          targetId = tabs.list()[n - 1].id;
+        }
+      }
+      hub.send(activeTab.id, targetId, message);
+      push('system', `→ [Sent to ${targetStr}]: ${message}`);
+      scheduleRender();
+      return;
+    }
+
+    const otherPeers = peers.filter((p) => p.id !== activeTab.id);
+    if (otherPeers.length === 0) {
+      push('system', `No other tabs active. Open another tab with '+' or Alt+2 to collaborate.`);
+      scheduleRender();
+      return;
+    }
+
+    const items = [
+      `Broadcast message to ALL tabs (${otherPeers.length})`,
+      ...otherPeers.map((p) => {
+        const t = tabs.get(p.id);
+        const idx = t ? `[Tab ${t.index}] ` : '';
+        return `${idx}${p.title} (${p.id})`;
+      }),
+    ];
+
+    const pickIdx = await openMenu('Inter-Session Collaboration (Send to Peer Tab)', items);
+    if (pickIdx < 0) return;
+
+    const targetId = pickIdx === 0 ? 'all' : otherPeers[pickIdx - 1].id;
+    const targetName = pickIdx === 0 ? 'All Tabs' : otherPeers[pickIdx - 1].title;
+
+    const msg = await ask(`Message to send to ${targetName}:`);
+    if (!msg || !msg.trim()) return;
+
+    hub.send(activeTab.id, targetId, msg.trim());
+    push('system', `→ [Sent to ${targetName}]: ${msg.trim()}`);
+    scheduleRender();
+  }
+
+  async function accountMenu(specificEmail?: string) {
+    const provId = runtime.config.model.provider;
+    const { listAntigravityAccounts, antigravityAmbientToken } = await import('../model/ambient-auth.js');
+    const { accountsFor, activeAccountName, setAccount } = await import('../model/keyring.js');
+
+    if (provId === 'antigravity' || provId === 'google-antigravity') {
+      const accs = await listAntigravityAccounts();
+      if (accs.length === 0) {
+        push('system', 'No Google Antigravity accounts found in ~/.omp/agent/agent.db or keyring.');
+        scheduleRender();
+        return;
+      }
+      const curAmbient = await antigravityAmbientToken();
+      const active = activeAccountName('antigravity') || curAmbient?.account || accs[0]?.email;
+
+      if (specificEmail) {
+        const match = accs.find((a) => a.email.toLowerCase() === specificEmail.toLowerCase());
+        if (match) {
+          const tok = await antigravityAmbientToken(undefined, match.email);
+          if (tok) {
+            setAccount('antigravity', match.email, tok.token, 'oauth');
+            push('system', `✓ Switched active account to ${match.email}`);
+            scheduleRender();
+            return;
+          }
+        }
+        push('error', `Account '${specificEmail}' not found. Run /account to select from list.`);
+        scheduleRender();
+        return;
+      }
+
+      const items = accs.map((a) => {
+        const isAct = a.email.toLowerCase() === (active ?? '').toLowerCase();
+        const badge = isAct ? `${T.lime}[ACTIVE]${T.reset} ` : '        ';
+        return `${badge}${T.cyan}${a.email.padEnd(30)}${T.reset} ${T.grayDark}· project: ${a.projectId || 'aicode-consumers'}${T.reset}`;
+      });
+
+      const chosenIdx = await openMenu(`Select Google Account (${accs.length} available)`, items);
+      if (chosenIdx < 0 || chosenIdx >= accs.length) return;
+      const chosen = accs[chosenIdx];
+      const tok = await antigravityAmbientToken(undefined, chosen.email);
+      if (tok) {
+        setAccount('antigravity', chosen.email, tok.token, 'oauth');
+        push('system', `✓ Switched active account to ${chosen.email}`);
+        scheduleRender();
+      }
+      return;
+    }
+
+    const accts = accountsFor(provId);
+    if (!accts.length) {
+      push('system', `No stored accounts for ${provId}. Authenticate with: /login`);
+      scheduleRender();
+      return;
+    }
+    const active = activeAccountName(provId);
+    const items = accts.map((name) => {
+      const isAct = name === active;
+      const badge = isAct ? `${T.lime}[ACTIVE]${T.reset} ` : '        ';
+      return `${badge}${T.cyan}${name}${T.reset}`;
+    });
+    const chosenIdx = await openMenu(`Select Account for ${provId}`, items);
+    if (chosenIdx >= 0 && chosenIdx < accts.length) {
+      const { switchAccount } = await import('../model/keyring.js');
+      switchAccount(provId, accts[chosenIdx]);
+      push('system', `✓ Switched active account to ${accts[chosenIdx]}`);
+      scheduleRender();
+    }
+  }
+
+  async function resumePickerMenu() {
+    const goals = runtime.workspace.listGoals();
+    if (goals.length === 0) {
+      push('system', 'No saved goals to resume.');
+      scheduleRender();
+      return;
+    }
+
+    const goalObjs = goals
+      .slice(-15)
+      .reverse()
+      .map((g) => {
+        try {
+          return runtime.workspace.loadGoal(g.replace(/\.json$/, ''));
+        } catch {
+          return null;
+        }
+      })
+      .filter((g): g is NonNullable<typeof g> => g !== null);
+
+    if (goalObjs.length === 0) {
+      push('system', 'No readable saved goals found.');
+      scheduleRender();
+      return;
+    }
+
+    const items = goalObjs.map((g) => {
+      const statBadge = g.status === 'completed'
+        ? `${T.lime}✓ Done${T.reset}`
+        : g.status === 'failed'
+          ? `${T.error}✗ Failed${T.reset}`
+          : `${T.cyan}◌ ${g.status}${T.reset}`;
+      const title = (g.objective || 'Untitled').slice(0, 36);
+      return `${statBadge.padEnd(16)} ${T.cyan}${g.id.slice(0, 8)}${T.reset} ${T.grayDark}· ${title}${T.reset}`;
+    });
+
+    const chosenIdx = await openMenu(`Resume a Session / Goal (${goalObjs.length} recent)`, items);
+    if (chosenIdx < 0 || chosenIdx >= goalObjs.length) return;
+    const chosen = goalObjs[chosenIdx];
+    await resumeById(chosen.id);
+  }
+
+  async function resumeById(idOrPrefix: string) {
+    push('system', `Resuming goal ${idOrPrefix.slice(0, 8)}...`);
+    scheduleRender();
+    await run(async () => {
+      return await runtime.resumeGoal(idOrPrefix);
+    }, false);
   }
 
   async function themeMenu() {
@@ -4426,8 +4710,11 @@ if (line === '/branch' || line.startsWith('/branch ')) {
       startSpinner();
       // echo:false — the agent streams assistant turns already.
       runtime.runPrompt(initialPrompt)
-        .then(() => {
+        .then((res) => {
           tabs.setStatus(activeTabId, 'done');
+          if (!state.lines.some((l) => l.kind === 'assistant') && res && res.trim()) {
+            push('assistant', res);
+          }
         })
         .catch((e) => {
           tabs.setStatus(activeTabId, 'error');

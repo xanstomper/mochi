@@ -19,6 +19,7 @@ import { chameleonTool } from './chameleon.js';
 import { todoTool } from './todo.js';
 import { skillTool } from './skill.js';
 import { subagentTool } from './subagent.js';
+import { sessionCollabTool } from './session-collab.js';
 import { patchTool } from './patch.js';
 import { fetchTool } from './fetch.js';
 import { diffTool } from './diff.js';
@@ -78,7 +79,7 @@ import { notebookTool } from './notebook.js';
 export const ALL_TOOLS: Tool[] = [
   readTool, writeTool, editTool, deleteTool, shellTool, searchTool, globTool, outlineTool, astSliceTool,
   compilePromptTool,
-  gitTool, inspectTool, memoryTool, sessionRecallTool, recallOutputTool, todoTool, skillTool, subagentTool, patchTool,
+  gitTool, inspectTool, memoryTool, sessionRecallTool, recallOutputTool, todoTool, skillTool, subagentTool, sessionCollabTool, patchTool,
   bgTaskTool, fetchTool, diffTool, treeTool, regexReplaceTool, deepwikiTool, clipboardTool, sqlCodebaseTool,
   searchReplaceMultiTool, analyzeCodeTool, verifyTool, perfTool,
   webSearchTool, getDiagnosticsTool, mkdirTool, moveFileTool, copyFileTool,

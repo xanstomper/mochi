@@ -85,7 +85,7 @@ function stdioConnect(name: string, command: string, args: string[], env?: Recor
     });
 
     const channel: RpcChannel = {
-      async call(method, params, timeoutMs = 15_000) {
+      async call(method, params, timeoutMs = 5_000) {
         const id = ++state.nextId;
         return new Promise((resolveP, rejectP) => {
           const timer = setTimeout(() => {
@@ -153,7 +153,7 @@ function httpChannel(
     }
   };
   return {
-    async call(method, params, timeoutMs = 20_000) {
+    async call(method, params, timeoutMs = 5_000) {
       const id = ++nextId;
       const isNotification = params !== null && (method === 'notifications/initialized');
       const res = await post(

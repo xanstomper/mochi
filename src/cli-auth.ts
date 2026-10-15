@@ -28,19 +28,32 @@ export async function runAuthCommand(deps: AuthCommandDeps): Promise<void> {
     // Per-provider stored keys (keyring first, legacy active slot second) so
     // every provider reports its real source — not just the active one.
     const { loadKeyring, storedKeyForProvider, accountsFor, activeAccountName } = await import('./model/keyring.js');
-    const { codexAmbientToken, geminiAmbientToken, claudeAmbientToken, gcloudAmbientToken } = await import('./model/ambient-auth.js');
+    const { codexAmbientToken, geminiAmbientToken, claudeAmbientToken, gcloudAmbientToken, antigravityAmbientToken, listAntigravityAccounts, tokenjuiceAmbientToken, kiloAmbientToken } = await import('./model/ambient-auth.js');
     const ring = loadKeyring();
     const legacyKey = runtime.config.model.apiKey;
     const storedFor = (pid: string) => storedKeyForProvider(ring, pid, activeId, legacyKey);
     // Ambient OAuth: real tokens cached by other CLIs the user already logged
     // into (Codex, Gemini CLI, Claude Code, gcloud ADC). Resolved once, lazily.
     const ambientMap = new Map<string, string>();
+    const ambientInfo: Record<string, { account?: string; count?: number }> = {};
     await Promise.all(PROVIDERS.map(async (p) => {
       try {
         let tok: string | undefined;
-        if (p.id === 'openai') tok = (await codexAmbientToken())?.token;
+        if (p.id === 'openai' || p.id === 'openai-codex') tok = (await codexAmbientToken())?.token;
         else if (p.id === 'gemini' || p.id === 'google') tok = geminiAmbientToken()?.token ?? (await gcloudAmbientToken())?.token;
         else if (p.id === 'anthropic') tok = claudeAmbientToken()?.token;
+        else if (p.id === 'kilo') tok = (await kiloAmbientToken())?.token;
+        else if (p.id === 'cline' || p.id === 'cline-pass') tok = process.env.CLINE_API_KEY;
+        else if (p.id === 'antigravity' || p.id === 'google-antigravity') {
+          const amb = await antigravityAmbientToken();
+          tok = amb?.token;
+          const accs = await listAntigravityAccounts();
+          if (amb?.account) {
+            ambientInfo[p.id] = { account: amb.account, count: accs.length };
+          }
+        } else if (p.id === 'tokenjuice') {
+          tok = tokenjuiceAmbientToken()?.token;
+        }
         if (tok) ambientMap.set(p.id, tok);
       } catch { /* ambient is best-effort */ }
     }));
@@ -48,9 +61,11 @@ export async function runAuthCommand(deps: AuthCommandDeps): Promise<void> {
     const rows = PROVIDERS.map((p) => {
       const src = keySource(p, activeId, p.envKey ? lookup(p.envKey) : undefined, storedFor(p.id), isKeyUsable, ambientFor(p.id));
       const mark = p.id === activeId ? '*' : ' ';
-      const state = src === 'env' ? 'set (env)' : src === 'file' ? 'set (file)' : src === 'ambient' ? 'set (ambient)' : src === 'local' ? 'keyless local' : 'missing';
-      const n = accountsFor(p.id).length;
-      const extra = n > 1 ? `  (${n} accounts, active: ${activeAccountName(p.id)})` : '';
+      const info = ambientInfo[p.id];
+      const state = src === 'env' ? 'set (env)' : src === 'file' ? 'set (file)' : src === 'ambient' ? (info?.account ? `set (ambient: ${info.account})` : 'set (ambient)') : src === 'local' ? 'keyless local' : 'missing';
+      const n = (info?.count && info.count > 1) ? info.count : accountsFor(p.id).length;
+      const activeName = info?.account ?? activeAccountName(p.id);
+      const extra = n > 1 ? `  (${n} accounts, active: ${activeName})` : '';
       return `${mark}${p.id.padEnd(16)} ${state}${extra}`;
     });
     if (probing) {
@@ -165,7 +180,20 @@ export async function runAuthCommand(deps: AuthCommandDeps): Promise<void> {
       exit(1);
     }
     if (!providerById(provider)) { error(`Unknown provider: ${provider}`); exit(1); }
-    const { switchAccount, loadKeyring } = await import('./model/keyring.js');
+    const { switchAccount, loadKeyring, setAccount } = await import('./model/keyring.js');
+    if (provider === 'antigravity' || provider === 'google-antigravity') {
+      const { antigravityAmbientToken, listAntigravityAccounts } = await import('./model/ambient-auth.js');
+      const accs = await listAntigravityAccounts();
+      const match = accs.find((a) => a.email.toLowerCase() === account.toLowerCase());
+      if (match) {
+        const tok = await antigravityAmbientToken(undefined, match.email);
+        if (tok) {
+          setAccount('antigravity', match.email, tok.token, 'oauth');
+          log(`Switched active account for antigravity to "${match.email}".`);
+          return;
+        }
+      }
+    }
     if (!switchAccount(provider, account)) {
       error(`No account named "${account}" for ${provider}. List with: mochi auth accounts ${provider}`);
       exit(1);
@@ -186,6 +214,22 @@ export async function runAuthCommand(deps: AuthCommandDeps): Promise<void> {
   if (sub === 'accounts') {
     const target = positional[2] ?? activeId;
     if (!providerById(target)) { error(`Unknown provider: ${target}`); exit(1); }
+    if (target === 'antigravity' || target === 'google-antigravity') {
+      const { listAntigravityAccounts, antigravityAmbientToken } = await import('./model/ambient-auth.js');
+      const accs = await listAntigravityAccounts();
+      const { activeAccountName } = await import('./model/keyring.js');
+      const curAmbient = await antigravityAmbientToken();
+      const active = activeAccountName('antigravity') || curAmbient?.account || accs[0]?.email;
+      if (accs.length > 0) {
+        log(`Accounts for antigravity (${accs.length}):`);
+        for (const a of accs) {
+          const isAct = a.email.toLowerCase() === (active ?? '').toLowerCase();
+          log(`${isAct ? '*' : ' '} ${a.email} (id: ${a.id}, project: ${a.projectId || 'aicode-consumers'})`);
+        }
+        log(`\n* = active. Switch with: mochi auth switch antigravity <email>`);
+        return;
+      }
+    }
     const { accountsFor, activeAccountName } = await import('./model/keyring.js');
     const names = accountsFor(target);
     if (!names.length) { log(`No stored accounts for ${target}. Login with: mochi login ${target} --account <name>`); return; }

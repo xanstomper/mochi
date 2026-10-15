@@ -9,11 +9,14 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
+import { refreshAntigravityToken } from './antigravity-oauth.js';
 
 export interface AmbientToken {
   token: string;
   source: string;
   expiresAtMs?: number;
+  account?: string;
+  projectId?: string;
 }
 
 export interface AmbientDeps {
@@ -79,7 +82,33 @@ export async function codexAmbientToken(deps: AmbientDeps = {}): Promise<Ambient
     }
     return undefined; // refresh failed — do not hand back a stale token
   }
-  return { token: access, source: 'codex-oauth' };
+  if (access) return { token: access, source: 'codex-oauth' };
+
+  // Fallback to omp agent.db for openai-codex
+  const dbPath = home('.omp/agent/agent.db', deps.homeDir);
+  if (exists(dbPath)) {
+    const execFile = deps.execFile ?? (async (cmd: string, args: string[]) => {
+      const { execFile: ef } = await import('node:child_process');
+      const { promise, resolve, reject } = Promise.withResolvers<string>();
+      ef(cmd, args, { timeout: 8000 }, (e, out) => (e ? reject(e) : resolve(String(out ?? '').trim())));
+      return promise;
+    });
+    try {
+      const out = await execFile('sqlite3', [
+        dbPath,
+        "SELECT data FROM auth_credentials WHERE provider = 'openai-codex' ORDER BY updated_at DESC LIMIT 1;",
+      ], { timeout: 8000 });
+      if (out) {
+        const parsed: unknown = JSON.parse(out);
+        if (parsed && typeof parsed === 'object') {
+          const rec = parsed as Record<string, unknown>;
+          const tok = typeof rec.access === 'string' ? rec.access : typeof rec.access_token === 'string' ? rec.access_token : '';
+          if (tok) return { token: tok, source: 'omp-codex-oauth' };
+        }
+      }
+    } catch { /* best-effort */ }
+  }
+  return undefined;
 }
 
 async function refreshCodexToken(refreshToken: string, deps: AmbientDeps): Promise<{ access: string; refresh?: string; expiresAtMs?: number } | undefined> {
@@ -167,9 +196,172 @@ export async function gcloudAmbientToken(deps: AmbientDeps = {}): Promise<Ambien
   return undefined;
 }
 
+/** Antigravity OAuth: ~/.omp/agent/agent.db or ~/.antigravity/oauth_creds.json. */
+export interface AntigravityAccountInfo {
+  id: number;
+  email: string;
+  projectId?: string;
+  active: boolean;
+}
+
+export async function listAntigravityAccounts(deps: AmbientDeps = {}): Promise<AntigravityAccountInfo[]> {
+  const exists = deps.existsSync ?? existsSync;
+  const dbPath = home('.omp/agent/agent.db', deps.homeDir);
+  if (!exists(dbPath)) return [];
+  const execFile = deps.execFile ?? (async (cmd: string, args: string[]) => {
+    const { execFile: ef } = await import('node:child_process');
+    const { promise, resolve, reject } = Promise.withResolvers<string>();
+    ef(cmd, args, { timeout: 8000 }, (e, out) => (e ? reject(e) : resolve(String(out ?? '').trim())));
+    return promise;
+  });
+  try {
+    const out = await execFile('sqlite3', [
+      dbPath,
+      "SELECT id, json_extract(data, '$.email') as email, json_extract(data, '$.projectId') as projectId FROM auth_credentials WHERE provider = 'google-antigravity' ORDER BY id ASC;",
+    ], { timeout: 8000 });
+    if (!out) return [];
+    const lines = out.split('\n').filter(Boolean);
+    const list: AntigravityAccountInfo[] = [];
+    for (const line of lines) {
+      const parts = line.split('|');
+      const id = Number(parts[0]);
+      const email = parts[1] ?? '';
+      const projectId = parts[2] ?? '';
+      if (email) {
+        list.push({ id, email, projectId, active: false });
+      }
+    }
+    return list;
+  } catch {
+    return [];
+  }
+}
+
+/** Antigravity OAuth: ~/.omp/agent/agent.db or ~/.antigravity/oauth_creds.json. */
+export async function antigravityAmbientToken(deps: AmbientDeps = {}, accountSelector?: string): Promise<AmbientToken | undefined> {
+  const read = deps.readFileSync ?? ((p: string) => readFileSync(p, 'utf8'));
+  const exists = deps.existsSync ?? existsSync;
+  const now = deps.now ?? Date.now;
+
+  // 1. Check omp agent.db SQLite store
+  const dbPath = home('.omp/agent/agent.db', deps.homeDir);
+  if (exists(dbPath)) {
+    const execFile = deps.execFile ?? (async (cmd: string, args: string[]) => {
+      const { execFile: ef } = await import('node:child_process');
+      const { promise, resolve, reject } = Promise.withResolvers<string>();
+      ef(cmd, args, { timeout: 8000 }, (e, out) => (e ? reject(e) : resolve(String(out ?? '').trim())));
+      return promise;
+    });
+    try {
+      const query = accountSelector
+        ? `SELECT data FROM auth_credentials WHERE provider = 'google-antigravity' AND (json_extract(data, '$.email') = '${accountSelector.replace(/'/g, "''")}' OR id = '${accountSelector.replace(/'/g, "''")}') LIMIT 1;`
+        : "SELECT data FROM auth_credentials WHERE provider = 'google-antigravity' ORDER BY updated_at DESC LIMIT 1;";
+      const out = await execFile('sqlite3', [dbPath, query], { timeout: 8000 });
+      if (out && out.length > 0) {
+        const parsed: unknown = JSON.parse(out);
+        if (parsed && typeof parsed === 'object') {
+          const rec = parsed as Record<string, unknown>;
+          const access = typeof rec.access === 'string'
+            ? rec.access
+            : typeof rec.access_token === 'string'
+              ? rec.access_token
+              : '';
+          const expires = typeof rec.expires === 'number'
+            ? rec.expires
+            : typeof rec.expiresAtMs === 'number'
+              ? rec.expiresAtMs
+              : undefined;
+          const refresh = typeof rec.refresh === 'string'
+            ? rec.refresh
+            : typeof rec.refresh_token === 'string'
+              ? rec.refresh_token
+              : undefined;
+          const email = typeof rec.email === 'string' ? rec.email : undefined;
+          const projectId = typeof rec.projectId === 'string' ? rec.projectId : undefined;
+          if (access && isFresh(expires, now())) {
+            return { token: access, source: 'omp-antigravity-oauth', expiresAtMs: expires, account: email, projectId };
+          }
+          if (refresh) {
+            const refreshed = await refreshAntigravityToken(refresh, { fetchFn: deps.fetchJson as typeof fetch, now: deps.now });
+            return { token: refreshed.access_token, source: 'omp-antigravity-oauth', expiresAtMs: refreshed.expiresAtMs, account: email, projectId };
+          }
+        }
+      }
+    } catch { /* omp db read is best-effort */ }
+  }
+
+  // 2. Check JSON file fallback (~/.antigravity/oauth_creds.json)
+  const jsonPath = home('.antigravity/oauth_creds.json', deps.homeDir);
+  if (exists(jsonPath)) {
+    const data = readJson(jsonPath, read);
+    if (data) {
+      const access = typeof data.access_token === 'string'
+        ? data.access_token
+        : typeof data.access === 'string'
+          ? data.access
+          : '';
+      const expiry = typeof data.expiry_date === 'number'
+        ? data.expiry_date * 1000
+        : typeof data.expires === 'number'
+          ? data.expires
+          : undefined;
+      if (access && isFresh(expiry, now())) {
+        return { token: access, source: 'antigravity-oauth', expiresAtMs: expiry };
+      }
+    }
+  }
+
+  return undefined;
+}
+
+/** TokenJuice API key: ~/.omp/agent/tokenjuice.key. */
+export function tokenjuiceAmbientToken(deps: AmbientDeps = {}): AmbientToken | undefined {
+  const read = deps.readFileSync ?? ((p: string) => readFileSync(p, 'utf8'));
+  const exists = deps.existsSync ?? existsSync;
+  const path = home('.omp/agent/tokenjuice.key', deps.homeDir);
+  if (!exists(path)) return undefined;
+  const key = read(path).trim();
+  if (!key) return undefined;
+  return { token: key, source: 'omp-tokenjuice-key' };
+}
+/** Kilo Code OAuth: ~/.omp/agent/agent.db (provider: 'kilo'). */
+export async function kiloAmbientToken(deps: AmbientDeps = {}): Promise<AmbientToken | undefined> {
+  const exists = deps.existsSync ?? existsSync;
+  const now = deps.now ?? Date.now;
+  const dbPath = home('.omp/agent/agent.db', deps.homeDir);
+  if (!exists(dbPath)) return undefined;
+  const execFile = deps.execFile ?? (async (cmd: string, args: string[]) => {
+    const { execFile: ef } = await import('node:child_process');
+    const { promise, resolve, reject } = Promise.withResolvers<string>();
+    ef(cmd, args, { timeout: 8000 }, (e, out) => (e ? reject(e) : resolve(String(out ?? '').trim())));
+    return promise;
+  });
+  try {
+    const out = await execFile('sqlite3', [
+      dbPath,
+      "SELECT data FROM auth_credentials WHERE provider = 'kilo' ORDER BY updated_at DESC LIMIT 1;",
+    ], { timeout: 8000 });
+    if (out) {
+      const parsed: unknown = JSON.parse(out);
+      if (parsed && typeof parsed === 'object') {
+        const rec = parsed as Record<string, unknown>;
+        const access = typeof rec.access === 'string' ? rec.access : typeof rec.access_token === 'string' ? rec.access_token : '';
+        const exp = typeof rec.expires === 'number' ? rec.expires : undefined;
+        if (access && isFresh(exp, now())) {
+          return { token: access, source: 'omp-kilo-oauth', expiresAtMs: exp };
+        }
+      }
+    }
+  } catch { /* best-effort */ }
+  return undefined;
+}
+
 /** Try every known ambient source; first hit wins. */
 export async function anyAmbientToken(deps: AmbientDeps = {}): Promise<AmbientToken | undefined> {
   return (await codexAmbientToken(deps))
+    ?? (await antigravityAmbientToken(deps))
+    ?? tokenjuiceAmbientToken(deps)
+    ?? (await kiloAmbientToken(deps))
     ?? geminiAmbientToken(deps)
     ?? claudeAmbientToken(deps)
     ?? (await gcloudAmbientToken(deps));
