@@ -3641,15 +3641,22 @@ Continue from 'Next:', do not redo completed progress.`,
    */
   private trackToolResultHash(toolName: string, output: string): void {
     if (!output) return;
-    // 64-bit FNV-1a — same algorithm as `nativeHashPrompt` so we can swap
-    // for the native op later without changing the contract.
-    let h = 0xcbf29ce484222325n;
-    const prime = 0x100000001b3n;
+    // 64-bit-equivalent FNV-1a as two 32-bit Number lanes. (Was BigInt per
+    // char: a BigInt XOR+multiply per character over the full folded output
+    // is ~50-100x slower than Number math — ~5-15ms per 48KB tool result on
+    // the hot path of every successful call, purely to seed a 50-entry
+    // redundancy heuristic. Two independent 32-bit lanes give an equivalent
+    // collision profile here; lane 2 folds a rotated code unit so
+    // adjacent-character reordering still distinguishes.)
+    let h1 = 0x811c9dc5;
+    let h2 = 0x1b873593;
     for (let i = 0; i < output.length; i++) {
-      h ^= BigInt(output.charCodeAt(i));
-      h = (h * prime) & 0xffffffffffffffffn;
+      const ch = output.charCodeAt(i);
+      h1 = Math.imul(h1 ^ ch, 0x01000193) >>> 0;
+      const r = ((ch << 9) | (ch >>> 7)) & 0xffff;
+      h2 = Math.imul(h2 ^ r, 0x85ebca6b) >>> 0;
     }
-    const key = h.toString(16);
+    const key = h1.toString(16) + h2.toString(16).padStart(8, '0');
     const canonical = TOOL_ALIASES[toolName] || toolName;
     const prev = this.crossToolResultHash.get(key);
     if (prev && prev.tool !== canonical) {
