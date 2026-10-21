@@ -24,7 +24,26 @@ export interface CronJob {
   /** Optional delivery when a job finishes: either an https webhook URL or a
    *  shell command. Receives the goal summary via stdin / {summary} token. */
   notify?: string;
+  /** Per-run wall-clock cap. The daemon aborts the goal when it expires. */
+  timeoutMs?: number;
+  /** Explicitly paused jobs keep their schedule but never fire. */
+  paused?: boolean;
+  /** Outcome of the most recent run (surfaced by `schedule` and `mochi cron`). */
+  lastStatus?: 'ok' | 'error' | 'timeout';
+  lastError?: string;
+  lastOutput?: string;
+  lastDurationMs?: number;
 }
+
+export interface AddCronOptions {
+  notify?: string;
+  timeoutMs?: number;
+  paused?: boolean;
+}
+
+export const DEFAULT_CRON_TIMEOUT_MS = 30 * 60_000;
+export const MAX_CRON_TIMEOUT_MS = 24 * 60 * 60_000;
+export const MIN_CRON_TIMEOUT_MS = 10_000;
 
 const UNIT_MS: Record<string, number> = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000, w: 7 * 86_400_000 };
 
@@ -127,6 +146,14 @@ function loadJobs(dir: string): CronJob[] {
         runs: typeof r.runs === 'number' && r.runs >= 0 ? Math.floor(r.runs) : 0,
       };
       if (typeof r.notify === 'string' && validateNotify(r.notify) === null) job.notify = r.notify;
+      if (typeof r.timeoutMs === 'number' && r.timeoutMs >= MIN_CRON_TIMEOUT_MS) {
+        job.timeoutMs = Math.min(Math.floor(r.timeoutMs), MAX_CRON_TIMEOUT_MS);
+      }
+      job.paused = r.paused === true;
+      if (r.lastStatus === 'ok' || r.lastStatus === 'error' || r.lastStatus === 'timeout') job.lastStatus = r.lastStatus;
+      if (typeof r.lastError === 'string') job.lastError = r.lastError.slice(0, 2000);
+      if (typeof r.lastOutput === 'string') job.lastOutput = r.lastOutput.slice(0, 4000);
+      if (typeof r.lastDurationMs === 'number' && r.lastDurationMs >= 0) job.lastDurationMs = Math.floor(r.lastDurationMs);
       clean.push(job);
     }
     return clean;
@@ -167,15 +194,30 @@ export function validateNotify(notify: string): string | null {
 }
 
 /** Add a recurring job; returns its id or a validation error. */
-export function addJob(dir: string, prompt: string, schedule: string, notify?: string): { id?: string; error?: string } {
+export function addJob(
+  dir: string,
+  prompt: string,
+  schedule: string,
+  notifyOrOptions?: string | AddCronOptions,
+): { id?: string; error?: string } {
   if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
     return { id: undefined, error: 'Job prompt must be a non-empty string.' };
   }
+  const opts: AddCronOptions = typeof notifyOrOptions === 'string'
+    ? { notify: notifyOrOptions }
+    : (notifyOrOptions ?? {});
   const n = nextRunFor(schedule);
   if (n === null) return { id: undefined, error: `Unparseable schedule "${schedule}". Use "every 30m" or a 5-field cron like "0 9 * * 1-5".` };
-  if (notify !== undefined) {
-    const bad = validateNotify(notify);
+  if (opts.notify !== undefined) {
+    const bad = validateNotify(opts.notify);
     if (bad) return { id: undefined, error: bad };
+  }
+  let timeoutMs: number | undefined;
+  if (opts.timeoutMs !== undefined) {
+    if (!Number.isFinite(opts.timeoutMs) || opts.timeoutMs < MIN_CRON_TIMEOUT_MS) {
+      return { id: undefined, error: `timeoutMs must be at least ${MIN_CRON_TIMEOUT_MS}ms.` };
+    }
+    timeoutMs = Math.min(Math.floor(opts.timeoutMs), MAX_CRON_TIMEOUT_MS);
   }
   const jobs = loadJobs(dir);
   const job: CronJob = {
@@ -187,11 +229,113 @@ export function addJob(dir: string, prompt: string, schedule: string, notify?: s
     createdAt: Date.now(),
     enabled: true,
     runs: 0,
-    ...(notify ? { notify } : {}),
+    ...(opts.notify ? { notify: opts.notify } : {}),
+    ...(timeoutMs ? { timeoutMs } : {}),
+    ...(opts.paused ? { paused: true } : {}),
   };
   jobs.push(job);
   saveJobs(dir, jobs);
   return { id: job.id };
+}
+
+/** Pause/resume without deleting the schedule. Resuming re-arms the next run. */
+export function setJobPaused(dir: string, id: string, paused: boolean): boolean {
+  const jobs = loadJobs(dir);
+  let found = false;
+  const next = jobs.map((j) => {
+    if (j.id !== id) return j;
+    found = true;
+    if (paused) return { ...j, paused: true };
+    const at = nextRunFor(j.schedule);
+    return { ...j, paused: false, enabled: true, ...(at ? { nextRun: at } : {}) };
+  });
+  if (found) saveJobs(dir, next);
+  return found;
+}
+
+/** Enable/disable a job. Disabled jobs are kept for history and re-enabling. */
+export function setJobEnabled(dir: string, id: string, enabled: boolean): boolean {
+  const jobs = loadJobs(dir);
+  let found = false;
+  const next = jobs.map((j) => {
+    if (j.id !== id) return j;
+    found = true;
+    if (!enabled) return { ...j, enabled: false };
+    const at = nextRunFor(j.schedule);
+    return { ...j, enabled: true, paused: false, ...(at ? { nextRun: at } : {}) };
+  });
+  if (found) saveJobs(dir, next);
+  return found;
+}
+
+/** Queue a job for the next scheduler tick (1s in-process, 10s detached). */
+export function runJobNow(dir: string, id: string): boolean {
+  const jobs = loadJobs(dir);
+  let found = false;
+  const next = jobs.map((j) => {
+    if (j.id !== id) return j;
+    found = true;
+    return { ...j, enabled: true, paused: false, nextRun: Date.now() };
+  });
+  if (found) saveJobs(dir, next);
+  return found;
+}
+
+export function getJob(dir: string, id: string): CronJob | undefined {
+  return loadJobs(dir).find((j) => j.id === id || j.id.startsWith(id));
+}
+
+export interface CronRunOutcome {
+  id: string;
+  ok: boolean;
+  status: 'ok' | 'error' | 'timeout';
+  output: string;
+  error?: string;
+  durationMs: number;
+}
+
+/** Execute every due job serially with a real abort-based timeout, persist the
+ *  outcome, and deliver notifications. Returns one outcome per job. */
+export async function runDueCronJobs(
+  dir: string,
+  runGoal: (prompt: string, signal: AbortSignal) => Promise<string>,
+): Promise<CronRunOutcome[]> {
+  const outcomes: CronRunOutcome[] = [];
+  for (const job of dueJobs(dir)) {
+    const started = Date.now();
+    const timeoutMs = Math.min(Math.max(job.timeoutMs ?? DEFAULT_CRON_TIMEOUT_MS, MIN_CRON_TIMEOUT_MS), MAX_CRON_TIMEOUT_MS);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error(`cron job ${job.id} timed out after ${timeoutMs}ms`)), timeoutMs);
+    let status: 'ok' | 'error' | 'timeout' = 'ok';
+    let output = '';
+    let error: string | undefined;
+    try {
+      output = await runGoal(job.prompt, controller.signal);
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      status = controller.signal.aborted ? 'timeout' : 'error';
+      output = error;
+    } finally {
+      clearTimeout(timer);
+    }
+    const finished = Date.now();
+    const durationMs = finished - started;
+    const next = nextRunFor(job.schedule, finished) ?? job.nextRun;
+    const updated: CronJob = {
+      ...job,
+      lastRun: finished,
+      nextRun: next,
+      runs: job.runs + 1,
+      lastStatus: status,
+      lastDurationMs: durationMs,
+      lastOutput: String(output ?? '').slice(0, 4000),
+      ...(error ? { lastError: error.slice(0, 2000) } : { lastError: undefined }),
+    };
+    updateJob(dir, updated);
+    await notifyJobResult(job, String(output ?? ''));
+    outcomes.push({ id: job.id, ok: status === 'ok', status, output: String(output ?? ''), ...(error ? { error } : {}), durationMs });
+  }
+  return outcomes;
 }
 
 /** Deliver a job result to its configured notify target (webhook or command).
@@ -264,5 +408,5 @@ export function listJobs(dir: string): CronJob[] {
 
 /** Jobs whose nextRun has come due (enabled only). */
 export function dueJobs(dir: string, now = Date.now()): CronJob[] {
-  return loadJobs(dir).filter((j) => j.enabled && j.nextRun <= now);
+  return loadJobs(dir).filter((j) => j.enabled && !j.paused && j.nextRun <= now);
 }

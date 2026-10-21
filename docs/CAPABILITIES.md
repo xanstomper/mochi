@@ -70,6 +70,14 @@ Mochi ships with 30+ built-in tools covering file operations, AST intelligence, 
 - **`fetch`**: HTTP client for raw GET/POST requests.
 - **`deepwiki`**: Built-in documentation server and query tool.
 
+### Browser, Documents & Device Automation
+- **`browser`**: Persistent Playwright session with refs, tabs, cookies, console/network rings, uploads/downloads, PDF/screenshot, `evaluate`, and a live-browser backend (Celeste) that drives the user's real logged-in tab. `auto` prefers live for read-shaped commands and refuses to silently retarget mutations.
+- **`docs`**: Creates, appends to, and reads Google Docs with real keyboard formatting (headings, bullets, numbered lists, code, quotes, tables). Uses the persistent `~/.mochi/browser/profile` login.
+- **`email`**: Gmail drafts by default, `send: true` to send, with CC/BCC and attachments. Real keyboard input into Gmail's contenteditable composer.
+- **`canvas`**: Self-contained visual HTML plan plus a drag-and-drop `.excalidraw` scene; optional publish to excalidraw.com and screenshot.
+- **`schedule`**: Cron-style recurring agent jobs with timeout, notification, pause/resume, run-now, and recorded last status/error/output. Backed by `.mochi/cron.json` and `mochi cron`.
+- **`device`**: Android over adb (tap/swipe/type/key/UI dump/apps/launch/install/push/pull/logcat), Linux desktop over xdotool/scrot/wmctrl, and iOS simulators over simctl.
+
 ### Agentic Orchestration & State
 - **`subagent`**: Spawns a fresh child agent with its own context to solve an isolated subtask.
 - **`skill`**: Dynamically loads specialized workflow guidelines by name.

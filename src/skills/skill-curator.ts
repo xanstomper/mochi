@@ -19,6 +19,7 @@ import {skillsRoot, archiveRoot, loadUsage, safeSlug, parseFrontmatter, renderSk
 import { writeSkill, markUsed } from './skill-manager.js';
 import { mochiStateDir } from '../core/mochi-dir.js';
 import { loadLessons } from '../lessons.js';
+import { loadSkillFailures, clearSkillFailures, type SkillFailureRecord } from './skills.js';
 import { lintSkillDoc, formatSkillLint } from './skill-lint.js';
 import { maybeRedact } from '../security/security.js';
 
@@ -114,31 +115,42 @@ export function scanSkills(projectDir: string, cfg: CuratorConfig): { snapshots:
   const snapshots: SkillSnapshot[] = [];
   if (!existsSync(root)) return { snapshots: [], stale: [], archive: [] };
   const now = Date.now();
+  const pushSkill = (filePath: string, fallbackName: string, category?: string) => {
+    try {
+      // Resolve the canonical name from frontmatter (records are keyed by the
+      // skill's `name`, not the slug directory/file name).
+      const raw = readFileSync(filePath, 'utf8');
+      const pf = parseFrontmatter(raw);
+      const canonical = pf && typeof pf.meta.name === 'string' ? pf.meta.name : fallbackName;
+      const rec = usage.byName[canonical] ?? usage.byName[fallbackName] ?? { name: canonical, agentCreated: false, patches: 0, createdAt: now, lastUsedAt: now };
+      const st = statSync(filePath);
+      snapshots.push({
+        name: canonical,
+        path: filePath,
+        category,
+        agentCreated: !!rec.agentCreated,
+        lastUsedAt: rec.lastUsedAt ?? now,
+        ageMs: now - (st.mtimeMs || now),
+        patches: rec.patches ?? 0,
+      });
+    } catch { /* unreadable skill: skip this pass */ }
+  };
   const visit = (p: string, category?: string) => {
     for (const e of readdirSync(p, { withFileTypes: true })) {
-      if (!e.isDirectory() || e.name.startsWith('.')) continue;
-      const sub = join(p, e.name);
-      const skillMd = join(sub, 'SKILL.md');
-      if (existsSync(skillMd)) {
-        // Resolve the canonical name from frontmatter (records are keyed by the
-        // skill's `name`, not the slug directory name).
-        const raw = readFileSync(skillMd, 'utf8');
-        const pf = parseFrontmatter(raw);
-        const canonical = pf && typeof pf.meta.name === 'string' ? pf.meta.name : e.name;
-        const rec = usage.byName[canonical] ?? usage.byName[e.name] ?? { name: canonical, agentCreated: false, patches: 0, createdAt: now, lastUsedAt: now };
-        const st = statSync(skillMd);
-        snapshots.push({
-          name: canonical,
-          path: skillMd,
-          category,
-          agentCreated: !!rec.agentCreated,
-          lastUsedAt: rec.lastUsedAt ?? now,
-          ageMs: now - (st.mtimeMs || now),
-          patches: rec.patches ?? 0,
-        });
-      } else {
-        visit(sub, e.name);
+      if (e.name.startsWith('.')) continue;
+      const full = join(p, e.name);
+      if (!e.isDirectory()) {
+        // Legacy/flat layout: `<category>/<slug>.md` (early auto-drafts used
+        // this). Without this branch those skills were invisible to the
+        // curator AND the regression doctor forever.
+        if (e.name !== 'SKILL.md' && e.name.endsWith('.md')) {
+          pushSkill(full, e.name.replace(/\.md$/i, ''), category);
+        }
+        continue;
       }
+      const skillMd = join(full, 'SKILL.md');
+      if (existsSync(skillMd)) pushSkill(skillMd, e.name, category);
+      else visit(full, e.name);
     }
   };
   visit(root);
@@ -159,6 +171,10 @@ export interface CuratorOutput {
   consolidated: Array<{ kept: string; merged: string }>;
   /** Lessons promoted to agent-created skills this pass. */
   promoted: string[];
+  /** Agent skills that received failure notes folded in this pass. */
+  failureNotes: string[];
+  /** Regression-doctor result for agent-created skills. */
+  doctor?: { scanned: number; healthy: number; failures: number; archived: string[] };
   reportPath: string;
 }
 
@@ -262,7 +278,7 @@ export function promoteLessons(projectDir: string): PromotionResult {
     // version, skip. A missing tree means no collision (writeSkill creates it).
     try {
       const root = skillsRoot(projectDir);
-      let collision = existsSync(join(root, name, 'SKILL.md'));
+      let collision = existsSync(join(root, name, 'SKILL.md')) || existsSync(join(root, 'auto', `${name}.md`));
       if (!collision && existsSync(root)) {
         for (const e of readdirSync(root, { withFileTypes: true })) {
           if (e.isDirectory() && !e.name.startsWith('.') && existsSync(join(root, e.name, name, 'SKILL.md'))) { collision = true; break; }
@@ -302,6 +318,25 @@ export function promoteLessons(projectDir: string): PromotionResult {
   return { promoted, skipped };
 }
 
+/** Fold recorded failures into an agent-created SKILL.md as a bounded,
+ *  idempotent "Known failure notes" block. Keeps the original body intact. */
+function appendFailureNotes(path: string, rec: SkillFailureRecord): void {
+  const raw = readFileSync(path, 'utf8');
+  const recent = rec.recent.length ? rec.recent : [{ at: rec.lastAt, error: rec.lastError || 'run failed' }];
+  const block = [
+    '<!-- mochi:failures:start -->',
+    '## Known failure notes (auto)',
+    `Recorded by the harness: ${rec.count} failed run(s), last ${new Date(rec.lastAt || Date.now()).toISOString().slice(0, 10)}.`,
+    ...recent.map((r) => `- ${new Date(r.at || Date.now()).toISOString().slice(0, 10)}: ${String(r.error).replace(/[`\n\r]+/g, ' ').slice(0, 240)}`),
+    '',
+    'Treat these as pitfalls when applying this skill: re-check the trigger, adapt the procedure, and verify the failing command clears.',
+    '<!-- mochi:failures:end -->',
+  ].join('\n');
+  const re = /<!-- mochi:failures:start -->[\s\S]*?<!-- mochi:failures:end -->/;
+  const next = re.test(raw) ? raw.replace(re, block) : `${raw.trimEnd()}\n\n${block}\n`;
+  writeFileSync(path, next, 'utf8');
+}
+
 export function runCurator(projectDir: string, cfg: CuratorConfig): CuratorOutput {
   const { snapshots, stale, archive } = scanSkills(projectDir, cfg);
   const agentCreated = snapshots.filter((s) => s.agentCreated);
@@ -332,6 +367,28 @@ export function runCurator(projectDir: string, cfg: CuratorConfig): CuratorOutpu
   try {
     promoted = promoteLessons(projectDir).promoted;
   } catch { /* promotion is best-effort; curation results still land */ }
+  // Failure learning: skills that were loaded on losing runs get their real
+  // errors folded into the SKILL.md as pitfalls, then the queue is cleared so
+  // the note is written exactly once per failure batch.
+  const failureNotes: string[] = [];
+  const failures = loadSkillFailures(projectDir);
+  for (const snap of agentCreated) {
+    const rec = failures[snap.name];
+    if (!rec || rec.count <= 0) continue;
+    try {
+      appendFailureNotes(snap.path, rec);
+      clearSkillFailures(projectDir, snap.name);
+      failureNotes.push(snap.name);
+    } catch { /* one unwritable skill must not stop the pass */ }
+  }
+  // Regression doctor: structure + embedded `mochi:verify` snippets for
+  // agent-created skills only. Runs AFTER failure notes land, so a freshly
+  // documented skill is immediately re-validated.
+  let doctor: CuratorOutput['doctor'];
+  try {
+    const d = runSkillDoctor(projectDir, { executeSnippets: true, names: new Set(agentCreated.map((s) => s.name)) });
+    doctor = { scanned: d.scanned, healthy: d.healthy, failures: d.failures.length, archived: d.archived };
+  } catch { /* doctor is best-effort */ }
   const report = [
     `# Skill curator report (${new Date(now).toISOString()})`,
     `Scanned: ${snapshots.length} skills (${agentCreated.length} agent-created).`,
@@ -339,6 +396,8 @@ export function runCurator(projectDir: string, cfg: CuratorConfig): CuratorOutpu
     `Archived: ${archived.join(', ') || '(none)'}.`,
     consolidated.length ? `Consolidated: ${consolidated.map((c) => `${c.merged} → ${c.kept}`).join(', ')}.` : '',
     promoted.length ? `Promoted: ${promoted.join(', ')}.` : '',
+    failureNotes.length ? `Failure notes folded into: ${failureNotes.join(', ')}.` : '',
+    doctor ? `Doctor: ${doctor.healthy}/${doctor.scanned} healthy, ${doctor.failures} failure(s)${doctor.archived.length ? `, archived: ${doctor.archived.join(', ')}` : ''}.` : '',
     ``,
     'Agent-created skills (maintainable):',
     ...agentCreated.map((s) => `- ${s.name}${s.category ? ` [${s.category}]` : ''} — ${s.patches} patches, active`),
@@ -347,7 +406,17 @@ export function runCurator(projectDir: string, cfg: CuratorConfig): CuratorOutpu
   mkdirSync(reportDir, { recursive: true });
   const reportPath = join(reportDir, `skill-curator-${now}.md`);
   writeFileSync(reportPath, report, 'utf8');
-  return { scanned: snapshots.length, agentCreated: agentCreated.length, stale: stale.map((s) => s.name), archived, consolidated, promoted, reportPath };
+  return {
+    scanned: snapshots.length,
+    agentCreated: agentCreated.length,
+    stale: stale.map((s) => s.name),
+    archived,
+    consolidated,
+    promoted,
+    failureNotes,
+    ...(doctor ? { doctor } : {}),
+    reportPath,
+  };
 }
 
 // ─── State (last-run time, pause, pin) — Hermes curator_state ────────────
@@ -410,12 +479,16 @@ export function autoDraftSkill(
   try {
     const min = opts.minSuccesses ?? 2;
     if (opts.successes < min) return null;
-    const slug = safeSlug(`${opts.pattern}-${opts.strategy}`);
+    // Skill names are capped at 64 chars by the lint gate. The old code passed
+    // the full pattern+strategy slug through, so virtually every real draft was
+    // rejected and autoDraftSkill silently returned null forever.
+    const slug = safeSlug(`auto-${opts.pattern}-${opts.strategy}`).slice(0, 60).replace(/-+$/g, '');
     if (!slug || slug.length < 3) return null;
     const root = skillsRoot(projectDir);
-    const skillDir = join(root, 'auto');
-    const path = join(skillDir, `${slug}.md`);
-    if (existsSync(path)) return null; // already drafted — never overwrite
+    const skillDir = join(root, 'auto', slug);
+    const path = join(skillDir, 'SKILL.md');
+    const legacyPath = join(root, 'auto', `${slug}.md`);
+    if (existsSync(path) || existsSync(legacyPath)) return null; // already drafted — never overwrite
     // Skip if any existing skill's name/description already covers this pattern.
     const usage = loadUsage(projectDir);
     for (const name of Object.keys(usage.byName)) {
@@ -429,10 +502,18 @@ export function autoDraftSkill(
       `Distilled from ${opts.successes} successful run(s) using strategy \`${opts.strategy}\`.`,
       opts.taskTitle ? `Originating task: "${opts.taskTitle.slice(0, 120)}".` : '',
       '',
-      '## Procedure that worked',
+      '## Procedure',
+      'What worked on the previous runs:',
       ...(lessons.length
         ? lessons.map((l, i) => `${i + 1}. ${l.slice(0, 200)}`)
         : ['1. Apply the strategy that repeatedly succeeded for this pattern; verify before claiming completion.']),
+      '',
+      '## Verification',
+      'The curator runs this structural check automatically; a broken file is archived after two failures:',
+      '',
+      '<!-- mochi:verify',
+      'mochi:assert-sections Procedure,Verification',
+      '-->',
       '',
       '## Notes',
       '- This skill was auto-drafted from run telemetry (MCH-44). Refine or delete via skill_manage.',
@@ -448,6 +529,9 @@ export function autoDraftSkill(
       }
     } catch { /* gate is best-effort — never block drafting on gate failure */ }
     writeFileSync(path, renderSkill({ name: slug, description, category: 'auto', body }));
+    // Mark the draft as agent-created so the curator lifecycle (stale,
+    // archive, consolidate) and the regression doctor actually manage it.
+    try { markUsed(projectDir, slug, { agentCreated: true, category: 'auto' }); } catch { /* usage best-effort */ }
     return slug;
   } catch {
     return null;
@@ -548,6 +632,9 @@ export interface SkillDoctorOptions {
   maxConsecutiveFailures?: number; // default: 2
   executeSnippets?: boolean;       // default: true
   timeoutMs?: number;              // default: 3000ms
+  /** Restrict checks to these canonical skill names (curator passes the
+   *  agent-created set so a big bundled library isn't re-verified each pass). */
+  names?: Set<string>;
 }
 
 export function extractVerificationSnippet(rawText: string): string | null {
@@ -583,7 +670,8 @@ export function runSkillDoctor(
   opts: SkillDoctorOptions = {},
 ): SkillDoctorReport {
   const cfg = defaultCuratorConfig();
-  const { snapshots } = scanSkills(projectDir, cfg);
+  const allSnapshots = scanSkills(projectDir, cfg).snapshots;
+  const snapshots = opts.names ? allSnapshots.filter((s) => opts.names!.has(s.name)) : allSnapshots;
   const history = loadDoctorHistory(projectDir);
   const now = Date.now();
   const maxFailures = opts.maxConsecutiveFailures ?? 2;
@@ -678,10 +766,18 @@ export function runSkillDoctor(
     const snippet = extractVerificationSnippet(raw);
     if (snippet && executeSnippets) {
       try {
-        // Platform shell: the `exit 0` / `exit 1` / `echo` probes are already
-        // cmd-compatible, so only the runner needs the branch — win32 mirrors
-        // exec.ts's runShellString recipe (cmd.exe /d /s /c), POSIX keeps bash.
-        if (process.platform === 'win32') {
+        // Cross-platform structural checks are expressed as a tiny internal
+        // directive so auto-drafted skills never depend on bash/grep (Windows
+        // cmd would fail every pass and archive a perfectly good skill).
+        const internal = /^mochi:assert-sections\s+(.+)$/m.exec(snippet);
+        if (internal) {
+          const required = internal[1].split(',').map((x) => x.trim()).filter(Boolean);
+          const missing = required.filter((name) => !new RegExp(`^##\\s+${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'm').test(raw));
+          if (missing.length) throw new Error(`missing required section(s): ${missing.join(', ')}`);
+        } else if (process.platform === 'win32') {
+          // Platform shell: the `exit 0` / `exit 1` / `echo` probes are already
+          // cmd-compatible, so only the runner needs the branch — win32 mirrors
+          // exec.ts's runShellString recipe (cmd.exe /d /s /c), POSIX keeps bash.
           execFileSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', snippet], {
             cwd: projectDir,
             timeout: timeoutMs,

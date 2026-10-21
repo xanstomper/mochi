@@ -485,6 +485,8 @@ export class Agent {
   private hypotheses: Hypothesis[] = [];
   private diagnosis: DiagnosisResult | undefined;
   private lastLessons: Lesson[] = [];
+  /** Lesson ids injected into the prompt this run (success/failure attribution). */
+  private surfacedLessonIds = new Set<string>();
   private anchor = new AnchorEngine();
   private fileChanged = false;
   /** Shell mutations (`sed -i`, `npm create`, `git apply`, `> file`, …) never
@@ -5155,6 +5157,7 @@ Continue from 'Next:', do not redo completed progress.`,
     // Pull matching procedural lessons for THIS signature/kind so the prompt
     // can say "last time you saw this, X fixed it" instead of starting cold.
     this.lastLessons = retrieveLessons(this.workspace.dir, failureText, kind);
+    for (const l of this.lastLessons) this.surfacedLessonIds.add(l.id);
 
     // MCH-77: consult the cross-run LearningStore — if this error pattern was
     // seen in prior sessions, surface the historically best strategy so the
@@ -5954,10 +5957,27 @@ Continue from 'Next:', do not redo completed progress.`,
     // win-rate (wins/loads) self-corrects the MCH-40 relevance boost.
     try {
       const { getSkillsLoadedThisRun, clearSkillsLoadedThisRun } = await import('../tools/skill.js');
-      const { recordSkillUsage } = await import('../skills/skills.js');
-      for (const name of getSkillsLoadedThisRun()) recordSkillUsage(this.workspace.dir, name, success === true);
+      const { recordSkillUsage, recordSkillFailure, clearSkillFailures } = await import('../skills/skills.js');
+      const loaded = getSkillsLoadedThisRun();
+      for (const name of loaded) {
+        recordSkillUsage(this.workspace.dir, name, success === true);
+        // Failure notes feed the curator's self-repair pass; a green run clears
+        // the queue so a one-off flake doesn't permanently scar the skill.
+        if (success === true) clearSkillFailures(this.workspace.dir, name);
+        else recordSkillFailure(this.workspace.dir, name, String(this.lastToolError ?? summary).slice(0, 500));
+      }
       clearSkillsLoadedThisRun();
     } catch { /* skill outcome attribution must never affect task completion */ }
+    // Lesson attribution: a retrieved lesson that was actually injected gets
+    // its useCount/successCount advanced. This is what makes promotion
+    // (3+ uses, 1+ success) reachable instead of permanently stuck at zero.
+    try {
+      if (this.surfacedLessonIds.size > 0) {
+        const { markLessonUsed } = await import('../lessons.js');
+        for (const id of this.surfacedLessonIds) markLessonUsed(this.workspace.dir, id, success === true);
+        this.surfacedLessonIds.clear();
+      }
+    } catch { /* lesson attribution must never affect task completion */ }
     // MCH-63: attribute run outcome to every durable fact surfaced this run —
     // the missing half of the fact lifecycle. Success -> success_count++ per
     // fact; failure -> attempts++ with last_failed, so 3 failed runs on a fact

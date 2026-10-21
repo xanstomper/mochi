@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll } from 'bun:test';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadToolSeqs, saveToolSeq } from './core/tool-sequence.js';
@@ -24,11 +24,11 @@ describe('draftSkillFromToolRoutes (MCH-55)', () => {
     expect(loadToolSeqs(ws).seqs.length).toBe(3);
     const slug = await draftSkillFromToolRoutes(ws);
     expect(slug).not.toBeNull();
-    // Skill file should exist under the auto-drafted skills root.
+    // Skill file should exist under the auto-drafted skills root (curator-
+    // managed directory layout: .mochi/skills/auto/<slug>/SKILL.md).
     expect(slug).toMatch(/tool-route/);
-    const { globSync } = await import('node:fs');
-    const hits = globSync(join(ws, '.mochi', '**', `${slug}.md`));
-    expect(hits.length).toBeGreaterThan(0);
+    const skillPath = join(ws, '.mochi', 'skills', 'auto', slug!, 'SKILL.md');
+    expect(existsSync(skillPath)).toBe(true);
     // Idempotent-ish: a second draft either returns the same slug or a deduped variant — must not throw.
     const slug2 = await draftSkillFromToolRoutes(ws);
     expect(typeof slug2 === 'string' || slug2 === null).toBe(true);

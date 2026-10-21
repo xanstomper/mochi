@@ -142,7 +142,9 @@ Usage:
   mochi daemon send "<goal>"
   mochi daemon approve
   mochi daemon resume <goalId>      # resume a persisted goal over HTTP
-  mochi daemon cron add|list|remove # scheduled agent jobs
+  mochi daemon cron add|list|status|pause|resume|run|remove # scheduled jobs over HTTP
+  mochi cron list|add|status|pause|resume|run|remove  # manage jobs without HTTP
+  mochi browser login|status|close  # persistent login profile for Docs/Gmail/live automation
   mochi daemon restart              # stop + start on the same port
   mochi daemon stop
   mochi termix ["<task>"] [--coms|--sep] [--sessions N]
@@ -710,6 +712,61 @@ async function main() {
     console.log(`Checkpoint created: ${cp.type} ${cp.ref}`);
     return;
   }
+  // `mochi cron ...` — inspect / queue scheduled jobs without the daemon.
+  if (first === 'cron' || first === 'schedule') {
+    const cron = await import('./daemon/cron.js');
+    const sub = (positional[1] || 'list').toLowerCase();
+    const wsCwd = runtime.workspace.dir;
+    const fmt = (j: import('./daemon/cron.js').CronJob) => {
+      const state = j.paused ? 'PAUSED' : (j.enabled ? 'active' : 'disabled');
+      const next = new Date(j.nextRun).toLocaleString();
+      const last = j.lastStatus ? ` last=${j.lastStatus}${j.lastDurationMs ? ` ${Math.round(j.lastDurationMs / 1000)}s` : ''}` : '';
+      return `${j.id}  [${state}]  ${j.schedule}  next=${next}  runs=${j.runs}${last}\n    ${j.prompt.slice(0, 140).replace(/\n/g, ' ')}\n    id: ${j.id}`;
+    };
+    if (sub === 'list' || sub === 'ls') {
+      const jobs = cron.listJobs(wsCwd);
+      if (!jobs.length) { console.log('No scheduled jobs. Add: mochi cron add "every 30m" "check the build"'); return; }
+      console.log(jobs.map(fmt).join('\n\n'));
+      return;
+    }
+    if (sub === 'add') {
+      const schedule = typeof flags.schedule === 'string' ? flags.schedule : positional[2];
+      const prompt = typeof flags.prompt === 'string' ? flags.prompt : positional.slice(3).join(' ');
+      if (!schedule || !prompt) { console.log('Usage: mochi cron add "<schedule>" "<prompt>"'); return; }
+      const timeoutMs = flags.timeoutMs !== undefined ? Number(flags.timeoutMs) : undefined;
+      const r = cron.addJob(wsCwd, prompt, schedule, {
+        notify: typeof flags.notify === 'string' ? flags.notify : undefined,
+        timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : undefined,
+        paused: flags.paused === true,
+      });
+      console.log(r.error ? `Error: ${r.error}` : `Added job ${r.id}. Start the daemon to run it: mochi daemon start`);
+      return;
+    }
+    const id = positional[2] || (typeof flags.id === 'string' ? flags.id : '');
+    if (!id) { console.log('Usage: mochi cron <status|pause|resume|enable|disable|run|remove> <id>'); return; }
+    const job = cron.getJob(wsCwd, id);
+    if (!job) { console.log(`No job matching "${id}".`); return; }
+    if (sub === 'status') { console.log(fmt(job)); if (job.lastError) console.log(`last error: ${job.lastError}`); if (job.lastOutput) console.log(`last output: ${job.lastOutput.slice(0, 1200)}`); return; }
+    if (sub === 'pause') cron.setJobPaused(wsCwd, job.id, true);
+    else if (sub === 'resume') cron.setJobPaused(wsCwd, job.id, false);
+    else if (sub === 'enable') cron.setJobEnabled(wsCwd, job.id, true);
+    else if (sub === 'disable') cron.setJobEnabled(wsCwd, job.id, false);
+    else if (sub === 'run') cron.runJobNow(wsCwd, job.id);
+    else if (sub === 'remove' || sub === 'rm' || sub === 'delete') cron.removeJob(wsCwd, job.id);
+    else { console.log(`Unknown cron action "${sub}". Use list|add|status|pause|resume|enable|disable|run|remove.`); return; }
+    console.log(`Job ${job.id}: ${sub} ok.`);
+    return;
+  }
+
+  // `mochi browser ...` — persistent browser profile + live browser status.
+  // The agent-facing tools are separate; this is the one-time login surface
+  // for Google Docs / Gmail and the health check when automation misbehaves.
+  if (first === 'browser') {
+    const { runBrowserCli } = await import('./browser/cli.js');
+    await runBrowserCli(positional.slice(1), flags);
+    return;
+  }
+
   if (first === 'docgen' || first === 'docs') {
     const { generateProjectDocs } = await import('./docgen.js');
     const docs = generateProjectDocs(cwd);

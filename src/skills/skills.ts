@@ -363,6 +363,77 @@ export function recordSkillUsage(projectDir: string, name: string, won?: boolean
   } catch { /* stats are best-effort */ }
 }
 
+/** Failure telemetry for loaded skills. Kept separate from the wins/loads
+ *  counters so existing consumers keep their shape; the curator folds these
+ *  notes into agent-created SKILL.md files and then clears the queue. */
+export interface SkillFailureRecord {
+  count: number;
+  lastAt: number;
+  lastError: string;
+  recent: Array<{ at: number; error: string }>;
+}
+
+export function skillFailurePath(projectDir: string): string {
+  return join(mochiStateDir(projectDir), 'skill-failures.json');
+}
+
+export function loadSkillFailures(projectDir: string): Record<string, SkillFailureRecord> {
+  try {
+    const p = skillFailurePath(projectDir);
+    if (!existsSync(p)) return {};
+    const raw = JSON.parse(readFileSync(p, 'utf8')) as Record<string, SkillFailureRecord>;
+    const out: Record<string, SkillFailureRecord> = {};
+    for (const [name, rec] of Object.entries(raw)) {
+      if (!rec || typeof rec.count !== 'number') continue;
+      out[name] = {
+        count: Math.max(0, Math.floor(rec.count)),
+        lastAt: typeof rec.lastAt === 'number' ? rec.lastAt : 0,
+        lastError: typeof rec.lastError === 'string' ? rec.lastError.slice(0, 500) : '',
+        recent: Array.isArray(rec.recent)
+          ? rec.recent.filter((r) => r && typeof r.error === 'string').slice(-5).map((r) => ({ at: Number(r.at) || 0, error: String(r.error).slice(0, 500) }))
+          : [],
+      };
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function saveSkillFailures(projectDir: string, all: Record<string, SkillFailureRecord>): void {
+  mkdirSync(mochiStateDir(projectDir), { recursive: true });
+  writeFileSync(skillFailurePath(projectDir), JSON.stringify(all, null, 2));
+}
+
+/** Record that a loaded skill participated in a failed run. Dedupes identical
+ *  consecutive errors so a retry loop cannot flood the queue. */
+export function recordSkillFailure(projectDir: string, name: string, error: string): void {
+  try {
+    const all = loadSkillFailures(projectDir);
+    const msg = String(error || 'run failed').replace(/\s+/g, ' ').trim().slice(0, 500);
+    const cur = all[name] ?? { count: 0, lastAt: 0, lastError: '', recent: [] };
+    cur.count += 1;
+    cur.lastAt = Date.now();
+    cur.lastError = msg;
+    if (!cur.recent.length || cur.recent[cur.recent.length - 1].error !== msg) {
+      cur.recent.push({ at: cur.lastAt, error: msg });
+      cur.recent = cur.recent.slice(-5);
+    }
+    all[name] = cur;
+    saveSkillFailures(projectDir, all);
+  } catch { /* telemetry is best-effort */ }
+}
+
+/** A green run clears the failure queue for that skill. */
+export function clearSkillFailures(projectDir: string, name: string): void {
+  try {
+    const all = loadSkillFailures(projectDir);
+    if (!(name in all)) return;
+    delete all[name];
+    saveSkillFailures(projectDir, all);
+  } catch { /* best-effort */ }
+}
+
 /** Build the boost map for selectRelevantSkills: wins count as successes. */
 export function usageBoostMap(usage: Map<string, SkillUsage>): Map<string, number> {
   const m = new Map<string, number>();
