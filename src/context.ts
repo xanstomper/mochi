@@ -541,6 +541,14 @@ export class ContextEngine {
         try {
           boost = usageBoostMap(loadSkillUsage(this.projectRoot));
         } catch { boost = undefined; }
+        // MCH-202 verdict: the TF-IDF index is NOT wired as the relevance
+        // gate. Its scores can't separate true positives from generic-token
+        // false positives (tdd leader margin 1.015x vs ipv4 false-positive
+        // margin 1.45x; an absolute floor admitting git-workflow 0.0573 also
+        // admits code-readability 0.0512). The linear tokenOverlap gate with
+        // MIN_SKILL_SCORE=0.25 stays the accept/reject authority; the index
+        // remains in service for MCH-203 error matching, where fuzzy recall
+        // is the goal. Do not re-wire without re-pinning the gate tests.
         relevant = selectRelevantSkills(skills, task.title + ' ' + (task.description ?? ''), MAX_TASK_SKILLS, boost);
         // MCH-201: sort relevant skills by quality score descending so higher-scored
         // skills appear first in the advertised block (model learns to prefer proven ones).

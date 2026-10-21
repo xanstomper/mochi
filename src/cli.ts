@@ -126,7 +126,7 @@ Usage:
   mochi watch [dir...] [--cmd C]    # run the repo check on every file change
   mochi serve [--port N] [--token T] [--host H] # JSON API + OpenAI-compatible (/v1); default 127.0.0.1
   mochi auth [status|accounts|switch|...]  # per-provider credentials & multi-account
-  mochi skills [list|lint]           # list and validate skills
+  mochi skills [list|lint|mine]      # list, validate skills; mine one from a trace
   mochi providers                   # list AI model providers
   mochi dashboard | mochi web        # open web dashboard in browser
   mochi plugin add <dir>|remove <name>|list        # spec 12-E plugin registry
@@ -1262,6 +1262,35 @@ async function main() {
         }
       }
       console.log(`\\nLinted ${scanned} skills${failing ? ` — ${failing} failed` : ' (all clean)'}.`);
+      return;
+    }
+    if (sub === 'mine') {
+      // mochi skills mine --task <t> --lessons <a,b,c> --tools <r,e,s> --errors <x,y>
+      // Manual MCH-200: draft a SKILL.md from a supplied trace via the
+      // configured provider. Requires a live model provider; never throws.
+      const f = (k: string): string | undefined => {
+        const v = flags[k];
+        return typeof v === 'string' && v.trim() ? v : undefined;
+      };
+      const taskTitle = f('task');
+      if (!taskTitle) { console.log('Usage: mochi skills mine --task <title> [--lessons a,b] [--tools read,edit,shell] [--errors E1,E2] [--dry]'); return; }
+      const { mineSkillFromTrace } = await import('./skills/skill-curator.js');
+      const { createProvider } = await import('./model/router.js');
+      try {
+        const provider = createProvider(runtime.config.model);
+        const splitList = (v?: string) => (v ? v.split(',').map((x) => x.trim()).filter(Boolean) : []);
+        if (flags.dry) { console.log('Dry run: would mine a skill from the supplied trace (no model call made).'); return; }
+        const mined = await mineSkillFromTrace(cwd, {
+          taskTitle,
+          lessons: splitList(f('lessons')),
+          toolSequence: splitList(f('tools')),
+          errorsFixed: splitList(f('errors')),
+          pattern: f('pattern') ?? 'general',
+          strategy: f('strategy') ?? 'unclassified',
+          provider,
+        });
+        console.log(mined ? `Mined skill: ${mined}` : 'Mining produced no skill (evidence gate, lint, or provider rejected the trace).');
+      } catch (e) { console.error(`Mine failed: ${(e as Error).message}`); }
       return;
     }
     const { skills } = loadAllSkills(cwd);

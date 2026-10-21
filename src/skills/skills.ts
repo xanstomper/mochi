@@ -686,6 +686,16 @@ export function filterRelevantSkillsIndexed(
       .map((s) => ({ s, score: indexedRelevanceScore(taskText, s.name, idx!) }))
       .filter((e) => e.score >= minScore)
       .sort((a, b) => b.score - a.score || skills.indexOf(a.s) - skills.indexOf(b.s));
+    if (scored.length === 0) return [];
+    // False-positive gate: TF-IDF alone can't tell "write isValidIpv4" from
+    // "code-readability" — every query shares generic tokens (write, code,
+    // function). When the runner-up is nearly as good as the leader, the whole
+    // result set is noise: no skill is actually relevant. Require the leader
+    // to clear the floor AND lead the pack by a real margin (1.4×) before
+    // advertising anything; otherwise advertise nothing, like the linear gate.
+    const leader = scored[0];
+    const runnerUp = scored[1]?.score ?? 0;
+    if (leader.score < runnerUp * 1.4) return [];
     return scored.slice(0, max).map((e) => e.s);
   } catch {
     return fallback ? fallback(skills, taskText, max) : [];
