@@ -138,8 +138,6 @@ function finishSpawn(
       child.stderr?.destroy();
       setTimeout(() => { if (!settled) { killTree('SIGKILL'); done(130, { cancelled: true }); } }, 800);
     };
-    if (opts.signal?.aborted) { onAbort(); return; }
-    opts.signal?.addEventListener('abort', onAbort, { once: true });
     // No caller ever feeds stdin (no stdin-input API exists): close it now so
     // an interactive child (cmd.exe without /C) hits EOF instead of blocking
     // on our open pipe until the timeout kills it.
@@ -169,6 +167,13 @@ function finishSpawn(
       reject(err);
     });
     child.on('close', (code) => done(code));
+    // Already-aborted: run the abort path AFTER the listeners exist. The old
+    // early-return skipped 'error'/'close' attachment — a spawn that fails
+    // while already aborted (nonexistent cwd, deleted shell) then emitted
+    // 'error' with NO listener: an unhandled 'error' event crashes the whole
+    // process. Order guarantees the rejection is caught.
+    if (opts.signal?.aborted) { onAbort(); return; }
+    opts.signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
 

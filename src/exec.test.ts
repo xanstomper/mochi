@@ -35,6 +35,21 @@ describe('exec policy', () => {
     expect(r.cancelled).toBe(true);
   }, 60_000);
 
+  it('pre-aborted signal + failing spawn rejects (handled) instead of crashing on an unhandled error event', async () => {
+    // The old early-return skipped 'error'/'close' listener attachment when
+    // the signal was ALREADY aborted: a spawn failing under an aborted signal
+    // (nonexistent cwd here → ENOENT) emitted 'error' with NO listener — an
+    // unhandled 'error' event on a ChildProcess THROWS and can crash the
+    // host process. Now the listeners exist first, so the failure arrives as
+    // an ordinary handled rejection — consistent with the non-aborted path,
+    // where a failed spawn also rejects.
+    const c = new AbortController();
+    c.abort();
+    await expect(
+      runShellString('echo never-runs', { timeoutMs: 20_000, signal: c.signal, cwd: '/definitely/not/a/real/dir' }),
+    ).rejects.toThrow();
+  }, 60_000);
+
   it.skipIf(process.platform === 'win32')('kills the whole process TREE on timeout, not just the direct child', async () => {
     const { mkdtempSync, readFileSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
