@@ -869,6 +869,10 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
     // turn, which is always kept (the active working set). A single message
     // larger than the whole window still goes through alone (the orphan
     // cleanup and shrinkOldToolOutputs address its content size downstream).
+    // CONTRACT (B15 restructure pin): the floor chooses WHICH messages fit —
+    // it is a recency priority ordering INSIDE the window; it can never
+    // expand the window. The newest turn is the sole unconditional add.
+    // The test "recency floor can never expand the budget window" pins this.
     for (let i = this.messages.length - 1; i >= 0; i--) {
       const m = this.messages[i];
       const tokens = cachedMessageTokens(m);
