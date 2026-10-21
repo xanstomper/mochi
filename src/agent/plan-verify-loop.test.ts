@@ -5,6 +5,12 @@
 // result "Blocked: plan mode..."), the command never runs, and the plan-mode
 // research flow cannot use the project's own checks.
 import { describe, it, expect } from 'vitest';
+// Hermetic: this file exercises the TypeScript context engine only. The
+// native Rust runtime must NOT be spawned from here — a live child process
+// left behind in the vitest worker keeps the macOS runner's test step alive
+// (the runner's orphan cleanup then tears the job down). The native path has
+// its own parity tests.
+process.env.MOCHI_NO_NATIVE = '1';
 import { mkdtempSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
