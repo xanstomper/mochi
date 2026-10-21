@@ -46,6 +46,7 @@ mochi interop claude [--dry-run]     # Import Claude Code hooks, agents, and com
 # Diagnostics & Skills
 mochi doctor                         # Run health check on workspace, tools, and compilers
 mochi skills                         # List all bundled and project skills
+mochi skills mine --task <t> [opts]  # Mine a SKILL.md from a trace (--lessons/--tools/--errors/--dry)
 mochi skills import <src> [opts]     # Import an external skills tree (alias of below)
 mochi import-skills <src> [opts]     # Adopt an external SKILL.md tree into ~/.mochi/skills
 mochi import-skills <src> --list     # Dry-run: list discoverable skills without importing
