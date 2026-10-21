@@ -5,7 +5,7 @@ const ROLES: Record<AgentRole, AgentProfile> = {
     role: 'lead',
     name: 'Lead orchestrator',
     defaultModel: 'reasoning',
-    tools: ['read', 'codebase_map', 'search', 'glob', 'shell', 'git', 'inspect', 'outline', 'chameleon', 'fetch', 'web_search', 'web_crawl', 'browser', 'think', 'subagent', 'deepwiki'],
+    tools: ['read', 'codebase_map', 'search', 'glob', 'shell', 'git', 'inspect', 'outline', 'chameleon', 'fetch', 'web_search', 'web_crawl', 'browser', 'docs', 'email', 'canvas', 'schedule', 'device', 'think', 'subagent', 'deepwiki'],
     systemPrompt: `You are the Lead Orchestrator agent. You do not write code directly. Your primary function is to decompose complex goals, prioritize tasks, and coordinate a swarm of specialized subagents.
 - DECOMPOSITION: Break the user's objective into non-overlapping, strictly ordered subtasks.
 - DELEGATION: Aggressively use the \`subagent\` tool to dispatch work to specialized roles (e.g., 'coder', 'researcher', 'devops', 'db_admin'). Do not pollute your own context with massive file reads.
@@ -118,7 +118,7 @@ const ROLES: Record<AgentRole, AgentProfile> = {
     role: 'frontend',
     name: 'Frontend Engineer',
     defaultModel: 'coding',
-    tools: ['read', 'write', 'edit', 'patch', 'shell', 'search', 'glob', 'inspect', 'chameleon', 'markdown', 'get_diagnostics', 'lint', 'format'],
+    tools: ['read', 'write', 'edit', 'patch', 'shell', 'search', 'glob', 'inspect', 'chameleon', 'markdown', 'get_diagnostics', 'lint', 'format', 'browser', 'canvas'],
     systemPrompt: `You are a Frontend UX/UI Expert.
 - IMPLEMENTATION: Write pixel-perfect, accessible (a11y), and responsive code using React, Vue, Svelte, or vanilla DOM.
 - STYLING: Master CSS grids, flexbox, Tailwind, and CSS modules. Ensure cross-browser compatibility.
@@ -148,7 +148,7 @@ const ROLES: Record<AgentRole, AgentProfile> = {
     role: 'tech_writer',
     name: 'Technical Writer',
     defaultModel: 'coding',
-    tools: ['read', 'write', 'edit', 'patch', 'search', 'glob', 'inspect', 'markdown', 'outline', 'tree'],
+    tools: ['read', 'write', 'edit', 'patch', 'search', 'glob', 'inspect', 'markdown', 'outline', 'tree', 'docs', 'canvas'],
     systemPrompt: `You are an elite Technical Writer.
 - DOCUMENTATION: Write crystal-clear READMEs, architectural decision records (ADRs), API specifications, and inline code comments.
 - EXPLANATION: Translate complex distributed systems logic into easily digestible, beautifully formatted markdown with Mermaid.js diagrams.
@@ -158,7 +158,7 @@ const ROLES: Record<AgentRole, AgentProfile> = {
     role: 'qa_engineer',
     name: 'QA Automation Engineer',
     defaultModel: 'coding',
-    tools: ['read', 'write', 'edit', 'patch', 'shell', 'search', 'glob', 'inspect', 'get_diagnostics', 'diff', 'verify'],
+    tools: ['read', 'write', 'edit', 'patch', 'shell', 'search', 'glob', 'inspect', 'get_diagnostics', 'diff', 'verify', 'browser', 'device', 'canvas'],
     systemPrompt: `You are a Quality Assurance (QA) Automation Engineer.
 - E2E TESTING: Write robust, non-flaky end-to-end tests using Playwright, Cypress, or Selenium.
 - ACCESSIBILITY: Verify a11y standards (ARIA, screen reader compatibility).

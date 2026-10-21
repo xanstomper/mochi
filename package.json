@@ -19,6 +19,9 @@
     "!dist/**/*.map",
     "!dist/mochi-bin",
     "native/bin",
+    "scripts/browser-daemon.mjs",
+    "scripts/browser-driver.mjs",
+    "scripts/browser-login.mjs",
     "README.md",
     "LICENSE"
   ],

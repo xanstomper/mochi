@@ -10,6 +10,26 @@ export interface CompletionCommand {
 }
 
 export const COMPLETION_COMMANDS: CompletionCommand[] = [
+  {
+    name: 'browser', description: 'Persistent browser profile + live browser status',
+    subcommands: [
+      { name: 'login', description: 'Open a real headed browser once to sign in (Google Docs/Gmail)' },
+      { name: 'status', description: 'Show headless engines, live bridge, and profile path' },
+      { name: 'close', description: 'Close the persistent login browser window' },
+    ],
+  },
+  {
+    name: 'cron', description: 'Manage scheduled agent jobs', aliases: ['schedule'],
+    subcommands: [
+      { name: 'list', description: 'List jobs with next run and last status' },
+      { name: 'add', description: 'Add: mochi cron add "<schedule>" "<prompt>"' },
+      { name: 'status', description: 'Show one job including last output/error' },
+      { name: 'pause', description: 'Pause without deleting' },
+      { name: 'resume', description: 'Resume and re-arm the next run' },
+      { name: 'run', description: 'Queue a job for the next daemon tick' },
+      { name: 'remove', description: 'Delete a job' },
+    ],
+  },
   { name: 'goal', description: 'Run a multi-step objective' },
   { name: 'team', description: 'Run specialists concurrently' },
   { name: 'plan', description: 'Plan only, no edits' },

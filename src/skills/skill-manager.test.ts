@@ -1,12 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import {
   writeSkill, patchSkill, deleteSkill, loadUsage, saveUsage, markUsed, bumpPatch,
   listAgentCreated, parseFrontmatter, renderSkill, safeSlug, skillsRoot, archiveRoot, forget,
 } from './skill-manager.js';
-import { detectSkillOpportunities, opportunitiesToPrompt, scanSkills, runCurator, shouldRunCurator, recordCuratorRun, loadCuratorState, saveCuratorState, defaultCuratorConfig } from './skill-curator.js';
+import { detectSkillOpportunities, opportunitiesToPrompt, scanSkills, runCurator, shouldRunCurator, recordCuratorRun, loadCuratorState, saveCuratorState, defaultCuratorConfig, autoDraftSkill, runSkillDoctor } from './skill-curator.js';
+import { recordSkillFailure, loadSkillFailures } from './skills.js';
 
 function procedureFixture(detail: string): string {
   return [
@@ -326,5 +327,79 @@ describe('skill-curator', () => {
     state.lastRunAt = Date.now() - 3600_000;
     saveCuratorState(proj, state);
     expect(shouldRunCurator(proj, on)).toBe(false);
+  });
+});
+
+describe('self-improvement closure', () => {
+  it('auto-drafts curator-managed skills with a runnable verification snippet', () => {
+    const slug = autoDraftSkill(proj, {
+      pattern: 'TS2345 type mismatch on optional field',
+      strategy: 'narrow the type at the call site and re-run typecheck',
+      successes: 3,
+      lessons: ['Reproduce with npm run typecheck first.', 'Prefer a narrow guard over a cast.'],
+      taskTitle: 'fix the build',
+    });
+    expect(slug).toBeTruthy();
+    const path = join(skillsRoot(proj), 'auto', slug!, 'SKILL.md');
+    expect(existsSync(path)).toBe(true);
+    const raw = readFileSync(path, 'utf8');
+    expect(raw).toContain('mochi:verify');
+    expect(raw).toContain('## Procedure');
+    // Agent-created marker makes it eligible for curation/doctor lifecycle.
+    expect(loadUsage(proj).byName[slug!]?.agentCreated).toBe(true);
+    const doctor = runSkillDoctor(proj, { executeSnippets: true, names: new Set([slug!]) });
+    expect(doctor.failures).toHaveLength(0);
+    expect(doctor.healthy).toBe(1);
+    // A truncated skill must fail the same structural check on the next pass.
+    writeFileSync(path, raw.replace('## Verification', '## Removed'), 'utf8');
+    const broken = runSkillDoctor(proj, { executeSnippets: true, names: new Set([slug!]) });
+    expect(broken.failures).toHaveLength(1);
+    expect(broken.failures[0].kind).toBe('verification-failed');
+    writeFileSync(path, raw, 'utf8');
+    // Idempotent: a second identical draft is refused.
+    expect(autoDraftSkill(proj, {
+      pattern: 'TS2345 type mismatch on optional field',
+      strategy: 'narrow the type at the call site and re-run typecheck',
+      successes: 3,
+    })).toBeNull();
+  });
+
+  it('marks model-authored skills agentCreated so the curator can improve them', async () => {
+    const { skillManageTool } = await import('./skill-manager.js');
+    const ctx = { cwd: proj, workspace: { dir: proj } } as any;
+    const out = await skillManageTool.execute({
+      action: 'create',
+      name: 'Model Authored',
+      description: 'Reusable fixture proving model-authored skills enter curation',
+      body: procedureFixture('Model-authored procedure.'),
+    }, ctx);
+    expect(out).toContain("Created skill 'Model Authored'");
+    expect(loadUsage(proj).byName['Model Authored']?.agentCreated).toBe(true);
+    expect(listAgentCreated(proj).some((s) => s.name === 'Model Authored')).toBe(true);
+  });
+
+  it('scanSkills sees legacy flat auto/*.md files', () => {
+    const dir = join(skillsRoot(proj), 'auto');
+    require('node:fs').mkdirSync(dir, { recursive: true });
+    require('node:fs').writeFileSync(join(dir, 'legacy.md'), renderSkill({
+      name: 'legacy-flat', description: 'Legacy flat auto draft discovered by the curator lifecycle',
+      category: 'auto', body: procedureFixture('Legacy flat draft.'),
+    }));
+    markUsed(proj, 'legacy-flat', { agentCreated: true, category: 'auto' });
+    const { snapshots } = scanSkills(proj, defaultCuratorConfig());
+    expect(snapshots.map((s) => s.name)).toContain('legacy-flat');
+  });
+
+  it('folds recorded failures into the skill and clears the queue', () => {
+    const r = writeSkill(proj, { name: 'Flaky Fix', description: 'Reusable fixture for failure-note lifecycle assertions', body: procedureFixture('Apply the documented repair.') });
+    markUsed(proj, 'Flaky Fix', { agentCreated: true });
+    recordSkillFailure(proj, 'Flaky Fix', 'command exited 1: missing dependency');
+    expect(loadSkillFailures(proj)['Flaky Fix']?.count).toBe(1);
+    const out = runCurator(proj, { ...defaultCuratorConfig(), consolidate: false, archiveAfterDays: 9999, staleAfterDays: 9999 });
+    expect(out.failureNotes).toContain('Flaky Fix');
+    const raw = readFileSync(r.path!, 'utf8');
+    expect(raw).toContain('Known failure notes');
+    expect(raw).toContain('missing dependency');
+    expect(loadSkillFailures(proj)['Flaky Fix']).toBeUndefined();
   });
 });

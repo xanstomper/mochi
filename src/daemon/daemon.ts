@@ -15,7 +15,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { atomicWriteFileSync } from '../core/atomic-fs.js';
 import type { MochiConfig } from '../types.js';
 import { Runtime } from '../runtime.js';
-import { addJob, listJobs, removeJob, dueJobs, bumpJob, updateJob, notifyJobResult } from './cron.js';
+import { addJob, listJobs, removeJob, getJob, setJobPaused, setJobEnabled, runJobNow, runDueCronJobs } from './cron.js';
 import { truncateMiddle } from '../util.js';
 
 export interface DaemonInfo {
@@ -218,15 +218,9 @@ export async function startDaemonInProcess(opts: {
     if (processing) return;
     processing = true;
     try {
-      const due = await dueJobs(cwd);
-      for (const job of due) {
-        let summary = 'Goal ran.';
-        try {
-          summary = await runtime.goal(job.prompt);
-        } catch { /* job failures are non-fatal */ }
-        await notifyJobResult(job, summary);
-        updateJob(cwd, bumpJob(job)); // persist nextRun+runs so it won't re-fire
-      }
+      // Serial, timeout-aware, and persisted: a crashing/timing-out job can
+      // never wedge the scheduler or re-fire immediately.
+      await runDueCronJobs(cwd, (prompt, signal) => runtime.goal(prompt, [], undefined, signal));
     } finally {
       processing = false;
     }
@@ -579,13 +573,39 @@ async function handleRequest(
         const schedule = String(body.schedule ?? '');
         const notify = body.notify ? String(body.notify) : undefined;
         if (!prompt || !schedule) { send(400, { ok: false, error: 'prompt and schedule required' }); return; }
-        const r = addJob(cwd, prompt, schedule, notify);
+        const timeoutMs = body.timeoutMs !== undefined ? Number(body.timeoutMs) : undefined;
+        const r = addJob(cwd, prompt, schedule, { notify, timeoutMs, paused: body.paused === true });
         send(r.error ? 400 : 200, r.error ? { ok: false, error: r.error } : { ok: true, id: r.id });
         return;
       }
-      if (action === 'listed-up') {
-        const jobs = listJobs(cwd).map((j) => ({ id: j.id, prompt: j.prompt, schedule: j.schedule, enabled: j.enabled, runs: j.runs, lastRun: j.lastRun, nextRun: j.nextRun, notify: j.notify ?? null }));
+      if (action === 'list' || action === 'listed-up') {
+        const jobs = listJobs(cwd).map((j) => ({
+          id: j.id, prompt: j.prompt, schedule: j.schedule, enabled: j.enabled, paused: j.paused === true,
+          runs: j.runs, lastRun: j.lastRun, nextRun: j.nextRun, notify: j.notify ?? null,
+          timeoutMs: j.timeoutMs ?? null, lastStatus: j.lastStatus ?? null, lastError: j.lastError ?? null,
+          lastOutput: j.lastOutput ?? null, lastDurationMs: j.lastDurationMs ?? null,
+        }));
         send(200, { ok: true, jobs });
+        return;
+      }
+      if (action === 'status') {
+        const job = getJob(cwd, String(body.id ?? ''));
+        send(job ? 200 : 404, job ? { ok: true, job } : { ok: false, error: 'job not found' });
+        return;
+      }
+      if (action === 'pause' || action === 'resume') {
+        const ok = setJobPaused(cwd, String(body.id ?? ''), action === 'pause');
+        send(ok ? 200 : 404, ok ? { ok: true } : { ok: false, error: 'job not found' });
+        return;
+      }
+      if (action === 'enable' || action === 'disable') {
+        const ok = setJobEnabled(cwd, String(body.id ?? ''), action === 'enable');
+        send(ok ? 200 : 404, ok ? { ok: true } : { ok: false, error: 'job not found' });
+        return;
+      }
+      if (action === 'run') {
+        const ok = runJobNow(cwd, String(body.id ?? ''));
+        send(ok ? 200 : 404, ok ? { ok: true, queued: true } : { ok: false, error: 'job not found' });
         return;
       }
       if (action === 'remove') {
@@ -594,7 +614,7 @@ async function handleRequest(
         send(200, { ok: true });
         return;
       }
-      send(400, { ok: false, error: 'action must be added|listed-up|remove' });
+      send(400, { ok: false, error: 'action must be add|list|status|pause|resume|enable|disable|run|remove' });
       return;
     } else if (path === '/api/resume') {
       const goalId = String(body.goalId ?? '');
@@ -742,13 +762,7 @@ export async function serverMain(argv: string[]): Promise<void> {
     if (processing) return;
     processing = true;
     try {
-      const due = await dueJobs(cwd);
-      for (const job of due) {
-        let out = 'Goal ran.';
-        try { out = await rt.goal(job.prompt); } catch { /* best-effort */ }
-        await notifyJobResult(job, out);
-        updateJob(cwd, bumpJob(job)); // persist so the same job doesn't re-fire
-      }
+      await runDueCronJobs(cwd, (prompt, signal) => rt.goal(prompt, [], undefined, signal));
     } finally { processing = false; }
   }, 10_000);
   server.listen(Number(port), host, () => {

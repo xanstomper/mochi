@@ -375,6 +375,10 @@ export const skillManageTool: Tool = {
         category: category === 'global' || category === 'user' ? undefined : category,
       });
       if (!r.ok) return JSON.stringify(r);
+      // Model-authored skills must enter the curator lifecycle (stale,
+      // archive, consolidation, regression doctor) — writeSkill only records
+      // usage, which left agentCreated=false and made them invisible to it.
+      try { markUsed(targetDir, name, { agentCreated: true, category: category === 'global' || category === 'user' ? undefined : category }); } catch { /* best-effort */ }
       return `Created skill '${name}' at ${r.path}. It is advertised to every future session in this scope; the user can read it with 'mochi skills ${name}'.`;
     }
     if (action === 'edit') {

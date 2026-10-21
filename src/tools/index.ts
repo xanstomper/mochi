@@ -61,6 +61,11 @@ import { astSliceTool } from './ast-slice.js';
 import { compilePromptTool } from './compile-prompt.js';
 import { toolFactoryTool, RESERVED_TOOL_NAMES, loadAuthoredTools } from './tool-factory.js';
 import { browserTool } from './browser.js';
+import { docsTool } from './docs.js';
+import { emailTool } from './email.js';
+import { canvasTool } from './canvas.js';
+import { scheduleTool } from './schedule.js';
+import { deviceTool } from './device.js';
 
 import { timerTool } from './timer.js';
 import { envTool } from './env.js';
@@ -93,6 +98,11 @@ export const ALL_TOOLS: Tool[] = [
   notesTool, tuiBuilderTool, mcpManageTool, markdownTool, colorTool,
   toolFactoryTool,
   browserTool,
+  docsTool,
+  emailTool,
+  canvasTool,
+  scheduleTool,
+  deviceTool,
   acceptPlanTool,
   askQuestionTool,
   notebookTool,
@@ -115,14 +125,14 @@ export const AUXILIARY_TOOL_NAMES = new Set([
  *  work. The model can pull any of these in mid-run via the `load_tools` tool. */
 export const HEAVY_TOOL_NAMES = new Set([
   'browser', 'db_inspect', 'deepwiki', 'sql_codebase_query', 'create_pr', 'review_pr', 'repl',
-  'perf', 'clipboard', 'mcp_manage', 'lint', 'format', 'diff', 'tree',
+  'perf', 'clipboard', 'mcp_manage', 'lint', 'format', 'diff', 'tree', 'device',
   'analyze_code', 'code_similarity', 'type_hierarchy', 'rename_symbol',
   'resolve_conflicts', 'system_info',
 ]);
 
 /** Task text regexes that justify advertising heavy tools up front. */
 const HEAVY_SIGNAL_RE =
-  /\b(browser|web page|screenshot|database|sql|postgres|mysql|sqlite|pull request|github pr|deepwiki|wiki|performance|profile|benchmark|lint|format|refactor across|rename (across|symbol)|merge conflict|clipboard)\b/i;
+  /\b(browser|web page|screenshot|database|sql|postgres|mysql|sqlite|pull request|github pr|deepwiki|wiki|performance|profile|benchmark|lint|format|refactor across|rename (across|symbol)|merge conflict|clipboard|google doc|gdoc|docs|email|gmail|mail|canvas|diagram|whiteboard|excalidraw|visual plan|roadmap|android|adb|phone|tablet|emulator|ios|simulator|device automation|xdotool|desktop automation|tap|swipe|send|click|scroll|press|control|screenshot)\b/i;
 
 /** Filter heavy tools out of the advertised map for focused coding tasks.
  *  Returns the number of tools trimmed (0 = nothing trimmed). Authored tools and
@@ -149,7 +159,7 @@ export const LEAN_TOOL_NAMES = new Set([
 
 /** Task text regexes that justify the full (non-lean) toolset up front. */
 const LEAN_SIGNAL_RE =
-  /\b(memory|recall|skill|subagent|browser|web|screenshot|database|sql|pull request|github|deepwiki|wiki|performance|profile|benchmark|analyze|audit|security|map the codebase|architecture|clipboard|repl|note)\b/i;
+  /\b(memory|recall|skill|subagent|browser|web|screenshot|database|sql|pull request|github|deepwiki|wiki|performance|profile|benchmark|analyze|audit|security|map the codebase|architecture|clipboard|repl|note|google doc|gdoc|docs|email|gmail|mail|canvas|diagram|whiteboard|excalidraw|visual plan|roadmap|calendar|schedule|automate|android|adb|phone|tablet|emulator|simulator|xdotool|desktop|tap|swipe|send|click|scroll|press|control|screenshot)\b/i;
 
 /** MCH-110: defer all non-LEAN tools to `load_tools` for simple focused tasks.
  *  Returns the number of tools deferred (0 = task looks complex, keep full set). */
