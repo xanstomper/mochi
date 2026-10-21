@@ -403,3 +403,106 @@ describe('self-improvement closure', () => {
     expect(loadSkillFailures(proj)['Flaky Fix']).toBeUndefined();
   });
 });
+
+describe('MCH-200..204 skill quality & mining', () => {
+  let proj: string;
+  beforeEach(() => { proj = mkdtempSync(join(tmpdir(), 'mochi-mch-')); });
+  afterEach(() => { rmSync(proj, { recursive: true, force: true }); });
+
+  it('computeSkillScore ranks wins over losses and caps at 100', async () => {
+    const { computeSkillScore } = await import('./skill-manager.js');
+    const good = computeSkillScore(5, 0, 10);
+    const bad = computeSkillScore(0, 5, 10);
+    expect(good).toBeGreaterThan(0);
+    expect(good).toBeGreaterThan(bad);
+    expect(bad).toBe(0);
+    expect(computeSkillScore(1000, 0, 1000)).toBeLessThanOrEqual(100);
+  });
+
+  it('markUsed with win/loss accrues outcomes and recomputes score', () => {
+    const r = writeSkill(proj, { name: 'Score Test', description: 'Fixture for score accrual assertions', body: procedureFixture('Apply the documented steps.') });
+    expect(r.ok).toBe(true);
+    markUsed(proj, 'Score Test', { agentCreated: true, win: true });
+    markUsed(proj, 'Score Test', { win: true });
+    markUsed(proj, 'Score Test', { win: false });
+    const rec = loadUsage(proj).byName['Score Test'];
+    expect(rec.wins).toBe(2);
+    expect(rec.losses).toBe(1);
+    expect(rec.score).toBeGreaterThan(0);
+    expect(rec.score).toBeLessThanOrEqual(100);
+  });
+
+  it('runCurator auto-retires low-quality agent-created skills', async () => {
+    const { computeSkillScore } = await import('./skill-manager.js');
+    const r = writeSkill(proj, { name: 'Bad Skill', description: 'Fixture that should be auto-retired', body: procedureFixture('Do the thing.') });
+    markUsed(proj, 'Bad Skill', { agentCreated: true });
+    const db = loadUsage(proj);
+    db.byName['Bad Skill'].wins = 0;
+    db.byName['Bad Skill'].losses = 5;
+    db.byName['Bad Skill'].score = computeSkillScore(0, 5, 5);
+    saveUsage(proj, db);
+    const out = runCurator(proj, { ...defaultCuratorConfig(), consolidate: false, archiveAfterDays: 9999, staleAfterDays: 9999 });
+    expect(out.archived).toContain('Bad Skill');
+  });
+
+  it('mineSkillFromTrace writes a lint-passing skill via a mock provider', async () => {
+    const { mineSkillFromTrace } = await import('./skill-curator.js');
+    const doc = [
+      '---',
+      'name: mined-retry-fix',
+      'description: Fix flaky network retries in test suites',
+      '---',
+      '# Mined Retry Fix',
+      '## Trigger',
+      'Use when network flake causes test retries.',
+      '## Procedure',
+      '1. Identify the failing endpoint.',
+      '2. Add exponential backoff.',
+      '3. Re-run the suite twice.',
+      '## Pitfalls',
+      'Do not disable the test.',
+      '## Verification',
+      'Suite passes twice in a row.',
+    ].join('\n');
+    const mockProvider = {
+      chat: async () => ({ content: doc }),
+      streamChat: async function* () {},
+    } as unknown as import('../model/router.js').RawProvider;
+    const mined = await mineSkillFromTrace(proj, {
+      taskTitle: 'fix flaky tests',
+      lessons: ['backoff helps'],
+      toolSequence: ['read', 'edit', 'shell', 'verify'],
+      errorsFixed: ['ECONNRESET'],
+      pattern: 'test-fix',
+      strategy: 'backoff',
+      provider: mockProvider,
+    });
+    expect(mined).toBe('mined-retry-fix');
+  });
+
+  it('mineSkillFromTrace returns null when the provider fails', async () => {
+    const { mineSkillFromTrace } = await import('./skill-curator.js');
+    const badProvider = {
+      chat: async () => { throw new Error('provider down'); },
+      streamChat: async function* () {},
+    } as unknown as import('../model/router.js').RawProvider;
+    const mined = await mineSkillFromTrace(proj, {
+      taskTitle: 't', lessons: [], toolSequence: [], errorsFixed: [],
+      pattern: 'p', strategy: 's', provider: badProvider,
+    });
+    expect(mined).toBeNull();
+  });
+
+  it('buildSkillIndex + indexedRelevanceScore rank matching skills above irrelevant', async () => {
+    const { buildSkillIndex, loadSkillIndex, indexedRelevanceScore } = await import('./skills.js');
+    const mk = (name: string, description: string) => ({ name, description, path: join(proj, name), body: '' }) as never;
+    const skills = [mk('vitest-debug', 'Debug failing vitest test suites'), mk('docker-push', 'Push docker images to a registry')];
+    const idxPath = join(proj, '.mochi', 'skill-index.json');
+    buildSkillIndex(skills, idxPath, 1000);
+    const idx = loadSkillIndex(idxPath, 999);
+    expect(idx).not.toBeNull();
+    const vitestScore = indexedRelevanceScore('vitest suite fails on import', 'vitest-debug', idx!);
+    const dockerScore = indexedRelevanceScore('vitest suite fails on import', 'docker-push', idx!);
+    expect(vitestScore).toBeGreaterThan(dockerScore);
+  });
+});

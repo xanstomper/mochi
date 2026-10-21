@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { MemoryStore, type MemoryEntry } from './memory/memory.js';
 import { selectRelevant } from './memory/relevance.js';
 import { loadAllSkills, formatSkillsForPrompt, type Skill, bundledSkillsDir, discoverSkills, loadSkillUsage, usageBoostMap } from './skills/skills.js';
+import { loadUsage } from './skills/skill-manager.js';
 import { nativeCountTokens } from './native/core.js';
 import { nativePlanCompaction, nativeTokensCount } from './native/agent-protocol.js';
 import type { PlanRequestMessage } from './native/agent-protocol.js';
@@ -541,6 +542,16 @@ export class ContextEngine {
           boost = usageBoostMap(loadSkillUsage(this.projectRoot));
         } catch { boost = undefined; }
         relevant = selectRelevantSkills(skills, task.title + ' ' + (task.description ?? ''), MAX_TASK_SKILLS, boost);
+        // MCH-201: sort relevant skills by quality score descending so higher-scored
+        // skills appear first in the advertised block (model learns to prefer proven ones).
+        try {
+          const usageDb = loadUsage(this.projectRoot);
+          relevant = [...relevant].sort((a, b) => {
+            const sa = usageDb.byName[a.name]?.score ?? 0;
+            const sb = usageDb.byName[b.name]?.score ?? 0;
+            return sb - sa;
+          });
+        } catch { /* sort is best-effort; unsorted result still lands */ }
       } else if (tools && tools.length > 0) {
         const bDir = bundledSkillsDir();
         relevant = bDir ? discoverSkills(bDir).skills : [];

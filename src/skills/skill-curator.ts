@@ -16,7 +16,7 @@ import { readdirSync, existsSync, readFileSync, statSync, mkdirSync, writeFileSy
 import { join, dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import {skillsRoot, archiveRoot, loadUsage, safeSlug, parseFrontmatter, renderSkill} from './skill-manager.js';
-import { writeSkill, markUsed } from './skill-manager.js';
+import { writeSkill, markUsed, bumpPatch } from './skill-manager.js';
 import { mochiStateDir } from '../core/mochi-dir.js';
 import { loadLessons } from '../lessons.js';
 import { loadSkillFailures, clearSkillFailures, type SkillFailureRecord } from './skills.js';
@@ -342,6 +342,7 @@ export function runCurator(projectDir: string, cfg: CuratorConfig): CuratorOutpu
   const agentCreated = snapshots.filter((s) => s.agentCreated);
   const archived: string[] = [];
   const now = Date.now();
+  const usage = loadUsage(projectDir);
   for (const s of archive) {
     try {
       const arc = join(archiveRoot(projectDir), safeSlug(s.name), 'SKILL.md');
@@ -350,13 +351,28 @@ export function runCurator(projectDir: string, cfg: CuratorConfig): CuratorOutpu
       archived.push(s.name);
     } catch { /* keep going */ }
   }
+  // MCH-201: auto-retire low-quality agent-created skills (score < 15, >= 5 uses)
+  for (const s of agentCreated) {
+    if (archived.includes(s.name)) continue; // already archived
+    const rec = usage.byName[s.name];
+    if (!rec) continue;
+    const totalUses = (rec.wins ?? 0) + (rec.losses ?? 0);
+    if ((rec.score ?? 0) < 15 && totalUses >= 5) {
+      try {
+        const arc = join(archiveRoot(projectDir), safeSlug(s.name), 'SKILL.md');
+        mkdirSync(dirname(arc), { recursive: true });
+        renameSync(s.path, arc);
+        archived.push(s.name);
+        // Note: auto-retire is recorded in the curator report (see archived list)
+      } catch { /* keep going */ }
+    }
+  }
   // Dedup pass runs on the survivors (post-archive). Skills the agent has
   // USED (usage record) or CREATED this session are eligible; human/bundled
   // skills are never auto-merged, and pinned skills are never merged away.
   // Fresh-but-never-used agent skills still merge: near-duplicates usually
   // come from re-authoring the same procedure in one session.
   const pinned = new Set(loadCuratorState(projectDir).pinned ?? []);
-  const usage = loadUsage(projectDir);
   const consolidateable = scanSkills(projectDir, cfg).snapshots.filter((s) =>
     (s.agentCreated || usage.byName[s.name]?.agentCreated) && !archived.includes(s.name) && !pinned.has(s.name));
   const consolidated = consolidateSkills(consolidateable, cfg);
@@ -869,4 +885,139 @@ export function runSkillDoctor(
     archived,
     reportPath,
   };
+}
+// ─── MCH-200: model-driven skill mine (trace → real SKILL.md) ────────────
+
+/** Inputs for mineSkillFromTrace. provider is a RawProvider from model/router. */
+export interface MineTraceOpts {
+  taskTitle: string;
+  lessons: string[];
+  toolSequence: string[];
+  errorsFixed: string[];
+  pattern: string;
+  strategy: string;
+  provider: import('../model/router.js').RawProvider;
+}
+
+/** Extract a name/description from model-generated frontmatter; null on fail. */
+function parseMinedSkillDoc(text: string): { name: string; description: string; body: string } | null {
+  const m = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(text.trim());
+  if (!m) return null;
+  const name = /^name:\s*(.+)$/m.exec(m[1])?.[1]?.trim();
+  const description = /^description:\s*(.+)$/m.exec(m[1])?.[1]?.trim();
+  if (!name || !description) return null;
+  return { name: safeSlug(name), description, body: m[2].trim() };
+}
+
+/** Mine a SKILL.md from a completed run's trace via a cheap provider call.
+ *  Returns the drafted skill slug, or null on any failure (lint, provider,
+ *  parse). Never throws — mining must never affect task completion. */
+export async function mineSkillFromTrace(projectDir: string, opts: MineTraceOpts): Promise<string | null> {
+  try {
+    const lessons = opts.lessons.filter(Boolean).slice(0, 5);
+    const tools = opts.toolSequence.filter(Boolean).slice(0, 10);
+    const errors = opts.errorsFixed.filter(Boolean).slice(0, 3);
+    // Evidence gate: mining a generic skill from a trace with no lessons and
+    // no tool breadth produces noise. Require at least one real lesson AND at
+    // least 3 DISTINCT tools (repeats of one tool are a veto/stuck signature,
+    // not complexity) — otherwise skip without any model call.
+    if (lessons.length === 0 || new Set(tools).size < 3) return null;
+    const prompt = [
+      'You are writing a SKILL.md procedure for a coding agent.',
+      `Task: "${opts.taskTitle}"`,
+      `Pattern: ${opts.pattern} / strategy: ${opts.strategy}`,
+      `Tool sequence used: ${tools.join(' -> ') || 'none'}`,
+      `Lessons learned: ${lessons.map((l) => `- ${l}`).join(' ') || 'none'}`,
+      `Errors fixed: ${errors.map((e) => `- ${e}`).join(' ') || 'none'}`,
+      '',
+      'Write a SKILL.md with frontmatter (name, description) and sections:',
+      '# <Title>', '## Trigger', '## Procedure', '## Pitfalls', '## Verification',
+      'Rules: numbered steps only, no placeholders, no TODO, actionable commands.',
+    ].join('\n');
+    const res = await Promise.race([
+      opts.provider.chat([{ role: 'user', content: prompt }], [], { maxTokens: 600, temperature: 0 }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 15000)),
+    ]);
+    if (!res?.content) return null;
+    const parsed = parseMinedSkillDoc(res.content);
+    if (!parsed) return null;
+    // Quality gate: same lint the whole library passes.
+    const lint = lintSkillDoc(parsed.name, parsed.description, parsed.body);
+    if (lint.issues.some((i) => i.severity === 'error')) return null;
+    const written = writeSkill(projectDir, {
+      name: parsed.name,
+      description: parsed.description,
+      body: parsed.body,
+      category: 'mined',
+    });
+    if (!written.ok) return null;
+    markUsed(projectDir, parsed.name, { agentCreated: true, category: 'mined' });
+    return parsed.name;
+  } catch {
+    return null;
+  }
+}
+
+// ─── MCH-204: curator self-patch loop ────────────────────────────────────
+
+/** Rewrite the ## Procedure section of a low-scoring, repeatedly-failing
+ *  agent-created skill using a cheap provider call. Keeps frontmatter and
+ *  all other sections; bumps the patch counter on success. Never throws. */
+export async function selfPatchSkill(
+  projectDir: string,
+  skill: { name: string; path: string },
+  failures: string[],
+  provider: import('../model/router.js').RawProvider,
+): Promise<boolean> {
+  try {
+    const raw = readFileSync(skill.path, 'utf8');
+    // Split frontmatter from body
+    const fm = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(raw);
+    if (!fm) return false;
+    const body = fm[2];
+    const sections = body.split(/^(## .+)$/m);
+    const procIdx = sections.findIndex((s) => s.trim().toLowerCase() === '## procedure');
+    if (procIdx === -1 || !sections[procIdx + 1]) return false;
+    const otherSections: string[] = [];
+    for (let i = 0; i < sections.length; i += 2) {
+      if (i === procIdx - 1 || i === procIdx) continue; // skip header + its content
+      if (sections[i]?.trim()) otherSections.push(sections[i].trim());
+      if (sections[i + 1]?.trim() && i + 1 !== procIdx + 1) otherSections.push(sections[i + 1].trim());
+    }
+    const prompt = [
+      'Here is a skill procedure that failed on these tasks:',
+      ...failures.slice(0, 5).map((f) => `- ${f.slice(0, 240)}`),
+      '',
+      'Current SKILL.md body:',
+      '```',
+      body.slice(0, 3000),
+      '```',
+      '',
+      'Rewrite ONLY the ## Procedure section to fix these pitfalls.',
+      'Respond with the new ## Procedure section content only (starting with "## Procedure"). No other text.',
+    ].join('\n');
+    const res = await Promise.race([
+      provider.chat([{ role: 'user', content: prompt }], [], { maxTokens: 400, temperature: 0 }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 12000)),
+    ]);
+    const content = res?.content ?? '';
+    const procMatch = /^## Procedure\s*\n([\s\S]*)$/.exec(content.trim());
+    if (!procMatch || !procMatch[1].trim()) return false;
+    const newBody = [
+      otherSections.filter((s) => !s.startsWith('## Procedure')).join('\n\n'),
+      '## Procedure',
+      procMatch[1].trim(),
+    ].filter(Boolean).join('\n\n');
+    const next = `---\n${fm[1]}\n---\n${newBody}\n`;
+    // Gate: lint the rebuilt doc before persisting.
+    const nameM = /^name:\s*(.+)$/m.exec(fm[1])?.[1]?.trim() ?? skill.name;
+    const descM = /^description:\s*(.+)$/m.exec(fm[1])?.[1]?.trim() ?? '';
+    const lint = lintSkillDoc(nameM, descM, newBody);
+    if (lint.issues.some((i) => i.severity === 'error')) return false;
+    writeFileSync(skill.path, next);
+    bumpPatch(projectDir, skill.name);
+    return true;
+  } catch {
+    return false;
+  }
 }

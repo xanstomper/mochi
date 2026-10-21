@@ -270,7 +270,9 @@ describe('Agent', () => {
       const result = await agent.run(task);
       // The duplicate write-style calls must not each execute — the todo tool
       // is additive so check the run completed without burning all requests.
-      expect(fake.requests.length).toBeLessThanOrEqual(5);
+      // 5 in-run requests max (spam guard works); the 6th is the post-run
+      // MCH-200 skill-mining enrichment call hitting the same fake server.
+      expect(fake.requests.length).toBeLessThanOrEqual(6);
       void result;
     } finally {
       await fake.close();
@@ -1727,14 +1729,14 @@ describe('injectStruggleState (quality slice — agent must surface its struggle
     return (agent as any).context.messages as Array<{ role: string; content: string }>;
   }
 
-  it('is a no-op on a healthy run (no signals)', () => {
+  it('is a no-op on a healthy run (no signals)', async () => {
     const { agent, dir } = makeBareAgent();
     try {
       // Fresh agent: empty consecutiveToolErrors, emptyResponseCount = 0,
       // verifyCount = 0, no lastToolError, no known errors.
       const before = messagesOf(agent).length;
-      (agent as any).injectStruggleState(0);
-      (agent as any).injectStruggleState(1);
+      await (agent as any).injectStruggleState(0);
+      await (agent as any).injectStruggleState(1);
       const after = messagesOf(agent).length;
       expect(after).toBe(before);
     } finally {
@@ -1742,12 +1744,12 @@ describe('injectStruggleState (quality slice — agent must surface its struggle
     }
   });
 
-  it('injects a system message when a tool has failed 2+ times in a row', () => {
+  it('injects a system message when a tool has failed 2+ times in a row', async () => {
     const { agent, dir } = makeBareAgent();
     try {
       // Simulate 3 consecutive failures of the same tool.
       (agent as any).consecutiveToolErrors.set('edit', { error: 'oldText not found', count: 3 });
-      (agent as any).injectStruggleState(0);
+      await (agent as any).injectStruggleState(0);
       const msgs = messagesOf(agent);
       const struggleMsgs = msgs.filter((m) =>
         m.role === 'system' && m.content.includes('STRUGGLE STATE'));
@@ -1759,11 +1761,11 @@ describe('injectStruggleState (quality slice — agent must surface its struggle
     }
   });
 
-  it('injects empty-response count when the provider drops requests', () => {
+  it('injects empty-response count when the provider drops requests', async () => {
     const { agent, dir } = makeBareAgent();
     try {
       (agent as any).emptyResponseCount = 3;
-      (agent as any).injectStruggleState(0);
+      await (agent as any).injectStruggleState(0);
       const msgs = messagesOf(agent);
       const struggleMsgs = msgs.filter((m) =>
         m.role === 'system' && m.content.includes('STRUGGLE STATE'));
@@ -1774,17 +1776,17 @@ describe('injectStruggleState (quality slice — agent must surface its struggle
     }
   });
 
-  it('rate-limits to once per 2 iterations', () => {
+  it('rate-limits to once per 2 iterations', async () => {
     const { agent, dir } = makeBareAgent();
     try {
       (agent as any).emptyResponseCount = 3;
-      (agent as any).injectStruggleState(0);
-      (agent as any).injectStruggleState(1); // rate-limited: should be no-op
+      await (agent as any).injectStruggleState(0);
+      await (agent as any).injectStruggleState(1); // rate-limited: should be no-op
       const msgs = messagesOf(agent);
       const struggleMsgs = msgs.filter((m) =>
         m.role === 'system' && m.content.includes('STRUGGLE STATE'));
       expect(struggleMsgs.length).toBe(1);
-      (agent as any).injectStruggleState(2); // 2 iterations later: ok
+      await (agent as any).injectStruggleState(2); // 2 iterations later: ok
       const struggleMsgs2 = msgs.filter((m) =>
         m.role === 'system' && m.content.includes('STRUGGLE STATE'));
       expect(struggleMsgs2.length).toBe(2);
@@ -1793,7 +1795,7 @@ describe('injectStruggleState (quality slice — agent must surface its struggle
     }
   });
 
-  it('combines all signals into one summary when multiple are present', () => {
+  it('combines all signals into one summary when multiple are present', async () => {
     const { agent, dir } = makeBareAgent();
     try {
       (agent as any).consecutiveToolErrors.set('edit', { error: 'oldText not found', count: 2 });
@@ -1804,7 +1806,7 @@ describe('injectStruggleState (quality slice — agent must surface its struggle
       (agent as any).lastVerifyPassed = false;
       (agent as any).toolCallsTotal = 25;
       (agent as any).context.addKnownError('verification failed: test_x broke');
-      (agent as any).injectStruggleState(0);
+      await (agent as any).injectStruggleState(0);
       const msg = messagesOf(agent)
         .filter((m) => m.role === 'system' && m.content.includes('STRUGGLE STATE'))
         .pop();
@@ -2159,7 +2161,7 @@ describe('repeated tool result detection (quality slice 5 — flag when the mode
     return { agent, dir };
   }
 
-  it('same output 3x from the same tool surfaces as STRUGGLE STATE', () => {
+  it('same output 3x from the same tool surfaces as STRUGGLE STATE', async () => {
     const { agent, dir } = makeBareAgent();
     try {
       // Three identical outputs from the same tool — the model has clearly
@@ -2171,7 +2173,7 @@ describe('repeated tool result detection (quality slice 5 — flag when the mode
       (agent as any).trackToolResultHash('read', out);
       // Force a 2-iteration gap so the rate-limit doesn't drop the injection.
       (agent as any).lastStruggleInjectIter = -10;
-      (agent as any).injectStruggleState(0);
+      await (agent as any).injectStruggleState(0);
       const msgs = (agent as any).context.messages as Array<{ role: string; content: string }>;
       const struggle = msgs.find((m) => m.role === 'system' && m.content.includes('STRUGGLE STATE'));
       expect(struggle).toBeDefined();
@@ -2182,14 +2184,14 @@ describe('repeated tool result detection (quality slice 5 — flag when the mode
     }
   });
 
-  it('different outputs from the same tool do not trigger redundancy', () => {
+  it('different outputs from the same tool do not trigger redundancy', async () => {
     const { agent, dir } = makeBareAgent();
     try {
       (agent as any).trackToolResultHash('read', 'content v1');
       (agent as any).trackToolResultHash('read', 'content v2');
       (agent as any).trackToolResultHash('read', 'content v3');
       (agent as any).lastStruggleInjectIter = -10;
-      (agent as any).injectStruggleState(0);
+      await (agent as any).injectStruggleState(0);
       const msgs = (agent as any).context.messages as Array<{ role: string; content: string }>;
       const struggle = msgs.find((m) => m.role === 'system' && m.content.includes('identical content'));
       expect(struggle).toBeUndefined();
@@ -2198,7 +2200,7 @@ describe('repeated tool result detection (quality slice 5 — flag when the mode
     }
   });
 
-  it('the same output from DIFFERENT tools still counts as redundancy', () => {
+  it('the same output from DIFFERENT tools still counts as redundancy', async () => {
     const { agent, dir } = makeBareAgent();
     try {
       const out = 'function foo() { return 1; }';
@@ -2206,7 +2208,7 @@ describe('repeated tool result detection (quality slice 5 — flag when the mode
       (agent as any).trackToolResultHash('search', out);
       (agent as any).trackToolResultHash('grep', out);
       (agent as any).lastStruggleInjectIter = -10;
-      (agent as any).injectStruggleState(0);
+      await (agent as any).injectStruggleState(0);
       const msgs = (agent as any).context.messages as Array<{ role: string; content: string }>;
       const struggle = msgs.find((m) => m.role === 'system' && m.content.includes('STRUGGLE STATE'));
       expect(struggle).toBeDefined();

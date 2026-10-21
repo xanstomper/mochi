@@ -38,6 +38,10 @@ export interface UsageRecord {
   createdAt: number;
   lastUsedAt: number;
   category?: string;
+  /** MCH-201: Quality signal — wins/losses from run outcomes, derived score. */
+  wins?: number;
+  losses?: number;
+  score?: number;
 }
 
 export interface UsageDB {
@@ -46,6 +50,15 @@ export interface UsageDB {
 export interface MarkOpts {
   agentCreated?: boolean;
   category?: string;
+  /** MCH-201: outcome signal — true for a successful run, false for a failed one. */
+  win?: boolean;
+}
+
+/** MCH-201: quality score formula. Returns 0..100.
+ *  Balances win ratio against log2(uses+2) so a skill used once with 1 win
+ *  doesn't beat one used 50 times with 40 wins. Capped at 100. */
+export function computeSkillScore(wins: number, losses: number, uses: number): number {
+  return Math.min(100, Math.round((wins / (wins + losses + 1)) * 100 * Math.log2(uses + 2)));
 }
 
 export function loadUsage(projectDir: string): UsageDB {
@@ -62,7 +75,8 @@ export function saveUsage(projectDir: string, db: UsageDB): void {
   writeFileSync(usagePath(projectDir), JSON.stringify(db.byName, null, 2), 'utf8');
 }
 
-/** Record a skill as seen/used; optionally mark it as agent-authored. */
+/** Record a skill as seen/used; optionally mark it as agent-authored.
+ *  MCH-201: when opts.win is provided, updates wins/losses + recomputes score. */
 export function markUsed(projectDir: string, name: string, opts: MarkOpts = {}): void {
   const db = loadUsage(projectDir);
   const rec = db.byName[name] ?? { name, agentCreated: false, patches: 0, createdAt: Date.now(), lastUsedAt: Date.now() };
@@ -70,6 +84,16 @@ export function markUsed(projectDir: string, name: string, opts: MarkOpts = {}):
   if (opts.agentCreated) rec.agentCreated = true;
   if (opts.category) rec.category = opts.category;
   if (!rec.createdAt) rec.createdAt = Date.now();
+  // MCH-201: track win/loss outcome and recompute quality score
+  if (opts.win === true) {
+    rec.wins = (rec.wins ?? 0) + 1;
+  } else if (opts.win === false) {
+    rec.losses = (rec.losses ?? 0) + 1;
+  }
+  if (opts.win !== undefined) {
+    const uses = (rec.wins ?? 0) + (rec.losses ?? 0);
+    rec.score = computeSkillScore(rec.wins ?? 0, rec.losses ?? 0, uses);
+  }
   db.byName[name] = rec;
   saveUsage(projectDir, db);
 }

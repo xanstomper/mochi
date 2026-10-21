@@ -1541,7 +1541,7 @@ Continue from 'Next:', do not redo completed progress.`,
       // attempts have already passed. The injection is rate-limited to once
       // per 2 iterations and a no-op when no struggle signals exist, so the
       // cost is zero on healthy runs.
-      this.injectStruggleState(i);
+      await this.injectStruggleState(i);
       // Self-tuning complexity: promote a struggling task to `complex` mid-run
       // (full toolset + context preservation) once real hard-task evidence
       // accumulates — no separate classification LLM call on the fast path.
@@ -5474,7 +5474,7 @@ Continue from 'Next:', do not redo completed progress.`,
       'stuck_no_progress');
   }
 
-  private injectStruggleState(iter: number): void {
+  private async injectStruggleState(iter: number): Promise<void> {
     if (iter - this.lastStruggleInjectIter < 2) return;
     const parts: string[] = [];
 
@@ -5543,9 +5543,24 @@ Continue from 'Next:', do not redo completed progress.`,
 
     if (parts.length === 0) return; // healthy run, no signal
 
+    // MCH-203: when repeated tool errors are the struggle, surface the most
+    // relevant high-quality skill's body so the model gets the FIX, not just
+    // the diagnosis. Bounded to 2000 chars; never breaks the loop.
+    let skillBlock = '';
+    if (this.lastToolError && this.consecutiveToolErrors.size > 0) {
+      try {
+        const { matchSkillToError } = await import('../skills/skills.js');
+        const match = matchSkillToError(String(this.lastToolError).slice(0, 300), this.workspace.dir);
+        if (match) {
+          skillBlock = `\n\nRELEVANT SKILL — "${match.name}":\n${match.body}`;
+        }
+      } catch { /* skill match must never break struggle injection */ }
+    }
+
     const summary =
       `STRUGGLE STATE (turn ${iter + 1}) — read this BEFORE your next action:\n` +
       parts.join('\n') +
+      skillBlock +
       `\nIf the same approach has failed 2+ times, change strategy: ` +
       `(1) re-read the relevant files, (2) try a different tool, ` +
       `(3) reduce scope or report a concrete blocker.`;
@@ -6105,6 +6120,11 @@ Continue from 'Next:', do not redo completed progress.`,
       const loaded = getSkillsLoadedThisRun();
       for (const name of loaded) {
         recordSkillUsage(this.workspace.dir, name, success === true);
+        // MCH-201: accrue win/loss outcome into the skill quality score DB.
+        try {
+          const { markUsed } = await import('../skills/skill-manager.js');
+          markUsed(this.workspace.dir, name, { win: success === true });
+        } catch { /* score accrual is best-effort */ }
         // Failure notes feed the curator's self-repair pass; a green run clears
         // the queue so a one-off flake doesn't permanently scar the skill.
         if (success === true) clearSkillFailures(this.workspace.dir, name);
@@ -6142,6 +6162,34 @@ Continue from 'Next:', do not redo completed progress.`,
       if (shouldRunCurator(this.workspace.dir, ccfg)) {
         const out = runCurator(this.workspace.dir, ccfg);
         recordCuratorRun(this.workspace.dir, `scanned ${out.scanned}, archived ${out.archived.length}`);
+        // MCH-204: self-patch low-scoring, repeatedly-failing agent-created
+        // skills — the curator rewrites their Procedure section via a cheap
+        // model call so skills get better over time instead of just archived.
+        try {
+          const { selfPatchSkill } = await import('../skills/skill-curator.js');
+          const { loadUsage: loadU, skillsRoot: sRoot } = await import('../skills/skill-manager.js');
+          const udb = loadU(this.workspace.dir);
+          const root = sRoot(this.workspace.dir);
+          const failuresBySkill = new Map<string, string[]>();
+          const { loadSkillFailures } = await import('../skills/skills.js');
+          const failsMap = loadSkillFailures(this.workspace.dir);
+          for (const [name, frec] of Object.entries(failsMap) as Array<[string, import('../skills/skills.js').SkillFailureRecord]>) {
+            const rec = udb.byName[name];
+            if (!rec?.agentCreated || (rec.score ?? 0) >= 40 || (frec.count ?? 0) < 2) continue;
+            failuresBySkill.set(name, [...(frec.recent ?? []).map((r) => r.error), frec.lastError].filter(Boolean));
+          }
+          for (const [name, fails] of failuresBySkill) {
+            const slug = name.toLowerCase().replace(/[^a-z0-9-]+/g, '-');
+            for (const candidate of [join(root, slug, 'SKILL.md'), join(root, name, 'SKILL.md')]) {
+              if (!existsSync(candidate)) continue;
+              const patched = await selfPatchSkill(this.workspace.dir, { name, path: candidate }, fails, this.provider);
+              if (patched) {
+                this.events.emit({ type: 'agent:log', agentId: this.id, message: `[curator] self-patched skill "${name}" from ${fails.length} failure(s)` });
+              }
+              break;
+            }
+          }
+        } catch { /* self-patch must never affect task completion */ }
       }
     } catch { /* curator must never affect task completion */ }
     if (success) {
@@ -6168,6 +6216,27 @@ Continue from 'Next:', do not redo completed progress.`,
           }
         }
       } catch { /* auto-draft must never affect task completion */ }
+      // MCH-200: model-driven skill mine for complex tasks — sends the run's
+      // real trace (lessons, tools, errors fixed) to the provider to draft a
+      // proper SKILL.md, far richer than the template autoDraftSkill stubs.
+      // Fires only on success and only for non-simple tasks; never throws.
+      try {
+        if (!isSimpleScriptTask(task) && this.provider) {
+          const { mineSkillFromTrace } = await import('../skills/skill-curator.js');
+          const mined = await mineSkillFromTrace(this.workspace.dir, {
+            taskTitle: task.title,
+            lessons: (this.lastLessons ?? []).map((l) => l.lesson).slice(0, 5),
+            toolSequence: [...this.toolSeq].slice(0, 10),
+            errorsFixed: ((this.context['state']?.knownErrors as string[] | undefined) ?? []).slice(0, 3),
+            pattern: [...this.seenPatterns][0] ?? 'general',
+            strategy: this.lastStrategy ?? 'unclassified',
+            provider: this.provider,
+          });
+          if (mined) {
+            this.events.emit({ type: 'agent:log', agentId: this.id, message: `[skills] mined skill "${mined}" from run trace` });
+          }
+        }
+      } catch { /* mine must never affect task completion */ }
       // MCH-47: persist a successful plan so similar future tasks warm-start.
       // planAcceptedText is only set when the model submitted via accept_plan.
       try {

@@ -563,6 +563,182 @@ export function additionalUserSkillDirs(): string[] {
   return dirs.filter((d) => existsSync(d));
 }
 
+// ─── MCH-202: TF-IDF Skill Index ─────────────────────────────────────────
+// Replace O(N·M) linear token-overlap scan with an inverted term-frequency index
+// cached at <projectDir>/.mochi/skill-index.json. Rebuilt only when the skills
+// directories' mtimes advance. Falls back to the linear scan when unavailable.
+
+/** Index file shape written to disk. */
+export interface SkillIndex {
+  /** Unix ms of the newest mtime seen across all indexed skill dirs. */
+  mtime: number;
+  /** Map of term → [skillName, tf] pairs where tf is in [0,1]. */
+  terms: Record<string, Array<[string, number]>>;
+  /** All skill names in the index (for score normalisation checks). */
+  names: string[];
+}
+
+const INDEX_STOP = new Set([
+  'a','an','the','and','or','of','to','in','for','on','with','that','is','be',
+  'how','what','my','me','this','by','as','it','at','from','use','used','when',
+]);
+
+function indexTokens(s: string): string[] {
+  return (s.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter(
+    (w) => w.length >= 3 && !INDEX_STOP.has(w),
+  );
+}
+
+/** Build and persist a TF-IDF term index for the given skill list. */
+export function buildSkillIndex(skills: Skill[], indexPath: string, dirsMtime: number): void {
+  try {
+    const terms: Record<string, Array<[string, number]>> = {};
+    for (const s of skills) {
+      const tokens = indexTokens(`${s.name} ${s.description}`);
+      const freq: Record<string, number> = {};
+      for (const t of tokens) freq[t] = (freq[t] ?? 0) + 1;
+      const total = tokens.length || 1;
+      for (const [t, count] of Object.entries(freq)) {
+        const tf = count / total;
+        if (!terms[t]) terms[t] = [];
+        terms[t].push([s.name, tf]);
+      }
+    }
+    const idx: SkillIndex = { mtime: dirsMtime, terms, names: skills.map((s) => s.name) };
+    const dir = indexPath.split('/').slice(0, -1).join('/');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(indexPath, JSON.stringify(idx), 'utf8');
+  } catch { /* index build is best-effort; fall back to linear scan */ }
+}
+
+/** Load the cached index; return null when missing or stale (dirs have newer mtime). */
+export function loadSkillIndex(indexPath: string, dirsMtime: number): SkillIndex | null {
+  try {
+    if (!existsSync(indexPath)) return null;
+    const idx = JSON.parse(readFileSync(indexPath, 'utf8')) as SkillIndex;
+    if (typeof idx.mtime !== 'number' || idx.mtime < dirsMtime) return null;
+    return idx;
+  } catch {
+    return null;
+  }
+}
+
+/** Score a single skill against a task query using the prebuilt index.
+ *  Returns a value in [0, ~1] compatible with the existing tokenOverlap range. */
+export function indexedRelevanceScore(task: string, skillName: string, index: SkillIndex): number {
+  const qTokens = indexTokens(task);
+  if (qTokens.length === 0) return 0;
+  let score = 0;
+  for (const t of qTokens) {
+    const postings = index.terms[t];
+    if (!postings) continue;
+    // IDF: log2(N / df) where N = total skills, df = postings length
+    const idf = Math.log2((index.names.length + 1) / (postings.length + 1));
+    const entry = postings.find(([name]) => name === skillName);
+    if (entry) score += entry[1] * idf;
+  }
+  // Normalise to roughly [0,1] by dividing by query length-weighted ceiling
+  return score / (qTokens.length + 1);
+}
+
+/** Compute the maximum mtime of a list of directories (best-effort, 0 on error). */
+function dirsMtimeMax(dirs: string[]): number {
+  let max = 0;
+  for (const d of dirs) {
+    try {
+      const m = statSync(d).mtimeMs;
+      if (m > max) max = m;
+    } catch { /* dir may not exist */ }
+  }
+  return max;
+}
+
+/** Filter skills relevant to the task using the TF-IDF index when available,
+ *  falling back to the provided linear fallback function if the index is absent.
+ *
+ *  MCH-202: this is the indexed fast path replacing the O(N·M) scan in
+ *  selectRelevantSkills(). Called from context.ts after discovery. */
+export function filterRelevantSkillsIndexed(
+  skills: Skill[],
+  taskText: string,
+  max: number,
+  projectDir: string,
+  minScore = 0.05,
+  fallback?: (skills: Skill[], taskText: string, max: number) => Skill[],
+): Skill[] {
+  if (!taskText.trim()) return [];
+  try {
+    const indexPath = join(projectDir, '.mochi', 'skill-index.json');
+    const skillDirs = [
+      join(projectDir, '.mochi', 'skills'),
+      defaultUserSkillsDir(),
+    ].filter(Boolean);
+    const mtime = dirsMtimeMax(skillDirs);
+    let idx = loadSkillIndex(indexPath, mtime);
+    if (!idx) {
+      buildSkillIndex(skills, indexPath, mtime);
+      idx = loadSkillIndex(indexPath, mtime);
+    }
+    if (!idx) {
+      return fallback ? fallback(skills, taskText, max) : [];
+    }
+    const scored = skills
+      .map((s) => ({ s, score: indexedRelevanceScore(taskText, s.name, idx!) }))
+      .filter((e) => e.score >= minScore)
+      .sort((a, b) => b.score - a.score || skills.indexOf(a.s) - skills.indexOf(b.s));
+    return scored.slice(0, max).map((e) => e.s);
+  } catch {
+    return fallback ? fallback(skills, taskText, max) : [];
+  }
+}
+
+/** Match a skill to an error string using the TF-IDF index. Returns the best
+ *  matching skill name + its raw SKILL.md body (truncated to 2000 chars), or
+ *  null when no skill scores above the quality threshold. MCH-203 support. */
+export function matchSkillToError(
+  errorText: string,
+  workspaceDir: string,
+  globalSkillsDir?: string,
+): { name: string; body: string } | null {
+  try {
+    const { skills } = loadAllSkills(workspaceDir, globalSkillsDir);
+    if (skills.length === 0) return null;
+    const indexPath = join(workspaceDir, '.mochi', 'skill-index.json');
+    const skillDirs = [join(workspaceDir, '.mochi', 'skills'), globalSkillsDir ?? defaultUserSkillsDir()].filter(Boolean);
+    const mtime = dirsMtimeMax(skillDirs as string[]);
+    let idx = loadSkillIndex(indexPath, mtime);
+    if (!idx) {
+      buildSkillIndex(skills, indexPath, mtime);
+      idx = loadSkillIndex(indexPath, mtime);
+    }
+    if (!idx) return null;
+    // Load usage DB synchronously to check quality score
+    let usageDb: Record<string, { score?: number }> = {};
+    try {
+      const usagePath = join(workspaceDir, '.mochi', 'skill-meta.json');
+      if (existsSync(usagePath)) {
+        usageDb = JSON.parse(readFileSync(usagePath, 'utf8')) as Record<string, { score?: number }>;
+      }
+    } catch { /* usage load is best-effort */ }
+    // Score each skill against the error text
+    const scored = skills
+      .map((s) => ({ s, score: indexedRelevanceScore(errorText, s.name, idx!) }))
+      .filter((e) => e.score > 0.1)
+      .sort((a, b) => b.score - a.score);
+    if (scored.length === 0) return null;
+    // Prefer skills with quality score >= 40
+    const highQuality = scored.filter((e) => (usageDb[e.s.name]?.score ?? 0) >= 40);
+    const best = highQuality[0] ?? scored[0];
+    if (!best) return null;
+    // Load the body
+    const body = readSkillBody(best.s, workspaceDir);
+    if (!body) return null;
+    return { name: best.s.name, body: body.slice(0, 2000) };
+  } catch {
+    return null;
+  }
+}
+
 /** loadProjectSkills plus the bundled catalog appended last (so project and
  *  user skills shadow bundled ones by name). */
 export function loadAllSkills(projectDir: string, userDir?: string): { skills: Skill[]; diagnostics: string[] } {
