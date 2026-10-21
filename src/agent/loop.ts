@@ -1,5 +1,27 @@
 import { performance } from 'node:perf_hooks';
 import { randomUUID } from 'node:crypto';
+
+/** Pure read-only shell detection for the parallel batch (exported for
+ *  tests). A command may ride the CONCURRENT read-only group only when it
+ *  provably cannot change state:
+ *  - no state-mutating metacharacters (`; & | < > \` $ ( )`) — and ANY
+ *    control character (`\n \r \v \f`): `\s` splits on `\v`/`\f` too, so a
+ *    second command (`cat foo\vrm -rf x`) hid behind a read-only first
+ *    token unless the whole control range is rejected;
+ *  - first token is a known read-only binary. `find` is deliberately ABSENT:
+ *    its `-delete`/`-exec … +` forms mutate and evade the metachar class —
+ *    find commands go through the serial path (safe, just not parallel).
+ *  - `env` is deliberately ABSENT: `env rm -rf .git` runs arbitrary argv[2]
+ *    and `env -i FOO=1 sh -c …` runs a whole shell — neither is provably
+ *    read-only. `printenv` stays (it only prints). */
+export function isPureReadOnlyShellCommand(cmd: string): boolean {
+  const c = cmd.trim();
+  if (c.length === 0) return false;
+  if (/[;&|<>`$()\n\r\v\f]|[\x00-\x1f\x7f]|cd\s/.test(c)) return false;
+  const bin = c.split(/\s+/)[0];
+  return /^(ls|cat|head|tail|grep|egrep|fgrep|wc|file|stat|which|type|jq|printenv|ps|pgrep|pwd|whoami|hostname|date|uname|df|du|tree|ripgrep|rg)$/.test(bin);
+}
+
 import {sortableId} from '../util.js';
 import type { Attempt, ChatMessage, MochiConfig, ModelProfile, Task, ToolDefinition, ToolCall, ToolResult, MochiEvent } from '../types.js';
 import { contentText } from '../types.js';
@@ -3700,20 +3722,13 @@ Continue from 'Next:', do not redo completed progress.`,
       }
 
       // 3. Shell: previously serial even when safe. Now: a batch of PURE
-      // read-only shell commands (ls, cat, grep, head, tail, find, wc, jq,
+      // read-only shell commands (ls, cat, grep, head, tail, wc, jq,
       // tree, file, stat, ps, env, which, type, du, df, ripgrep) can run in
       // parallel — they don't change state and don't interfere with each other.
       // Stateful commands (anything with `&&`, `||`, `|`, `>`, `>>`, `<`,
       // backticks, `$()`, `;`, `cd`, or shell metacharacters) still go one at
       // a time to preserve causal order.
       if (headName === 'shell') {
-        const isPureReadOnly = (cmd: string): boolean => {
-          const c = cmd.trim();
-          if (/[;&|<>`$()]|>>?|<|cd\s/.test(c)) return false;
-          // First token (binary name) must be a known read-only command.
-          const bin = c.split(/\s+/)[0];
-          return /^(ls|cat|head|tail|grep|egrep|fgrep|wc|file|stat|which|type|jq|env|printenv|ps|pgrep|pwd|whoami|hostname|date|uname|df|du|find|tree|ripgrep|rg)$/.test(bin);
-        };
         const group: ToolCall[] = [];
         const remaining: ToolCall[] = [];
         for (const tc of batch) {
@@ -3724,7 +3739,7 @@ Continue from 'Next:', do not redo completed progress.`,
               const parsed = this.parseArgs(tc.function.arguments || '{}');
               cmd = String(parsed.command ?? '');
             } catch { /* leave cmd empty -> not pure */ }
-            if (isPureReadOnly(cmd)) group.push(tc);
+            if (isPureReadOnlyShellCommand(cmd)) group.push(tc);
             else remaining.push(tc);
           } else {
             remaining.push(tc);
