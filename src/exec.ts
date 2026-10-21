@@ -50,16 +50,63 @@ export interface ExecResult {
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_OUTPUT = 2_000_000;
 
+/** Per-stream accumulation with keep-ends truncation. A firehose stream that
+ *  overflows the cap keeps the HEAD half (startup context, first error) AND
+ *  a rolling TAIL half (build/test failure summaries print at the END —
+ *  head-only truncation made models re-run failed commands to see the tail),
+ *  eliding the middle with a dropped-bytes marker. Bounded memory: the tail
+ *  is re-trimmed per chunk; the stream is NOT destroyed on overflow, so the
+ *  tail keeps arriving (timeouts still bound runaway children). */
+interface StreamAcc {
+  total: number;
+  head: string;
+  tail: string;
+  truncated: boolean;
+}
+
+function newStreamAcc(): StreamAcc {
+  return { total: 0, head: '', tail: '', truncated: false };
+}
+
+function pushStream(acc: StreamAcc, chunk: string, cap: number): void {
+  acc.total += chunk.length;
+  if (!acc.truncated) {
+    acc.head += chunk;
+    if (acc.head.length > cap) {
+      acc.truncated = true;
+      const keep = Math.max(0, Math.floor(cap / 2));
+      acc.tail = acc.head.slice(keep);
+      acc.head = acc.head.slice(0, keep);
+      if (acc.tail.length > keep) acc.tail = acc.tail.slice(-keep);
+    }
+    return;
+  }
+  acc.tail += chunk;
+  const keep = Math.max(0, Math.floor(cap / 2));
+  if (acc.tail.length > keep) acc.tail = acc.tail.slice(-keep);
+}
+
+function streamText(acc: StreamAcc): string {
+  if (!acc.truncated) return acc.head;
+  const dropped = acc.total - acc.head.length - acc.tail.length;
+  // The literal `[truncated]` anchor is part of the observable contract —
+  // consumers (and tests) grep for it — so it stays intact with the detail
+  // appended after it.
+  return `${acc.head}\n... [truncated] (${dropped} bytes in the middle elided — output ends below) ...\n${acc.tail}`;
+}
+
 function finishSpawn(
   child: ReturnType<typeof spawn>,
   cmd: string,
   opts: ExecOptions,
-  stdoutRef: { text: string; truncated: boolean },
-  stderrRef: { text: string; truncated: boolean },
+  stdoutAcc: StreamAcc,
+  stderrAcc: StreamAcc,
   startedAt: number,
 ): Promise<ExecResult> {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const killGraceMs = opts.killGraceMs ?? 1500;
+  const stdoutCap = opts.maxOutput ?? DEFAULT_MAX_OUTPUT;
+  const stderrCap = opts.maxOutput ?? DEFAULT_MAX_OUTPUT;
   // MOCHI_EXEC_TRACE=1 logs every spawn and outcome — the ONLY way to see
   // WHICH command a hung run is stuck on (a hang prints start, never done).
   if (process.env.MOCHI_EXEC_TRACE === '1') {
@@ -89,8 +136,8 @@ function finishSpawn(
         opts.onAudit?.({ cmd: cmd.slice(0, 200), code, timedOut: wasTimedOut, durationMs });
       } catch { /* audit must never break execution */ }
       resolve({
-        stdout: stdoutRef.text,
-        stderr: stderrRef.text,
+        stdout: streamText(stdoutAcc),
+        stderr: streamText(stderrAcc),
         code,
         timedOut: wasTimedOut,
         cancelled: wasCancelled,
@@ -144,20 +191,15 @@ function finishSpawn(
     try { child.stdin?.end(); } catch { /* already closed */ }
     void timedOut; void cancelled;
     child.stdout?.on('data', (chunk) => {
-      stdoutRef.text += String(chunk);
-      if (stdoutRef.text.length > (opts.maxOutput ?? DEFAULT_MAX_OUTPUT)) {
-        stdoutRef.text = stdoutRef.text.slice(0, opts.maxOutput ?? DEFAULT_MAX_OUTPUT) + '\n... [truncated]';
-        stdoutRef.truncated = true;
-        child.stdout?.destroy();
-      }
+      // Keep-ends accumulation: on overflow the head AND a rolling tail are
+      // retained (build/test failure summaries print at the END — head-only
+      // truncation hid them and made models re-run failed commands). The
+      // stream stays open so the tail keeps arriving; memory is bounded by
+      // the per-chunk re-trim in pushStream.
+      pushStream(stdoutAcc, String(chunk), stdoutCap);
     });
     child.stderr?.on('data', (chunk) => {
-      stderrRef.text += String(chunk);
-      if (stderrRef.text.length > (opts.maxOutput ?? DEFAULT_MAX_OUTPUT)) {
-        stderrRef.text = stderrRef.text.slice(0, opts.maxOutput ?? DEFAULT_MAX_OUTPUT) + '\n... [truncated]';
-        stderrRef.truncated = true;
-        child.stderr?.destroy();
-      }
+      pushStream(stderrAcc, String(chunk), stderrCap);
     });
     child.on('error', (err) => {
       if (settled) return;
@@ -191,7 +233,7 @@ export function runArgv(cmd: string, args: readonly string[], opts: ExecOptions 
     // signal the entire tree (see killTree). No-op on Windows.
     detached: process.platform !== 'win32',
   });
-  return finishSpawn(child, [cmd, ...args].join(' '), opts, { text: '', truncated: false }, { text: '', truncated: false }, startedAt);
+  return finishSpawn(child, [cmd, ...args].join(' '), opts, newStreamAcc(), newStreamAcc(), startedAt);
 }
 
 /** Run a shell string (`sh -c`-class) under policy. Reserved for the agent's
@@ -220,7 +262,7 @@ export function runShellString(command: string, opts: ExecOptions & { shellBin?:
     detached: process.platform !== 'win32',
     ...(isWin ? { windowsVerbatimArguments: true } : {}),
   });
-  return finishSpawn(child, command, opts, { text: '', truncated: false }, { text: '', truncated: false }, startedAt);
+  return finishSpawn(child, command, opts, newStreamAcc(), newStreamAcc(), startedAt);
 }
 
 /** execFile-style convenience for short harness probes with a string result.

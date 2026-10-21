@@ -69,10 +69,15 @@ describe('exec policy', () => {
     expect(alive).toBe(false);
   }, 30_000);
 
-  it('truncates firehose output at the cap', async () => {
+  it('truncates firehose output at the cap — keeping BOTH ends', async () => {
+    // seq 1 200000: the head alone is lines 1..N; the failure-summary tail
+    // (here the LAST lines) must survive too — head-only truncation (the old
+    // behavior) made models re-run failed commands to see the end.
     const r = await runShellString('seq 1 200000', { maxOutput: 4096, timeoutMs: 15_000 });
     expect(r.stdout.length).toBeLessThan(9000);
     expect(r.stdout).toContain('[truncated]');
+    expect(r.stdout).toContain('200000'); // the tail survived
+    expect(r.stdout.startsWith('1\n')).toBe(true); // the head survived
   }, 60_000);
 
   it('execArgvText resolves stdout and rejects on failure', async () => {
