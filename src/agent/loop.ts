@@ -30,6 +30,8 @@ import type { PromptUserFn } from '../tools/user-prompt.js';
 import { PermissionManager } from '../security/permission.js';
 import type { PermissionPolicy } from '../security/permission.js';
 import { describeApproval, normalizePolicy } from '../security/approval.js';
+import { classifyCommand } from '../security/security.js';
+import { snapshotTree, rollbackTracked, resolveVerifyCommand, type PlanVerifySnapshot } from './plan-verify.js';
 import type { ApprovalHandler } from '../security/approval.js';
 import { AgentProfileService } from '../agents/profile.js';
 import { BudgetEngine } from '../budget.js';
@@ -2528,8 +2530,78 @@ Continue from 'Next:', do not redo completed progress.`,
         // model that keeps attempting edits after a veto is stopped outright.
         // Read-only is an ALLOWLIST: anything not explicitly read-only (shell,
         // write/edit/delete/patch, git, MCP tools, ...) is vetoed.
+        // B9 restructure: `verify` is EXEMPT from the veto when it can run
+        // against a tree snapshot — plan-mode research legitimately includes
+        // "does the project's own check pass on the current tree?" — with any
+        // tracked-file modification the command introduces rolled back before
+        // the loop continues (agent/plan-verify.ts). Destructive-classified
+        // commands and non-git workspaces still veto (fail closed). The gate
+        // classifies the command the TOOL WILL ACTUALLY RUN: verify's
+        // `command` arg can be a repo-derived alias (test/build/typecheck/
+        // lint), and a `target` arg is appended before execution — the gate
+        // classifies the full post-append string via resolveVerifyCommand,
+        // never the raw arg. Both `destructive` AND `network` classifications
+        // veto (fail closed): plan-mode research means "the project's own
+        // checks", and check commands don't need to reach the network.
         if (this.planMode) {
           const isMutating = (c: ToolCall) => !this.isReadOnly(c.function.name, this.parseArgs(c.function.arguments));
+          const isPlanVerify = (c: ToolCall) => {
+            const canonical = TOOL_ALIASES[c.function.name] || c.function.name;
+            if (canonical !== 'verify') return false;
+            const args = this.parseArgs(c.function.arguments);
+            const resolved = resolveVerifyCommand(args, this.cwd);
+            // Fail closed: null (unresolvable), 'destructive' AND 'network'
+            // all veto — only genuinely low-risk check commands run.
+            const risk = resolved !== null ? classifyCommand(resolved) : null;
+            return risk === 'low';
+          };
+          const planVerifyCalls = response.toolCalls.filter(isPlanVerify);
+          if (planVerifyCalls.length > 0) {
+            // Snapshot each verify call's pre-state; a failed snapshot vetoes
+            // that call (containment is a precondition, not a best effort).
+            const snapshots = new Map<string, PlanVerifySnapshot | null>();
+            for (const c of planVerifyCalls) snapshots.set(c.id, await snapshotTree(this.cwd));
+            const runnable = planVerifyCalls.filter((c) => snapshots.get(c.id) !== null);
+            const unrunnable = planVerifyCalls.filter((c) => snapshots.get(c.id) === null);
+            // The exemption must NOT inflate planVetoes with successful
+            // research — the escalation counter tracks refusals. Unrunnable
+            // verify calls ARE refusals and count.
+            this.planVetoes += unrunnable.length;
+            // Read-only batch + runnable verify calls execute normally (the
+            // permission gate still applies to verify: dangerous:true).
+            const toExecute = [...response.toolCalls.filter((c) => !isMutating(c)), ...runnable];
+            if (toExecute.length > 0) await this.executeToolCalls(toExecute);
+            for (const c of runnable) {
+              const snap = snapshots.get(c.id)!;
+              const { rolledBack, untrackedLeftover } = await rollbackTracked(this.cwd, snap);
+              if (rolledBack.length > 0 || untrackedLeftover.length > 0) {
+                this.context.addMessage({
+                  role: 'system',
+                  content: `PLAN MODE verify rollback: the verify command modified tracked files (${rolledBack.join(', ')}) — they were restored to the pre-command state.${untrackedLeftover.length ? ` Untracked leftovers (not deleted): ${untrackedLeftover.join(', ')}` : ''}`,
+                });
+                this.events.emit({ type: 'agent:log', agentId: this.id, message: `[plan-mode] verify modified ${rolledBack.length} tracked file(s); rolled back` });
+              }
+            }
+            for (const c of response.toolCalls) {
+              if (!isMutating(c)) continue;
+              if (isPlanVerify(c) && snapshots.get(c.id) !== null) continue;
+              this.vetoToolCall(c, 'plan mode is active. No file or command changes are permitted while planning.');
+            }
+            if (this.planVetoes > 2) {
+              // The model will not stop reaching for tools. Finish with whatever
+              // plan-shaped text exists: this turn's content, else the last
+              // assistant message, else an honest placeholder.
+              const lastAssistant = [...this.context['messages']].reverse().find((m) => m.role === 'assistant' && typeof m.content === 'string' && m.content.trim());
+              const planText = (response.content ?? '').trim() || (lastAssistant?.content as string | undefined)?.trim() || '';
+              return this.finish(task, true, planText || 'Planned. No files were changed.', 'completed');
+            }
+            this.context.addMessage({
+              role: 'system',
+              content: 'PLAN MODE: you are only planning right now. Do not edit files or run mutating commands. Do not call write/edit/delete/shell again. Hand back your plan (steps, files to change, risks, verification) as the final answer now.',
+            });
+            this.events.emit({ type: 'agent:log', agentId: this.id, message: '[plan-mode] handled batch (verify-with-rollback); requesting plan' });
+            continue;
+          }
           if (response.toolCalls.some(isMutating)) {
             this.planVetoes++;
             // Mixed batches: run the read-only calls so their ids are answered,
