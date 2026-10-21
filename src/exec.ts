@@ -138,8 +138,6 @@ function finishSpawn(
       child.stderr?.destroy();
       setTimeout(() => { if (!settled) { killTree('SIGKILL'); done(130, { cancelled: true }); } }, 800);
     };
-    if (opts.signal?.aborted) { onAbort(); return; }
-    opts.signal?.addEventListener('abort', onAbort, { once: true });
     // No caller ever feeds stdin (no stdin-input API exists): close it now so
     // an interactive child (cmd.exe without /C) hits EOF instead of blocking
     // on our open pipe until the timeout kills it.
@@ -169,6 +167,13 @@ function finishSpawn(
       reject(err);
     });
     child.on('close', (code) => done(code));
+    // Already-aborted: run the abort path AFTER the listeners exist. The old
+    // early-return skipped 'error'/'close' attachment — a spawn that fails
+    // while already aborted (nonexistent cwd, deleted shell) then emitted
+    // 'error' with NO listener: an unhandled 'error' event crashes the whole
+    // process. Order guarantees the rejection is caught.
+    if (opts.signal?.aborted) { onAbort(); return; }
+    opts.signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
 
@@ -251,6 +256,14 @@ function defaultSandboxWritable(cwd?: string): string[] {
 }
 
 let cachedBwrap: string | null | undefined;
+
+/** Test seam: forget the cached bwrap probe. detectBubblewrap() caches by
+ *  comparing its pathEnv argument to the CURRENT process.env.PATH, so a test
+ *  that mutates PATH (to simulate "no bwrap installed") must reset the cache
+ *  before AND after, or the poisoned null survives the restore. */
+export function resetBubblewrapCache(): void {
+  cachedBwrap = undefined;
+}
 
 /** Absolute path to `bwrap`, or null when unavailable. Cached. Testable via
  *  explicit pathEnv (production callers omit it). */
