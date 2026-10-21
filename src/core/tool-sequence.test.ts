@@ -3,7 +3,7 @@ import { describe, it, expect, afterAll } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadToolSeqs, saveToolSeq, mineBigrams, toolPatternText } from './tool-sequence.js';
+import { loadToolSeqs, saveToolSeq, mineBigrams, toolPatternText, predictNextTools } from './tool-sequence.js';
 
 const dirs: string[] = [];
 afterAll(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
@@ -49,4 +49,20 @@ describe('tool-sequence store', () => {
     expect(text).toContain('read -> grep');
     expect(toolPatternText(loadToolSeqs(tempDir()))).toBe('');
   });
+
+  it('MCH-209: predictNextTools ranks the likely next tool from the live sequence', () => {
+    const dir = tempDir();
+    const store = loadToolSeqs(dir);
+    for (let i = 0; i < 4; i++) saveToolSeq(dir, store, ['read', 'edit', 'run']);
+    // current run is mid-flight: read done → edit is the statistically next tool
+    const pred = predictNextTools(store, ['read'], 3);
+    expect(pred.length).toBeGreaterThan(0);
+    expect(pred[0].tool).toBe('edit');
+    expect(pred[0].count).toBe(4);
+    // a run whose tail has no recorded transition predicts nothing
+    expect(predictNextTools(store, ['glob'], 3)).toEqual([]);
+    // empty current sequence predicts nothing
+    expect(predictNextTools(store, [], 3)).toEqual([]);
+  });
 });
+

@@ -1,5 +1,12 @@
 # Mochi Changelog
 
+### Added (MCH-209..212 — speculative/predictive coding + training loop, commit 3)
+
+- **Next-tool prediction (MCH-209)**: `predictNextTools()` mines bigram transitions across past runs and, from the live run's tool tail, identifies the statistically likely next tool. When it's a reader, prefetch fires with an observable confidence log — cache warming stops being a guess.
+- **Predictive edit-impact (MCH-210)**: a successful write/edit/patch/delete immediately seeds the co-change prefetch with the edited path — the verification step's reads (test file, sibling module) are cache-warm before the model asks. Previously warming waited for the next turn boundary.
+- **Skill training loop closed (MCH-211)**: `selfPatchSkill` now clears the skill's failure queue after a successful rewrite — the patch is the training signal, so the next run re-tests the rewritten procedure fresh instead of instantly re-patching stale failures (was burning patches on untested rewrites up to the ≥5 cap).
+- **Self-improvement daemon tick (MCH-212)**: daemon start auto-provisions ONE recurring cron job (every 6h, marker-detectable, idempotent) whose prompt runs the full flywheel — curator, pitfall mining, lesson graduation, self-patch, skills report. Opt out via `selfImprovement: false`. Skipped under vitest. Self-improvement now happens even between user tasks.
+
 ## [Unreleased]
 
 ### Added (MCH-205..208 — self-improvement flywheel, commit 2)

@@ -62,6 +62,23 @@ export function mineBigrams(store: ToolSeqStore, top = 12): Bigram[] {
     .slice(0, top);
 }
 
+/** MCH-209: predict the next tool from the run's own live sequence. Mines
+ *  bigrams across past runs, then looks up transitions FROM the tools just
+ *  used this run. Returns the most likely next tool(s) with counts. Empty
+ *  when there's no history or no transition from the current tail. */
+export function predictNextTools(store: ToolSeqStore, currentSeq: string[], top = 3): Array<{ tool: string; count: number }> {
+  if (currentSeq.length === 0 || store.seqs.length === 0) return [];
+  const bigrams = mineBigrams(store, 200);
+  const tail = currentSeq[currentSeq.length - 1];
+  const out: Array<{ tool: string; count: number }> = [];
+  for (const b of bigrams) {
+    if (b.from === tail && !currentSeq.slice(-2).includes(b.to)) {
+      out.push({ tool: b.to, count: b.count });
+    }
+  }
+  return out.sort((a, b) => b.count - a.count).slice(0, top);
+}
+
 /** Compact text block for task-start injection; '' when no history yet. */
 export function toolPatternText(store: ToolSeqStore): string {
   try {

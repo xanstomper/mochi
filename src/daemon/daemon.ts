@@ -214,6 +214,27 @@ export async function startDaemonInProcess(opts: {
   let processing = false;
   let ticker: ReturnType<typeof setInterval> | undefined;
   const cwd = opts.cwd;
+  // MCH-212: self-improvement tick. On daemon start, ensure ONE recurring
+  // cron job exists whose prompt drives the full improvement flywheel
+  // (pitfall mining, lesson graduation, self-patch, report) even when no
+  // user task is running. Idempotent: detected by a reserved marker, and
+  // opted out via config.selfImprovement === false. Skipped under vitest
+  // (tests assert exact job lists) — same convention as update-check.
+  try {
+    const cfg = runtime.config as { selfImprovement?: boolean };
+    if (cfg.selfImprovement !== false && !process.env.VITEST) {
+      const { listJobs, addJob } = await import('./cron.js');
+      const MARKER = '[self-improvement tick]';
+      const jobs = listJobs(resolve(cwd, '.mochi'));
+      if (!jobs.some((j) => j.prompt.includes(MARKER))) {
+        addJob(
+          resolve(cwd, '.mochi'),
+          `${MARKER} Run the skill self-improvement flywheel for this workspace: (1) call the skill curator so pitfall mining, lesson graduation, and self-patching of repeatedly-failing skills execute; (2) run \`mochi skills report\` and record one line summarizing the league table (total skills, avg score, needs-attention count) in the run output. Keep the whole run under 20 tool calls; do not modify source files.`,
+          'every 6h',
+        );
+      }
+    }
+  } catch { /* bootstrap must never block daemon start */ }
   const runDue = async () => {
     if (processing) return;
     processing = true;

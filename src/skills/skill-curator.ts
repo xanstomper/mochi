@@ -1124,6 +1124,14 @@ export async function selfPatchSkill(
     if (lint.issues.some((i) => i.severity === 'error')) return false;
     writeFileSync(skill.path, next);
     bumpPatch(projectDir, skill.name);
+    // MCH-211: the patch is the training signal — clear the failure queue so
+    // the next run gives the rewrite a fresh chance. Without this, the stale
+    // failures keep satisfying the ≥2 gate and the skill burns patches (up
+    // to the ≥5 cap) on rewrites that were never actually re-tested.
+    try {
+      const { clearSkillFailures } = await import('./skills.js');
+      clearSkillFailures(projectDir, skill.name);
+    } catch { /* best-effort */ }
     return true;
   } catch {
     return false;

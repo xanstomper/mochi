@@ -3621,6 +3621,14 @@ Continue from 'Next:', do not redo completed progress.`,
           content: `Result trust: your ${canonical} to ${path || 'the target file'} succeeded — the file on disk is exactly what you sent. Do NOT spend a turn re-reading or re-checking it to confirm; proceed to the next step or your final summary (a later, differently-motivated read is still fine).`,
         });
       }
+      // MCH-210: predictive edit-impact. A successful edit is the strongest
+      // known signal of what happens next: the model will verify (test/
+      // typecheck) and read the co-changed files. Fire the co-change prefetch
+      // NOW with the edited path as the seed instead of waiting for the next
+      // turn boundary, so the verification reads are already cache-warm.
+      if (path) {
+        void this.prefetchForNextTurn(path);
+      }
     }
     if (canonical === 'patch' && toolResult?.output) {
       for (const line of toolResult.output.split('\n')) {
@@ -3785,12 +3793,27 @@ Continue from 'Next:', do not redo completed progress.`,
    * with zero added latency. Cheap (one git log via predictNextFiles) and
    * deduped by readCache freshness, so repeat warming is nearly free.
    */
-  private async prefetchForNextTurn(): Promise<void> {
+  private async prefetchForNextTurn(seedPath?: string): Promise<void> {
     try {
+      // MCH-209: next-tool prediction from this run's live sequence. When the
+      // mined bigrams say the next tool is likely a reader, the co-change
+      // warming below is not a guess — it is the statistically likely target
+      // of the model's next action. A confidence log keeps it observable.
+      try {
+        const { loadToolSeqs, predictNextTools } = await import('../core/tool-sequence.js');
+        const predicted = predictNextTools(loadToolSeqs(this.workspace.dir), this.toolSeq, 1);
+        if (predicted.length > 0 && ['read', 'search', 'glob', 'outline'].includes(predicted[0]!.tool)) {
+          this.events.emit({ type: 'agent:log', agentId: this.id, message: `predict: after ${this.toolSeq[this.toolSeq.length - 1]} → ${predicted[0]!.tool} (${predicted[0]!.count} past occurrences); warming reads` });
+        }
+      } catch { /* prediction is strictly optional */ }
       const touched = this.context.getMessages()
         .filter((m) => m.role === 'user' || m.role === 'assistant')
         .slice(-20)
         .flatMap((m) => (contentText(m).match(/[\w./-]+\.(?:ts|js|py|go|rs)/g) ?? []));
+      // MCH-210: an edit-seeded call puts the edited file FIRST in the seed
+      // list — co-change mining from the just-edited file predicts what the
+      // verification step will read (the test file, the sibling module).
+      if (seedPath) touched.unshift(seedPath);
       const uniqueTouched = [...new Set(touched)].slice(0, 10);
       if (uniqueTouched.length === 0) return;
       const predicted = predictNextFiles(this.workspace.dir, uniqueTouched, 5);

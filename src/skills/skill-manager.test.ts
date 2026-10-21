@@ -581,6 +581,32 @@ describe('MCH-200..204 skill quality & mining', () => {
     expect(loadUsage(proj).byName['deploy-check'].patches ?? 0).toBe(5);
   });
 
+  it('MCH-211: selfPatchSkill clears the failure queue so the rewrite gets a fresh test', async () => {
+    const { recordSkillFailure, loadSkillFailures } = await import('./skills.js');
+    const { writeSkill } = await import('./skill-manager.js');
+    const { selfPatchSkill } = await import('./skill-curator.js');
+    writeSkill(proj, { name: 'flaky-skill', description: 'Deploy health probe: run when verifying a deployment is healthy after a release.', body: [
+      'When to use: verifying a deployment is healthy after a release.',
+      '## Procedure',
+      '1. curl the health endpoint.',
+      '2. Check HTTP status is 200.',
+      '3. Parse the JSON body for status field.',
+      '## Pitfalls',
+      'A 502 right after deploy usually means the pod is still booting — wait 10s and retry once before treating it as failure.',
+      '## Verification',
+      'Run the command and confirm exit code 0.',
+    ].join('\n') });
+    recordSkillFailure(proj, 'flaky-skill', 'health 404 A');
+    recordSkillFailure(proj, 'flaky-skill', 'health 404 B');
+    const skillPath = join(proj, '.mochi', 'skills', 'flaky-skill', 'SKILL.md');
+    const provider = {
+      chat: async () => ({ content: '## Procedure\n1. curl the health endpoint with retry.\n2. Check HTTP status is 200.\n3. Retry twice with exponential backoff on failure.' }),
+    } as unknown as Parameters<typeof selfPatchSkill>[3];
+    const ok = await selfPatchSkill(proj, { name: 'flaky-skill', path: skillPath }, ['health 404 A', 'health 404 B'], provider);
+    expect(ok).toBe(true);
+    expect(loadSkillFailures(proj)['flaky-skill']).toBeUndefined();
+  });
+
   it('MCH-208: skillsReport buckets origins and flags attention cases', async () => {
     const { markUsed, skillsReport } = await import('./skill-manager.js');
     markUsed(proj, 'hand-one', { win: true });
