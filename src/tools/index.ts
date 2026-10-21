@@ -631,7 +631,15 @@ export async function executeTool(
     if (!isPermitted) {
       return { output: '', error: `Permission denied for tool ${name} (${perm})`, durationMs: 0 };
     }
-    if (ctx.config.safety?.mode === 'safe' && tool.def.dangerous) {
+    // Safe mode × dangerous tools. `shell` is EXEMPT from this blanket deny:
+    // its own risk gate (tools/shell.ts) IS the safe-mode policy for shell —
+    // it blocks every elevated-risk foreground command, and either sandboxes
+    // or blocks elevated-risk background ones (B10/B31, pinned in
+    // shell.background-gate.test.ts). Denying shell here too made that whole
+    // gate dead code in safe mode and broke harness-internal shell (verify,
+    // git baseline capture). Every other dangerous tool (verify, …) still
+    // requires ask/auto — none carries an equivalent inner gate.
+    if (ctx.config.safety?.mode === 'safe' && tool.def.dangerous && name !== 'shell') {
       return { output: '', error: `Tool ${name} requires safety mode ask/auto`, durationMs: 0 };
     }
   }
