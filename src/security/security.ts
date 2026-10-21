@@ -93,6 +93,19 @@ export type CommandRisk = 'low' | 'network' | 'destructive';
 const DESTRUCTIVE = [
   /\brm\s+(-[a-z]*r[a-z]*)?\s+/i, /\brmdir\b/i, /\brm\s+-rf\b/i,
   /\bgit\s+(push|reset\s+--hard|clean\s+-[a-z]*f[a-z]*|checkout\s+--\s+\.|rebase|cherry-pick)(?![\w.])/i,
+  // Silent-discard class (audit round 2): these destroy uncommitted work or
+  // saved state with no gate when classified 'low' in safe mode.
+  // git restore: default mode discards WORKTREE changes; --staged/-S alone is
+  // index-only (worktree preserved) and stays low. Flag order must not matter
+  // (--source=HEAD before vs after --staged used to flip the verdict), so the
+  // staged exception scans the whole command segment, and any --worktree/-W
+  // makes it destructive regardless.
+  /\bgit\s+restore\b(?![^|;&]*(?:--staged\b|\s-S\b))/i,   // worktree mode (no --staged/-S anywhere)
+  /\bgit\s+restore\b[^|;&]*(--worktree\b|\s-W\b)/i,       // explicit worktree restore (even with --staged)
+  /\bgit\s+checkout\b[^|;&]*\s--\s/i,              // path-limited checkout discards that path
+  /\bgit\s+stash\s+(drop|clear)\b/i,               // permanently drops saved work
+  /\bfind\b[^|;&]*\s-delete\b/i,                   // find's bulk-delete mutation form
+  /-exec(dir)?\s+rm\b/i,                           // find -exec rm: delete via the exec escape hatch (no \b: ' -' has no word boundary)
   /\bforce[- ]?(push)?\b/i, /\bterraform\s+(apply|destroy|force)\b/i,
   /\bkubectl\s+(delete|drain|replace|apply)\b/i,
   /\bdrop\s+(database|table|schema)\b/i, /\btruncate\b/i,
@@ -113,11 +126,19 @@ const NETWORK = [
 
 /** Classify a shell command by its side-effect risk (Horus's classifier). */
 export function classifyCommand(cmd: string): CommandRisk {
+  // TS is the reference classifier; the native accelerator runs first for
+  // speed but its pattern list can LAG the reference (they are maintained by
+  // hand). A native 'low' therefore must not override a TS 'destructive'
+  // verdict: destructive is checked in TS unconditionally. Native
+  // 'destructive' short-circuits (agreeing or stricter is fine), and native
+  // 'network' short-circuits the TS network scan — after the destructive
+  // check, the safer verdict wins.
   const nat = nativeClassifyCommand(cmd);
-  if (nat !== null) return nat;
+  if (nat === 'destructive') return 'destructive';
   const c = cmd.trim();
   if (!c) return 'low';
   if (DESTRUCTIVE.some((r) => r.test(c))) return 'destructive';
+  if (nat === 'network') return 'network';
   if (NETWORK.some((r) => r.test(c))) return 'network';
   return 'low';
 }

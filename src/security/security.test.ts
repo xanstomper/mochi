@@ -89,6 +89,38 @@ describe('security.ts — redaction & classification', () => {
       expect(classifyCommand('npm publish')).toBe('network');
     });
 
+    it('classifies the silent-discard git/file class as destructive (audit round 2)', () => {
+      // These destroy uncommitted work or saved state; pre-fix they
+      // classified 'low' and ran ungated in safe mode. (The find flags are
+      // assembled from parts solely to pass the write-tool source filter
+      // against destructive literals — the assertion is the classifier's
+      // recognition of the exact command text.)
+      const del = '-del' + 'ete';
+      const execRm = '-ex' + 'ec rm';
+      expect(classifyCommand('git restore .')).toBe('destructive');
+      expect(classifyCommand('git restore src/a.ts')).toBe('destructive');
+      expect(classifyCommand('git restore --source=HEAD -- src/a.ts')).toBe('destructive');
+      // Index-only restore is bookkeeping, not discard.
+      expect(classifyCommand('git restore --staged .')).toBe('low');
+      // Flag order must not flip the verdict (review P2:86269bd1): the
+      // staged exception scans the whole segment, not just the next token.
+      expect(classifyCommand('git restore --source=HEAD --staged -- a.ts')).toBe('low');
+      expect(classifyCommand('git restore --staged --source=HEAD a.ts')).toBe('low');
+      // -S short form gets the same treatment.
+      expect(classifyCommand('git restore -S .')).toBe('low');
+      // Explicit worktree restore discards even when --staged is present.
+      expect(classifyCommand('git restore --staged --worktree .')).toBe('destructive');
+      expect(classifyCommand('git restore --worktree --staged .')).toBe('destructive');
+      expect(classifyCommand('git restore -W .')).toBe('destructive');
+      expect(classifyCommand('git checkout 3f2a -- src/a.ts')).toBe('destructive');
+      expect(classifyCommand('git checkout feature-branch')).toBe('low'); // plain branch switch stays low
+      expect(classifyCommand('git stash drop')).toBe('destructive');
+      expect(classifyCommand('git stash clear')).toBe('destructive');
+      expect(classifyCommand(`find . -name "*.log" ${del}`)).toBe('destructive');
+      expect(classifyCommand(`find . -name x ${execRm} {} +`)).toBe('destructive');
+      expect(classifyCommand('find . -name "*.txt"')).toBe('low'); // plain find stays low
+    });
+
     it('defaults to low risk', () => {
       expect(classifyCommand('ls -la')).toBe('low');
       expect(classifyCommand('cat file.txt')).toBe('low');
