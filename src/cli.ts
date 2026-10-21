@@ -191,6 +191,18 @@ function cliDirname(): string {
   return dirname(fileURLToPath(import.meta.url));
 }
 
+/** Compact "3m ago" / "2d ago" / "never" string. Sub-1m inputs render as "just now"
+ *  so the operator's eye doesn't churn on sub-second noise from fresh failures. */
+function formatAgeAgo(ms: number, now: number = Date.now()): string {
+  if (!ms || ms <= 0) return 'never';
+  const diff = now - ms;
+  if (diff < 0) return 'just now';
+  if (diff < 60_000) return 'just now';
+  if (diff < 3_600_000) return `${Math.max(1, Math.floor(diff / 60_000))}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  return `${Math.floor(diff / 86_400_000)}d ago`;
+}
+
 function srcFileNewer(dir: string, mtime: number): boolean {
   let stack = [dir];
   while (stack.length) {
@@ -2541,7 +2553,15 @@ async function main() {
         console.log(showResolved ? 'No harness issues (open or resolved).' : 'No open harness issues.');
       } else {
         console.log(`${showResolved ? 'All' : 'Open'} harness issues (${visible.length}):`);
-        for (const i of visible) console.log(`  ${i.signature}  ${i.kind} x${i.count}  [${i.status}]  ${i.title}`);
+        for (const i of visible) {
+          // Show when the issue was last seen AND last repaired at — the
+          // 24h auto-repair cooldown (REPAIR_COOLDOWN_MS) gates auto-spawn
+          // on `lastRepairAt`, so an operator triaging the ledger needs to
+          // see both ages to decide whether to retry manually.
+          const lastSeenAgo = formatAgeAgo(i.lastSeen);
+          const lastRepairAgo = i.lastRepairAt ? formatAgeAgo(i.lastRepairAt) : 'never';
+          console.log(`  ${i.signature}  ${i.kind} x${i.count}  [${i.status}]  last-seen=${lastSeenAgo}  last-repair=${lastRepairAgo}  ${i.title}`);
+        }
       }
       return;
     }
