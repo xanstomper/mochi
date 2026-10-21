@@ -6,6 +6,7 @@
 // research flow cannot use the project's own checks.
 import { describe, it, expect } from 'vitest';
 import { mkdtempSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Agent } from './loop.js';
@@ -17,7 +18,13 @@ import { startFakeOpenAI } from '../testutil/fake-openai.js';
 import type { MochiConfig } from '../types.js';
 
 const SCRATCH = resolve(import.meta.dirname ?? '.', '..', '..', '.revtmp');
-const GITENV = { ...process.env, GIT_CONFIG_GLOBAL: '/home/bamn/testing/.tmp-gitconfig-noguard' };
+// Fresh clone / CI may not have the scratch root yet.
+mkdirSync(SCRATCH, { recursive: true });
+// Hermetic git env (see plan-verify.test.ts): empty global config, no system
+// config — identical behavior on every machine.
+const GITCFG = join(mkdtempSync(join(tmpdir(), 'mochi-planverifyloop-gitcfg-')), 'gitconfig');
+writeFileSync(GITCFG, '');
+const GITENV = { ...process.env, GIT_CONFIG_GLOBAL: GITCFG, GIT_CONFIG_NOSYSTEM: '1' };
 
 function makeConfig(dir: string, url: string): MochiConfig {
   return {

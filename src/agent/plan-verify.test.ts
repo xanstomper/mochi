@@ -15,13 +15,23 @@
 // tiny and .revtmp is cleared manually. This keeps destructive-fs patterns
 // out of the test source.
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { snapshotTree, rollbackTracked, resolveVerifyCommand } from './plan-verify.js';
 const SCRATCH = resolve(import.meta.dirname ?? '.', '..', '..', '.revtmp');
-const GITENV = { ...process.env, GIT_CONFIG_GLOBAL: '/home/bamn/testing/.tmp-gitconfig-noguard' };
+// The scratch root may not exist yet (fresh clone / CI) — create it so the
+// test never depends on a developer's local state.
+mkdirSync(SCRATCH, { recursive: true });
+// Hermetic git env: point GIT_CONFIG_GLOBAL at an EMPTY file and drop the
+// system config, so the test's git calls behave the same on every machine
+// (no dubious-ownership guards, no signing keys, no user-global aliases).
+// (The original pinned a developer's absolute path, which only existed on
+// their workstation.)
+const GITCFG = join(mkdtempSync(join(tmpdir(), 'mochi-planverify-gitcfg-')), 'gitconfig');
+writeFileSync(GITCFG, '');
+const GITENV = { ...process.env, GIT_CONFIG_GLOBAL: GITCFG, GIT_CONFIG_NOSYSTEM: '1' };
 
 function scratchDir(prefix: string): string {
   return mkdtempSync(join(SCRATCH, prefix));

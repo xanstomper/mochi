@@ -137,7 +137,20 @@ export function loadConfig(overrides: Partial<MochiConfig> = {}, configPath?: st
   // B26: MOCHI_PROJECT_DIR is ALSO the workspace-dir override (line ~258), so
   // it relocates the project-config reads too — not just cfg.projectDir.
   const projectFragments = loadProjectConfigFragments(cwd);
-  if (Object.keys(projectFragments).length) merge(cfg as unknown as Record<string, unknown>, projectFragments);
+  if (Object.keys(projectFragments).length) {
+    // mcpServers keep the pre-restructure WHOLESALE per-server semantics: a
+    // project file (.mcp.json / .cursor / .vscode) that declares a server
+    // name owns that server's ENTIRE definition. The generic per-leaf deep
+    // merge would otherwise leak the user-level server's leftover fields
+    // (args/env) into the project's replacement entry.
+    const { mcpServers: projectMcp, ...projectRest } = projectFragments as Partial<MochiConfig> & {
+      mcpServers?: NonNullable<MochiConfig['mcpServers']>;
+    };
+    merge(cfg as unknown as Record<string, unknown>, projectRest as Record<string, unknown>);
+    if (projectMcp && Object.keys(projectMcp).length > 0) {
+      cfg.mcpServers = { ...(cfg.mcpServers ?? {}), ...projectMcp };
+    }
+  }
 
   // Provider switch consistency: when the user config selects a provider but
   // carries no baseUrl of its own, the defaultConfig()'s opencode-zen baseUrl

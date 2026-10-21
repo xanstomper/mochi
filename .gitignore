@@ -39,3 +39,6 @@ editors/jetbrains/.gradle/
 # NOTE: gradle-wrapper.jar IS committed (required for reproducible builds).
 aimbot-venv/
 *.env
+
+# Scratch dirs used by the plan-mode verify-with-rollback tests (workspace-local, gitignored)
+.revtmp/

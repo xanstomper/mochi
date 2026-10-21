@@ -56,6 +56,15 @@ export interface SafetyConfig {
    *  loudly if bwrap is missing). Env: MOCHI_SANDBOX. */
   sandbox?: 'off' | 'auto' | 'bubblewrap';
   maxVerifyRetries?: number;
+  /** B27 restructure: hostnames whose POST/PUT/PATCH/DELETE endpoints are
+   *  OPERATOR-DECLARED read-only (GraphQL query endpoints, search APIs that
+   *  take POST bodies, internal review tools). Plan mode exempts fetch calls
+   *  to these hosts from its mutating-tool veto so research can use POST-based
+   *  read APIs. Exact hostname match, case-insensitive; empty/absent = the
+   *  default (mutating fetch is vetoed in plan mode). Declaring a host here
+   *  is an authority act by the operator — same trust level as
+   *  permissions.network — NOT a claim the code verifies. */
+  planModeNetworkReads?: string[];
 }
 
 export type ReasoningLevel = 'low' | 'medium' | 'high' | 'max' | 'off' | 'auto';
