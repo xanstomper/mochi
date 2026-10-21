@@ -136,26 +136,8 @@ export function loadConfig(overrides: Partial<MochiConfig> = {}, configPath?: st
         : process.cwd());
   // B26: MOCHI_PROJECT_DIR is ALSO the workspace-dir override (line ~258), so
   // it relocates the project-config reads too — not just cfg.projectDir.
-  const projectMochi = readJsonFile(resolve(cwd, 'mochi.json')) ?? readJsonFile(resolve(cwd, '.mochi', 'config.json'));
-  if (projectMochi) merge(cfg as unknown as Record<string, unknown>, projectMochi);
-
-  // Project-local MCP configs. mochi.json/.mochi/config.json are mochi's own;
-  // .mcp.json (Claude Code), .cursor/mcp.json (Cursor) and .vscode/mcp.json
-  // (VS Code/GitHub Copilot) are the common shapes other agents author. Reading
-  // them keeps the user's existing MCP servers live without re-running
-  // onboarding, which is how mochi reuses other agents' tool ecosystems.
-  // Later files win on a name collision; a project file overrides user config.
-  for (const rel of ['.mcp.json', '.cursor/mcp.json', '.vscode/mcp.json']) {
-    const mcpJson = readJsonFile(resolve(cwd, rel));
-    if (mcpJson && typeof mcpJson === 'object') {
-      const servers = (mcpJson as { mcpServers?: unknown; servers?: unknown; mcp?: unknown }).mcpServers
-        ?? (mcpJson as { servers?: unknown }).servers
-        ?? (mcpJson as { mcp?: unknown }).mcp;
-      if (servers && typeof servers === 'object') {
-        cfg.mcpServers = { ...(cfg.mcpServers ?? {}), ...servers };
-      }
-    }
-  }
+  const projectFragments = loadProjectConfigFragments(cwd);
+  if (Object.keys(projectFragments).length) merge(cfg as unknown as Record<string, unknown>, projectFragments);
 
   // Provider switch consistency: when the user config selects a provider but
   // carries no baseUrl of its own, the defaultConfig()'s opencode-zen baseUrl
@@ -173,7 +155,7 @@ export function loadConfig(overrides: Partial<MochiConfig> = {}, configPath?: st
     // without this, the derivation below overwrote a project-selected model
     // (project file merges BEFORE this block, but userModel only inspects the
     // USER config file).
-    const projectModel = (projectMochi as { model?: { baseUrl?: string; model?: string } } | undefined)?.model;
+    const projectModel = projectFragments.model;
     if (prov && cfg.model.baseUrl && !userModel?.baseUrl && !envMc.baseUrl && !projectModel?.baseUrl) {
       cfg.model.baseUrl = prov.baseUrl;
       if (!userModel?.model && !projectModel?.model) cfg.model.model = prov.defaultModel;
@@ -362,8 +344,63 @@ function merge(target: Record<string, unknown>, source: Record<string, unknown>)
   }
 }
 
+/** B26 restructure (review fix): merge `later` config fragments INTO `base`
+ *  with the SAME precedence loadConfig itself applies — deep per-leaf merge
+ *  EXCEPT mcpServers, where a server-name collision REPLACES the whole entry
+ *  (the pre-restructure semantics: whoever declares a server name owns its
+ *  entire definition). Used by the CLI worktree path so flag overrides keep
+ *  beating launch-project fragments per LEAF, never wholesale. */
+export function mergeConfigFragments(
+  base: Record<string, unknown>,
+  later: Partial<MochiConfig>,
+): Record<string, unknown> {
+  const mergedMcp = { ...((base.mcpServers ?? {}) as NonNullable<MochiConfig['mcpServers']>), ...(later.mcpServers ?? {}) };
+  const laterNoMcp = { ...later };
+  delete (laterNoMcp as Record<string, unknown>).mcpServers;
+  merge(base, laterNoMcp as Record<string, unknown>);
+  if (Object.keys(mergedMcp).length) {
+    base.mcpServers = mergedMcp as NonNullable<MochiConfig['mcpServers']>;
+  }
+  return base;
+}
+
 export function loadProjectConfig(projectDir: string): Partial<MochiConfig> {
   return readJsonFile(resolve(projectDir, 'config.json')) ?? {};
+}
+
+/** Read a directory's project config fragments WITHOUT the user/env/override
+ *  layers: mochi.json (preferred) or .mochi/config.json, plus the MCP shapes
+ *  other agents author (.mcp.json Claude Code, .cursor/mcp.json Cursor,
+ *  .vscode/mcp.json VS Code). Later MCP files win on a name collision.
+ *
+ *  loadConfig uses this for its project layer. The CLI --worktree path ALSO
+ *  uses it (B26 restructure): a worktree session runs in the worktree copy,
+ *  so the LAUNCH project's fragments are carried across explicitly through
+ *  the overrides channel — restoring "worktree execution, launch-project
+ *  config" as visible intent instead of a process.cwd() accident, while the
+ *  resolution invariant (project files load from the directory actually being
+ *  targeted) stays intact. The carry goes through mergeConfigFragments (per-
+ *  leaf deep merge, flags still winning per leaf; mcpServers wholesale). */
+export function loadProjectConfigFragments(dir: string): Partial<MochiConfig> {
+  const out: Partial<MochiConfig> = {};
+  const projectMochi = readJsonFile(resolve(dir, 'mochi.json')) ?? readJsonFile(resolve(dir, '.mochi', 'config.json'));
+  if (projectMochi) merge(out as unknown as Record<string, unknown>, projectMochi);
+  for (const rel of ['.mcp.json', '.cursor/mcp.json', '.vscode/mcp.json']) {
+    const mcpJson = readJsonFile(resolve(dir, rel));
+    if (mcpJson && typeof mcpJson === 'object') {
+      const servers = (mcpJson as { mcpServers?: unknown }).mcpServers
+        ?? (mcpJson as { servers?: unknown }).servers
+        ?? (mcpJson as { mcp?: unknown }).mcp;
+      if (servers && typeof servers === 'object') {
+        // Wholesale per-server replacement (NOT a deep merge): whoever
+        // declares a server name owns that server's ENTIRE definition — the
+        // pre-restructure collision semantics (a project file fully
+        // redefines a user-level server, e.g. swap command for url).
+        out.mcpServers = { ...(out.mcpServers ?? {}), ...(servers as NonNullable<MochiConfig['mcpServers']>) };
+      }
+    }
+  }
+  return out;
 }
 
 /** Validate a merged config and return a list of human-readable problems.

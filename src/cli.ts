@@ -276,6 +276,7 @@ async function main() {
   try { await (await import('./sqlite.js')).sqliteDriverAsync(); } catch {}
 
   let effectiveCwd = process.cwd();
+  const launchCwd = effectiveCwd;
   let worktreeInfo;
   if (flags.worktree || flags.w) {
     const { WorktreeManager } = await import('./repo/worktree.js');
@@ -292,7 +293,26 @@ async function main() {
   }
 
   const cwd = effectiveCwd;
-  const configOverrides = configFromFlags(flags);
+  const flagOverrides = configFromFlags(flags);
+  let configOverrides: ReturnType<typeof configFromFlags> = flagOverrides;
+  // B26 restructure: a worktree session runs in the worktree COPY, and project
+  // configs now load from the directory actually being targeted (the worktree).
+  // That flipped the old ambient behavior (launch dir's mochi.json/.mcp.json
+  // were read from process.cwd()). Restore it explicitly: carry the LAUNCH
+  // project's fragments through the overrides channel — visible intent, below
+  // the flag overrides, still above the worktree's own project files.
+  if (worktreeInfo) {
+    const { loadProjectConfigFragments, mergeConfigFragments } = await import('./config.js');
+    const launchFragments = loadProjectConfigFragments(launchCwd);
+    if (Object.keys(launchFragments).length) {
+      // Launch fragments as BASE, flag overrides as the winning layer,
+      // merged per LEAF (mergeConfigFragments: `later` wins per leaf;
+      // mcpServers per-server). `mochi --worktree --model x` keeps --model
+      // even when the launch mochi.json has a model block.
+      configOverrides = mergeConfigFragments(launchFragments as Record<string, unknown>, flagOverrides) as ReturnType<typeof configFromFlags>;
+      console.error(`\x1b[38;2;163;230;53m[worktree]\x1b[0m Using launch project config from: ${launchCwd}`);
+    }
+  }
   const { Runtime } = await import('./runtime.js');
   const { randomSlug } = await import('./util.js');
   const { status, diff, isRepo } = await import('./repo/git.js');
