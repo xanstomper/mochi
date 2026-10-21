@@ -177,7 +177,12 @@ export const COMPLETION_COMMANDS: CompletionCommand[] = [
   { name: 'check', description: 'Run checks' },
   { name: 'known-good', description: 'Mark a known-good state' },
   { name: 'gc', description: 'Prune old session/trace files (retention)', aliases: ['prune', 'retention'] },
-  { name: 'selfheal', description: 'Run an automatic repair pass on an open harness issue' },
+  { name: 'selfheal', description: 'Run/list/resolve an open harness issue (--resolve <sig>, --resolved, --list, --status)', subcommands: [
+    { name: 'list', description: 'Show open issues without repairing' },
+    { name: 'status', description: 'Alias for --list' },
+    { name: 'resolved', description: 'Show resolved issues too (--resolved flag)' },
+    { name: 'resolve', description: 'Mark an issue resolved without spawning a repair agent (--resolve <sig>)' },
+  ]},
   { name: 'use', description: 'Use a profile or preset' },
   { name: 'enhance', description: 'Removed standalone — use goal/team --enhance' },
   {
