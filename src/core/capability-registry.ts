@@ -116,6 +116,7 @@ export class CapabilityRegistry {
 import type { Tool } from '../tools/types.js';
 import type { ToolContext } from '../tools/types.js';
 import { ALL_TOOLS, validateArgs } from '../tools/index.js';
+import { isFetchMutationRequest } from '../tools/fetch-methods.js';
 
 const READ_ONLY_TOOLS = new Set([
   'read', 'search', 'glob', 'inspect', 'git', 'diff', 'tree',
@@ -132,12 +133,26 @@ const READ_ONLY_TOOLS = new Set([
 // 'fetch' is deliberately ABSENT: its method arg selects POST/PUT/PATCH/
 // DELETE, which mutate REMOTE state (tools/fetch.ts), and this static flag is
 // arg-blind — mutating requests must not ride the concurrent read-only
-// Promise.allSettled batch. GET/HEAD stay read-only in the arg-aware gates
-// (security/permission.ts autoAllow, agent/loop.ts isReadOnly); here fetch
-// pays the sequential-batch fee for correctness.
+// Promise.allSettled batch. B27 restructure: the arg-blind static flag keeps
+// fetch OUT of the batch, but toolToCapability supplies an
+// isReadOnlyForArgs predicate so the dispatcher can admit the READ-ONLY
+// calls (GET/HEAD fetch) into parallel execution while mutating ones still
+// run sequentially.
+const READ_ONLY_FOR_ARGS: Record<string, (args: Record<string, unknown>) => boolean> = {
+  // fetch: GET/HEAD (incl. absent/non-mutating method args) are reads.
+  fetch: (args) => !isFetchMutationRequest('fetch', args),
+  // 'verify' deliberately has NO predicate: classifyCommand() is coarse —
+  // `npm run build` / `npm test` classify 'low' (not destructive, not network)
+  // yet they write artifacts and execute arbitrary project scripts. A curated
+  // read-only command allowlist would be the only sound predicate, and the
+  // parallelism win for a tool that usually runs alone does not justify that
+  // surface. verify stays fully mutating here (its plan-mode restrictions are
+  // loop-level).
+};
 
 export function toolToCapability(tool: Tool): Capability {
   const isReadOnly = READ_ONLY_TOOLS.has(tool.def.name);
+  const readOnlyForArgs = READ_ONLY_FOR_ARGS[tool.def.name];
   return {
     id: `native:${tool.def.name}`,
     name: tool.def.name,
@@ -146,6 +161,7 @@ export function toolToCapability(tool: Tool): Capability {
     schema: tool.def,
     isReadOnly,
     domain: isReadOnly ? 'inspect' : 'mutate',
+    ...(readOnlyForArgs ? { isReadOnlyForArgs: readOnlyForArgs } : {}),
     execute: async (req: CapabilityExecutionRequest): Promise<CapabilityExecutionResponse> => {
       const validation = validateArgs(tool, req.args);
       if (validation) {

@@ -96,14 +96,23 @@ export class ToolDispatcher {
       toRun.push({ call, executionId: rec.executionId });
     }
 
-    const readOnly = toRun.filter(({ call }) => {
+    // B27 restructure: an arg-aware predicate (isReadOnlyForArgs) wins over
+    // the static flag when present — GET fetch and low-risk verify rejoin
+    // the concurrent read-only batch while their mutating siblings (POST
+    // fetch, build/test verify) stay sequential. Unparseable/odd args fail
+    // closed (sequential).
+    const isCallReadOnly = (call: ToolCallSpec): boolean => {
       const cap = this.registry.get(call.name);
-      return cap ? cap.isReadOnly : false;
-    });
-    const mutating = toRun.filter(({ call }) => {
-      const cap = this.registry.get(call.name);
-      return !cap || !cap.isReadOnly;
-    });
+      if (!cap) return false;
+      if (cap.isReadOnlyForArgs) {
+        const args = call.arguments;
+        if (!args || typeof args !== 'object') return false;
+        return cap.isReadOnlyForArgs(args as Record<string, unknown>);
+      }
+      return cap.isReadOnly;
+    };
+    const readOnly = toRun.filter(({ call }) => isCallReadOnly(call));
+    const mutating = toRun.filter(({ call }) => !isCallReadOnly(call));
 
     // 1. Execute all read-only inspection tools concurrently
     const readSettled = await Promise.allSettled(

@@ -57,6 +57,13 @@ export interface Capability {
   readonly schema: ToolDefinition;
   readonly isReadOnly: boolean;
   readonly domain?: string; // e.g. "fs", "git", "db", "web", "subagent"
+  /** Arg-aware read-only refinement (B27 restructure): the static flag is
+   *  arg-blind, so a tool whose hazard depends on its arguments (fetch's
+   *  method, verify's command) provides this predicate. When present it
+   *  WINS over the static flag: true = this specific call is read-only
+   *  (eligible for the concurrent read-only batch), false = mutating.
+   *  It must fail closed — when in doubt, return false. */
+  readonly isReadOnlyForArgs?: (args: Record<string, unknown>) => boolean;
   
   execute(req: CapabilityExecutionRequest): Promise<CapabilityExecutionResponse>;
   estimatedTokenCost?(args: Record<string, unknown>): number;
