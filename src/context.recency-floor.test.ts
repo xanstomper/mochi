@@ -108,38 +108,46 @@ describe('recency floor must not override the token window (B15)', () => {
   });
 
   it('recency floor can never expand the budget window — only reorder within it (B15 restructure pin)', () => {
-    // CONTRACT (see context.ts buildPacket comment): the floor decides WHICH
-    // messages fit (recency priority ordering inside the window); the window
-    // decides HOW MANY. With the floor request (24) far below the message
-    // count and the total far above the window, an override implementation
-    // would keep the whole floor region unconditionally; a compliant one
-    // keeps only what fits (newest-first), always including the newest turn.
+    // CONTRACT (see context.ts buildPacket comment): the floor is a TARGET
+    // for the TOKEN window — the packet that goes to the provider always
+    // fits the budget, and the floor decides WHICH messages keep their full
+    // payload (newest first). It does NOT decide how many MESSAGES survive:
+    // below the floor a message is kept even when it does not fit at full
+    // size (its dense payload is truncated instead), because dropping a tool
+    // message or its assistant parent breaks provider tool-pairing and
+    // hides veto replies from the model.
+    //
+    // The DISCRIMINATOR is the token bound: an implementation that treated
+    // the floor as an override would keep all 20 messages at full size
+    // (~22k tokens — nearly three times the window) and blow the budget.
     const dir = mkdtempSync(join(tmpdir(), 'mochi-b15-pin-'));
     try {
       const c = new ContextEngine(cfg(8000), dir, skillsDir);
       c.setTaskComplexity('complex'); // floor request: 24 messages
       // 10 turns = 20 messages (~20k tokens with dense tool results) against
-      // an 8000-token window: an override would keep all 20 (the old code's
-      // first-24-unconditional behavior); a compliant builder keeps ~5.
+      // an 8000-token window: an override would keep all 20 at full size
+      // (~22k tokens); a compliant builder keeps the newest payload
+      // intact and shrinks the older ones to fit.
       for (let k = 0; k < 10; k++) {
         c.addMessage({ role: 'assistant', content: `step ${k}`, tool_calls: [{ id: `c${k}`, type: 'function', function: { name: 'read', arguments: '{}' } }] } as ChatMessage);
         c.addMessage({ role: 'tool', tool_call_id: `c${k}`, name: 'read', content: DENSE } as ChatMessage);
       }
       const packet = c.buildPacket([], undefined, undefined);
-      // STRUCTURAL bound (basis-independent): a compliant builder keeps a
-      // small newest-first slice (here exactly 10: the newest 5 pairs fit
-      // the budget, then the walk stops); the override kept all 20
-      // (+ system + state ≈ 22 wire messages).
-      const history = packet.messages.filter((m) => m.role !== 'system');
-      expect(history.length).toBeLessThanOrEqual(10);
       // WIRE bound: cachedMessageTokens and this measure share the same basis
       // (approxTokens over JSON.stringify), so the slack here only absorbs
-      // rounding at the walk boundary — the structural bound above is the
+      // rounding at the walk boundary — the token bound above is the
       // decisive discriminator (an override measures ~22k, nearly three
       // times the window).
       const real = packet.messages.reduce(
         (a, m) => a + approxTokens(JSON.stringify(m)), 0);
       expect(real).toBeLessThanOrEqual(8000 * 1.12);
+      expect(packet.usedTokens).toBeLessThanOrEqual(8000);
+      // PAYLOAD bound: the oldest dense payloads are truncated rather than
+      // riding along at full size — the floor reorders, it does not expand.
+      const toolMsgs = packet.messages.filter((m) => m.role === 'tool') as Array<ChatMessage & { tool_call_id?: string; content?: string }>;
+      const oldest = toolMsgs.find((m) => m.tool_call_id === 'c0');
+      expect(oldest).toBeDefined();
+      expect(String(oldest?.content).length).toBeLessThan(DENSE.length);
       // Recency priority held: the NEWEST turn specifically survives — the
       // sole unconditional add is the LAST message pushed (tool result of
       // call c9). Matching any tool result would let an oldest-first builder
@@ -147,7 +155,10 @@ describe('recency floor must not override the token window (B15)', () => {
       const newestTool = packet.messages.find(
         (m) => m.role === 'tool' && (m as { tool_call_id?: string }).tool_call_id === 'c9');
       expect(newestTool).toBeDefined();
-      expect((newestTool as { content?: string }).content).toBe(DENSE);
+      // Its payload stays essentially intact (the final budget backstop may
+      // shave the tail of the assembled packet, so this is a bound, not an
+      // exact equality).
+      expect(String((newestTool as { content?: string }).content).length).toBeGreaterThan(DENSE.length * 0.75);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

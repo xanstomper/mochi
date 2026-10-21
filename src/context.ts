@@ -869,9 +869,17 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
     // turn, which is always kept (the active working set). A single message
     // larger than the whole window still goes through alone (the orphan
     // cleanup and shrinkOldToolOutputs address its content size downstream).
-    // CONTRACT (B15 restructure pin): the floor chooses WHICH messages fit —
-    // it is a recency priority ordering INSIDE the window; it can never
-    // expand the window. The newest turn is the sole unconditional add.
+    // CONTRACT (B15 restructure pin): the floor is a TARGET for the TOKEN
+    // window, never an override of it — the packet that goes to the provider
+    // always fits the budget (the add path consults it, dense payloads are
+    // truncated rather than dropped, and the final backstop trims the
+    // assembled packet). What the floor decides is WHICH messages keep
+    // their full payload: the newest ones, with older payloads truncated
+    // first. It does NOT decide how many MESSAGES survive — below the floor a
+    // message is kept even when it does not fit at full size, because
+    // dropping a tool message (or its assistant parent) breaks provider
+    // tool-pairing and hides veto replies from the model. The newest turn is
+    // always present.
     // The test "recency floor can never expand the budget window" pins this.
     for (let i = this.messages.length - 1; i >= 0; i--) {
       const m = this.messages[i];
