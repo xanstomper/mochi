@@ -2519,11 +2519,30 @@ async function main() {
   // open harness issue (Mochi repairs itself). Works even when the run happened
   // elsewhere because issues persist in `.mochi/reports/harness-issues.json`.
   if (first === 'selfheal') {
-    const { listHarnessIssues, buildRepairPrompt } = await import('./core/harness-issues.js');
-    const open = listHarnessIssues(runtime.workspace.dir, { status: 'open' }).sort((a, b) => b.count - a.count);
-    if (flags.list || flags.status || flags.summary) {
-      if (open.length === 0) console.log('No open harness issues.');
-      else { console.log(`Open harness issues (${open.length}):`); for (const i of open) console.log(`  ${i.signature}  ${i.kind} x${i.count}  ${i.title}`); }
+    const { listHarnessIssues, resolveHarnessIssue, buildRepairPrompt } = await import('./core/harness-issues.js');
+    const all = listHarnessIssues(runtime.workspace.dir).sort((a, b) => b.count - a.count);
+    const open = all.filter((i) => i.status === 'open');
+    const showResolved = Boolean(flags.resolved);
+    // --resolve <sig>: mark an issue resolved without spawning a repair agent.
+    // Use it when the operator knows the entry is stale (e.g. an old workspace
+    // remigrated a 2024 read-on-dir EISDIR signature) or when the failure was
+    // task-specific and not actually a harness defect. Idempotent.
+    const resolveArg = typeof flags.resolve === 'string' ? flags.resolve : undefined;
+    if (resolveArg) {
+      const match = all.find((i) => i.signature.startsWith(resolveArg));
+      if (!match) { console.error(`No harness issue with signature prefix "${resolveArg}".`); process.exitCode = 1; return; }
+      const ok = resolveHarnessIssue(runtime.workspace.dir, match.signature);
+      console.log(`${ok ? 'Resolved' : 'No-op'}: ${match.signature} (${match.kind} x${match.count}) — ${match.title}`);
+      return;
+    }
+    if (flags.list || flags.status || flags.summary || showResolved) {
+      const visible = showResolved ? all : open;
+      if (visible.length === 0) {
+        console.log(showResolved ? 'No harness issues (open or resolved).' : 'No open harness issues.');
+      } else {
+        console.log(`${showResolved ? 'All' : 'Open'} harness issues (${visible.length}):`);
+        for (const i of visible) console.log(`  ${i.signature}  ${i.kind} x${i.count}  [${i.status}]  ${i.title}`);
+      }
       return;
     }
     if (open.length === 0) { console.log('No open harness issues. Nothing to do.'); return; }
