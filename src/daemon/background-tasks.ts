@@ -17,6 +17,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { atomicWriteFileSync } from '../core/atomic-fs.js';
+import { maybeSandbox, type SandboxOptions } from '../exec.js';
 
 export interface BackgroundTask {
   id: string;
@@ -109,7 +110,7 @@ function isPidAlive(pid?: number): boolean {
 export function startBackgroundTask(
   command: string,
   cwd: string,
-  opts: { description?: string; timeoutMs?: number; env?: NodeJS.ProcessEnv } = {},
+  opts: { description?: string; timeoutMs?: number; env?: NodeJS.ProcessEnv; sandbox?: SandboxOptions } = {},
 ): BackgroundTask {
   const id = randomUUID().slice(0, 8);
   const task: BackgroundTask = {
@@ -120,7 +121,20 @@ export function startBackgroundTask(
     status: 'running',
     output: '',
   };
-  const child = spawn('sh', ['-c', command], {
+  // B31 restructure: `sandbox` (set by the shell tool for safe-mode
+  // elevated-risk background commands) wraps the raw `sh -c` spawn through
+  // the SAME maybeSandbox machinery the foreground path uses. Callers pass
+  // mode 'bubblewrap' only after probing availability, so a vanished bwrap
+  // throws here — the task fails visibly, never runs unsandboxed.
+  let spawnCmd = 'sh';
+  let spawnArgs = ['-c', command];
+  if (opts.sandbox && opts.sandbox.mode !== 'off') {
+    ({ cmd: spawnCmd, args: spawnArgs } = maybeSandbox('sh', ['-c', command], {
+      cwd,
+      sandbox: opts.sandbox,
+    }));
+  }
+  const child = spawn(spawnCmd, spawnArgs, {
     cwd,
     env: opts.env ?? process.env,
     detached: false,

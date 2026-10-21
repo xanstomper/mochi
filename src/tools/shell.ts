@@ -1,6 +1,28 @@
 import type { Tool } from './types.js';
 import { classifyCommand } from '../security/security.js';
 import { markMutation } from './fs-signal.js';
+import { detectBubblewrap } from '../exec.js';
+
+/** B31 restructure decision table for the safe-mode risk gate. Returns:
+ *  - 'block'         : refuse the command (no sandbox for an elevated-risk
+ *                      background command, or safe-mode foreground rule);
+ *  - 'run-sandboxed' : run INSIDE the OS sandbox (safe-mode background
+ *                      command above low risk with a sandbox backend);
+ *  - 'run'           : run as-is.
+ *  Pure: callers own the sandbox-availability probe. */
+export function resolveBackgroundRiskAction(
+  risk: ReturnType<typeof classifyCommand>,
+  safeMode: boolean,
+  background: boolean,
+  sandboxAvailable: boolean,
+): 'block' | 'run-sandboxed' | 'run' {
+  if (!safeMode || risk === 'low') return 'run';
+  // Safe mode + elevated risk: foreground commands stay blocked (the shell
+  // tool's synchronous result is the model's next token — a contained,
+  // observable execution); background commands MAY run when contained.
+  if (background && sandboxAvailable) return 'run-sandboxed';
+  return 'block';
+}
 
 // Accumulation guard only (memory safety against firehose output). The final
 // RESULT the model sees is clipped to the shared tool-result budget by
@@ -93,9 +115,29 @@ export const shellTool: Tool = {
     // B10: this gate MUST run before the background early-return — the old
     // branch order let `background: true` bypass safe-mode blocking, the
     // risk log event, and sandbox resolution entirely (raw `sh -c` spawn).
+    // B31 restructure: safe mode no longer blocks elevated-risk BACKGROUND
+    // commands outright when an OS sandbox is available — long-lived
+    // watchers/servers (the legitimate background workload) are often
+    // network-touching, and the bwrap sandbox contains the FILESYSTEM
+    // (read-only root, writable cwd/tmp), the axis safe mode's destructive
+    // classifications care about most. Note its limits: network stays open
+    // and the home tree is readable, so this is containment, not
+    // exfiltration-proofing. Sandboxed-with-log replaces the block; when no
+    // sandbox backend exists the block stands (fail closed), with the reason
+    // in the message.
     const risk = classifyCommand(command);
-    if (ctx.config.safety.mode === 'safe' && risk !== 'low') {
-      throw new Error(`Blocked by safety: command classified as ${risk} (safe mode). Command: ${command.slice(0, 200)}`);
+    const isSafeMode = ctx.config.safety.mode === 'safe';
+    const isBackground = args.background === true;
+    const bgAction = resolveBackgroundRiskAction(risk, isSafeMode, isBackground, detectBubblewrap() !== null);
+    if (bgAction === 'block') {
+      const reason = isSafeMode && isBackground && risk !== 'low'
+        ? 'no OS sandbox (bubblewrap) is available on this host'
+        : 'safe mode';
+      throw new Error(`Blocked by safety: command classified as ${risk} (${reason}). Command: ${command.slice(0, 200)}`);
+    }
+    const forceBgSandbox = bgAction === 'run-sandboxed';
+    if (forceBgSandbox && ctx.events) {
+      ctx.events.emit({ type: 'agent:log', agentId: ctx.agentId, message: `[shell:${risk}] background command auto-sandboxed (safe mode): ${command.slice(0, 140)}` });
     }
     if (risk !== 'low' && ctx.events) {
       ctx.events.emit({ type: 'agent:log', agentId: ctx.agentId, message: `[shell:${risk}] ${command.slice(0, 160)}` });
@@ -105,6 +147,13 @@ export const shellTool: Tool = {
       const { startBackgroundTask, describeTask } = await import('../daemon/background-tasks.js');
       const t = startBackgroundTask(command, ctx.cwd, {
         description: typeof args.description === 'string' ? args.description : undefined,
+        // B31 restructure: elevated-risk background commands in safe mode run
+        // INSIDE the OS sandbox ('bubblewrap' mode = fail closed: if bwrap
+        // vanished between the availability check and spawn, the task fails
+        // visibly instead of running unsandboxed). Network stays allowed —
+        // the sandbox contains the FILESYSTEM; safe mode's network commands
+        // (curl, npm test) remain legitimate background workloads.
+        sandbox: forceBgSandbox ? { mode: 'bubblewrap' } : undefined,
       });
       // Known fence limitation: the background task mutates files LATER,
       // outside this synchronous bump's visibility. The bg-status polling

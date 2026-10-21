@@ -252,6 +252,14 @@ function defaultSandboxWritable(cwd?: string): string[] {
 
 let cachedBwrap: string | null | undefined;
 
+/** Test seam: forget the cached bwrap probe. detectBubblewrap() caches by
+ *  comparing its pathEnv argument to the CURRENT process.env.PATH, so a test
+ *  that mutates PATH (to simulate "no bwrap installed") must reset the cache
+ *  before AND after, or the poisoned null survives the restore. */
+export function resetBubblewrapCache(): void {
+  cachedBwrap = undefined;
+}
+
 /** Absolute path to `bwrap`, or null when unavailable. Cached. Testable via
  *  explicit pathEnv (production callers omit it). */
 export function detectBubblewrap(pathEnv = process.env.PATH ?? ''): string | null {
