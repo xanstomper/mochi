@@ -6,7 +6,7 @@
 // Rebranded into Mochi and extended. Kept dependency-free and sync so they
 // can wrap every disk write and tool gate without async plumbing.
 
-import { nativeRedactSecrets, nativeClassifyCommand } from '../native/core.js';
+import { nativeClassifyCommand } from '../native/core.js';
 
 /** Common secret shapes. Broader than Horus's originals (adds OpenAI/Anthropic/
  *  Gemini/JWT/bearer/ghp), because Mochi persists raw model output in
@@ -51,8 +51,12 @@ const SECRET_PATTERNS = [
 
 export function redact(input: string): string {
   if (!input) return input;
-  const nat = nativeRedactSecrets(input);
-  if (nat !== null) return nat;
+  // TS SECRET_PATTERNS are the single source of truth: the Rust mirror
+  // (native/mochi_core/src/redact.rs) has lagged TS before (Discord webhook
+  // URLs were missing there), and short-circuiting on a non-null native
+  // result silently skipped every TS-only pattern on native hosts. The TS
+  // pass is cheap (patterns only match-and-replace) and idempotent, so the
+  // native fast path is not worth the drift risk.
   let out = input;
   for (const re of SECRET_PATTERNS) out = out.replace(re, '[secret-redacted]');
   return out;
