@@ -9,7 +9,7 @@
  * Never touches the git index — review with `git diff` afterwards.
  */
 import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync } from 'node:fs';
-import { dirname, resolve, isAbsolute, sep as pathSep } from 'node:path';
+import { dirname, resolve, isAbsolute, relative, sep as pathSep } from 'node:path';
 import { atomicWriteFileSync } from './core/atomic-fs.js';
 
 export interface ApplyResult {
@@ -75,12 +75,25 @@ export function parseUnifiedDiff(diffText: string, root?: string): FileOp[] {
     if (!path) throw new Error(`Unsafe path in diff: ${path}`);
     if (isAbsolute(path)) {
       if (root === undefined) throw new Error(`Unsafe path in diff (absolute): ${path}`);
+      // Containment via path.relative(), NOT string prefix matching: the
+      // prefix form hardcoded '/' as the separator, so on Windows every
+      // in-root absolute path ("C:\root\file" vs root "C:\root") looked like
+      // an escape and was rejected. relative() also compares
+      // case-insensitively on Windows and returns an ABSOLUTE path when the
+      // target is on another drive — both fail closed here.
       const rootResolved = resolve(root);
       const inside = resolve(root, path);
-      if (inside === rootResolved || !inside.startsWith(rootResolved + '/')) {
+      const rel = relative(rootResolved, inside);
+      // rel === ''  → the path IS the root (not a file inside it)
+      // rel starts with '..' → escapes the root
+      // isAbsolute(rel) → different drive (Windows) → escapes
+      if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
         throw new Error(`Path escapes workspace root: ${path}`);
       }
-      normalized = inside.slice(rootResolved.length + 1);
+      // POSIX-style relative path (the diff format's own convention) so the
+      // op path compares equal to the workspace-relative paths the rest of
+      // the tool prints.
+      normalized = rel.split(pathSep).join('/');
     }
     if (normalized.includes('..')) throw new Error(`Unsafe path in diff: ${normalized}`);
     ops.push({ path: normalized, op, hunks });

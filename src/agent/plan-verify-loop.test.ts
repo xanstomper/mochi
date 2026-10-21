@@ -26,6 +26,13 @@ const GITCFG = join(mkdtempSync(join(tmpdir(), 'mochi-planverifyloop-gitcfg-')),
 writeFileSync(GITCFG, '');
 const GITENV = { ...process.env, GIT_CONFIG_GLOBAL: GITCFG, GIT_CONFIG_NOSYSTEM: '1' };
 
+/** Content read back from disk, normalized to LF (see the autocrlf note
+ *  in planModeRepo) — the contract is "the pre-verify content is restored",
+ *  not the platform's line-ending convention. */
+function readLf(p: string): string {
+  return readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
+}
+
 function makeConfig(dir: string, url: string): MochiConfig {
   return {
     model: { provider: 'openai', baseUrl: url, model: 'fake-model' },
@@ -53,6 +60,10 @@ function planModeRepo(): { dir: string; tracked: string } {
   g(['init', '-q']);
   g(['config', 'user.email', 't@t']);
   g(['config', 'user.name', 't']);
+  // Windows git defaults to core.autocrlf=true: the committed blob would be
+  // checked out as CRLF and the restored content would differ from the
+  // pre-verify content the test pins.
+  g(['config', 'core.autocrlf', 'false']);
   const tracked = join(dir, 'tracked.txt');
   writeFileSync(tracked, 'clean\n');
   writeFileSync(join(dir, '.gitignore'), '.mochi/\n.revtmp/\n');
@@ -116,7 +127,7 @@ describe('plan-mode verify-with-rollback (B9 restructure)', () => {
       expect(String(verifyMsg?.content)).toContain('[PASS]');
       // INVARIANT: the tracked-file write did NOT survive — restored to the
       // pre-verify content, and the tree is clean (the write is gone).
-      expect(readFileSync(tracked, 'utf8')).toBe('clean\n');
+      expect(readLf(tracked)).toBe('clean\n');
       const status = execFileSync('git', ['-C', dir, 'status', '--porcelain'], { env: GITENV, stdio: 'pipe' }).toString();
       expect(status.trim()).toBe('');
       // The rollback is announced in-loop.
@@ -172,7 +183,7 @@ describe('plan-mode verify-with-rollback (B9 restructure)', () => {
       expect(String(verifyMsg?.content)).toContain('plan mode');
       expect(String(verifyMsg?.content)).not.toContain('[PASS]');
       // The tree was never touched by an injected command.
-      expect(readFileSync(tracked, 'utf8')).toBe('clean\n');
+      expect(readLf(tracked)).toBe('clean\n');
     } finally {
       try { await fake?.close(); } catch { /* best-effort */ }
     }
@@ -218,7 +229,7 @@ describe('plan-mode verify-with-rollback (B9 restructure)', () => {
       expect(String(verifyMsg?.content)).toContain('plan mode');
       expect(String(verifyMsg?.content)).not.toContain('[PASS]');
       // No artifact landed in the tree.
-      expect(readFileSync(tracked, 'utf8')).toBe('clean\n');
+      expect(readLf(tracked)).toBe('clean\n');
     } finally {
       try { await fake?.close(); } catch { /* best-effort */ }
     }

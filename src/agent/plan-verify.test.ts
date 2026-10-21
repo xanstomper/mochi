@@ -37,12 +37,24 @@ function scratchDir(prefix: string): string {
   return mkdtempSync(join(SCRATCH, prefix));
 }
 
+/** Content read back from disk, normalized to LF: a Windows checkout may
+ *  materialize CRLF, and the contract under test is "the pre-verify content
+ *  is restored", not the platform's line-ending convention. */
+function readLf(p: string): string {
+  return readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
+}
+
 function gitRepo(): string {
   const dir = scratchDir('b9pv-git-');
   const g = (args: string[]) => execFileSync('git', ['-C', dir, ...args], { env: GITENV, stdio: 'pipe' });
   g(['init', '-q']);
   g(['config', 'user.email', 't@t']);
   g(['config', 'user.name', 't']);
+  // Keep the working tree byte-exact: Windows git defaults to
+  // core.autocrlf=true, which would rewrite the committed blobs to CRLF on
+  // checkout and make the restored content differ from the pre-verify
+  // content the test pins.
+  g(['config', 'core.autocrlf', 'false']);
   // Both files tracked: b.txt is the "user-dirtied before verify" file, so it
   // must be in HEAD for the tracked-dirty baseline to see it.
   writeFileSync(join(dir, 'a.txt'), 'original\n');
@@ -96,7 +108,7 @@ describe('snapshotTree / rollbackTracked', () => {
     expect(snap).not.toBeNull();
     expect(snap!.baselineDirty).toEqual(['b.txt']);
     // Snapshot must not have disturbed the working tree.
-    expect(readFileSync(join(dir, 'b.txt'), 'utf8')).toBe('user edit\n');
+    expect(readLf(join(dir, 'b.txt'))).toBe('user edit\n');
 
     // "verify" overwrites both: the user-dirtied file and a clean tracked file.
     writeFileSync(join(dir, 'b.txt'), 'user edit + verify noise\n');
@@ -107,8 +119,8 @@ describe('snapshotTree / rollbackTracked', () => {
     // user's dirty content at snapshot time) — verify's noise is undone and
     // the user's edit survives.
     expect(r.rolledBack.sort()).toEqual(['a.txt', 'b.txt']);
-    expect(readFileSync(join(dir, 'a.txt'), 'utf8')).toBe('original\n');
-    expect(readFileSync(join(dir, 'b.txt'), 'utf8')).toBe('user edit\n');
+    expect(readLf(join(dir, 'a.txt'))).toBe('original\n');
+    expect(readLf(join(dir, 'b.txt'))).toBe('user edit\n');
     // Untracked artifacts: under the tightened contract, a file CREATED after
     // the snapshot is a command artifact and is DELETED on rollback (not
     // merely reported).
@@ -132,8 +144,8 @@ describe('snapshotTree / rollbackTracked', () => {
     const r = await rollbackTracked(dir, snap!);
     expect(r.rolledBack.sort()).toEqual(['a.txt', 'b.txt']);
     // Content restored to pre-verify in both cases.
-    expect(readFileSync(join(dir, 'a.txt'), 'utf8')).toBe('user staged edit\n');
-    expect(readFileSync(join(dir, 'b.txt'), 'utf8')).toBe('user unstaged edit\n');
+    expect(readLf(join(dir, 'a.txt'))).toBe('user staged edit\n');
+    expect(readLf(join(dir, 'b.txt'))).toBe('user unstaged edit\n');
     // INDEX state preserved: a.txt still staged (X='M'), b.txt still only
     // unstaged (X=' '). Before the fix, checkout -- staged BOTH.
     const status = execFileSync('git', ['-C', dir, 'status', '--porcelain'], { env: GITENV, stdio: 'pipe' }).toString();
@@ -157,7 +169,7 @@ describe('snapshotTree / rollbackTracked', () => {
     // Created artifact GONE; pre-existing file UNTOUCHED.
     expect(existsSync(join(dir, 'dist.out'))).toBe(false);
     expect(existsSync(join(dir, 'preexisting.txt'))).toBe(true);
-    expect(readFileSync(join(dir, 'preexisting.txt'), 'utf8')).toBe('user file\n');
+    expect(readLf(join(dir, 'preexisting.txt'))).toBe('user file\n');
     // The created artifact is not reported as a leftover; the pre-existing
     // one is (the caller surfaces it honestly).
     expect(r.untrackedLeftover).toContain('preexisting.txt');
