@@ -1726,10 +1726,19 @@ Continue from 'Next:', do not redo completed progress.`,
           const acc = midStreamAcc.get(tcIndex);
           if (!acc || !acc.name || !acc.id) return;
           if (this.midStreamExecutedIds.has(acc.id)) return;
-          // Only fire when the args buffer is complete JSON.
-          let specArgs: Record<string, unknown> | undefined;
-          try { specArgs = JSON.parse(acc.args); } catch { return; }
+          // Only read-only tools can spec-execute: check the NAME first so a
+          // mutating call's ever-growing args buffer never reaches the parse
+          // below at all.
           const canonical = TOOL_ALIASES[acc.name] || acc.name;
+          if (!this.isReadOnly(canonical)) return;
+          // Only fire when the args buffer is COMPLETE JSON: the trailing
+          // non-space char of a finished object is '}'. Parsing every delta
+          // of a 20KB payload throws (exception construction is the expensive
+          // part) ~hundreds of times per call for nothing.
+          const trimmed = acc.args.trimEnd();
+          if (!trimmed.endsWith('}')) return;
+          let specArgs: Record<string, unknown> | undefined;
+          try { specArgs = JSON.parse(trimmed); } catch { return; }
           if (!this.isReadOnly(canonical, specArgs)) return;
           this.midStreamExecutedIds.add(acc.id);
           const call: ToolCall = { id: acc.id, type: 'function', function: { name: acc.name, arguments: acc.args } };
