@@ -1,6 +1,10 @@
 # Mochi Changelog
 
-### Added (MCH-209..212 — speculative/predictive coding + training loop, commit 3)
+#### Added (MCH-213/214 — self-config + API probe, commit 4)
+
+- **`self_config` tool (MCH-213/214)**: the agent can now set itself up. `show` reports its own model/provider/reasoning (key always masked), `probe` live-tests any OpenAI-compatible/Anthropic/Gemini endpoint+key with a zero-cost auth check (reuses the login-grade `verifyApiKey`), and `set` persists a new provider/model/apiKey/reasoning to the global config AND applies it to the live run. A `set` with new credentials probe-gates first: an endpoint-rejected key is REFUSED with an explanation (a bad key would burn every request on failover) — network-flaky verdicts store with a warning instead. This is the "setting itself up with APIs" loop: hand the agent a base URL + key mid-task and it wires itself, proves the key, and continues on the new model. Verified live: probe against freeinference returned PROBE OK with the real key.
+
+## Added (MCH-209..212 — speculative/predictive coding + training loop, commit 3)
 
 - **Next-tool prediction (MCH-209)**: `predictNextTools()` mines bigram transitions across past runs and, from the live run's tool tail, identifies the statistically likely next tool. When it's a reader, prefetch fires with an observable confidence log — cache warming stops being a guess.
 - **Predictive edit-impact (MCH-210)**: a successful write/edit/patch/delete immediately seeds the co-change prefetch with the edited path — the verification step's reads (test file, sibling module) are cache-warm before the model asks. Previously warming waited for the next turn boundary.
