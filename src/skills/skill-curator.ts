@@ -958,7 +958,115 @@ export async function mineSkillFromTrace(projectDir: string, opts: MineTraceOpts
   }
 }
 
-// ─── MCH-204: curator self-patch loop ────────────────────────────────────
+/** Mine a PITFALL skill from a FAILED run's trace. Inverted evidence gate vs
+ *  mineSkillFromTrace: requires ≥1 real error AND a diagnosis. The prompt asks
+ *  for an avoidance procedure, not a success procedure — failure traces are
+ *  where the most durable lessons live (Hermes has no equivalent). */
+export async function minePitfallSkillFromTrace(
+  projectDir: string,
+  opts: {
+    taskTitle: string;
+    errors: string[];
+    lessons: string[];
+    toolSequence: string[];
+    provider: import('../model/router.js').RawProvider;
+  },
+): Promise<string | null> {
+  try {
+    const errors = opts.errors.filter(Boolean).slice(0, 3);
+    const lessons = opts.lessons.filter(Boolean).slice(0, 3);
+    // Inverted gate: a failure with no error text and no diagnosis has nothing
+    // to teach. Also refuse when the run bailed via veto (one tool repeated =
+    // stuck loop, not a lesson).
+    const distinctTools = new Set(opts.toolSequence.filter(Boolean)).size;
+    if (errors.length === 0 || (lessons.length === 0 && distinctTools < 2)) return null;
+    const prompt = [
+      'You are writing a SKILL.md PITFALL-avoidance procedure for a coding agent.',
+      `A run FAILED on task: "${opts.taskTitle}"`,
+      `Errors hit: ${errors.map((e) => `- ${e.slice(0, 200)}`).join(' ')}`,
+      `Diagnosed lessons: ${lessons.map((l) => `- ${l.slice(0, 200)}`).join(' ') || '(none — infer from errors)'}`,
+      `Partial tool trail: ${opts.toolSequence.filter(Boolean).slice(0, 8).join(' -> ') || 'none'}`,
+      '',
+      'Write a SKILL.md with frontmatter (name prefixed "avoid-", description) and sections:',
+      '# Avoid: <pitfall>', '## Trigger', '## Avoidance Procedure', '## Pitfalls', '## Verification',
+      'Rules: numbered steps only, no placeholders, focus on EARLY detection and avoidance, not recovery after the fact.',
+    ].join('\n');
+    const res = await Promise.race([
+      opts.provider.chat([{ role: 'user', content: prompt }], [], { maxTokens: 600, temperature: 0 }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 15000)),
+    ]);
+    if (!res?.content) return null;
+    const parsed = parseMinedSkillDoc(res.content);
+    if (!parsed) return null;
+    if (!parsed.name.startsWith('avoid-')) parsed.name = `avoid-${safeSlug(parsed.name).slice(0, 55)}`;
+    const lint = lintSkillDoc(parsed.name, parsed.description, parsed.body);
+    if (lint.issues.some((i) => i.severity === 'error')) return null;
+    const written = writeSkill(projectDir, {
+      name: parsed.name,
+      description: parsed.description,
+      body: parsed.body,
+      category: 'mined-pitfall',
+    });
+    if (!written.ok) return null;
+    markUsed(projectDir, parsed.name, { agentCreated: true, category: 'mined-pitfall' });
+    return parsed.name;
+  } catch {
+    return null;
+  }
+}
+
+/** ─── MCH-206: lesson graduation — recurring proven lessons become skills ── */
+
+/** Promote lessons that have proven themselves in the field (retrieved often
+ *  enough AND fixed things often enough) into a real skill. This is the
+ *  missing rung between a one-off lesson note and a curated skill: lessons
+ *  that keep firing get permanent Procedure-section treatment. */
+export function graduateLessonsToSkill(projectDir: string, opts: { minUses?: number; minSuccesses?: number } = {}): string | null {
+  try {
+    const minUses = opts.minUses ?? 3;
+    const minSuccesses = opts.minSuccesses ?? 2;
+    const lessons = loadLessons(projectDir);
+    const ready = lessons.filter((l) => l.useCount >= minUses && l.successCount >= minSuccesses);
+    if (ready.length === 0) return null;
+    const nameSeed = ready[0]!.lesson.slice(0, 48);
+    const slug = safeSlug(`graduated-${nameSeed}`).slice(0, 60).replace(/-+$/g, '');
+    if (!slug || slug.length < 3) return null;
+    const root = skillsRoot(projectDir);
+    const skillDir = join(root, 'graduated', slug);
+    const path = join(skillDir, 'SKILL.md');
+    if (existsSync(path)) return null; // already graduated — never overwrite
+    const usage = loadUsage(projectDir);
+    for (const existing of Object.keys(usage.byName)) {
+      if (skillSimilarity(existing.toLowerCase(), slug.toLowerCase()) > 0.5) return null;
+    }
+    const description = `Graduated skill: ${ready[0]!.lesson.slice(0, 100)}`;
+    const body = [
+      `# Graduated from ${ready.length} proven lesson(s)`,
+      '',
+      '## Trigger',
+      ready.map((l) => `- stderr/output contains: \`${l.signature.slice(0, 120)}\``).join('\n'),
+      '',
+      '## Procedure',
+      ready.map((l, i) => `${i + 1}. ${l.lesson.slice(0, 220)} (proven ${l.successCount}/${l.useCount} retrievals)`).join('\n'),
+      '',
+      '## Verification',
+      '<!-- mochi:verify',
+      'mochi:assert-sections Procedure,Verification',
+      '-->',
+      '',
+      '## Notes',
+      '- Auto-graduated from lesson telemetry (MCH-206). Refine or delete via skill_manage.',
+    ].join('\n');
+    const lint = lintSkillDoc(slug, description, body);
+    if (lint.issues.some((i) => i.severity === 'error')) return null;
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(path, `---\nname: ${slug}\ndescription: ${JSON.stringify(description)}\n---\n\n${body}`, 'utf8');
+    markUsed(projectDir, slug, { agentCreated: true, category: 'graduated' });
+    return slug;
+  } catch {
+    return null;
+  }
+}
 
 /** Rewrite the ## Procedure section of a low-scoring, repeatedly-failing
  *  agent-created skill using a cheap provider call. Keeps frontmatter and

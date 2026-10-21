@@ -126,7 +126,7 @@ Usage:
   mochi watch [dir...] [--cmd C]    # run the repo check on every file change
   mochi serve [--port N] [--token T] [--host H] # JSON API + OpenAI-compatible (/v1); default 127.0.0.1
   mochi auth [status|accounts|switch|...]  # per-provider credentials & multi-account
-  mochi skills [list|lint|mine]      # list, validate skills; mine one from a trace
+  mochi skills [list|lint|mine|report]  # list, validate, mine skills; improvement report
   mochi providers                   # list AI model providers
   mochi dashboard | mochi web        # open web dashboard in browser
   mochi plugin add <dir>|remove <name>|list        # spec 12-E plugin registry
@@ -1291,6 +1291,33 @@ async function main() {
         });
         console.log(mined ? `Mined skill: ${mined}` : 'Mining produced no skill (evidence gate, lint, or provider rejected the trace).');
       } catch (e) { console.error(`Mine failed: ${(e as Error).message}`); }
+      return;
+    }
+    if (sub === 'report') {
+      // mochi skills report — MCH-208 league table: what the system has
+      // learned, scored by field performance, bucketed by origin.
+      const { skillsReport } = await import('./skills/skill-manager.js');
+      const rep = skillsReport(cwd);
+      console.log(`Skill library: ${rep.totalSkills} skills in the usage DB${rep.curatorRuns !== undefined ? `, ${rep.curatorRuns} curator run(s)` : ''}.`);
+      const origins = Object.entries(rep.byOrigin).sort((a, b) => b[1].count - a[1].count);
+      if (origins.length) {
+        console.log('\nBy origin:');
+        for (const [o, b] of origins) {
+          const wr = b.wins + b.losses > 0 ? `${Math.round((b.wins / (b.wins + b.losses)) * 100)}% win` : 'no field data';
+          console.log(`  ${o.padEnd(15)} ${String(b.count).padStart(4)}  avg score ${String(b.avgScore).padStart(3)}  ${wr} (${b.wins}W/${b.losses}L)`);
+        }
+      }
+      if (rep.topByScore.length) {
+        console.log('\nTop by score:');
+        for (const t of rep.topByScore.slice(0, 5)) console.log(`  ${t.score.toString().padStart(3)}  ${t.name} (${t.wins}W/${t.losses}L${t.patches ? `, ${t.patches} patches` : ''})`);
+      }
+      if (rep.needsAttention.length) {
+        console.log('\nNeeds attention (losses or repeated patching):');
+        for (const n of rep.needsAttention) console.log(`  ${n.score.toString().padStart(3)}  ${n.name} (${n.losses}L, ${n.patches} patches)`);
+      } else {
+        console.log('\nNo skills need attention.');
+      }
+      console.log(`\n${rep.selfPatched} skill(s) repaired by the curator so far.`);
       return;
     }
     const { skills } = loadAllSkills(cwd);

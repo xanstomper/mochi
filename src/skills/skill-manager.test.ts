@@ -505,4 +505,95 @@ describe('MCH-200..204 skill quality & mining', () => {
     const dockerScore = indexedRelevanceScore('vitest suite fails on import', 'docker-push', idx!);
     expect(vitestScore).toBeGreaterThan(dockerScore);
   });
+  it('MCH-205: minePitfallSkillFromTrace drafts avoid-* skill from failure trace; gate rejects errorless failures', async () => {
+    const { minePitfallSkillFromTrace } = await import('./skill-curator.js');
+    const badProvider = { chat: async () => { throw new Error('down'); }, streamChat: async function* () {} } as unknown as import('../model/router.js').RawProvider;
+    const gated = await minePitfallSkillFromTrace(proj, {
+      taskTitle: 't', errors: [], lessons: ['l'], toolSequence: ['read', 'edit'], provider: badProvider,
+    });
+    expect(gated).toBeNull();
+    const doc = [
+      '---',
+      'name: avoid-port-conflict',
+      'description: Detect and avoid dev-server port conflicts before starting',
+      '---',
+      '',
+      '# Avoid: port conflict',
+      '## Trigger',
+      'EADDRINUSE in stderr.',
+      '## Avoidance Procedure',
+      '1. Check the port is free before binding.',
+      '2. Pick an alternative port if occupied.',
+      '3. Re-run the server and confirm it binds.',
+      '## Pitfalls',
+      'Do not kill unknown processes.',
+      '## Verification',
+      'Server binds without EADDRINUSE.',
+    ].join('\n');
+    const mockProvider = { chat: async () => ({ content: doc }), streamChat: async function* () {} } as unknown as import('../model/router.js').RawProvider;
+    const mined = await minePitfallSkillFromTrace(proj, {
+      taskTitle: 'start dev server',
+      errors: ['Error: listen EADDRINUSE: address already in use :::3000'],
+      lessons: [],
+      toolSequence: ['shell', 'shell', 'read'],
+      provider: mockProvider,
+    });
+    expect(mined).toBe('avoid-port-conflict');
+    const { loadUsage } = await import('./skill-manager.js');
+    const rec = loadUsage(proj).byName['avoid-port-conflict'];
+    expect(rec).toBeDefined();
+    expect(rec.category).toBe('mined-pitfall');
+  });
+
+  it('MCH-206: graduateLessonsToSkill promotes proven lessons; skips under-qualified', async () => {
+    const { recordLesson, markLessonUsed } = await import('../lessons.js');
+    const lessons = recordLesson(proj, { id: 'les-1', signature: 'ECONNRESET', lesson: 'exponential backoff fixes flaky network tests' });
+    const { graduateLessonsToSkill } = await import('./skill-curator.js');
+    expect(graduateLessonsToSkill(proj)).toBeNull();
+    markLessonUsed(proj, lessons[0]!.id, true);
+    markLessonUsed(proj, lessons[0]!.id, true);
+    markLessonUsed(proj, lessons[0]!.id, false);
+    const slug = graduateLessonsToSkill(proj);
+    expect(slug).not.toBeNull();
+    expect(slug!).toContain('graduated-');
+    const { loadUsage, skillsRoot } = await import('./skill-manager.js');
+    const rec = loadUsage(proj).byName[slug!];
+    expect(rec).toBeDefined();
+    expect(rec.category).toBe('graduated');
+    const onDisk = readFileSync(join(skillsRoot(proj), 'graduated', slug!, 'SKILL.md'), 'utf8');
+    expect(onDisk).toContain('backoff');
+    expect(graduateLessonsToSkill(proj)).toBeNull();
+  });
+
+  it('MCH-207: failing hand-written skill is patch-eligible; 5-patch cap is respected', async () => {
+    const { writeSkill, markUsed, bumpPatch, loadUsage } = await import('./skill-manager.js');
+    const { recordSkillFailure, loadSkillFailures } = await import('./skills.js');
+    writeSkill(proj, { name: 'deploy-check', description: 'Verify deployment health', body: procedureFixture('1. curl health endpoint.') });
+    markUsed(proj, 'deploy-check', { win: false });
+    markUsed(proj, 'deploy-check', { win: false });
+    recordSkillFailure(proj, 'deploy-check', 'health check 404');
+    recordSkillFailure(proj, 'deploy-check', 'health check 404 again');
+    const rec = loadUsage(proj).byName['deploy-check'];
+    expect(rec.agentCreated ?? false).toBe(false);
+    expect(rec.score ?? 100).toBeLessThan(40);
+    expect((loadSkillFailures(proj)['deploy-check'] as { count?: number } | undefined)?.count ?? 0).toBeGreaterThanOrEqual(2);
+    for (let i = 0; i < 5; i++) bumpPatch(proj, 'deploy-check');
+    expect(loadUsage(proj).byName['deploy-check'].patches ?? 0).toBe(5);
+  });
+
+  it('MCH-208: skillsReport buckets origins and flags attention cases', async () => {
+    const { markUsed, skillsReport } = await import('./skill-manager.js');
+    markUsed(proj, 'hand-one', { win: true });
+    markUsed(proj, 'hand-one', { win: true });
+    markUsed(proj, 'mined-one', { win: true, category: 'mined', agentCreated: true });
+    markUsed(proj, 'pit-one', { win: false, category: 'mined-pitfall', agentCreated: true });
+    markUsed(proj, 'pit-one', { win: false, category: 'mined-pitfall', agentCreated: true });
+    const rep = skillsReport(proj);
+    expect(rep.totalSkills).toBe(3);
+    expect(rep.byOrigin['hand-written'].count).toBe(1);
+    expect(rep.byOrigin['mined'].count).toBe(1);
+    expect(rep.byOrigin['mined-pitfall'].count).toBe(1);
+    expect(rep.needsAttention.some((n) => n.name === 'pit-one')).toBe(true);
+    expect(rep.topByScore[0]!.name).toBe('hand-one');
+  });
 });

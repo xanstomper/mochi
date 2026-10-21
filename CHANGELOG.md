@@ -1,6 +1,13 @@
 # Mochi Changelog
 
 ## [Unreleased]
+
+### Added (MCH-205..208 — self-improvement flywheel, commit 2)
+
+- **Pitfall mining from failures (MCH-205)** — failed runs now draft `avoid-*` skills: an inverted-gate miner (`minePitfallSkillFromTrace`) requires real errors plus a diagnosis and asks the model for early-detection/avoidance procedures. Success mines teach how to do; failure mines teach what never to do again.
+- **Lesson graduation (MCH-206)** — lessons that prove themselves in the field (retrieved ≥3×, succeeded ≥2×) are auto-promoted into real `graduated/*` skills with Trigger/Procedure/Verification sections, entering the quality-scored library instead of staying one-off notes.
+- **Self-patch every failing skill (MCH-207)** — the curator's Procedure-rewrite pass no longer limits itself to agent-created skills; hand-written skills failing repeatedly get the same repair, with a 5-patch cap (persistent failure after 5 rewrites is a design problem, not a wording one).
+- **`mochi skills report` (MCH-208)** — league table for the skill library: counts + avg score + win-rate bucketed by origin (hand-written / mined / mined-pitfall / graduated / auto), top-by-score, needs-attention list, self-patch totals, curator run count. The receipt proving the system improves over time.
 - **Skill quality scores (MCH-201)** — every loaded skill accrues `win`/`loss` outcomes into a per-workpoint usage DB at run end, `computeSkillScore` converts them into a bounded 0–100 quality score, skill advertising is score-sorted, and the curator auto-retires agent-created skills whose score decays below floor with enough samples. Skills the agent wrote now compete on measured usefulness, not existence.
 - **Struggle-state skill surfacing (MCH-203)** — when the struggle-state injector fires on repeated tool errors, it now also matches the error against the skill library and injects the most relevant skill's actual body (bounded to 2000 chars) directly into the struggle message: the model gets the fix, not just the diagnosis. Never breaks the loop; match failure is silently skipped.
 - **Model-driven skill mining (MCH-200)** — after a successful non-trivial run, the real trace (lessons, distinct tool breadth, errors fixed) is sent to the provider to draft a proper SKILL.md, lint-gated like every hand-written skill. An evidence gate (≥1 real lesson AND ≥3 distinct tools) keeps trace-free or stuck-loop runs from burning a model call on noise.

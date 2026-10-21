@@ -4598,7 +4598,7 @@ Continue from 'Next:', do not redo completed progress.`,
       callerEmittedEvent: true,
     };
     this.events.emit({ type: 'tool:called', tool: tc.function.name, args, agentId: this.id, tool_call_id: tc.id });
-    const { output, error, durationMs } = await executeTool(tc.function.name, args, ctx, this.tools);
+    const { output, error, durationMs, images } = await executeTool(tc.function.name, args, ctx, this.tools);
     // MCH-91: `load_tools` mutated the live toolset — re-advertise defs so the
     // newly loaded tools appear in the next packet.
     if (!error && toolName === 'load_tools') {
@@ -4768,6 +4768,23 @@ Continue from 'Next:', do not redo completed progress.`,
       this.trackToolResultHash(toolName, foldedOutput);
     }
     this.context.addMessage({ role: 'tool', tool_call_id: tc.id, content: foldedOutput, name: tc.function.name });
+    // EYES: a tool that produced pictures (a screenshot of the screen, a
+    // rendered page) hands them to the model as image parts on a follow-up
+    // user turn — otherwise the agent photographs the screen and then acts
+    // on it blind. The image turn sits right after the tool result so the
+    // model's next turn is grounded in what the tool actually saw.
+    if (images && images.length > 0) {
+      this.context.addMessage({
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: `[${images.length} image(s) captured by the \`${toolName}\` tool — this is what the screen/page looks like right now. Use the coordinates and labels you can see to drive the next action.]`,
+          },
+          ...images,
+        ],
+      });
+    }
     this.events.emit({ type: 'tool:completed', tool: tc.function.name, result, agentId: this.id });
     await this.hooks.runAfter('after_tool', { tool: toolName, agent: this.id });
     if (MUTATING_TOOLS.has(toolName)) {
@@ -6175,7 +6192,14 @@ Continue from 'Next:', do not redo completed progress.`,
           const failsMap = loadSkillFailures(this.workspace.dir);
           for (const [name, frec] of Object.entries(failsMap) as Array<[string, import('../skills/skills.js').SkillFailureRecord]>) {
             const rec = udb.byName[name];
-            if (!rec?.agentCreated || (rec.score ?? 0) >= 40 || (frec.count ?? 0) < 2) continue;
+            // MCH-207: self-patch ANY repeatedly-failing skill, not just
+            // agent-created ones — a hand-written skill that keeps failing is
+            // exactly the one that needs a Procedure update. Two caps keep it
+            // sane: skip skills already patched ≥5 times (persistent failure
+            // after 5 rewrites is a design problem, not a wording one) and
+            // skip scores ≥40 (working well enough).
+            if (!rec || (rec.score ?? 0) >= 40 || (frec.count ?? 0) < 2) continue;
+            if ((rec.patches ?? 0) >= 5) continue;
             failuresBySkill.set(name, [...(frec.recent ?? []).map((r) => r.error), frec.lastError].filter(Boolean));
           }
           for (const [name, fails] of failuresBySkill) {
@@ -6216,6 +6240,37 @@ Continue from 'Next:', do not redo completed progress.`,
           }
         }
       } catch { /* auto-draft must never affect task completion */ }
+      // MCH-205: pitfall mining from FAILED runs — the inverted twin of the
+      // success-path miner. Failures carry the most durable lessons; a run
+      // that died with real errors + a diagnosis drafts an avoid-* skill.
+      try {
+        if (success !== true && !isSimpleScriptTask(task) && this.provider) {
+          const { minePitfallSkillFromTrace } = await import('../skills/skill-curator.js');
+          const pitfallErrors = ((this.context['state']?.knownErrors as string[] | undefined) ?? [])
+            .concat(this.lastToolError ? [this.lastToolError] : []).slice(0, 3);
+          const mined = await minePitfallSkillFromTrace(this.workspace.dir, {
+            taskTitle: task.title,
+            errors: pitfallErrors,
+            lessons: (this.lastLessons ?? []).map((l) => l.lesson).slice(0, 3),
+            toolSequence: [...this.toolSeq].slice(0, 10),
+            provider: this.provider,
+          });
+          if (mined) {
+            this.events.emit({ type: 'agent:log', agentId: this.id, message: `[skills] mined pitfall skill "${mined}" from failed run` });
+          }
+        }
+      } catch { /* pitfall mine must never affect task completion */ }
+      // MCH-206: lesson graduation — lessons that proved themselves in the
+      // field (retrieved ≥3x, fixed ≥2x) get promoted into a real skill so
+      // they stop depending on fuzzy lesson retrieval and enter the quality-
+      // scored, curator-managed library like any hand-written skill.
+      try {
+        const { graduateLessonsToSkill } = await import('../skills/skill-curator.js');
+        const graduated = graduateLessonsToSkill(this.workspace.dir);
+        if (graduated) {
+          this.events.emit({ type: 'agent:log', agentId: this.id, message: `[skills] graduated proven lesson(s) into skill "${graduated}"` });
+        }
+      } catch { /* graduation must never affect task completion */ }
       // MCH-200: model-driven skill mine for complex tasks — sends the run's
       // real trace (lessons, tools, errors fixed) to the provider to draft a
       // proper SKILL.md, far richer than the template autoDraftSkill stubs.

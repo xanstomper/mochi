@@ -115,6 +115,61 @@ export function listAgentCreated(projectDir: string): UsageRecord[] {
   return Object.values(db.byName).filter((r) => r.agentCreated).sort((a, b) => b.lastUsedAt - a.lastUsedAt);
 }
 
+/** MCH-208: skill-improvement report — the league table proving the system
+ *  is learning over time. Buckets skills by origin (hand-written / mined /
+ *  mined-pitfall / graduated / auto), aggregates scores + win-rates, and
+ *  surfaces the self-patch telemetry (how many skills the curator has
+ *  repaired and how their scores responded). Best-effort; never throws. */
+export function skillsReport(projectDir: string): {
+  totalSkills: number;
+  byOrigin: Record<string, { count: number; avgScore: number; wins: number; losses: number }>;
+  selfPatched: number;
+  topByScore: Array<{ name: string; score: number; wins: number; losses: number; patches: number; category?: string }>;
+  needsAttention: Array<{ name: string; score: number; losses: number; patches: number }>;
+  curatorRuns?: number;
+} {
+  try {
+    const db = loadUsage(projectDir);
+    const records = Object.values(db.byName);
+    const originOf = (rec: UsageRecord): string =>
+      rec.category === 'mined' ? 'mined'
+      : rec.category === 'mined-pitfall' ? 'mined-pitfall'
+      : rec.category === 'graduated' ? 'graduated'
+      : rec.category === 'auto' ? 'auto'
+      : rec.agentCreated ? 'agent-created'
+      : 'hand-written';
+    const byOrigin: Record<string, { count: number; avgScore: number; wins: number; losses: number }> = {};
+    for (const rec of records) {
+      const o = originOf(rec);
+      const b = byOrigin[o] ?? { count: 0, avgScore: 0, wins: 0, losses: 0 };
+      b.count += 1;
+      b.wins += rec.wins ?? 0;
+      b.losses += rec.losses ?? 0;
+      b.avgScore += rec.score ?? 0;
+      byOrigin[o] = b;
+    }
+    for (const b of Object.values(byOrigin)) {
+      b.avgScore = b.count > 0 ? Math.round(b.avgScore / b.count) : 0;
+    }
+    const scored = records
+      .map((r) => ({ name: r.name, score: r.score ?? 0, wins: r.wins ?? 0, losses: r.losses ?? 0, patches: r.patches ?? 0, category: r.category }))
+      .sort((a, b) => b.score - a.score);
+    const curatorStatePath = join(mochiStateDir(projectDir), 'curator-state.json');
+    let curatorRuns: number | undefined;
+    try { curatorRuns = (JSON.parse(readFileSync(curatorStatePath, 'utf8')) as { runCount?: number }).runCount; } catch { /* no state yet */ }
+    return {
+      totalSkills: records.length,
+      byOrigin,
+      selfPatched: records.filter((r) => (r.patches ?? 0) > 0).length,
+      topByScore: scored.slice(0, 10),
+      needsAttention: scored.filter((r) => (r.losses ?? 0) >= 2 || (r.patches ?? 0) >= 3).slice(0, 10).map((r) => ({ name: r.name, score: r.score, losses: r.losses, patches: r.patches })),
+      curatorRuns,
+    };
+  } catch {
+    return { totalSkills: 0, byOrigin: {}, selfPatched: 0, topByScore: [], needsAttention: [] };
+  }
+}
+
 export function forget(projectDir: string, name: string): void {
   const db = loadUsage(projectDir);
   delete db.byName[name];

@@ -220,8 +220,11 @@ export function toolToCapability(tool: Tool): Capability {
             ? { spawnSubagent: async (prompt: string, opts?: { role?: string }) => (await req.context.spawnSubagent!(prompt, opts)).summary }
             : {}),
         };
-        const output = await tool.execute(req.args, toolCtx);
+        const raw = await tool.execute(req.args, toolCtx);
         const durationMs = Math.round(performance.now() - start);
+        // Tools may return a plain string or a {text, images} outcome (the
+        // image bridge); the capability layer is text-only, so keep the text.
+        const output = typeof raw === 'string' ? raw : (raw.text ?? '');
         return {
           callId: req.callId,
           name: tool.def.name,
