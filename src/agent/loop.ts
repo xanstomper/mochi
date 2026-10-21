@@ -4403,16 +4403,26 @@ Continue from 'Next:', do not redo completed progress.`,
           content: `Error: ${cached.error}`,
         });
       } else {
+        // Redaction contract: maybeRedact is the single tool-output→context
+        // gate and must hold on EVERY path that feeds the model. The normal
+        // completion path stores POLICY-processed output (folded+scrubbed+
+        // redacted); the speculative exec path stores RAW output — so the
+        // replay must apply the same gate here or an unredacted replayed
+        // read (e.g. a file containing an API key) reaches the model context.
+        const replayOutput = applyToolOutputPolicy(
+          scrubAnsiFragments(maybeRedact(cached.output)),
+          { toolName: tc.function.name },
+        ).content;
         this.context.addMessage({
           role: 'tool',
           tool_call_id: tc.id,
           name: tc.function.name,
-          content: cached.output,
+          content: replayOutput,
         });
         this.events.emit({
           type: 'tool:completed',
           tool: tc.function.name,
-          result: { toolCallId: tc.id, name: tc.function.name, output: cached.output, durationMs: 0 },
+          result: { toolCallId: tc.id, name: tc.function.name, output: replayOutput, durationMs: 0 },
           agentId: this.id,
         });
       }
