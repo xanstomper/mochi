@@ -5139,7 +5139,12 @@ Continue from 'Next:', do not redo completed progress.`,
       if (this.budget && !this.budget.canMakeModelCall()) return;
       const shared = this.budget;
       const budget = shared ?? new BudgetEngine(this.config.safety);
-      budget.start();
+      // start() resets startedAt (the wall-clock baseline): calling it on the
+      // SHARED session budget restarted maxRuntimeMinutes mid-session, so
+      // every speculative-preflight run silently bought a full fresh runtime
+      // window and runtime_limit accounting lied. Only a freshly created
+      // engine starts its clock; the shared one is already running.
+      if (!shared) budget.start();
       const engine = new SpeculativeEngine(this.config, budget, 3 /* candidateCount */);
       const question = task.title + (task.description ? `\n\nContext: ${task.description}` : '');
       // Learning loop: past strategy→outcome records on similar tasks bias
