@@ -22,7 +22,7 @@ export interface ApplyResult {
 interface FileOp { path: string; op: 'update' | 'create' | 'delete'; hunks: string[]; }
 
 /** Parse a unified diff into per-file operations. Throws on malformed input. */
-export function parseUnifiedDiff(diffText: string): FileOp[] {
+export function parseUnifiedDiff(diffText: string, root?: string): FileOp[] {
   const ops: FileOp[] = [];
   const lines = diffText.split('\n');
   let i = 0;
@@ -62,11 +62,28 @@ export function parseUnifiedDiff(diffText: string): FileOp[] {
     else if (newPath === '/dev/null') op = 'delete';
     else op = 'update';
     const path = stripA(op === 'create' ? newPath : op === 'delete' ? oldPath : newPath);
-    // B14: reject absolute paths too. The `..` check alone was bypassable —
-    // an absolute path like /etc/evil sailed through and applyDiffAtomically's
-    // abs() wrote OUTSIDE the workspace root verbatim.
-    if (!path || isAbsolute(path) || path.includes('..')) throw new Error(`Unsafe path in diff: ${path}`);
-    ops.push({ path, op, hunks });
+    // B14: absolute paths bypassed the `..` containment check — an absolute
+    // path like /etc/evil sailed through and applyDiffAtomically's abs()
+    // wrote OUTSIDE the workspace root verbatim.
+    // Restructure (intent + invariant): when a root is known, an absolute
+    // path that resolves INSIDE the root is re-rooted to workspace-relative
+    // and applied (external tooling legitimately emits absolute-path diffs),
+    // while one that escapes the root is rejected. Without a root, absolute
+    // paths are rejected outright (the conservative pre-B14-fix posture is
+    // unreachable for callers; applyDiffAtomically always passes root).
+    let normalized = path;
+    if (!path) throw new Error(`Unsafe path in diff: ${path}`);
+    if (isAbsolute(path)) {
+      if (root === undefined) throw new Error(`Unsafe path in diff (absolute): ${path}`);
+      const rootResolved = resolve(root);
+      const inside = resolve(root, path);
+      if (inside === rootResolved || !inside.startsWith(rootResolved + '/')) {
+        throw new Error(`Path escapes workspace root: ${path}`);
+      }
+      normalized = inside.slice(rootResolved.length + 1);
+    }
+    if (normalized.includes('..')) throw new Error(`Unsafe path in diff: ${normalized}`);
+    ops.push({ path: normalized, op, hunks });
   }
   return ops;
 }
@@ -109,7 +126,7 @@ export function applyHunks(content: string, hunks: string[]): string | null {
  * restored to its pre-apply content (new files are removed).
  */
 export function applyDiffAtomically(root: string, diffText: string): ApplyResult {
-  const ops = parseUnifiedDiff(diffText);
+  const ops = parseUnifiedDiff(diffText, root);
   if (ops.length === 0) throw new Error('No file operations found in diff.');
   const result: ApplyResult = { applied: [], created: [], deleted: [], skipped: [] };
   const rollback: Array<{ path: string; prev: string | null }> = [];

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync as realWriteFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { parseUnifiedDiff, applyHunks, applyDiffAtomically } from './apply.js';
 
 describe('parseUnifiedDiff', () => {
@@ -81,6 +81,57 @@ describe('parseUnifiedDiff', () => {
     ].join('\n');
     expect(() => parseUnifiedDiff(diff)).toThrow(/Unsafe path/);
   });
+
+  it('re-roots absolute paths that resolve INSIDE the given root (B14 restructure)', () => {
+    // External tooling legitimately emits absolute-path diffs. With a root,
+    // in-workspace absolute paths are re-rooted to workspace-relative and
+    // applied; only ESCAPING paths are rejected.
+    const root = '/tmp/b14root';
+    const diff = [
+      `diff --git ${root}/src/a.ts ${root}/src/a.ts`,
+      `--- ${root}/src/a.ts`,
+      `+++ ${root}/src/a.ts`,
+      '@@ -1,1 +1,1 @@',
+      '-old',
+      '+new',
+    ].join('\n');
+    const ops = parseUnifiedDiff(diff, root);
+    expect(ops.map((o) => [o.path, o.op])).toEqual([['src/a.ts', 'update']]);
+  });
+
+  it('still rejects absolute paths that ESCAPE the given root (B14 restructure)', () => {
+    const root = '/tmp/b14root';
+    const diff = [
+      'diff --git /etc/evil /etc/evil',
+      '--- /etc/evil',
+      '+++ /etc/evil',
+      '@@ -1,1 +1,1 @@',
+      '-x',
+      '+y',
+    ].join('\n');
+    expect(() => parseUnifiedDiff(diff, root)).toThrow(/escapes workspace root/);
+  });
+
+  it('applyDiffAtomically applies an in-root absolute-path diff end-to-end', () => {
+    const root = mkdtempSync(resolve(tmpdir(), 'mochi-b14apply-'));
+    try {
+      const target = resolve(root, 'abs.ts');
+      realWriteFileSync(target, 'old\n', 'utf8');
+      const diff = [
+        `diff --git ${target} ${target}`,
+        `--- ${target}`,
+        `+++ ${target}`,
+        '@@ -1,1 +1,1 @@',
+        '-old',
+        '+new',
+      ].join('\n');
+      const res = applyDiffAtomically(root, diff);
+      expect(res.applied).toContain('abs.ts');
+      expect(readFileSync(target, 'utf8')).toBe('new\n');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('applyHunks', () => {
@@ -115,7 +166,7 @@ describe('applyDiffAtomically', () => {
   ].join('\n');
 
   it('applies all files', () => {
-    writeFileSync(join(dir, 'mod.txt'), 'old line\n');
+    realWriteFileSync(join(dir, 'mod.txt'), 'old line\n');
     const res = applyDiffAtomically(dir, diffFor('old line', 'new line'));
     expect(res.applied).toEqual(['mod.txt', 'added.txt']);
     expect(res.created).toEqual(['added.txt']);
@@ -124,7 +175,7 @@ describe('applyDiffAtomically', () => {
   });
 
   it('rolls back everything when a later hunk fails', () => {
-    writeFileSync(join(dir, 'mod.txt'), 'drifted content\n');
+    realWriteFileSync(join(dir, 'mod.txt'), 'drifted content\n');
     const diff = [
       'diff --git a/mod.txt b/mod.txt',
       '--- a/mod.txt',
@@ -139,7 +190,7 @@ describe('applyDiffAtomically', () => {
   });
 
   it('rolls back earlier successful writes when a later file fails', () => {
-    writeFileSync(join(dir, 'a.txt'), 'aaa\n');
+    realWriteFileSync(join(dir, 'a.txt'), 'aaa\n');
     const diff = [
       'diff --git a/a.txt b/a.txt',
       '--- a/a.txt',
@@ -160,7 +211,7 @@ describe('applyDiffAtomically', () => {
   });
 
   it('deletes files', () => {
-    writeFileSync(join(dir, 'del.txt'), 'bye\n');
+    realWriteFileSync(join(dir, 'del.txt'), 'bye\n');
     const diff = [
       'diff --git a/del.txt b/del.txt',
       '--- a/del.txt',
