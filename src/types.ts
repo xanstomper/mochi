@@ -38,6 +38,11 @@ export interface PermissionConfig {
   network: boolean;
   gitDestructive: boolean;
   admin?: boolean;
+  /** Desktop control (computer tool). Stricter than shell: NO default ever
+   *  sets this — it requires explicit opt-in (config or MOCHI_COMPUTER=1 /
+   *  MOCHI_PERMISSION_COMPUTER=1), and the approval layer never auto-allows
+   *  it, so headless runs deny it by default. */
+  computer?: boolean;
   [key: string]: boolean | undefined;
 }
 
@@ -49,9 +54,27 @@ export interface SafetyConfig {
   maxIterations: number;
   maxRuntimeMinutes: number;
   maxConcurrentAgents: number;
+  /** Multi-agent fanout: max BACKGROUND child runs (spawn_agent with
+   *  background=true / review fleets) executing at once per parent; excess
+   *  spawns queue FIFO instead of failing. Default 4. */
+  maxConcurrentSubagents?: number;
+  /** Multi-agent fanout: deepest delegation tree. An agent at depth d may
+   *  spawn children (at depth d+1) only while d < maxSubagentDepth, so the
+   *  default 2 means: root -> child -> grandchild, and grandchildren cannot
+   *  spawn further. Default 2. */
+  maxSubagentDepth?: number;
   contextBudgetTokens: number;
   maxTokens?: number;
   maxCostUsd?: number;
+  /** Offline price-table cost accounting (C5, src/pricing.ts): when a
+   *  provider reports $0/no cost for a call, BudgetEngine estimates it from
+   *  the built-in per-model table. `overrides` replaces/merges per-model
+   *  rates (USD per 1M tokens; keys are model ids, partial rates merge over
+   *  the built-in entry). `disabled: true` restores report-only accounting. */
+  pricing?: {
+    disabled?: boolean;
+    overrides?: Record<string, { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }>;
+  };
   maxToolCalls?: number;
   maxModelCalls?: number;
   /** OS-level sandbox for spawned commands: 'off' (default, direct exec),
@@ -72,6 +95,33 @@ export interface SafetyConfig {
 
 export type ReasoningLevel = 'low' | 'medium' | 'high' | 'max' | 'off' | 'auto';
 
+/** Reasoning-discipline mechanisms (src/agent/discipline.ts): evidence-gated
+ *  replanning, cross-turn progress forcing, drift snap-back, decisive finish,
+ *  same-failure strategy switch, adaptive reasoning effort. Every mechanism
+ *  defaults ON; set one to false here — or use the env kill-switches
+ *  (MOCHI_DISCIPLINE=0 master, MOCHI_DISCIPLINE_<MECHANISM>=0 per mechanism) —
+ *  to disable it. Only consulted when reasoning is not pinned by the user. */
+/** Evidence-based skill lifecycle (src/skills/): model-authored skills are
+ *  born on PROBATION and are promoted only on verifier-passed runs — the
+ *  structural rubric is a lint gate, never a promotion. Set `probation:
+ *  false` here — or env MOCHI_SKILLS_PROBATION=0 — to restore the legacy
+ *  behavior (authored skills active at birth, no lifecycle transitions). */
+export interface SkillsConfig {
+  /** Master switch for probation enforcement. Default: on. */
+  probation?: boolean;
+}
+
+export interface DisciplineConfig {
+  /** Master switch: false disables every discipline mechanism. */
+  enabled?: boolean;
+  replanGate?: boolean;
+  progressForcing?: boolean;
+  driftSnapback?: boolean;
+  decisiveFinish?: boolean;
+  sameFailureSwitch?: boolean;
+  adaptiveEffort?: boolean;
+}
+
 export interface MochiConfig {
   model: ModelConfig;
   safety: SafetyConfig;
@@ -79,6 +129,14 @@ export interface MochiConfig {
   mcpServers?: Record<string, { command?: string; args?: string[]; url?: string; headers?: Record<string, string>; env?: Record<string, string> }>;
   /** Plan-then-act: in plan mode the agent produces a plan instead of editing. */
   planMode?: boolean;
+  /** Tool exposure policy (P1.3): 'measured' (default) advertises a
+   *  schema-budgeted, usage-ranked subset of the built tools per run;
+   *  'full' restores legacy behavior (every built tool advertised).
+   *  Env MOCHI_TOOLS=full overrides. See tools/tool-exposure.ts. */
+  toolExposure?: 'measured' | 'full';
+  /** Total serialized schema-char budget for measured tool exposure.
+   *  Env MOCHI_TOOL_SCHEMA_BUDGET overrides. Default 24,000 (≈ 6K tokens). */
+  toolSchemaBudgetChars?: number;
   /** Self-repair: when the agent detects a harness-attributable failure, run an
    *  automatic repair pass after the main task. Defaults to on inside Mochi's
    *  own source repo, off elsewhere ( repairs must not surprise users). */
@@ -87,6 +145,15 @@ export interface MochiConfig {
   mode?: string;
   /** Active reasoning effort / compute level: low | medium | high | max. */
   reasoning?: ReasoningLevel;
+  /** Durable-memory prompt injection budget, in chars, for the volatile
+   *  unified-memory block (ContextEngine.loadMemory). Default 4000. Unified
+   *  retrieval ranks across all four memory stores, so the budget buys
+   *  ranked hits rather than a first-come slice of one store. */
+  memory?: { injectionChars?: number };
+  /** Reasoning-discipline mechanisms (see DisciplineConfig). All default on. */
+  discipline?: DisciplineConfig;
+  /** Evidence-based skill lifecycle (see SkillsConfig). Probation default on. */
+  skills?: SkillsConfig;
   telemetry: boolean;
   projectDir: string;
   configDir: string;
@@ -151,7 +218,7 @@ export interface Goal {
   updatedAt: number;
 }
 
-export type AgentRole = 'lead' | 'coder' | 'reviewer' | 'tester' | 'researcher' | 'debugger' | 'security' | 'redteam' | 'architect' | 'devops' | 'db_admin' | 'frontend' | 'backend' | 'performance' | 'tech_writer' | 'qa_engineer' | 'data_scientist' | 'designer' | 'integrator' | 'scout';
+export type AgentRole = 'lead' | 'coder' | 'reviewer' | 'tester' | 'researcher' | 'debugger' | 'security' | 'redteam' | 'architect' | 'devops' | 'db_admin' | 'frontend' | 'backend' | 'performance' | 'tech_writer' | 'qa_engineer' | 'data_scientist' | 'designer' | 'integrator' | 'scout' | 'pr_reviewer' | 'explorer';
 
 export interface AgentProfile {
   role: AgentRole;
@@ -177,7 +244,7 @@ export interface ToolDefinition {
   description: string;
   parameters: ToolParameter[];
   dangerous?: boolean;
-  permission?: 'read' | 'write' | 'shell' | 'network' | 'gitDestructive' | 'admin';
+  permission?: 'read' | 'write' | 'shell' | 'network' | 'gitDestructive' | 'admin' | 'computer';
 }
 
 export interface ToolCall {
@@ -315,6 +382,11 @@ export type MochiEvent =
   | { type: 'subagent:started'; agentId: string; parentId: string; role: AgentRole; prompt: string }
   | { type: 'subagent:completed'; agentId: string; parentId: string; role: AgentRole; success: boolean; summary: string; tokensUsed: number }
   | { type: 'agent:log'; agentId: string; message: string }
+  /** Run-finish skill attribution: which skills the run loaded, joined with
+   *  the run's final verifier-gate verdict. The trajectory exporter lifts
+   *  this into the record's `skills[]`/`verification` so offline tooling can
+   *  compute per-skill fix-rates. Emitted once per run by finishOnce. */
+  | { type: 'skills:attributed'; agentId: string; skills: Array<{ id: string; verdict: 'pass' | 'fail' | 'partial' | 'blocked' | 'none' }>; verifyStatus?: string; taskKind?: string }
   | { type: 'agent:reasoning'; content: string; agentId: string }
   | { type: 'agent:iteration'; agentId: string; trace: IterationTrace }
   | { type: 'tool:called'; tool: string; args: unknown; agentId: string; tool_call_id?: string }
@@ -322,7 +394,7 @@ export type MochiEvent =
   | { type: 'tool:failed'; tool: string; error: string; agentId: string }
   | { type: 'file:changed'; path: string; operation: 'write' | 'edit' | 'delete'; agentId: string }
   | { type: 'message:chunk'; content: string; agentId: string }
-  | { type: 'usage:updated'; agentId: string; inputTokens: number; outputTokens: number; cacheTokens: number; totalTokens: number; costUsd?: number }
+  | { type: 'usage:updated'; agentId: string; inputTokens: number; outputTokens: number; cacheTokens: number; totalTokens: number; costUsd?: number; model?: string }
   | { type: 'error'; error: string; agentId?: string }
   | { type: 'pulse'; state: AgentState }
   | { type: 'message'; role: 'user' | 'assistant' | 'system'; content: string; agentId?: string }

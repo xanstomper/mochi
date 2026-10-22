@@ -2,8 +2,8 @@ import { existsSync, readFileSync, statSync, readdirSync } from 'node:fs';
 import {hostname, platform, arch, totalmem, freemem, cpus, release} from 'node:os';
 import { resolve } from 'node:path';
 import { MemoryStore, type MemoryEntry } from './memory/memory.js';
-import { selectRelevant } from './memory/relevance.js';
-import { loadAllSkills, formatSkillsForPrompt, type Skill, bundledSkillsDir, discoverSkills, loadSkillUsage, usageBoostMap } from './skills/skills.js';
+import { searchMemory } from './memory/unified-search.js';
+import { loadAllSkills, formatSkillsForPrompt, type Skill, bundledSkillsDir, discoverSkills, loadSkillUsage, usageBoostMap, resolveSkillsSettings, advertiseGateFloors } from './skills/skills.js';
 import { nativeCountTokens } from './native/core.js';
 import { nativePlanCompaction, nativeTokensCount } from './native/agent-protocol.js';
 import type { PlanRequestMessage } from './native/agent-protocol.js';
@@ -13,16 +13,22 @@ import { contentText } from './types.js';
 import {TOOL_ALIASES, normalizeToolArgs} from './tools/index.js';
 import { getCachedScaffold } from './cognitive/chameleon.js';
 import { isMode, modeInstruction } from './modes.js';
-import { loadRules, selectActiveRules } from './rules.js';
+import { loadRulesCached, selectActiveRules } from './rules.js';
 import { scanPromptInjection } from './skills/skill-lint.js';
 import { contractSection } from './contract.js';
-import { memoryDigest } from './memory/memory-store.js';
+import { memoryDigest, memoryFilePath } from './memory/memory-store.js';
 import { feedbackDigest } from './observability/feedback.js';
 import { detectCircle } from './circle.js';
 import { archiveToolOutput } from './tools/output-archive.js';
 import { evaluateOwl } from './cognitive/owl.js';
 import { formatEnvironmentBlock } from './core/env-profiler.js';
 import { condenseOutput } from './core/output-condenser.js';
+import {
+  buildCompactionLineageRecord, buildRecoveryBlock, buildSummaryLineage,
+  dedupeProbeFacts, ensureRetention, extractProbeFacts, probeFactsFromState,
+  recordCompactionLineage, renderProbeOutcome, renderSummaryLineage, probeTextOf,
+  type CompactionVerification,
+} from './summary/verified-compaction.js';
 
 const CANDIDATE_RULES = ['MOCHI.md', 'mochi.md', 'AGENTS.md', 'CLAUDE.md', 'GEMINI.md', '.cursorrules', '.github/copilot-instructions.md'];
 
@@ -57,9 +63,6 @@ function countFilesShallow(root: string): number {
  */
 const machineBlockCache = new Map<string, string>();
 
-export function clearMachineBlockCache(): void {
-  machineBlockCache.clear();
-}
 
 export function machineAccessBlock(projectRoot?: string): string {
   const rootStr = projectRoot || process.cwd();
@@ -146,12 +149,121 @@ function rulesSource(path: string, label: string): string {
   return renderProjectRules(readFileSync(path, 'utf8').slice(0, 4000), label);
 }
 
+const TOKENIZER_SPECIALS = ['<|endoftext|>', '<|fim_prefix|>', '<|fim_middle|>', '<|fim_suffix|>', '<think>', '</think>', '<thought>', '</thought>'];
+
+/**
+ * Pure-TS port of the Rust heuristic tokenizer (native/mochi_core/src/
+ * tokenizer.rs `count_tokens`), used when the native core is not loaded.
+ *
+ * Why a port instead of the old ceil(chars/4): the native counter is
+ * CALIBRATED against chars/4 — word runs charge ceil(len/5), whitespace is
+ * free (merged into the following token by real BPE), symbol runs charge
+ * ceil(len/3) — and then CLAMPED to never exceed ceil(bytes/4). So the two
+ * paths disagreed by 10-25% on typical code/prose: the same conversation
+ * counted materially higher in a no-native build (dev machines, tests)
+ * than in production, and compaction/budget triggers fired at different
+ * points. Porting the algorithm makes the fallback return the SAME number
+ * the native counter returns, so there is exactly one token accounting
+ * everywhere. Hand-computed expectations are pinned in
+ * context.efficiency.test.ts; keep this in lockstep with tokenizer.rs.
+ */
+export function heuristicTokenCount(text: string): number {
+  if (text.length === 0) return 0;
+  let count = 0;
+  let bytes = 0;
+  const n = text.length;
+  let i = 0;
+  const isWs = (c: number) => c === 0x20 || c === 0x09 || c === 0x0a || c === 0x0c || c === 0x0d;
+  const isAlnum = (c: number) => (c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a);
+  const isGraphic = (c: number) => c >= 0x21 && c <= 0x7e;
+  while (i < n) {
+    const c = text.charCodeAt(i);
+    if (c < 0x80) {
+      // Special tokens (all start with '<').
+      if (c === 0x3c) {
+        let matched = 0;
+        for (const st of TOKENIZER_SPECIALS) {
+          if (text.startsWith(st, i)) { matched = st.length; break; }
+        }
+        if (matched > 0) {
+          count += 1;
+          bytes += matched;
+          i += matched;
+          continue;
+        }
+      }
+      if (isWs(c)) {
+        // Whitespace runs are free (merged into the following token).
+        let run = 0;
+        while (i < n) {
+          const w = text.charCodeAt(i);
+          if (w >= 0x80 || !isWs(w)) break;
+          i++; run++;
+        }
+        bytes += run;
+        continue;
+      }
+      if (isAlnum(c) || c === 0x5f) {
+        let run = 0;
+        while (i < n) {
+          const w = text.charCodeAt(i);
+          if (w >= 0x80 || !(isAlnum(w) || w === 0x5f)) break;
+          i++; run++;
+        }
+        bytes += run;
+        count += Math.max(1, Math.ceil(run / 5));
+        continue;
+      }
+      if (isGraphic(c)) {
+        let run = 0;
+        while (i < n) {
+          const w = text.charCodeAt(i);
+          if (w >= 0x80 || !isGraphic(w) || isAlnum(w)) break;
+          i++; run++;
+        }
+        bytes += run;
+        count += Math.ceil(run / 3);
+        continue;
+      }
+      // Other ASCII (control chars, DEL): one token each, like the Rust
+      // else-branch charges one per char.
+      count += 1;
+      bytes += 1;
+      i++;
+      continue;
+    }
+    // Non-ASCII: one token per Unicode code point; UTF-8 byte length by range.
+    const cp = text.codePointAt(i)!;
+    count += 1;
+    bytes += cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+    i += cp > 0xffff ? 2 : 1;
+  }
+  // Budget parity clamp (mirrors tokenizer.rs): never exceed ceil(bytes/4),
+  // never below 1 for non-empty input.
+  return Math.max(1, Math.min(count, Math.ceil(bytes / 4)));
+}
+
 export function approxTokens(text: string): number {
-  // Native Rust tokenizer (heuristic BPE) when available; ~4 chars/token
-  // approximation otherwise. Same contract either way: fast, deterministic.
+  // Native Rust tokenizer (heuristic BPE) when available; the exact TS port
+  // of the same algorithm otherwise. One counter everywhere: budget checks,
+  // the context backstop, and reported estimates all derive from this.
   const native = nativeCountTokens(text);
   if (native !== null) return native;
-  return Math.ceil(text.length / 4);
+  return heuristicTokenCount(text);
+}
+
+/** Sum of cached per-message token counts — THE conversation-size estimator.
+ *  Every harness component that needs "how big is this conversation" (the
+ *  context backstop, the mid-run digest trigger, budget pre-checks) must use
+ *  this or cachedMessageTokens, never a private re-implementation: the loop's
+ *  digest trigger previously counted raw content text while the packet
+ *  counted JSON.stringify(message), so the two disagreed by the JSON
+ *  structure overhead (10-15% on tool-heavy histories) and the digest fired
+ *  later than the packet accounting said it should. */
+export function estimateMessagesTokens(messages: readonly object[]): number {
+  let sum = 0;
+  for (const m of messages) sum += cachedMessageTokens(m as { role: string });
+  return sum;
 }
 
 // Per-message token-count cache. buildPacket() walks the ENTIRE history every
@@ -218,7 +330,13 @@ export function tokenOverlap(a: string, b: string): number {
  *  preserving stable source order for ties. Strong harnesses only surface
  *  skills whose description matches the request; this reproduces that so the
  *  model is not shown an off-topic skill registry it can hallucinate from. */
-export function selectRelevantSkills(skills: Skill[], taskText: string, max: number, usageBoost?: Map<string, number>): Skill[] {
+export function selectRelevantSkills(
+  skills: Skill[],
+  taskText: string,
+  max: number,
+  usageBoost?: Map<string, number>,
+  gated?: Map<string, number>,
+): Skill[] {
   if (!taskText.trim()) return [];
   // MCH-40 (skills v2): usageBoost folds real-world skill success into the
   // rank — boost = min(0.15, successes/20 * 0.15). Skills that actually help
@@ -229,9 +347,13 @@ export function selectRelevantSkills(skills: Skill[], taskText: string, max: num
     .map((s) => {
       const base = tokenOverlap(taskText, `${s.name} ${s.description}`);
       const boost = usageBoost ? Math.min(0.15, ((usageBoost.get(s.name) ?? 0) / 20) * 0.15) : 0;
-      return { s, score: base + boost };
+      return { s, base, score: base + boost };
     })
-    .filter((e) => e.score >= MIN_SKILL_SCORE)
+    // Evidence lifecycle: a GATED skill (probation / demoted) must clear its
+    // floor on RAW relevance — a usage boost earned by other skills' history
+    // or by pre-lifecycle loads must not launder a weak match into an
+    // advertisement for an unproven skill.
+    .filter((e) => e.score >= MIN_SKILL_SCORE && e.base >= (gated?.get(e.s.name) ?? 0))
     .sort((a, b) => b.score - a.score || skills.indexOf(a.s) - skills.indexOf(b.s));
   return scored.slice(0, max).map((e) => e.s);
 }
@@ -271,6 +393,8 @@ export class ContextEngine {
   private skillsFingerprint = '';
   private skillsTaskFingerprint = '';
   private skillsInitialized = false;
+  private todoCacheFp: string | null = null;
+  private todoCacheBlock = '';
   private config: MochiConfig;
   private userSkillsDir?: string;
   private lastSentTokens = 0;
@@ -285,6 +409,13 @@ export class ContextEngine {
   private lastStaleCheckAt = 0;
   private lastStaleResult: string[] = [];
   initialUserPrompt?: string;
+  /** C7 verified compaction: record of the most recent compact() — the
+   *  probe facts extracted pre-cut, the summary lineage, the probe outcome
+   *  before/after escalation, and whether retention ultimately passed.
+   *  Undefined until the first compaction actually cuts. The loop and
+   *  diagnostics read this; a failed final probe is surfaced here and in
+   *  the compacted ledger instead of silently continuing. */
+  lastCompactionVerification?: CompactionVerification;
   /** Complexity of the ACTIVE task (set per-run by the loop). When 'complex',
    *  every context-destroying path in this engine (ingestion folding, in-place
    *  tool-output shrinking, compaction cut point, eviction rescue) relaxes its
@@ -387,7 +518,15 @@ export class ContextEngine {
 
       if ((text.length > errCharLimit || text.split('\n').length > errLineLimit) && hasErrors) {
         const condensed = condenseOutput(text, { maxLines: preserve ? 500 : 50, preserveContext: 3 });
-        this.messages.push({ ...msg, content: condensed.condensed });
+        // Archive the pre-condense text: condensing is lossy by design, and
+        // the dropped lines used to be unrecoverable without re-running the
+        // tool. Same MCH-66 archive shrinkOldToolOutputs uses.
+        let note = '';
+        try {
+          const arcId = archiveToolOutput(this.projectRoot, msg.name ?? 'tool', text);
+          if (arcId) note = `\n[full output archived — recall_output ${arcId} retrieves it]`;
+        } catch { /* archive is best-effort */ }
+        this.messages.push({ ...msg, content: condensed.condensed + note });
         return;
       }
 
@@ -399,7 +538,15 @@ export class ContextEngine {
           const headLines = lines.slice(0, keepHead);
           const tailLines = lines.slice(-keepTail);
           const omitted = lines.length - keepHead - keepTail;
-          const folded = `${headLines.join('\n')}\n\n… [mochi: ${omitted > 0 ? `${omitted} lines ` : ''}output folded (${text.length.toLocaleString('en-US')} chars) to conserve context tokens — narrow the query or use offset/limit] …\n\n${tailLines.join('\n')}`;
+          // Archive the pre-fold text (MCH-66 pattern): outputs in the
+          // ~5-20KB band pass the tool-output policy untouched (no spill
+          // file), so before this the folded-away middle was simply lost.
+          let recovery = 'narrow the query or use offset/limit';
+          try {
+            const arcId = archiveToolOutput(this.projectRoot, msg.name ?? 'tool', text);
+            if (arcId) recovery = `full text archived — recall_output ${arcId} retrieves it; or narrow the query / use offset/limit`;
+          } catch { /* archive is best-effort */ }
+          const folded = `${headLines.join('\n')}\n\n… [mochi: ${omitted > 0 ? `${omitted} lines ` : ''}output folded (${text.length.toLocaleString('en-US')} chars) to conserve context tokens — ${recovery}] …\n\n${tailLines.join('\n')}`;
           this.messages.push({ ...msg, content: folded });
           return;
         }
@@ -460,7 +607,22 @@ export class ContextEngine {
       resolve(base, 'memory', 'architecture.md'),
       resolve(base, 'memory', 'conventions.md'),
       resolve(base, 'memory', 'failures.md'),
+      // Unified search also reads these stores; a write to any of them (e.g.
+      // a success fact recorded at the previous run's finish) must refresh
+      // the cached selection instead of replaying a stale packet.
+      resolve(base, 'project-memory.md'),
+      resolve(base, 'memory', 'lessons.json'),
+      memoryFilePath(),
     ].map(fingerprint).join('|');
+  }
+
+  /** Char budget for the volatile memory block. Configurable via
+   *  config.memory.injectionChars / MOCHI_MEMORY_INJECTION_CHARS; the old
+   *  hard 2,000-char slice predates unified ranking — with hits ranked
+   *  across all four stores, a 4,000 default buys signal, not dump. */
+  private memoryInjectionCap(): number {
+    const n = this.config?.memory?.injectionChars;
+    return typeof n === 'number' && Number.isFinite(n) && n > 0 ? Math.floor(n) : 4000;
   }
 
   private loadMemory(query = ''): string {
@@ -470,22 +632,36 @@ export class ContextEngine {
     if (fp !== this.memoryFingerprint || query !== this.memoryQuery) {
       this.memoryFingerprint = fp;
       this.memoryQuery = query;
+      const cap = this.memoryInjectionCap();
       try {
-        const store = new MemoryStore(resolve(this.projectRoot, '.mochi'));
-        const entries = store.entries().map((e: MemoryEntry) => ({
-          title: e.title,
-          body: e.body,
-          kind: e.kind,
-          source: e.source,
-          always: e.source === 'project.md',
-        }));
-        const relevant = query
-          ? selectRelevant(query, entries, { maxTokens: 2000 })
-          : entries;
-        this.memoryCache = relevant
-          .map((e) => `${e.title}\n${e.body}`)
-          .join('\n\n')
-          .slice(0, 2000);
+        if (!query) {
+          // No task context to rank against: keep the legacy full dump of
+          // workspace entries (project overview first), bounded by the cap.
+          const store = new MemoryStore(resolve(this.projectRoot, '.mochi'));
+          const entries = store.entries().map((e: MemoryEntry) => ({
+            title: e.title,
+            body: e.body,
+          }));
+          this.memoryCache = entries
+            .map((e) => `${e.title}\n${e.body}`)
+            .join('\n\n')
+            .slice(0, cap);
+        } else {
+          // Unified retrieval (P1.5): one fused search over global facts,
+          // workspace entries, project-memory lines and lessons, ranked by
+          // reciprocal-rank fusion of the keyword and trigram rankers —
+          // replaces the workspace-only selectRelevant path, which could
+          // never surface a global fact or a lesson here at all.
+          const hits = searchMemory(query, {
+            stateDir: resolve(this.projectRoot, '.mochi'),
+            projectDir: this.projectRoot,
+            limit: 12,
+          });
+          this.memoryCache = hits
+            .map((h) => (h.title ? `${h.title}\n${h.text}` : h.text))
+            .join('\n\n')
+            .slice(0, cap);
+        }
       } catch {
         this.memoryCache = '';
       }
@@ -509,7 +685,7 @@ export class ContextEngine {
     }
 
     try {
-      const allModularRules = loadRules(this.projectRoot);
+      const allModularRules = loadRulesCached(this.projectRoot);
       const active = selectActiveRules(
         allModularRules,
         [],
@@ -559,10 +735,18 @@ export class ContextEngine {
       if (task) {
         // MCH-40: usage-ranked boost — skills with proven win history float up.
         let boost: Map<string, number> | undefined;
+        let gated: Map<string, number> | undefined;
         try {
-          boost = usageBoostMap(loadSkillUsage(this.projectRoot));
-        } catch { boost = undefined; }
-        relevant = selectRelevantSkills(skills, task.title + ' ' + (task.description ?? ''), MAX_TASK_SKILLS, boost);
+          const usage = loadSkillUsage(this.projectRoot);
+          boost = usageBoostMap(usage);
+          // Evidence lifecycle: probation skills advertise only on a strong
+          // raw match, demoted skills only on a very strong one. Explicit
+          // loads by name (the `skill` tool) are NOT gated — only the
+          // unsolicited advertisement is. Enforcement off = no gates.
+          const floors = advertiseGateFloors(usage, resolveSkillsSettings(this.config));
+          gated = floors.size > 0 ? floors : undefined;
+        } catch { boost = undefined; gated = undefined; }
+        relevant = selectRelevantSkills(skills, task.title + ' ' + (task.description ?? ''), MAX_TASK_SKILLS, boost, gated);
       } else if (tools && tools.length > 0) {
         const bDir = bundledSkillsDir();
         relevant = bDir ? discoverSkills(bDir).skills : [];
@@ -630,7 +814,7 @@ ${this.toolGuidelines(tools)}
 - **Operational Wisdom (OWL)**: Apply epistemic checks before modifying code. Validate assumptions against actual disk contents.
 - **Documented Contracts (DOX)**: Adhere strictly to project conventions in AGENTS.md / MOCHI.md.
 - **State Continuity (ANCHOR)**: Maintain active awareness of the ongoing conversation history and state.
-- **Test-Time Compute (Chameleon)**: Dynamically expand compute and cellular reasoning for complex algorithmic tasks.
+- **Test-Time Compute (Chameleon)**: For genuinely hard problems the chameleon tool spends extra model passes (draft, critique, improve — kept only when better). Routine tasks instead get a deterministic scaffold of invariants, boundary checks, and hazards injected into context — no extra model calls.
 
 # VI. Output Constraints (CRITICAL)
 - **Collaborative & Transparent**: Proactively guide the user through what you are doing. Explain your code changes, architectural decisions, and verification steps.
@@ -666,7 +850,7 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
     add(['blast_radius'], 'blast_radius: analyze the downstream impact and caller call sites of a symbol before modifying or refactoring it.');
     add(['find_definitions', 'find_references'], 'find_definitions / find_references: look up actual symbol definitions, type contracts, and caller usages across the project before modifying code to prevent guessing or hallucinating APIs.');
     add(['get_diagnostics'], 'get_diagnostics: inspect compiler, syntax, and linter diagnostics for files to verify clean types and syntax.');
-    add(['chameleon'], 'chameleon: run test-time compute expansion and cellular MoE decomposition for complex algorithms or architectural refactors.');
+    add(['chameleon'], 'chameleon: run test-time compute expansion — extra model passes that draft, critique, and improve a solution, reverting if a pass makes it worse — for complex algorithms or architectural refactors.');
     add(['session_recall'], 'session_recall: search, list, or retrieve transcripts from past conversation sessions to recall earlier architectural discussions or previous solutions.');
     add(['think'], 'think: structure complex step-by-step logic, architectural decisions, and invariants before modifying code.');
     add(['skill'], 'skill: load instructions for a specialized domain skill by name (e.g. `airtable`, `godot-roguelike-dev`, `apple-notes`, etc.), or list all available skills with name="list".');
@@ -726,7 +910,7 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
         if (tiny) parts.push(tiny);
       } catch { /* continue */ }
       try {
-        const allModularRules = loadRules(this.projectRoot);
+        const allModularRules = loadRulesCached(this.projectRoot);
         const activeFileRules = selectActiveRules(
           allModularRules,
           this.state.filesModified.concat(this.state.filesRead ?? []),
@@ -803,19 +987,29 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
     if (this.state.knownErrors.length) lines.push(`Known errors: ${this.state.knownErrors.join('; ')}`);
     if (this.state.importantDecisions.length) lines.push(`Important decisions: ${this.state.importantDecisions.join('; ')}`);
     if (this.state.constraints.length) lines.push(`Constraints: ${this.state.constraints.join('; ')}`);
-    // Persist and surface active todo items on every turn (Claude Code discipline)
+    // Persist and surface active todo items on every turn (Claude Code discipline).
+    // The formatted block is cached behind the file's fingerprint: this ran a
+    // readFileSync + JSON.parse on EVERY turn even when the todo file had not
+    // changed since the previous turn (the common case — todos update on
+    // task transitions, not per model call).
     try {
       const todoPath = resolve(this.projectRoot, '.mochi', 'state', 'todo.json');
-      if (existsSync(todoPath)) {
-        const raw = readFileSync(todoPath, 'utf8');
-        const todos = JSON.parse(raw) as Array<{ order: number; status: string; title: string; notes?: string }>;
-        if (Array.isArray(todos) && todos.length > 0) {
-          const formatted = todos
-            .map((t) => `${t.order}. [${t.status === 'done' ? 'x' : t.status === 'in_progress' ? '-' : ' '}] ${t.title}${t.notes ? ` -- ${t.notes}` : ''}`)
-            .join('\n');
-          lines.push(`## Active Plan & Todo Checklist (Current Execution Ledger)\n${formatted}`);
+      const todoFp = fingerprint(todoPath);
+      if (todoFp !== this.todoCacheFp) {
+        this.todoCacheFp = todoFp;
+        this.todoCacheBlock = '';
+        if (todoFp !== '') {
+          const raw = readFileSync(todoPath, 'utf8');
+          const todos = JSON.parse(raw) as Array<{ order: number; status: string; title: string; notes?: string }>;
+          if (Array.isArray(todos) && todos.length > 0) {
+            const formatted = todos
+              .map((t) => `${t.order}. [${t.status === 'done' ? 'x' : t.status === 'in_progress' ? '-' : ' '}] ${t.title}${t.notes ? ` -- ${t.notes}` : ''}`)
+              .join('\n');
+            this.todoCacheBlock = `## Active Plan & Todo Checklist (Current Execution Ledger)\n${formatted}`;
+          }
         }
       }
+      if (this.todoCacheBlock) lines.push(this.todoCacheBlock);
     } catch {
       // ignore todo loading error
     }
@@ -1280,11 +1474,15 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
         archiveToolOutput(this.projectRoot, m.name ?? 'tool', c);
       } catch { /* archive is best-effort */ }
       const shrunk = c.slice(0, KEEP_HEAD) + MARK + (c.length > KEEP_HEAD + KEEP_TAIL ? c.slice(-KEEP_TAIL) : '');
-      saved += c.length - shrunk.length;
+      // Token savings measured with the unified counter (cached per-message
+      // counts), not a private chars/3.8 divisor that disagreed with the
+      // estimator used everywhere else (3.8 vs the native-calibrated port).
+      const beforeTokens = cachedMessageTokens(m);
       m.content = shrunk;
       invalidateMessageTokens(m); // content mutated: drop cached token count
+      saved += Math.max(0, beforeTokens - cachedMessageTokens(m));
     }
-    return Math.floor(saved / 3.8);
+    return saved;
   }
 
   private stateLedger(): string {
@@ -1293,6 +1491,10 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
     const rootGoal = this.initialUserPrompt || s.goal;
     if (rootGoal) parts.push(`Root User Goal: ${rootGoal}`);
     if (s.filesModified.length) parts.push(`Files modified: ${s.filesModified.join(', ')}`);
+    // Constraints were silently dropped here until C7 — the retention probe
+    // now treats them as must-survive, and the ledger must actually carry
+    // them or every compaction with a recorded constraint escalates.
+    if (s.constraints.length) parts.push(`Constraints: ${s.constraints.join('; ')}`);
     if (s.knownErrors.length) parts.push(`Known errors: ${s.knownErrors.join('; ')}`);
     if (s.importantDecisions.length) parts.push(`Decisions: ${s.importantDecisions.join('; ')}`);
     return parts.join('\n');
@@ -1356,6 +1558,28 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
     const dropped = this.messages.slice(0, cutIndex);
     this.messages = this.messages.slice(cutIndex);
 
+    // C7: BEFORE the dropped slice is distilled away, extract the retention
+    // probe facts and the summary lineage from it. Both are deterministic
+    // functions of the slice (salience-ranked, Phase A), so the checkpoint
+    // the loop built from previewCompact() — the same slice — carries the
+    // same lineage id. The probe set ALSO includes the pinned state facts
+    // (contract, constraints, decisions, known errors, modified files):
+    // those live outside the slice, and the ledger that is supposed to
+    // carry them forward has silently dropped members before (constraints)
+    // — so they are verified, not assumed.
+    const probeFacts = dedupeProbeFacts([
+      ...probeFactsFromState({
+        goal: this.state.goal,
+        initialUserPrompt: this.initialUserPrompt,
+        constraints: this.state.constraints,
+        decisions: this.state.importantDecisions,
+        errors: this.state.knownErrors,
+        filesModified: this.state.filesModified,
+      }),
+      ...extractProbeFacts(dropped),
+    ]);
+    const lineage = buildSummaryLineage(dropped);
+
 
     const facts: string[] = [];
     for (const m of dropped) {
@@ -1396,7 +1620,87 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
     if (this.filesEdited.size) fileOps.push(`Files already edited in this session: ${[...this.filesEdited].slice(-30).join(', ')}`);
     if (this.filesRead.size) fileOps.push(`Files previously read (their contents were compacted away; re-read the ones relevant to the current step): ${[...this.filesRead].slice(-30).join(', ')}`);
     const body = [checkpoint?.trim(), ledger, fileOps.join('\n'), facts.length ? 'Session facts:\n' + facts.join('\n') : ''].filter(Boolean).join('\n');
-    if (body.trim()) this.messages.unshift({ role: 'system', content: `Earlier in this session (compacted):\n${body}` });
+    // The compacted ledger leads with its lineage marker: the next
+    // compaction that drops THIS message adopts its id as a parent.
+    let compactionMsg: ChatMessage | undefined;
+    if (body.trim()) {
+      compactionMsg = { role: 'system', content: `Earlier in this session (compacted):\n${renderSummaryLineage(lineage)}\n${body}` };
+      this.messages.unshift(compactionMsg);
+    }
+
+    // C7 retention probe: the post-compaction transcript must still be
+    // able to answer every probe fact. On failure, escalate — re-include
+    // the missing facts verbatim, then (if still missing) widen with the
+    // raw source excerpts — rather than silently continuing on a summary
+    // that lost load-bearing context. The outcome is recorded on
+    // lastCompactionVerification and annotated into the ledger.
+    if (probeFacts.length > 0) {
+      const renderForProbe = (msgs: readonly ChatMessage[]): string =>
+        msgs.map((m) => `${probeTextOf(m)}${m.tool_calls?.length ? ' ' + m.tool_calls.map((tc) => `${tc.function.name}(${tc.function.arguments ?? ''})`).join(' ') : ''}`).join('\n');
+      const appendToLedger = (extra: string): void => {
+        if (compactionMsg) {
+          compactionMsg.content = `${compactionMsg.content as string}\n${extra}`;
+          invalidateMessageTokens(compactionMsg);
+        } else {
+          compactionMsg = { role: 'system', content: `Earlier in this session (compacted):\n${renderSummaryLineage(lineage)}\n${extra}` };
+          this.messages.unshift(compactionMsg);
+        }
+      };
+      const outcome = ensureRetention({
+        facts: probeFacts,
+        readText: () => renderForProbe(this.messages),
+        reinject: (missing) => appendToLedger(buildRecoveryBlock(missing)),
+        widen: (missing) => appendToLedger(
+          'WIDENED RE-INCLUSION (raw excerpts of the messages behind the still-missing facts):\n' +
+          missing.map((f) => {
+            // State facts (sourceIndex -1) have no source message: their
+            // verbatim text IS the widest form available.
+            const src = f.sourceIndex >= 0 ? dropped[f.sourceIndex] : undefined;
+            return `- ${src ? renderForProbe([src]).replace(/\s+/g, ' ').slice(0, 600) : f.text}`;
+          }).join('\n'),
+        ),
+      });
+      this.lastCompactionVerification = {
+        lineage,
+        facts: probeFacts,
+        initial: outcome.initial,
+        final: outcome.final,
+        escalations: outcome.escalations,
+        passed: outcome.final.passed,
+      };
+      appendToLedger(renderProbeOutcome(outcome));
+    } else {
+      this.lastCompactionVerification = {
+        lineage,
+        facts: probeFacts,
+        initial: { total: 0, retainedIds: [], missing: [], score: 1, passed: true },
+        final: { total: 0, retainedIds: [], missing: [], score: 1, passed: true },
+        escalations: [],
+        passed: true,
+      };
+    }
+
+    // C7 lineage record: persist this compaction's provenance — source
+    // range + slice fingerprint, digest fingerprint, the probe outcome
+    // (kept / repaired / still-missed), and the recall_output archive ids
+    // the digest or the dropped slice reference — under .mochi/state so
+    // the chain of summaries stays inspectable after the session ends.
+    // Best-effort: bookkeeping never fails a compaction.
+    const verification = this.lastCompactionVerification;
+    if (verification) {
+      try {
+        const renderAll = (msgs: readonly ChatMessage[]): string => msgs.map((m) => probeTextOf(m)).join('\n');
+        recordCompactionLineage(this.projectRoot, buildCompactionLineageRecord({
+          lineage,
+          ts: Date.now(),
+          sourceRange: { from: 0, to: cutIndex },
+          sourceText: renderAll(dropped),
+          digestText: compactionMsg && typeof compactionMsg.content === 'string' ? compactionMsg.content : body,
+          verification,
+          archiveScanText: `${body}\n${renderAll(dropped)}`,
+        }));
+      } catch { /* best-effort */ }
+    }
   }
 }
 
