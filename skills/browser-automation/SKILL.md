@@ -36,3 +36,13 @@ Flaky automation is worse than no automation. The discipline is: stable selector
 - Testing through the UI what you could test via API: UI tests are for the INTEGRATION, not for data setup — seed via API/DB, act via UI, assert via UI.
 - `page.$eval` one-offs that bypass locator retry semantics — the API you reach for determines your flake rate.
 - Forgetting downloads/popups open new pages: the context listener must be registered BEFORE the triggering click.
+
+## 6. Driving mochi's built-in `browser` tool instead
+For ad-hoc automation (not test suites), mochi's own `browser` tool wraps a
+persistent-profile driver — state survives across calls, so flows are
+sequences of small tool calls, not one script:
+- Session: cookies/login and the open TAB SET persist. `tabs` lists them, `newtab [url]` opens one, `switchtab <index|url-part>` changes the active tab, `closetab` removes one. Site popups join the set on their own.
+- Reading: `extract [css]` returns main content as clean markdown plus the largest table as structured rows — reach for it before `text`/`html`. `waitfor` takes a selector, a load state (`networkidle`, `load`, `domcontentloaded`), or `url:<part>` for route changes.
+- Acting: `click/type/fill/select/hover/press/scroll/waitfor` as in §3, but waits are signal-shaped: wait for the element or state the NEXT step needs, never a bare `waitMs`.
+- Frames and files: pass `frame` (iframe selector or name) to act inside an iframe (payment widgets); `upload <css> <path>` sets a file input; `download <css> [dest]` clicks a trigger and saves the resulting download — the tool registers the wait before the click, so the §5 popup/download race is handled.
+- Console errors and page errors ride along in every result — treat them as verification evidence, per the `mochi-automation-surface` skill's assert-the-effect rule.

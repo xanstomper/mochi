@@ -128,4 +128,90 @@ describe('browser tool driver args (pure, no browser launch)', () => {
     expect(buildDriverArgs({ command: 'screenshot', path: '/tmp/a.png' })).toEqual(['screenshot', '/tmp/a.png']);
     expect(buildDriverArgs({ command: 'text', selector: 'main' })).toEqual(['text', 'main']);
   });
+
+  it('builds tab-management argv (tabs / newtab / switchtab / closetab)', () => {
+    expect(buildDriverArgs({ command: 'tabs' })).toEqual(['tabs']);
+    expect(buildDriverArgs({ command: 'newtab', url: 'https://example.com/a' }))
+      .toEqual(['newtab', 'https://example.com/a']);
+    expect(buildDriverArgs({ command: 'newtab' })).toEqual(['newtab', '']);
+    // newtab must NOT also emit the generic --url prefix (it would navigate
+    // the current tab before the new one opens).
+    expect(buildDriverArgs({ command: 'newtab', url: 'https://example.com/a' })).not.toContain('--url');
+    // Tab target resolution: explicit target > selector > text.
+    expect(buildDriverArgs({ command: 'switchtab', target: '2' })).toEqual(['switchtab', '2']);
+    expect(buildDriverArgs({ command: 'switchtab', selector: 'example.com' })).toEqual(['switchtab', 'example.com']);
+    expect(buildDriverArgs({ command: 'switchtab', text: '1' })).toEqual(['switchtab', '1']);
+    expect(buildDriverArgs({ command: 'closetab' })).toEqual(['closetab', '']);
+    expect(buildDriverArgs({ command: 'closetab', target: '0' })).toEqual(['closetab', '0']);
+    // Global flags still apply to tab commands.
+    expect(buildDriverArgs({ command: 'tabs', profile: '/tmp/p1' })).toEqual(['tabs', '--profile', '/tmp/p1']);
+  });
+
+  it('builds download / upload / extract argv', () => {
+    expect(buildDriverArgs({ command: 'download', selector: '#dl', path: '/tmp/out.pdf' }))
+      .toEqual(['download', '#dl', '/tmp/out.pdf']);
+    expect(buildDriverArgs({ command: 'download', selector: '#dl' })).toEqual(['download', '#dl', '']);
+    expect(buildDriverArgs({ command: 'download', url: 'https://example.com/files' }))
+      .toEqual(['download', '', '', '--url', 'https://example.com/files']);
+    expect(buildDriverArgs({ command: 'upload', selector: 'input[type=file]', path: '/tmp/a.png' }))
+      .toEqual(['upload', 'input[type=file]', '/tmp/a.png']);
+    expect(buildDriverArgs({ command: 'extract', selector: 'article' })).toEqual(['extract', 'article']);
+    expect(buildDriverArgs({ command: 'extract' })).toEqual(['extract', '']);
+  });
+
+  it('builds robust waitfor targets and the --frame flag', () => {
+    expect(buildDriverArgs({ command: 'waitfor', selector: 'networkidle' })).toEqual(['waitfor', 'networkidle']);
+    expect(buildDriverArgs({ command: 'waitfor', selector: 'url:/dashboard' })).toEqual(['waitfor', 'url:/dashboard']);
+    expect(buildDriverArgs({ command: 'click', selector: '#pay', frame: 'iframe#stripe' }))
+      .toEqual(['click', '#pay', '--frame', 'iframe#stripe']);
+    expect(buildDriverArgs({ command: 'fill', selector: '#card', text: '4242', url: 'https://example.com/checkout', frame: 'payment-frame' }))
+      .toEqual(['fill', '#card', '4242', '--url', 'https://example.com/checkout', '--frame', 'payment-frame']);
+  });
+});
+
+describe('browser tool summaries for tabs / download / extract', () => {
+  it('summarizes the tab list with the active tab marked', () => {
+    const out = summarizeResult('tabs', JSON.stringify({
+      ok: true,
+      tabs: [
+        { index: 0, url: 'https://a.example/', title: 'A', active: false },
+        { index: 1, url: 'https://b.example/', title: 'B', active: true },
+      ],
+      active: 1,
+    }));
+    expect(out).toContain('tabs (2):');
+    expect(out).toContain('[0] https://a.example/ — A');
+    expect(out).toContain('[1] * https://b.example/ — B');
+  });
+
+  it('summarizes a download with filename and size, not the screenshot line', () => {
+    const out = summarizeResult('download', JSON.stringify({
+      ok: true, action: 'download', saved: '/tmp/dl/report.pdf', filename: 'report.pdf', size: 12345,
+    }));
+    expect(out).toContain('downloaded: /tmp/dl/report.pdf (12345 bytes, filename=report.pdf)');
+    expect(out).not.toContain('saved: /tmp/dl/report.pdf');
+  });
+
+  it('summarizes extract text and a structured table', () => {
+    const out = summarizeResult('extract', JSON.stringify({
+      ok: true, title: 'Prices', url: 'https://example.com/prices',
+      extract: '# Prices\nBasic plan costs less.',
+      table: { headers: ['Plan', 'Price'], rows: [['Basic', '$5'], ['Pro', '$20']], rowCount: 2 },
+    }));
+    expect(out).toContain('extract:');
+    expect(out).toContain('# Prices');
+    expect(out).toContain('table (2 rows): Plan | Price');
+    expect(out).toContain('Basic | $5');
+    expect(out).toContain('Pro | $20');
+  });
+
+  it('caps the displayed table rows at 20 but reports the true row count', () => {
+    const rows = Array.from({ length: 30 }, (_, i) => [`r${i}`, 'x']);
+    const out = summarizeResult('extract', JSON.stringify({
+      ok: true, extract: 'body', table: { headers: ['A', 'B'], rows, rowCount: 137 },
+    }));
+    expect(out).toContain('table (137 rows)');
+    expect(out).toContain('r19');
+    expect(out).not.toContain('r20');
+  });
 });
