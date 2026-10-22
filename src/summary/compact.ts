@@ -9,6 +9,9 @@
 // so compaction cannot regress into an unbounded prompt.
 
 import type { MochiEvent } from '../types.js';
+import { renderSummaryLineage, type SummaryLineage } from './verified-compaction.js';
+
+export type { SummaryLineage } from './verified-compaction.js';
 
 export interface CompactContext {
   goal?: string;
@@ -19,6 +22,11 @@ export interface CompactContext {
   unresolved: string[];
   references: string[];
   nextAction?: string;
+  /** C7 lineage: parent pointers to the summaries/messages this summary
+   *  replaces (see verified-compaction.ts). Supplied by the caller, which
+   *  knows the replaced slice; rendered into the prompt by compactToPrompt
+   *  so the NEXT compaction can adopt this summary's id as a parent. */
+  lineage?: SummaryLineage;
   /** true when anything was preserved (an empty context means compaction
    *  found nothing of value and callers should keep the raw transcript). */
   isEmpty: boolean;
@@ -29,6 +37,9 @@ export interface CompactOptions {
   constraints?: string[];
   priorDecisions?: string[];
   maxPerSection?: number;
+  /** Lineage of the slice being summarized (built by the caller from the
+   *  dropped messages via buildSummaryLineage). */
+  lineage?: SummaryLineage;
 }
 
 const DEFAULT_MAX = 12;
@@ -53,6 +64,7 @@ export function compactSession(events: readonly MochiEvent[], opts: CompactOptio
     unresolved: [],
     references: [],
     nextAction: undefined,
+    lineage: opts.lineage,
     isEmpty: false,
   };
 
@@ -112,6 +124,7 @@ export function compactSession(events: readonly MochiEvent[], opts: CompactOptio
 export function compactToPrompt(ctx: CompactContext): string {
   if (ctx.isEmpty) return '';
   const sections: string[] = ['SESSION CONTEXT'];
+  if (ctx.lineage) sections.push(renderSummaryLineage(ctx.lineage));
   if (ctx.goal) sections.push(`GOAL\n${ctx.goal}`);
   if (ctx.decisions.length) sections.push(`DECISIONS\n${ctx.decisions.map((d) => `- ${d}`).join('\n')}`);
   if (ctx.implemented.length) sections.push(`IMPLEMENTED\n${ctx.implemented.map((d) => `- ${d}`).join('\n')}`);
