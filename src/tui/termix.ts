@@ -79,9 +79,15 @@ async function runSession(
   const provider = createProvider(config.model, 'reasoning');
   const role = roleFor(index);
   const startedAt = performance.now();
+  // The session's cost is read from its budget ledger at return time: the
+  // ledger holds the EFFECTIVE spend (provider-reported, or the price-table
+  // estimate when the provider reported $0 — recordUsage applies that
+  // fallback live). Accumulating response.usage.costUsd by hand instead
+  // reported a flattering $0 for every unreported-but-priced call. The
+  // budget is created fresh per session, so its total IS the session total.
+  const sessionCostUsd = () => budget.snapshot(config.model.model).usedCostUsd;
   let mine = '';
   let tokensUsed = 0;
-  let costUsd = 0;
   let steps = 0;
   let output = '';
 
@@ -106,8 +112,7 @@ async function runSession(
       output = response.content ?? '';
       if (response.usage) {
         tokensUsed += response.usage.totalTokens;
-        budget.recordTokens(response.usage.totalTokens, config.model.model, config.model.provider, response.usage.costUsd ?? 0);
-        costUsd += response.usage.costUsd ?? 0;
+        budget.recordUsage(response.usage, config.model.model, config.model.provider);
       }
       steps++;
 
@@ -124,7 +129,7 @@ async function runSession(
     }
   } catch (e) {
     return {
-      index, role, steps, tokensUsed, costUsd,
+      index, role, steps, tokensUsed, costUsd: sessionCostUsd(),
       durationMs: Math.round(performance.now() - startedAt),
       output,
       error: e instanceof Error ? e.message : String(e),
@@ -132,7 +137,7 @@ async function runSession(
   }
 
   return {
-    index, role, steps, tokensUsed, costUsd,
+    index, role, steps, tokensUsed, costUsd: sessionCostUsd(),
     durationMs: Math.round(performance.now() - startedAt),
     output,
   };
