@@ -13,7 +13,7 @@ Goals · Task DAGs · Multi-agent Teams · Persistent Daemon · Deep Run Traces 
 [![Version](https://img.shields.io/badge/version-0.27.0-8b5cf6?style=for-the-badge&labelColor=1c1233)](https://github.com/xanstomper/mochi/releases)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-339933?style=for-the-badge&logo=nodedotjs&logoColor=white&labelColor=0d1f12)](https://nodejs.org)
 [![Rust Core](https://img.shields.io/badge/core-rust--native-dea584?style=for-the-badge&logo=rust&logoColor=white&labelColor=2b1a0e)](native/mochi_core)
-[![Tests](https://img.shields.io/badge/tests-2340%20passing-3fb950?style=for-the-badge&labelColor=0e2415)](#testing)
+[![Tests](https://img.shields.io/badge/tests-2821%20passing-3fb950?style=for-the-badge&labelColor=0e2415)](#testing)
 [![Deps](https://img.shields.io/badge/runtime%20deps-0-cf222e?style=for-the-badge&labelColor=2b0d0d)](#architecture)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge&labelColor=0d1b2e)](LICENSE)
 [![CI](https://img.shields.io/badge/CI-linux%20%C2%B7%20macOS%20%C2%B7%20windows-2094d3?style=for-the-badge&logo=githubactions&logoColor=white&labelColor=0a1d2b)](https://github.com/xanstomper/mochi/actions)
@@ -286,12 +286,14 @@ Fully functional end to end (agent loop, tools, config, workspaces); drop it ont
 | `mochi completion <bash\|zsh\|fish>` | Shell completion script |
 | `mochi doctor` | Self-inspect the full harness |
 | `mochi self-train [N] [focus]` | Cycles of self-review + skill curation |
+| `mochi gate run\|baseline\|freeze\|check` | Frozen regression gate: hash-pinned task set + independent diff analyser for harness changes |
+| `mochi sleeptime [--cap <usd>] [--dry-run]` | Nightly consolidation pipeline (skill repair, curator, gate, curriculum) under a hard spend cap |
 | `mochi perf` | Stream-pipeline micro-benchmarks |
 
 ## Comprehensive Documentation
 
 - **[Technical Architecture Blueprint](docs/ARCHITECTURE.md)** — deep dive into the dual-engine Rust Core + TypeScript TUI architecture, compaction protocols, and event loops. Auto-generated coverage of 298 modules / 3105 symbols via `mochi docgen`.
-- **[Complete Capabilities Reference](docs/CAPABILITIES.md)** — the 16 specialized agent roles, 70+ native tools, 142 skills, and MCP/ACP protocols.
+- **[Complete Capabilities Reference](docs/CAPABILITIES.md)** — the 17 specialized agent roles, 81 native tools, 150 skills, and MCP/ACP protocols.
 - **[Empirical Benchmarks](docs/BENCHMARKS.md)** — standardized PSS memory, TTFF, TTFI, and compaction latency vs jcode, Claude Code, Cursor, Copilot, and OpenCode, with reproducible probe scripts.
 - **[CLI & Interface Reference](docs/CLI_REFERENCE.md)** — complete flags, daemon endpoints, slash commands, and keybindings.
 - **[Editor Integrations](docs/EDITORS.md)** — VS Code, Cursor, JetBrains, Zed, Neovim, Claude Desktop via MCP/ACP stdio servers.
@@ -318,7 +320,7 @@ Mochi
 │   ├── ContextEngine (token budget, compaction, freshness)
 │   ├── RetrievalEngine (files, symbols, references, git history)
 │   ├── Model provider / router / failover
-│   ├── Tool bus (70+ tools, tiered advertising)
+│   ├── Tool bus (81 tools, tiered advertising)
 │   ├── BudgetEngine
 │   └── Verification / Recovery / Pulse
 ├── Memory
@@ -344,7 +346,7 @@ The runtime loop is `preflight → model → tools → verify → recover → pu
 
 1. **Preflight** — context packet built in ~325 ms cold (batched binary probing, fingerprint-cached rules/memory so multi-hundred-iteration tasks don't re-read disk every call).
 2. **Model** — tiered tool advertising (21 lean tools / ~3K tokens on the first call, 7 for chat, 16 for research, 65 on demand via `load_tools` recovery), speculative preflight on hard tasks, streaming with mid-stream Ctrl-C abort on the wire.
-3. **Tools** — 70+ tools through a permission-gated bus; every shell command risk-classified (17 destructive + 16 network patterns); output folded head/tail through the Rust core; secrets redacted on every output, trace line, and disk write.
+3. **Tools** — 81 tools through a permission-gated bus; every shell command risk-classified (17 destructive + 16 network patterns); output folded head/tail through the Rust core; secrets redacted on every output, trace line, and disk write.
 4. **Verify** — baseline + proportionate verification (goal-engine tasks add the independent verifier and outcome judge with rule-based veto on contradictory PASSes).
 5. **Recover** — provider failover, key rotation, model auto-escalation, checkpoint/rollback, warm-start resume.
 6. **Pulse / Struggle injection** — consecutive tool errors, repeated identical tool results (3+ reads of the same content), empty responses, and verification loops are surfaced to the model as a STRUGGLE STATE system message plus an escape-plan directive, so a struggling model never starts its next turn blind to its own failure history. Healthy runs pay nothing (zero-cost no-op).
@@ -449,7 +451,7 @@ Global: `~/.config/mochi/config.json` · Project: `.mochi/config.json`
 | `MOCHI_LIGHT=1` | Disable embedded SQLite index + WASM parser |
 | `FREEINFERENCE_API_KEY=...` | Provider key (or any OpenAI-compatible env) |
 
-**36 built-in providers** — OpenAI, Anthropic, Gemini, DeepSeek, OpenRouter, Groq, Mistral, xAI, Together, Fireworks, Cerebras, Azure, AWS Bedrock, GitHub Models, DeepInfra, Cloudflare Workers AI, HuggingFace, Perplexity, SambaNova, SiliconFlow, Moonshot/Kimi, MiniMax, Zhipu, Z.AI, Cohere, Alibaba Qwen, Upstage/Solar, Nebius, Novita, AI21/Jamba, Ollama, LM Studio, llama.cpp, OpenCode Zen/Go, FreeInference — all with failover, key-pool rotation, and capability-tier routing. Adding one is a single registry entry plus tests (see the `provider-registration` skill).
+**41 built-in providers** — OpenAI, Anthropic, Gemini, Google Antigravity, DeepSeek, OpenRouter, Groq, Mistral, xAI, Together, Fireworks, Cerebras, Azure, AWS Bedrock, GitHub Models, DeepInfra, Cloudflare Workers AI, HuggingFace, Perplexity, SambaNova, SiliconFlow, Moonshot/Kimi, MiniMax, Zhipu, Z.AI, Cohere, Alibaba Qwen, Upstage/Solar, Nebius, Novita, AI21/Jamba, Ollama, LM Studio, llama.cpp, OpenCode Zen, OpenCode Go, FreeInference, TokenJuice, OpenAI Codex, ClinePass, Kilo Code — all with failover, key-pool rotation, and capability-tier routing. Adding one is a single registry entry plus tests (see the `provider-registration` skill).
 
 Unknown values for `MOCHI_SAFETY` / `MOCHI_SANDBOX` / `MOCHI_REASONING` warn at startup rather than being silently ignored.
 
@@ -503,7 +505,7 @@ Profiles control tools, model routing, verification requirements, and behavior. 
 
 ## Teams
 
-`mochi team "..."` spawns a role-diverse set of agents (architect, implementer, reviewer, verifier — 16 specialized roles available) sharing one budget and workspace, coordinating through the task DAG. Each role can route to a different configured model tier.
+`mochi team "..."` spawns a role-diverse set of agents (architect, implementer, reviewer, verifier — 17 specialized roles available) sharing one budget and workspace, coordinating through the task DAG. Each role can route to a different configured model tier.
 
 ## Hooks
 
@@ -648,7 +650,7 @@ A minimal, fast, keyboard-first interface built on a measured frame budget:
 
 ### Chameleon (internal synthetic-parameter reasoning)
 
-Turns a flash-class model into a frontier-grade reasoner for hard goals by generating dense "synthetic parameter" reasoning context injected into the agent prompt. Built into Mochi — it uses the agent's **own** configured provider: no external CLI, no shell-out, no extra API key. A failed provider call is a graceful no-op.
+Expands test-time compute for hard goals: a deterministic, repo-grounded task scaffold (classifier-selected invariants and hazards, a checklist built from the repo's own scripts, codegraph symbols, traps from prior run autopsies) plus — above flash mode — additional model passes with stall-recovery strategies whose output is injected into the agent prompt as extra reasoning context. Built into Mochi — it uses the agent's **own** configured provider: no external CLI, no shell-out, no extra API key. Flash mode is fully deterministic (no model calls), and a failed provider call degrades gracefully to the deterministic scaffold.
 
 ```bash
 mochi goal "Build a Redis rate limiter" --enhance --mode hard  # inject enhancement context before solving
@@ -733,7 +735,7 @@ Git-backed snapshots, so rollback composes with your normal workflow.
 
 ## Skills
 
-84 built-in skills with a lifecycle (install, enable, curate, pack). Skills are loadable procedure libraries the agent consults on demand; a self-checking catalog test keeps the registry honest.
+150 built-in skills with a lifecycle (install, enable, curate, pack). Skills are loadable procedure libraries the agent consults on demand; a self-checking catalog test keeps the registry honest.
 
 ### Skill Marketplace
 
@@ -775,7 +777,7 @@ Requires Node ≥ 22. The Rust core builds with any modern `cargo` and is option
 ## Testing
 
 ```bash
-npm test              # vitest — 2340 tests, 319 files
+npm test              # vitest — 2821 passing (2834 total, 13 skipped), 367 files
 npm run typecheck     # tsc --noEmit
 ```
 
