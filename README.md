@@ -10,10 +10,10 @@
 
 Goals · Task DAGs · Multi-agent Teams · Persistent Daemon · Deep Run Traces · Rust Native Core
 
-[![Version](https://img.shields.io/badge/version-0.23.0-8b5cf6?style=for-the-badge&labelColor=1c1233)](https://github.com/xanstomper/mochi/releases)
+[![Version](https://img.shields.io/badge/version-0.27.0-8b5cf6?style=for-the-badge&labelColor=1c1233)](https://github.com/xanstomper/mochi/releases)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-339933?style=for-the-badge&logo=nodedotjs&logoColor=white&labelColor=0d1f12)](https://nodejs.org)
 [![Rust Core](https://img.shields.io/badge/core-rust--native-dea584?style=for-the-badge&logo=rust&logoColor=white&labelColor=2b1a0e)](native/mochi_core)
-[![Tests](https://img.shields.io/badge/tests-1494%20passing-3fb950?style=for-the-badge&labelColor=0e2415)](#testing)
+[![Tests](https://img.shields.io/badge/tests-2340%20passing-3fb950?style=for-the-badge&labelColor=0e2415)](#testing)
 [![Deps](https://img.shields.io/badge/runtime%20deps-0-cf222e?style=for-the-badge&labelColor=2b0d0d)](#architecture)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge&labelColor=0d1b2e)](LICENSE)
 [![CI](https://img.shields.io/badge/CI-linux%20%C2%B7%20macOS%20%C2%B7%20windows-2094d3?style=for-the-badge&logo=githubactions&logoColor=white&labelColor=0a1d2b)](https://github.com/xanstomper/mochi/actions)
@@ -775,7 +775,7 @@ Requires Node ≥ 22. The Rust core builds with any modern `cargo` and is option
 ## Testing
 
 ```bash
-npm test              # vitest — 1494 tests, 211 files
+npm test              # vitest — 2340 tests, 319 files
 npm run typecheck     # tsc --noEmit
 ```
 
