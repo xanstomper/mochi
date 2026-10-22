@@ -8,6 +8,7 @@
 
 import { existsSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
 import { resolve, basename } from 'node:path';
+import { scanPromptInjection } from './skills/skill-lint.js';
 
 const RULE_CANDIDATES = ['MOCHI.md', 'mochi.md', 'AGENTS.md', 'CLAUDE.md', 'GEMINI.md', '.cursorrules', '.github/copilot-instructions.md'];
 
@@ -35,6 +36,15 @@ export function contractSection(cwd: string): string {
   const rules = loadRules(cwd).trim();
   if (!rules) return '';
   const source = basename(findRulesFile(cwd) ?? 'MOCHI.md');
+  // The rules file is project-supplied (untrusted) content — the same file
+  // context.ts loads via loadProjectRules. Scan it with the shared
+  // injection scanner: on a strong hit the content is omitted entirely
+  // (an omission note takes its place), never injected raw. Without this,
+  // the context.ts scan would be bypassed by this second loader.
+  const hit = scanPromptInjection(rules);
+  if (hit) {
+    return `\n# BEHAVIORAL CONTRACT (from ${source})\n\n[omitted — the rules file matched a prompt-injection pattern (${hit.rule}: ${hit.message}) and its content was NOT loaded. If these rules are legitimate, review and rephrase the file manually.]\n`;
+  }
   return `\n# BEHAVIORAL CONTRACT (from ${source})\n\nThe following rules are durable operating instructions. They apply to EVERY turn in this session, not just when explicitly invoked. Honor them in order, and prefer asking before assuming when they conflict.\n\n${rules}\n`;
 }
 

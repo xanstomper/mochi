@@ -35,6 +35,36 @@ describe('retention', () => {
     expect(r.state.deletedFiles).toBe(0);
   });
 
+  it('does not GC a completed trace whose trajectory has not been exported', () => {
+    const f = resolve(ws, 'traces', 'done.jsonl');
+    writeFileSync(f, [
+      JSON.stringify({ t: 1, kind: 'task:started' }),
+      JSON.stringify({ t: 2, kind: 'task:completed', stopReason: 'completed' }),
+    ].join('\n') + '\n');
+    const past = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
+    utimesSync(f, past, past);
+    const r = runRetention({ workspaceDir: ws, maxAgeDays: 14 });
+    expect(r.traces.deletedFiles).toBe(0);
+    expect(r.traces.remainingFiles).toBe(1);
+    expect(existsSync(f)).toBe(true);
+  });
+
+  it('GCs old traces that are exported, and old traces that never completed', () => {
+    const exported = resolve(ws, 'traces', 'exp.jsonl');
+    writeFileSync(exported, JSON.stringify({ t: 1, kind: 'task:failed', stopReason: 'tool_loop' }) + '\n');
+    mkdirSync(resolve(ws, 'exports'), { recursive: true });
+    writeFileSync(resolve(ws, 'exports', 'trajectory-exp.jsonl'), '{}\n');
+    const crashed = resolve(ws, 'traces', 'crash.jsonl');
+    writeFileSync(crashed, JSON.stringify({ t: 1, kind: 'task:started' }) + '\n');
+    const past = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
+    utimesSync(exported, past, past);
+    utimesSync(crashed, past, past);
+    const r = runRetention({ workspaceDir: ws, maxAgeDays: 14 });
+    expect(r.traces.deletedFiles).toBe(2);
+    expect(existsSync(exported)).toBe(false);
+    expect(existsSync(crashed)).toBe(false);
+  });
+
   it('returns a logPath even when nothing was deleted', () => {
     const r = runRetention({ workspaceDir: ws, maxAgeDays: 14 });
     expect(r.logPath).toContain('retention.log');

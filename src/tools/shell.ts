@@ -1,5 +1,6 @@
 import type { Tool } from './types.js';
 import { classifyCommand } from '../security/security.js';
+import { matchHardline } from '../security/hardline.js';
 import { markMutation } from './fs-signal.js';
 import { detectBubblewrap } from '../exec.js';
 
@@ -107,6 +108,18 @@ export const shellTool: Tool = {
       throw new Error(
         `Refused to launch desktop GUI app "${gui}". You are a coding agent: when asked to BUILD/IMPLEMENT/CODE something, deliver it as source files (write/edit), then verify headlessly (unit test, CLI invocation, or script) and report the result. Do NOT open a GUI window. Current working directory: ${ctx.cwd ?? ''}`
       );
+    }
+
+    // Hardline floor: catastrophic commands (rm -rf /, mkfs, dd to a block
+    // device, fork bombs, …) are refused under EVERY policy and mode —
+    // including yolo/unattended and safe mode alike. This check sits before
+    // the background early-return on purpose: background tasks spawn via
+    // background-tasks.ts, NOT exec.ts, so this tool gate is the only
+    // chokepoint that sees every agent shell command. (runShellString in
+    // exec.ts enforces the same floor for non-tool shell strings.)
+    const hardline = matchHardline(command);
+    if (hardline) {
+      throw new Error(`Blocked by hardline safety floor (${hardline}): catastrophic commands are refused under every permission policy, including yolo/unattended. Command: ${command.slice(0, 200)}`);
     }
 
     // Horus-derived command risk gate: in safe mode, destructive or network-

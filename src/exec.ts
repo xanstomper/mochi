@@ -5,6 +5,7 @@
 // API for shell-free execution, and an audit hook for risk logging.
 // Long-lived processes (background tasks, daemons, PTY) keep their own
 // lifecycle owners and are intentionally OUT of scope.
+import { matchHardline } from './security/hardline.js';
 import { spawn, spawnSync, execFile } from 'node:child_process';
 import { homedir, tmpdir } from 'node:os';
 import { resolve, delimiter } from 'node:path';
@@ -241,6 +242,22 @@ export function runArgv(cmd: string, args: readonly string[], opts: ExecOptions 
  *  composition (pipes, redirects) is the feature. Harness internals must
  *  use runArgv instead. */
 export function runShellString(command: string, opts: ExecOptions & { shellBin?: string } = {}): Promise<ExecResult> {
+  // Hardline floor (security/hardline.ts): catastrophic commands are refused
+  // here — the one function every shell-string execution flows through — so
+  // no caller, policy, or mode (yolo included) can run them. Returned as a
+  // 126 result (shell's "cannot execute") instead of a throw, matching this
+  // function's result-envelope contract.
+  const hardline = matchHardline(command);
+  if (hardline) {
+    return Promise.resolve({
+      stdout: '',
+      stderr: `Blocked by hardline safety floor (${hardline}): catastrophic commands are refused under every permission policy, including yolo/unattended. Command: ${command.slice(0, 200)}`,
+      code: 126,
+      timedOut: false,
+      cancelled: false,
+      durationMs: 0,
+    });
+  }
   const startedAt = Date.now();
   const isWin = process.platform === 'win32';
   const shellBin = opts.shellBin ?? (isWin ? (process.env.ComSpec || 'cmd.exe') : (process.env.SHELL || '/bin/bash'));

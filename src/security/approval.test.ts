@@ -1,6 +1,6 @@
 // Approval gate: policy tiers finally enforced on the execution path.
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { Agent } from '../agent/loop.js';
@@ -107,11 +107,12 @@ describe('approval gate on the execution path', () => {
     }
   }, 60_000);
 
-  it('headless strict without a handler preserves allow behavior and audits', async () => {
+  it('headless strict without a handler: floor-safe write proceeds, approval-requiring shell DENIED by default', async () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-approve-headless-'));
     const fake = await startFakeOpenAI([
       { content: 'Writing.', toolCalls: [{ id: 'w1', type: 'function', function: { name: 'write', arguments: JSON.stringify({ path: 'note.txt', content: 'hi' }) } }], finishReason: 'tool_calls' },
-      { content: 'Wrote note.txt.', finishReason: 'stop' },
+      { content: 'Pushing.', toolCalls: [shellCall('s1', 'git push origin main')], finishReason: 'tool_calls' },
+      { content: 'Push was not approved.', finishReason: 'stop' },
     ]);
     try {
       const config = makeConfig(dir, fake.url);
@@ -119,13 +120,132 @@ describe('approval gate on the execution path', () => {
       workspace.ensure();
       const context = new ContextEngine(config, dir);
       context.setGoal('write note');
-      // No approvalHandler, strict tier: must NOT hang or veto (pre-gate behavior).
+      // No approvalHandler, strict tier. Deny-by-default (fail closed) for
+      // approval-requiring calls: the destructive shell call is vetoed and
+      // audited as a denial, and the veto must not hang the run. The
+      // in-workspace write is inside the headless-safe floor (the
+      // workspace-safe tier's auto-allow set) and still proceeds.
       const agent = new Agent({ role: 'coder', config, workspace, events: new EventBus(), cwd: dir, context, permPolicy: 'strict' });
-      const result = await agent.run(createTask('Create the note file', 'Write note.txt containing hi.'));
+      const result = await agent.run(createTask('Create the note file', 'Write note.txt containing hi, then attempt a git push and report.'));
       expect(existsSync(resolve(dir, 'note.txt'))).toBe(true);
       expect(result.success).toBe(true);
       const lines = auditLines(dir);
       expect(lines.some((l) => l.includes('"tool":"write"') && l.includes('"decision":"allow"'))).toBe(true);
+      expect(lines.some((l) => l.includes('"tool":"shell"') && l.includes('"decision":"deny"'))).toBe(true);
+    } finally {
+      await fake.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('headless workspace-safe without a handler: policy-safe calls proceed, approval-requiring shell is denied', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-approve-headless-ws-'));
+    const fake = await startFakeOpenAI([
+      { content: 'Writing.', toolCalls: [{ id: 'w1', type: 'function', function: { name: 'write', arguments: JSON.stringify({ path: 'note.txt', content: 'hi' }) } }], finishReason: 'tool_calls' },
+      { content: 'Checking.', toolCalls: [shellCall('s1', 'echo hello')], finishReason: 'tool_calls' },
+      { content: 'Pushing.', toolCalls: [shellCall('s2', 'git push origin main')], finishReason: 'tool_calls' },
+      { content: 'Done, push was not approved.', finishReason: 'stop' },
+    ]);
+    try {
+      const config = makeConfig(dir, fake.url);
+      const workspace = new Workspace(dir, '.mochi');
+      workspace.ensure();
+      const context = new ContextEngine(config, dir);
+      context.setGoal('write note and check git');
+      const agent = new Agent({ role: 'coder', config, workspace, events: new EventBus(), cwd: dir, context, permPolicy: 'workspace-safe' });
+      const result = await agent.run(createTask('Create the note file and report git state', 'Write note.txt containing hi, run echo hello, then attempt a git push and report.'));
+      expect(result.success).toBe(true);
+      // "Safe without a handler" = PermissionManager.autoAllow: in-workspace
+      // write and low-risk shell proceeded with nobody to ask…
+      expect(existsSync(resolve(dir, 'note.txt'))).toBe(true);
+      const lines = auditLines(dir);
+      expect(lines.some((l) => l.includes('"tool":"write"') && l.includes('"decision":"allow"'))).toBe(true);
+      // …while the destructive shell call (not auto-allowed) was denied.
+      expect(lines.some((l) => l.includes('"tool":"shell"') && l.includes('"decision":"deny"'))).toBe(true);
+    } finally {
+      await fake.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('explicit unattendedAllow opt-in restores headless allow + audit beyond the floor', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-approve-unattended-'));
+    const fake = await startFakeOpenAI([
+      { content: 'Cleaning.', toolCalls: [shellCall('s1', 'rm -rf ./scratch-dir')], finishReason: 'tool_calls' },
+      { content: 'Cleaned scratch-dir.', finishReason: 'stop' },
+    ]);
+    try {
+      const config = makeConfig(dir, fake.url);
+      const workspace = new Workspace(dir, '.mochi');
+      workspace.ensure();
+      mkdirSync(resolve(dir, 'scratch-dir'), { recursive: true });
+      const context = new ContextEngine(config, dir);
+      context.setGoal('clean scratch');
+      // Destructive-class shell is beyond the headless-safe floor: it runs
+      // ONLY because the host explicitly opted this unattended run in —
+      // never by default (see the headless-strict test above).
+      const agent = new Agent({ role: 'coder', config, workspace, events: new EventBus(), cwd: dir, context, permPolicy: 'strict', unattendedAllow: true });
+      const result = await agent.run(createTask('Clean the scratch dir', 'Remove ./scratch-dir with rm -rf via shell and report.'));
+      expect(result.success).toBe(true);
+      expect(existsSync(resolve(dir, 'scratch-dir'))).toBe(false);
+      const lines = auditLines(dir);
+      expect(lines.some((l) => l.includes('"tool":"shell"') && l.includes('"decision":"allow"'))).toBe(true);
+    } finally {
+      await fake.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('subagents never prompt and are denied approval-requiring calls (handler is not consulted)', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-approve-subagent-'));
+    const fake = await startFakeOpenAI([
+      { content: 'Pushing.', toolCalls: [shellCall('s1', 'git push origin main')], finishReason: 'tool_calls' },
+      { content: 'Blocked as a subagent.', finishReason: 'stop' },
+    ]);
+    try {
+      const config = makeConfig(dir, fake.url);
+      const workspace = new Workspace(dir, '.mochi');
+      workspace.ensure();
+      const context = new ContextEngine(config, dir);
+      context.setGoal('push changes');
+      let prompts = 0;
+      const agent = new Agent({
+        role: 'coder', config, workspace, events: new EventBus(), cwd: dir, context,
+        permPolicy: 'strict', subagentDepth: 1,
+        approvalHandler: async () => { prompts++; return 'allow-once'; },
+      });
+      const result = await agent.run(createTask('Push the changes', 'Run git push origin main via shell and report.'));
+      expect(result.success).toBe(true);
+      expect(prompts).toBe(0);
+      const lines = auditLines(dir);
+      expect(lines.some((l) => l.includes('"tool":"shell"') && l.includes('"decision":"deny"'))).toBe(true);
+    } finally {
+      await fake.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('hardline shell command is denied at the gate even under yolo', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-approve-hardline-'));
+    const fake = await startFakeOpenAI([
+      { content: 'Formatting.', toolCalls: [shellCall('s1', 'mkfs.ext4 /dev/null')], finishReason: 'tool_calls' },
+      { content: 'Refused, as it should be.', finishReason: 'stop' },
+    ]);
+    try {
+      const config = makeConfig(dir, fake.url);
+      const workspace = new Workspace(dir, '.mochi');
+      workspace.ensure();
+      const context = new ContextEngine(config, dir);
+      context.setGoal('format disk');
+      // Yolo auto-allows everything at the policy layer — the hardline
+      // floor sits below it and still denies (audited as a gate denial).
+      const agent = new Agent({ role: 'coder', config, workspace, events: new EventBus(), cwd: dir, context, permPolicy: 'yolo' });
+      const result = await agent.run(createTask('Format the disk', 'Run mkfs.ext4 /dev/null via shell.'));
+      expect(result.success).toBe(true);
+      const lines = auditLines(dir);
+      expect(lines.some((l) => l.includes('"tool":"shell"') && l.includes('"decision":"deny"'))).toBe(true);
+      const toolMsgs = context.getMessages().filter((m) => m.role === 'tool').map((m) => String(m.content ?? ''));
+      expect(toolMsgs.some((t) => t.includes('hardline'))).toBe(true);
     } finally {
       await fake.close();
       rmSync(dir, { recursive: true, force: true });

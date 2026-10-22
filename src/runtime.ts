@@ -65,7 +65,8 @@ export class Runtime {
    *  headless: ask_question resolves deterministic defaults instead. */
   promptUser?: import('./tools/user-prompt.js').PromptUserFn;
   /** Interactive approval resolver (TUI allow/deny menu). Assign via
-   *  setApprovalHandler(). Unset headless: the gate allows + audits. */
+   *  setApprovalHandler(). Unset headless: the gate denies by default any
+   *  call the policy does not auto-allow (see security/approval.ts). */
   approvalHandler?: import('./security/approval.js').ApprovalHandler;
   /** Host-registered in-process tools (SDK `registerTool`). Shared with the
    *  goal engine so every spawned agent (and subagent) can call them. */

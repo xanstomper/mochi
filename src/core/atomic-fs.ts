@@ -1,4 +1,4 @@
-import { writeFileSync, renameSync, mkdirSync, existsSync, unlinkSync, lstatSync } from 'node:fs';
+import { writeFileSync, renameSync, mkdirSync, existsSync, unlinkSync, lstatSync, chmodSync } from 'node:fs';
 import { dirname, join, basename } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
@@ -50,6 +50,10 @@ export function atomicWriteFileSync(filePath: string, content: string, opts?: { 
   const tmp = join(dir, `.${basename(filePath)}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`);
   try {
     writeFileSync(tmp, content, mode !== undefined ? { mode } : undefined);
+    // The creation mode above is masked by the process umask (e.g. umask 0007
+    // turns a preserved 0o755 into 0o750), so set the bits explicitly — this
+    // is what actually guarantees the existing file's mode survives the swap.
+    if (mode !== undefined) { try { chmodSync(tmp, mode); } catch { /* best effort */ } }
     renameSync(tmp, filePath);
   } catch {
     try { unlinkSync(tmp); } catch { /* best effort */ }
