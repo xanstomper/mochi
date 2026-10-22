@@ -110,6 +110,8 @@ Usage:
   mochi memory
   mochi inspect "<query>"
   mochi trace [<goalId>]             # replay the run trace for a goal
+  mochi gate run|baseline|freeze|check  # frozen regression gate (bench/frozen/)
+  mochi sleeptime [--cap <usd>] [--dry-run]  # nightly consolidation pipeline (repair+curator+gate+curriculum, hard spend cap)
   mochi session list                 # list past sessions
   mochi session search "<text>"       # full-text search past transcripts
   mochi speculate "<question>"
@@ -581,7 +583,7 @@ async function main() {
     // daily) so learning compounds unattended. Unit in
     // ./self-train-schedule.js; this stays a thin adapter.
     if (flags.schedule !== undefined) {
-      const { validateTrainSchedule, trainSchedule, trainCronPrompt } = await import('./self-train-schedule.js');
+      const { validateTrainSchedule, trainSchedule, sleeptimeCronPrompt } = await import('./self-train-schedule.js');
       const bad = validateTrainSchedule(flags.schedule === true ? undefined : flags.schedule);
       if (bad) { console.error(bad); process.exit(1); }
       const rest = positional.slice(1);
@@ -597,7 +599,7 @@ async function main() {
       const res = await fetch(`http://127.0.0.1:${info?.port}/api/cron`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${info?.token}` },
-        body: JSON.stringify({ action: 'add', prompt: trainCronPrompt(focus), schedule: trainSchedule(flags.schedule === true ? undefined : flags.schedule) }),
+        body: JSON.stringify({ action: 'add', prompt: sleeptimeCronPrompt(focus), schedule: trainSchedule(flags.schedule === true ? undefined : flags.schedule) }),
       });
       const data = (await res.json()) as { ok?: boolean; error?: string; id?: string };
       if (!res.ok || data.error) { console.error(data.error ?? 'Daemon error'); process.exit(1); }
@@ -2572,6 +2574,18 @@ async function main() {
     console.log(`Running self-repair for ${target!.signature} (${target!.kind}, seen ${target!.count}x)...`);
     const summary = await runtime.runPrompt(buildRepairPrompt(target!), { sessionId: runtime.activeSessionId });
     console.log(summary);
+    return;
+  }
+
+  if (first === 'gate') {
+    const { handleGateCommand } = await import('./evals/gate-cli.js');
+    await handleGateCommand({ positional, flags, cwd });
+    return;
+  }
+
+  if (first === 'sleeptime') {
+    const { handleSleeptimeCommand } = await import('./sleeptime/cli.js');
+    await handleSleeptimeCommand({ positional, flags, cwd });
     return;
   }
 

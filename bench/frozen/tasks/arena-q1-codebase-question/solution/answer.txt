@@ -1,0 +1,2 @@
+VAR=AUTH_SALT
+FALLBACK=pepper

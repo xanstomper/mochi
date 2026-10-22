@@ -1,0 +1,206 @@
+{
+  "frozenAt": "2026-10-22",
+  "kind": "mochi-frozen-gate-set",
+  "note": "Seed set v1: this repo's own harness-arena tasks (bench/arena.mjs, MCH-90) re-expressed as declarative frozen payloads. Grown in v2 (2026-10-22) with 12 history-derived tasks from pre-runway git commits (each entry names its source commit; starting states derive from the commit's parent tree). These are NOT SWE-bench or Terminal-Bench instances and must never be described as such. See README.md for provenance and the growth plan toward ~24 golden tasks.",
+  "setHash": "b483201beffb6356bb882a9724c6477019130150a1a0ee6ff9ade293fe3723c6",
+  "tasks": [
+    {
+      "category": "feature",
+      "hash": "420ecde4c9bd874ed7165b361b5b50af9319d9d168f6e6d78b38c3adfdefe674",
+      "id": "arena-f1-feature-add-test",
+      "prompt": "tasks/arena-f1-feature-add-test/prompt.txt",
+      "provenance": "bench/arena.mjs task f1 'feature-add-test' (MCH-90), re-expressed declaratively 2026-10-22; setup/check ported exactly",
+      "solutionDir": "tasks/arena-f1-feature-add-test/solution",
+      "source": "arena",
+      "verifier": "tasks/arena-f1-feature-add-test/verify.mjs"
+    },
+    {
+      "category": "fix",
+      "filesDir": "tasks/arena-b1-bugfix-off-by-one/files",
+      "hash": "ce9ffb7b00997df74f2b70e224f03de0ad193d0a7fd9913bc2b0e10861bfa34b",
+      "id": "arena-b1-bugfix-off-by-one",
+      "prompt": "tasks/arena-b1-bugfix-off-by-one/prompt.txt",
+      "provenance": "bench/arena.mjs task b1 'bugfix-off-by-one' (MCH-90), re-expressed declaratively 2026-10-22; setup/check ported exactly",
+      "solutionDir": "tasks/arena-b1-bugfix-off-by-one/solution",
+      "source": "arena",
+      "verifier": "tasks/arena-b1-bugfix-off-by-one/verify.mjs"
+    },
+    {
+      "category": "refactor",
+      "filesDir": "tasks/arena-r1-refactor-rename/files",
+      "hash": "6b03cf9c95f675ad9abf3076ae01ea045304d2757ae161c782a4b37591cc7837",
+      "id": "arena-r1-refactor-rename",
+      "prompt": "tasks/arena-r1-refactor-rename/prompt.txt",
+      "provenance": "bench/arena.mjs task r1 'refactor-rename' (MCH-90), re-expressed declaratively 2026-10-22; setup/check ported exactly",
+      "solutionDir": "tasks/arena-r1-refactor-rename/solution",
+      "source": "arena",
+      "verifier": "tasks/arena-r1-refactor-rename/verify.mjs"
+    },
+    {
+      "category": "research",
+      "filesDir": "tasks/arena-q1-codebase-question/files",
+      "hash": "35f27b2f372e1a5e5a2fd10f22f66d397e8b8ed33e7c8eac751cedf1a6394f3b",
+      "id": "arena-q1-codebase-question",
+      "prompt": "tasks/arena-q1-codebase-question/prompt.txt",
+      "provenance": "bench/arena.mjs task q1 'codebase-question' (MCH-90), re-expressed declaratively 2026-10-22; setup/check ported exactly",
+      "solutionDir": "tasks/arena-q1-codebase-question/solution",
+      "source": "arena",
+      "verifier": "tasks/arena-q1-codebase-question/verify.mjs"
+    },
+    {
+      "category": "refactor",
+      "filesDir": "tasks/arena-x1-multifile-refactor/files",
+      "hash": "94c5a9af04701472283d6af14bd9068b30e794973ae47f7036b81e25ad51aa47",
+      "id": "arena-x1-multifile-refactor",
+      "prompt": "tasks/arena-x1-multifile-refactor/prompt.txt",
+      "provenance": "bench/arena.mjs task x1 'multifile-refactor' (MCH-90), re-expressed declaratively 2026-10-22; setup/check ported exactly",
+      "solutionDir": "tasks/arena-x1-multifile-refactor/solution",
+      "source": "arena",
+      "verifier": "tasks/arena-x1-multifile-refactor/verify.mjs"
+    },
+    {
+      "category": "fix",
+      "filesDir": "tasks/arena-x2-cross-module-bugfix/files",
+      "hash": "63ab3ca7bdf58dcb495f4f8c81383aecf34b0d7ea934866dc701bc4b1bae5342",
+      "id": "arena-x2-cross-module-bugfix",
+      "prompt": "tasks/arena-x2-cross-module-bugfix/prompt.txt",
+      "provenance": "bench/arena.mjs task x2 'cross-module-bugfix' (MCH-90), re-expressed declaratively 2026-10-22; setup/check ported exactly",
+      "solutionDir": "tasks/arena-x2-cross-module-bugfix/solution",
+      "source": "arena",
+      "verifier": "tasks/arena-x2-cross-module-bugfix/verify.mjs"
+    },
+    {
+      "category": "fix",
+      "filesDir": "tasks/hist-fix-atomic-fs-umask-mode/files",
+      "hash": "f26f9accd62d610013221ab48ccd52b755941265e42ac676049b502d42596eda",
+      "id": "hist-fix-atomic-fs-umask-mode",
+      "prompt": "tasks/hist-fix-atomic-fs-umask-mode/prompt.txt",
+      "provenance": "git commit 3bdc1ea (fix(atomic-fs): chmod the temp file so preserved permission bits survive any umask); starting state = src/core/atomic-fs.ts at 3bdc1ea^, types stripped + CommonJS export (body byte-identical modulo the import/require conversion); verifier ports the commit's regression case (preserved 0755 under umask 0007)",
+      "solutionDir": "tasks/hist-fix-atomic-fs-umask-mode/solution",
+      "source": "golden",
+      "verifier": "tasks/hist-fix-atomic-fs-umask-mode/verify.mjs"
+    },
+    {
+      "category": "fix",
+      "filesDir": "tasks/hist-fix-restore-flag-order/files",
+      "hash": "aacf7ef27174d604e1f76946f8acb39a6ee3755b35c62316be80d7e4b0ad5047",
+      "id": "hist-fix-restore-flag-order",
+      "prompt": "tasks/hist-fix-restore-flag-order/prompt.txt",
+      "provenance": "git commit 0ab0cc3 (fix(security): git restore staged-detection — flag order no longer flips the verdict); DESTRUCTIVE/NETWORK lists + classifyCommand from src/security/security.ts at 0ab0cc3^ (types stripped, CommonJS; native accelerator call omitted — the TS reference path is what runs standalone; pattern sources verified identical to the source file); verifier ports the commit's regression tests in src/security/security.test.ts plus verdicts that were already correct",
+      "solutionDir": "tasks/hist-fix-restore-flag-order/solution",
+      "source": "golden",
+      "verifier": "tasks/hist-fix-restore-flag-order/verify.mjs"
+    },
+    {
+      "category": "fix",
+      "filesDir": "tasks/hist-fix-exec-keep-ends-truncation/files",
+      "hash": "b419b913b904a2cfb01ae7140a7265c9e6f2f7b474e87fb7bea9eca3815cd6d1",
+      "id": "hist-fix-exec-keep-ends-truncation",
+      "prompt": "tasks/hist-fix-exec-keep-ends-truncation/prompt.txt",
+      "provenance": "git commit e39d744 (fix(exec): keep-ends truncation — firehose output keeps head AND rolling tail); starting state re-expresses the inline stdout/stderr accumulation in src/exec.ts at e39d744^ (head-slice + marker + stream destroy) as an OutputCollector with identical observable behavior; verifier ports the commit's regression assertions from src/exec.test.ts",
+      "solutionDir": "tasks/hist-fix-exec-keep-ends-truncation/solution",
+      "source": "golden",
+      "verifier": "tasks/hist-fix-exec-keep-ends-truncation/verify.mjs"
+    },
+    {
+      "category": "fix",
+      "filesDir": "tasks/hist-fix-dashboard-token-leak/files",
+      "hash": "162a660bf84905a903874def7d298abb3002b4ce56016ed451feba0aa46390e7",
+      "id": "hist-fix-dashboard-token-leak",
+      "prompt": "tasks/hist-fix-dashboard-token-leak/prompt.txt",
+      "provenance": "git commit 55db719 (fix(daemon): stop leaking the bearer <redacted> via the dashboard, scope CORS to localhost); starting state models the parent route semantics in src/daemon/daemon.ts at 55db719^ (reqToken || auth.token embedded in served HTML; wildcard CORS); solution ports the commit's own helpers verbatim modulo types/CommonJS; verifier ports src/daemon/daemon-dashboard-auth.test.ts including its marker-token leak rule",
+      "solutionDir": "tasks/hist-fix-dashboard-token-leak/solution",
+      "source": "golden",
+      "verifier": "tasks/hist-fix-dashboard-token-leak/verify.mjs"
+    },
+    {
+      "category": "fix",
+      "filesDir": "tasks/hist-fix-racer-shell-verification/files",
+      "hash": "c4229dc92d60e3e9a60340470da32187dbc086790cda4b42971ddc643d9f8ee9",
+      "id": "hist-fix-racer-shell-verification",
+      "prompt": "tasks/hist-fix-racer-shell-verification/prompt.txt",
+      "provenance": "git commit bbcaa62 (fix(branch-racer): run verification through the shell); starting state = the parent's testCmd.split(' ') + execFile route in src/core/branch-racer.ts at bbcaa62^; verifier ports the commit's regression scenario from src/core/branch-racer.test.ts (env assignment + quoted arguments + && chain)",
+      "solutionDir": "tasks/hist-fix-racer-shell-verification/solution",
+      "source": "golden",
+      "verifier": "tasks/hist-fix-racer-shell-verification/verify.mjs"
+    },
+    {
+      "category": "feature",
+      "filesDir": "tasks/hist-feat-trace-corpus-guard/files",
+      "hash": "cd51f0436fa1b3fda6313059ad7e9acd75bbd3c3ef5bd7dcfc9a6ef64e8e230e",
+      "id": "hist-feat-trace-corpus-guard",
+      "prompt": "tasks/hist-feat-trace-corpus-guard/prompt.txt",
+      "provenance": "git commit b0b113c (feat(retention): never prune or GC a completed run's trace before its trajectory is exported); starting state = pruneTraces from src/observability/trace.ts at b0b113c^ (verbatim modulo types/CommonJS); solution adds the commit's guard helpers verbatim; verifier ports the commit's retention scenarios (spared unexported-completed, pruned exported/incomplete/malformed, protection lapses on export)",
+      "solutionDir": "tasks/hist-feat-trace-corpus-guard/solution",
+      "source": "golden",
+      "verifier": "tasks/hist-feat-trace-corpus-guard/verify.mjs"
+    },
+    {
+      "category": "feature",
+      "filesDir": "tasks/hist-feat-search-regex-mode/files",
+      "hash": "082534eae661742bf30cb22fc8c24749ec51939af03ad050f37206a9b398a48d",
+      "id": "hist-feat-search-regex-mode",
+      "prompt": "tasks/hist-feat-search-regex-mode/prompt.txt",
+      "provenance": "git commit db8ad9b (feat(search): add regex mode to the search tool); starting state = the matching core of fallbackSearch in src/tools/search.ts at db8ad9b^ (escapeRegex literal match) made synchronous for the frozen workdir; solution adds the commit's validateRegex verbatim and the regex branch; verifier ports the cases in src/tools/search.test.ts (alternation, identifier families, lookahead, error surfacing)",
+      "solutionDir": "tasks/hist-feat-search-regex-mode/solution",
+      "source": "golden",
+      "verifier": "tasks/hist-feat-search-regex-mode/verify.mjs"
+    },
+    {
+      "category": "feature",
+      "filesDir": "tasks/hist-feat-trajectory-record/files",
+      "hash": "3c23031b97b208a9903349726da9b1368aaf2b0ecc390413c8b9d16a45c2744c",
+      "id": "hist-feat-trajectory-record",
+      "prompt": "tasks/hist-feat-trajectory-record/prompt.txt",
+      "provenance": "git commit 0b225a8 (feat(trajectory): build structured trajectory records from run traces); starting state = the pre-feature raw-dump export CLI; solution ports buildTrajectory from src/observability/trajectory.ts at 0b225a8 (types stripped, CommonJS; line-checked against the source); verifier checks the record contract of src/observability/trajectory.test.ts across three fixture traces (clean, looping, messy)",
+      "solutionDir": "tasks/hist-feat-trajectory-record/solution",
+      "source": "golden",
+      "verifier": "tasks/hist-feat-trajectory-record/verify.mjs"
+    },
+    {
+      "category": "refactor",
+      "filesDir": "tasks/hist-refactor-spec-exec-parse-gate/files",
+      "hash": "06b07bc28b6768c369d7c6be835b65a995bba11b47e30d34b3d582c87f679c03",
+      "id": "hist-refactor-spec-exec-parse-gate",
+      "prompt": "tasks/hist-refactor-spec-exec-parse-gate/prompt.txt",
+      "provenance": "git commit 0c6db59 (refactor(loop): skip speculative execution parse attempts for mutating or incomplete calls); starting state extracts the pre-refactor inline gating in src/agent/loop.ts at 0c6db59^ with a parseAttempts counter as the disclosed observability harness; verifier pins the refactor's wins (zero parses for mutating/incomplete streams) and identical fire behavior",
+      "solutionDir": "tasks/hist-refactor-spec-exec-parse-gate/solution",
+      "source": "golden",
+      "verifier": "tasks/hist-refactor-spec-exec-parse-gate/verify.mjs"
+    },
+    {
+      "category": "refactor",
+      "filesDir": "tasks/hist-refactor-result-hash-lanes/files",
+      "hash": "f04fd931962dd29518c64b8dce16c65be07175c470646b765b4ab005219b95b1",
+      "id": "hist-refactor-result-hash-lanes",
+      "prompt": "tasks/hist-refactor-result-hash-lanes/prompt.txt",
+      "provenance": "git commit c3486a0 (refactor(loop): two-lane 32-bit FNV hash for tool results — no more BigInt on the hot path); starting state = the BigInt FNV-1a core in src/agent/loop.ts at c3486a0^ verbatim modulo types; verifier pins the new algorithm's known-answer keys and a calibrated speed bound (two-lane ~0.12 ms vs BigInt ~3.8 ms median per ~48K-char hash on the build machine)",
+      "solutionDir": "tasks/hist-refactor-result-hash-lanes/solution",
+      "source": "golden",
+      "verifier": "tasks/hist-refactor-result-hash-lanes/verify.mjs"
+    },
+    {
+      "category": "research",
+      "filesDir": "tasks/hist-research-provider-registry/files",
+      "hash": "6d2d3436a4f2c5a857619bb9f44c8cc5a49efbf7ec26002c15ef5e4087755f8f",
+      "id": "hist-research-provider-registry",
+      "prompt": "tasks/hist-research-provider-registry/prompt.txt",
+      "provenance": "src/model/providers.ts verbatim at git commit 953ae4f (the pre-runway boundary); ground truth counted from the file itself: 41 provider entries, antigravity defaultModel gemini-3.8-flash, ollama on baseUrl port 11434",
+      "solutionDir": "tasks/hist-research-provider-registry/solution",
+      "source": "golden",
+      "verifier": "tasks/hist-research-provider-registry/verify.mjs"
+    },
+    {
+      "category": "research",
+      "filesDir": "tasks/hist-research-exec-defaults/files",
+      "hash": "0df73c62d15cc30a9df7f1240987dfe4a157331f4b1ccf15f368b316dfc0b5c6",
+      "id": "hist-research-exec-defaults",
+      "prompt": "tasks/hist-research-exec-defaults/prompt.txt",
+      "provenance": "src/exec.ts lines 1-70 verbatim at e39d744^ (pre-runway); ground truth read from the excerpt: DEFAULT_TIMEOUT_MS = 120_000 (line 50), DEFAULT_MAX_OUTPUT = 2_000_000 (line 51), killGraceMs default 1500 (line 62)",
+      "solutionDir": "tasks/hist-research-exec-defaults/solution",
+      "source": "golden",
+      "verifier": "tasks/hist-research-exec-defaults/verify.mjs"
+    }
+  ],
+  "version": 2
+}

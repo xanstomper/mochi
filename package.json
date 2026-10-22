@@ -38,6 +38,7 @@
     "bench:stream": "tsx bench/streaming.mjs",
     "typecheck": "tsc --noEmit",
     "bench:memory": "node bench/memory.mjs",
+    "gate": "tsx src/cli.ts gate run",
     "bench:speculation": "tsx bench/speculation.mjs",
     "release:check": "node scripts/release-check.mjs"
   },

@@ -1,0 +1,29 @@
+{
+  "kind": "mochi-frozen-gate-blocklist-additions",
+  "note": "Ids of the frozen regression-gate set. Training/curriculum ingestion must drop these exactly like eval instances (see bench/frozen/README.md). Merge into eval_blocklist.json extra_blocked.instance_ids, or check alongside it.",
+  "generatedAt": "2026-10-22",
+  "extra_blocked": {
+    "instance_ids": [
+      "arena-f1-feature-add-test",
+      "arena-b1-bugfix-off-by-one",
+      "arena-r1-refactor-rename",
+      "arena-q1-codebase-question",
+      "arena-x1-multifile-refactor",
+      "arena-x2-cross-module-bugfix",
+      "hist-fix-atomic-fs-umask-mode",
+      "hist-fix-restore-flag-order",
+      "hist-fix-exec-keep-ends-truncation",
+      "hist-fix-dashboard-token-leak",
+      "hist-fix-racer-shell-verification",
+      "hist-feat-trace-corpus-guard",
+      "hist-feat-search-regex-mode",
+      "hist-feat-trajectory-record",
+      "hist-refactor-spec-exec-parse-gate",
+      "hist-refactor-result-hash-lanes",
+      "hist-research-provider-registry",
+      "hist-research-exec-defaults"
+    ],
+    "base_commits": [],
+    "repo_commit_pairs": []
+  }
+}
