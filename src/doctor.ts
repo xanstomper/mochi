@@ -37,6 +37,11 @@ export interface DoctorReport {
   cron: { jobs: number };
   sessions: { sqlite: boolean; count: number };
   harness: { openIssues: number };
+  /** Flaky-test quarantine registry (.mochi/state/flaky-tests.json):
+   *  tracked = every test ever observed flaking (post-decay); quarantined =
+   *  score >= threshold — still run, but non-blocking and excluded from
+   *  mutation checks. */
+  flaky: { tracked: number; quarantined: number; tests: Array<{ id: string; score: number; flakeEvents: number; lastSeenAt: number }> };
   theme: { id: string; name: string; stuck: boolean };
   diagnostics: { typescript: boolean; python: boolean };
   sandbox: { bubblewrap: boolean };
@@ -140,6 +145,21 @@ export async function doctorReport(opts: {
     harnessOpenIssues = listHarnessIssues(stateDir, { status: 'open' }).length;
   } catch { /* best-effort */ }
 
+  // Flaky-test quarantine: stateDir here is the `.mochi` dir itself, so the
+  // Workspace root is its parent. Read-only — the doctor never mutates the
+  // registry (decay is applied in memory for display).
+  let flakySection: DoctorReport['flaky'] = { tracked: 0, quarantined: 0, tests: [] };
+  try {
+    const { flakyQuarantineReport } = await import('./core/flaky.js');
+    const { Workspace } = await import('./workspace.js');
+    const rep = flakyQuarantineReport(new Workspace(resolve(stateDir, '..'), '.mochi'));
+    flakySection = {
+      tracked: rep.tracked,
+      quarantined: rep.quarantined.length,
+      tests: rep.entries.map((e) => ({ id: e.id, score: e.score, flakeEvents: e.flakeEvents, lastSeenAt: e.lastSeenAt })),
+    };
+  } catch { /* best-effort: registry absent or unreadable */ }
+
   // Skill regression doctor (MCH-20): scan the skills directories for degraded
   // entries — empty files, missing frontmatter, or stale orphans.
   const candidateDirs = [
@@ -239,6 +259,7 @@ export async function doctorReport(opts: {
     cron: { jobs: cronJobs },
     sessions: { sqlite, count: sessionCount },
     harness: { openIssues: harnessOpenIssues },
+    flaky: flakySection,
   theme: currentThemeInfo(),
     diagnostics: { typescript: tsAvailable, python: pyAvailable },
     sandbox: { bubblewrap },
@@ -261,6 +282,9 @@ export async function doctorReport(opts: {
     for (const s of degradedSkills) {
       problems.push(`Skill "${s.name}" is degraded (${s.status}): ${s.path}`);
     }
+  }
+  if (flakySection.quarantined > 0) {
+    problems.push(`${flakySection.quarantined} test(s) quarantined as flaky (score >= 2 in .mochi/state/flaky-tests.json): ${flakySection.tests.filter((t) => t.score >= 2).slice(0, 3).map((t) => t.id).join(', ')}. They still run, but no longer block verification or feed mutation checks — fix or delete them to restore full signal.`);
   }
   if (report.acp && !report.acp.ok) problems.push(`ACP bridge broken: ${report.acp.detail} — editors (VS Code/JetBrains) will fail. Run \`mochi acp --check\`.`);
   if (report.onboarding && !report.onboarding.done) problems.push('First-run setup not completed — run `mochi onboard --yes` to wire providers/skills/MCPs.');
@@ -369,6 +393,7 @@ export function formatDoctor(r: DoctorReport): string {
     `  codegraph     ${ok(r.index.codegraph === 'ready')} ${r.index.codegraph}`,
     `  sessions      ${ok(true)} ${r.sessions.sqlite ? `FTS5 enabled (${r.sessions.count})` : `JSON fallback (${r.sessions.count})`}`,
     `  harness       ${ok(r.harness.openIssues === 0)} ${r.harness.openIssues === 0 ? 'no open issues' : `${r.harness.openIssues} open issue(s) — run mochi selfheal`}`,
+    `  flaky tests   ${ok(r.flaky.quarantined === 0)} ${r.flaky.tracked === 0 ? 'none tracked' : `${r.flaky.tracked} tracked, ${r.flaky.quarantined} quarantined (still run; non-blocking)`}`,
     `  daemon        ${ok(r.daemon.running)} ${r.daemon.running ? `running on :${r.daemon.port}` : 'not running'}`,
     `  diagnostics   TS:${r.diagnostics.typescript ? 'yes' : 'no'} Python:${r.diagnostics.python ? 'yes' : 'no'}`,
     `  sandbox       ${r.sandbox.bubblewrap ? 'ok    bubblewrap available (safety.sandbox / shell sandbox:true)' : 'MISS  no bwrap (sandbox unavailable)'}`,

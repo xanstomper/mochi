@@ -13,12 +13,30 @@ import { runMutationCheck, type MutationCheck } from './core/mutation.js';
 import { classifyContentOnly } from './core/one-shot.js';
 import { isGreenfieldTask } from './core/greenfield.js';
 import { planTargetedTests } from './core/test-select.js';
+import {
+  analyzeFailure, exitCodeOfEnvelope, flakeCommandKey, formatFlakyHits, gitChangedFiles,
+  isKnownFlaky, knownFlakyCommandKeys, loadFlakyRegistry, partitionFlakes, recordCleanPass,
+  recordFlakes, saveFlakyRegistry, type FlakyRegistry,
+} from './core/flaky.js';
 
 function execFileAsync(cmd: string, args: string[], cwd: string): Promise<string> {
   return execArgvText(cmd, args, { cwd, maxBuffer: 4 * 1024 * 1024 });
 }
 
-export type VerificationStatus = 'PASS' | 'FAIL' | 'PARTIAL' | 'BLOCKED';
+export type VerificationStatus = 'PASS' | 'FAIL' | 'PARTIAL' | 'BLOCKED' | 'FLAKY-PASS';
+
+/** A test observed flaking during this verify run (failed, then passed on a
+ *  bounded re-run with no code change). Surfaced on the result so summaries,
+ *  traces, and downstream signal consumers never mistake a flake-resolved
+ *  pass for a trustworthy one. */
+export interface FlakyTestRef {
+  id: string;
+  command: string;
+  /** Already quarantined in the flaky registry (score >= threshold). */
+  known: boolean;
+  /** The flake is one of this task's own target tests — warn harder. */
+  ownTarget: boolean;
+}
 
 export interface VerificationEvidence {
   source: string;
@@ -27,6 +45,10 @@ export interface VerificationEvidence {
   /** True when the check was skipped because the command is not installed
    *  (exit 127); such checks are no-ops, not failures. */
   skipped?: boolean;
+  /** Test ids this command's failure resolved as flakes on re-run. Set on
+   *  passed evidence: the command counts green, but via quarantine
+   *  semantics, not trust. */
+  flaky?: string[];
 }
 
 export interface VerificationResult {
@@ -36,6 +58,8 @@ export interface VerificationResult {
   recommendation: string;
   evidence: VerificationEvidence[];
   summary: string;
+  /** Flakes observed during this run (empty when the run was clean). */
+  flaky?: FlakyTestRef[];
 }
 
 export interface VerifierOptions {
@@ -78,6 +102,61 @@ export class VerifierEngine {
     }
 
     const evidence: VerificationEvidence[] = [];
+    // Flaky-test quarantine state for this run: flakes observed across all
+    // commands accumulate here and ride out on the result (never silent).
+    const flakyRegistry: FlakyRegistry = loadFlakyRegistry(this.workspace);
+    const knownFlakyAtStart = new Set(knownFlakyCommandKeys(flakyRegistry));
+    const flakyRefs: FlakyTestRef[] = [];
+    let changedFilesCache: string[] | undefined;
+    const changedFiles = () => (changedFilesCache ??= gitChangedFiles(this.cwd));
+
+    // Bounded re-run classification for one failed command execution.
+    // Returns 'flaky' when a re-run of the unchanged command went green and
+    // none of the flaked tests live in files this run changed (anti-gaming:
+    // own-edit flakes are FAIL, recorded but never excused). Partial flakes
+    // alongside consistent failures still record — the registry learns even
+    // from runs that correctly fail.
+    const resolveFailure = async (
+      command: string,
+      firstResult: string,
+    ): Promise<{ kind: 'flaky'; hits: FlakyTestRef[] } | { kind: 'fail'; output: string; note?: string }> => {
+      const key = flakeCommandKey(command);
+      const analysis = await analyzeFailure(
+        command,
+        { exitCode: exitCodeOfEnvelope(firstResult), output: firstResult },
+        async () => {
+          this.budget.recordToolCall();
+          const out = await this.runCommand(command);
+          return { exitCode: exitCodeOfEnvelope(out), output: out };
+        },
+      );
+      if (analysis.flakyIds.length > 0) {
+        recordFlakes(flakyRegistry, key, analysis.flakyIds, firstResult);
+        saveFlakyRegistry(this.workspace, flakyRegistry);
+      }
+      if (!analysis.eligible || !analysis.resolved || analysis.flakyIds.length === 0) {
+        return {
+          kind: 'fail',
+          output: analysis.eligible ? analysis.lastOutput : firstResult,
+          note: analysis.flakyIds.length > 0
+            ? `Note: ${analysis.flakyIds.join(', ')} flaked during re-runs (recorded in the flaky registry), but no re-run went fully green, so this failure stands.`
+            : undefined,
+        };
+      }
+      const parts = partitionFlakes(analysis.flakyIds, changedFiles(), task.fileScope ?? []);
+      const hits: FlakyTestRef[] = parts.excused.map((id) => ({
+        id, command, known: isKnownFlaky(flakyRegistry, id), ownTarget: parts.ownTarget.includes(id),
+      }));
+      flakyRefs.push(...hits);
+      if (parts.ownEdit.length > 0) {
+        return {
+          kind: 'fail',
+          output: analysis.lastOutput,
+          note: `Flake excuse DENIED for ${parts.ownEdit.join(', ')}: the test file was changed by this run, so its failure is treated as a real failure, not flakiness.`,
+        };
+      }
+      return { kind: 'flaky', hits };
+    };
     const repo = detectRepo(this.cwd);
     const diff = await this.safeGitDiff(task.fileScope);
     evidence.push({ source: 'diff', result: diff ? diff.slice(0, 2000) : 'No git changes detected', passed: true });
@@ -130,20 +209,35 @@ export class VerifierEngine {
         const tMissing = tCode === 127 || tCode === 9009;
         const tOk = tCode === 0;
         if (!tOk && !tMissing && !matchesBaseline(resolvedBaseline, targetedPlan.command, tRes)) {
-          evidence.push({
-            source: `command:${targetedPlan.command}`,
-            result: `[TARGETED: ${targetedPlan.reason}] ${tRes.slice(0, 2000)}`,
-            passed: false,
-          });
-          const early = this.build(
-            'FAIL',
-            [],
-            [`${targetedPlan.command} failed`],
-            'The tests related to your changed files failed. Fix them, then verify again (the full suite runs once the targeted set is green).',
-            evidence,
-          );
-          await this.hooks.runAfter('after_verify', { task: task.id, status: early.status });
-          return early;
+          // Flake check before the early FAIL: a targeted failure that goes
+          // green on a bounded re-run of the unchanged command is a flake,
+          // not breakage — fall through to the full gate instead of failing
+          // good work. Own-edit flakes are denied inside resolveFailure.
+          const flake = await resolveFailure(targetedPlan.command, tRes);
+          if (flake.kind === 'flaky') {
+            evidence.push({
+              source: `command:${targetedPlan.command}`,
+              result: `[TARGETED: ${targetedPlan.reason}] [FLAKY: failed, then passed on re-run with no code changes] ${tRes.slice(0, 1200)}`,
+              passed: true,
+              flaky: flake.hits.map((h) => h.id),
+            });
+          } else {
+            evidence.push({
+              source: `command:${targetedPlan.command}`,
+              result: `[TARGETED: ${targetedPlan.reason}] ${flake.output.slice(0, 2000)}${flake.note ? `\n${flake.note}` : ''}`,
+              passed: false,
+            });
+            const early = this.build(
+              'FAIL',
+              [],
+              [`${targetedPlan.command} failed`],
+              'The tests related to your changed files failed. Fix them, then verify again (the full suite runs once the targeted set is green).',
+              evidence,
+            );
+            if (flakyRefs.length > 0) early.flaky = flakyRefs;
+            await this.hooks.runAfter('after_verify', { task: task.id, status: early.status });
+            return early;
+          }
         }
         // Targeted passed or was inconclusive (missing tool / pre-existing
         // failure) → fall through to the authoritative full gate below.
@@ -188,10 +282,36 @@ export class VerifierEngine {
         });
         continue;
       }
+      if (passedNow) {
+        // A clean first-attempt pass is healing evidence for this command's
+        // known flakes: decay their scores (persisted only when it bites).
+        if (recordCleanPass(flakyRegistry, flakeCommandKey(command))) {
+          saveFlakyRegistry(this.workspace, flakyRegistry);
+        }
+        evidence.push({
+          source: `command:${command}`,
+          result: result.slice(0, 2000),
+          passed: true,
+        });
+        continue;
+      }
+      // Genuine failure: classify before judging. Bounded re-runs of the
+      // unchanged command separate flakes (excused, loudly) from consistent
+      // breakage (FAIL stands) and own-edit flakes (FAIL, excuse denied).
+      const flake = await resolveFailure(command, result);
+      if (flake.kind === 'flaky') {
+        evidence.push({
+          source: `command:${command}`,
+          result: `[FLAKY: failed, then passed on re-run with no code changes — counted green via quarantine semantics, not trust] ${result.slice(0, 1200)}`,
+          passed: true,
+          flaky: flake.hits.map((h) => h.id),
+        });
+        continue;
+      }
       evidence.push({
         source: `command:${command}`,
-        result: result.slice(0, 2000),
-        passed: passedNow,
+        result: `${flake.output.slice(0, 2000)}${flake.note ? `\n${flake.note}` : ''}`,
+        passed: false,
       });
     }
 
@@ -205,9 +325,24 @@ export class VerifierEngine {
     const testCommand = task.verificationCommand ?? repo.testCommand;
     const testCmdEvidence = testCommand ? evidence.find((e) => e.source === `command:${testCommand}`) : undefined;
     const testCommandRuns = Boolean(testCommand) && testCmdEvidence?.passed === true && testCmdEvidence?.skipped !== true;
+    // Flaky commands are excluded from mutation checks: a baseline that
+    // flips on its own makes every mutant verdict (killed OR survived)
+    // unreadable noise. "Flaky" = quarantined in the registry, or observed
+    // flaking during THIS verify run.
+    const testCommandFlaky = Boolean(testCommand) && (
+      knownFlakyAtStart.has(flakeCommandKey(testCommand as string)) ||
+      flakyRefs.some((f) => f.command === testCommand)
+    );
+    if (testCommand && testCommandRuns && testCommandFlaky) {
+      evidence.push({
+        source: 'mutation-check',
+        result: `Mutation check skipped: "${testCommand}" is a known-flaky command (flaky-test quarantine) — a flaky baseline makes mutant verdicts unreadable.`,
+        passed: true,
+      });
+    }
     // Gate on the TEST command itself passing — the old `evidence.some(passed)`
     // clause fired mutation when only lint passed but tests failed/never ran.
-    if (testCommand && testCommandRuns) {
+    if (testCommand && testCommandRuns && !testCommandFlaky) {
       try {
         mutationCheck = await runMutationCheck(this.cwd, testCommand, async (cmd) => this.exitCode(cmd), async (cmd) => this.captureOutput(cmd), task.fileScope);
         if (mutationCheck.applied) {
@@ -231,6 +366,22 @@ export class VerifierEngine {
     if (mutationCheck.applied && mutationCheck.survived && verdict.status === 'PASS') {
       verdict = this.build('PARTIAL', verdict.passed, [...verdict.failed, 'Mutation check: injected logic bug was NOT caught by the tests; coverage is weak.'], 'Tests passed but did not catch an injected logic mutation. Harden your tests to cover this path and re-verify.', evidence);
     }
+
+    // FLAKY-PASS: the run is green only because failures resolved as flakes
+    // on re-run. That must not read as a trustworthy PASS — distinct status,
+    // flaky tests named in the summary — but it does NOT block completion:
+    // the suite demonstrably passed with the tree unchanged.
+    if (verdict.status === 'PASS' && flakyRefs.length > 0) {
+      const byCommand = new Map<string, FlakyTestRef[]>();
+      for (const ref of flakyRefs) {
+        const list = byCommand.get(ref.command) ?? [];
+        list.push(ref);
+        byCommand.set(ref.command, list);
+      }
+      const flakyNote = [...byCommand.entries()].map(([cmd, hits]) => formatFlakyHits(hits, cmd)).join('\n');
+      verdict = this.build('FLAKY-PASS', verdict.passed, verdict.failed, `${verdict.recommendation}\n${flakyNote}`, evidence);
+    }
+    if (flakyRefs.length > 0) verdict.flaky = flakyRefs;
 
     await this.hooks.runAfter('after_verify', { task: task.id, status: verdict.status });
     return verdict;
@@ -258,7 +409,7 @@ export class VerifierEngine {
     ] as import('./types.js').ChatMessage[];
     try {
       const response = await provider.chat(messages, [], { temperature: 0 });
-      if (response.usage) this.budget.recordTokens(response.usage.totalTokens, this.config.model.model, this.config.model.provider, response.usage.costUsd ?? 0);
+      if (response.usage) this.budget.recordUsage(response.usage, this.config.model.model, this.config.model.provider);
       const cleaned = (response.content ?? '').replace(/```json\s*|\s*```/g, '').trim();
       const parsed = JSON.parse(cleaned);
       // Unparseable status falls back to the rule-based verdict (return null),

@@ -17,6 +17,7 @@
 import { existsSync, readFileSync, appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { homedir } from 'node:os';
+import { redact } from '../security/security.js';
 
 export type FeedbackVerdict = 'good' | 'bad';
 
@@ -47,7 +48,17 @@ function ensureFile(): void {
 
 export function recordFeedback(entry: FeedbackEntry): void {
   ensureFile();
-  appendFileSync(getFeedbackFile(), JSON.stringify(entry) + '\n');
+  // Redact BEFORE persisting (same posture as session-store transcripts and
+  // traces): the snippet is a raw slice of an assistant answer and the reason
+  // is free user text — either can carry a pasted API key or token, and this
+  // file is later injected back into prompts via feedbackDigest(). The digest
+  // only needs the pattern of the answer, never a live secret.
+  const safe: FeedbackEntry = {
+    ...entry,
+    snippet: redact(entry.snippet),
+    ...(entry.reason ? { reason: redact(entry.reason) } : {}),
+  };
+  appendFileSync(getFeedbackFile(), JSON.stringify(safe) + '\n');
 }
 
 export function loadAllFeedback(): FeedbackEntry[] {
