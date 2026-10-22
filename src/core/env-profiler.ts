@@ -136,6 +136,11 @@ export function getHostEnvironmentProfile(forceRefresh = false): HostEnvironment
     if (!present.size || present.has(c.name)) {
       const probe = probeBinary(c.name, c.flag);
       if (probe.available) runtimes[c.name] = probe;
+      // P5 (cache stability): the PATH scan is deterministic; a version
+      // spawn that times out under load must not REMOVE a binary the scan
+      // found — the profile feeds the stable prompt prefix, and a binary
+      // flapping in/out between runs is a guaranteed prefix-cache break.
+      else if (present.has(c.name)) runtimes[c.name] = { name: c.name, available: true };
     }
   }
 
@@ -152,6 +157,8 @@ export function getHostEnvironmentProfile(forceRefresh = false): HostEnvironment
     }
     const probe = probeBinary(c.name, c.flag);
     if (probe.available) buildTools[c.name] = probe;
+    // P5: same PATH-scan-wins rule as runtimes — probe timeout ≠ absent.
+    else if (present.has(c.name)) buildTools[c.name] = { name: c.name, available: true };
   }
 
   const linters: Record<string, ToolchainBinary> = {};
@@ -159,6 +166,8 @@ export function getHostEnvironmentProfile(forceRefresh = false): HostEnvironment
     if (!present.size || present.has(c.name)) {
       const probe = probeBinary(c.name, c.flag);
       if (probe.available) linters[c.name] = probe;
+      // P5: same PATH-scan-wins rule as runtimes — probe timeout ≠ absent.
+      else if (present.has(c.name)) linters[c.name] = { name: c.name, available: true };
     }
   }
 

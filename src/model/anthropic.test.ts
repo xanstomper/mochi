@@ -232,3 +232,22 @@ describe('anthropic SSE streaming', () => {
     }
   }, 60_000);
 });
+
+describe('anthropic stable/volatile system split (P5)', () => {
+  it('cache breakpoint covers only the first system message; later ones go out uncached, in order', async () => {
+    const captured: { body?: unknown } = {};
+    stubFetch(captured);
+    const p = createAnthropicProvider({ baseUrl: 'https://api.anthropic.com', model: 'm', apiKey: 'k' });
+    await p.chat([
+      { role: 'system', content: 'STABLE PROMPT' },
+      { role: 'user', content: 'hi' },
+      { role: 'system', content: 'VOLATILE STATE' },
+    ], []);
+    const body = captured.body as { system?: Array<{ type: string; text: string; cache_control?: { type: string } }> };
+    expect(body.system).toHaveLength(2);
+    expect(body.system?.[0]).toEqual({ type: 'text', text: 'STABLE PROMPT', cache_control: { type: 'ephemeral' } });
+    expect(body.system?.[1]).toEqual({ type: 'text', text: 'VOLATILE STATE' });
+    // No system text dropped or reordered by the split.
+    expect(body.system?.map((b) => b.text).join('\n\n')).toBe('STABLE PROMPT\n\nVOLATILE STATE');
+  });
+});

@@ -65,7 +65,7 @@ function buildContractSection(cwd: string): string {
   if (!rules) return '';
   const source = basename(findRulesFile(cwd) ?? 'MOCHI.md');
   // The rules file is project-supplied (untrusted) content — the same file
-  // context.ts loads via loadProjectRules. Scan it with the shared
+  // context.ts loads via loadRootRules/loadModularRules. Scan it with the shared
   // injection scanner: on a strong hit the content is omitted entirely
   // (an omission note takes its place), never injected raw. Without this,
   // the context.ts scan would be bypassed by this second loader.
