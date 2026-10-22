@@ -2,6 +2,15 @@ import { resolve, dirname } from 'node:path';
 import { runArgv } from '../exec.js';
 import { fileURLToPath } from 'node:url';
 import type { Tool } from './types.js';
+import {
+  forgetProfile,
+  isProfileName,
+  listProfiles,
+  looksLikePath,
+  resolveProfileDir,
+  revokeProfile,
+  touchProfile,
+} from '../browser/profiles.js';
 
 // Cline-grade browser automation for Mochi WITHOUT a runtime dependency.
 //
@@ -109,6 +118,17 @@ export function buildDriverArgs(input: BrowserDriverArgsInput): string[] {
   } else if (command === 'upload') {
     // upload <file-input-selector> <file-path[,path...]>
     driverArgs.push('upload', sel ?? '', pathArg ?? '');
+  } else if (command === 'a11y') {
+    // a11y [selector] — accessibility-tree snapshot of page or element.
+    driverArgs.push('a11y', sel ?? '');
+  } else if (command === 'batch') {
+    // batch: the steps JSON rides the `js` slot — [{command, args}, ...]
+    // executed in ONE browser session (see the tool description for why
+    // multi-action flows require it).
+    driverArgs.push('batch', js ?? '');
+  } else if (command === 'netlog') {
+    // netlog [count|clear] — the count/clear arg rides the selector slot.
+    driverArgs.push('netlog', sel ?? text ?? '');
   } else {
     // selector-based commands (click/text/links/html/inputs/snap/waitfor/
     // hover/extract, and scroll — whose selector slot may hold a selector
@@ -125,29 +145,46 @@ export function buildDriverArgs(input: BrowserDriverArgsInput): string[] {
   return driverArgs;
 }
 
+/** Render the profile registry for the `profiles` command. */
+export function summarizeProfiles(): string {
+  const profiles = listProfiles();
+  if (profiles.length === 0) return 'browser profiles: none registered yet (the first browser call creates the "default" profile).';
+  const lines = [`browser profiles (${profiles.length}) — a profile is a credential store: it holds that name's cookies/logins:`];
+  for (const p of profiles) {
+    const state = p.revoked ? `REVOKED ${p.revokedAt ? new Date(p.revokedAt).toISOString() : ''}` : 'active';
+    const used = p.lastUsedAt ? new Date(p.lastUsedAt).toISOString() : 'never';
+    lines.push(`  ${p.name} [${state}] created ${new Date(p.createdAt).toISOString()} last used ${used}${p.origins.length ? ` origins: ${p.origins.join(', ')}` : ''}`);
+  }
+  return lines.join('\n');
+}
+
 export const browserTool: Tool = {
   def: {
     name: 'browser',
     description:
       'Drive a real headless browser (navigate, read text/DOM/links, click, type/fill, press keys, scroll, hover, select options, wait for elements, eval JS, screenshot). ' +
-      'For testing web apps, dynamic pages, and UI verification. State (cookies/localStorage/login) persists across calls via a persistent browser profile, and the open tab set (URLs + active tab) persists too, so multi-step and multi-tab flows work. Page console errors are reported in the result. ' +
-      'Commands: navigate <url> | click <css> | type <css> <text> | fill <css> <text> | press <key> | scroll [css|pixels] | waitfor <css|networkidle|url:<part>> | select <css> <value> | hover <css> | ' +
-      'text [css] | links [css] | html [css] | inputs [css] | extract [css] | eval <js> | screenshot <path> | ' +
-      'tabs | newtab [url] | switchtab <index|url-part> | closetab [index|url-part] | download <css> [dest] | upload <css> <file-path>. ' +
+      'For testing web apps, dynamic pages, and UI verification. State (cookies/localStorage/login) persists across calls via a NAMED persistent browser profile, and the open tab set (URLs + active tab) persists too, so multi-step and multi-tab flows work. Page console errors are reported in the result. ' +
+      'Commands: navigate <url> | click <css> | type <css> <text> | fill <css> <text> | press <key> | scroll [css|pixels] | waitfor <css|networkidle|url:<part>|response:<part>|<css>::state:<state>|<css>::text:<substr>> | select <css> <value> | hover <css> | ' +
+      'text [css] | links [css] | html [css] | inputs [css] | extract [css] | a11y [css] | netlog [count|clear] | eval <js> | screenshot <path> | batch | ' +
+      'tabs | newtab [url] | switchtab <index|url-part> | closetab [index|url-part] | download <css> [dest] | upload <css> <file-path> | ' +
+      'profiles | revokeprofile | forgetprofile. ' +
+      'BATCH: any flow needing MULTIPLE actions on one page (fill a form then submit it, click then wait for the fetch it triggers) MUST use command=batch with `js` = a JSON array of steps like [{"command":"fill","args":["#user","alice"]},{"command":"click","args":["#go"]},{"command":"waitfor","args":["url:home"]}] — steps run in ONE browser session and stop at the first failure. Separate calls each reopen the page from its URL, so unsubmitted form state does NOT survive between them (cookies/login DO, via the profile). ' +
       'extract returns the page (or element) main content as clean markdown-ish text plus the largest table as structured rows. ' +
+      'a11y returns the accessibility tree (roles + names + states) — the observation mode that survives DOM churn. netlog returns the profile session\'s network request log (method, URL, status). ' +
+      'PROFILES: `profile` is a profile NAME (e.g. "github-work"), never a directory path — paths are refused because a profile is a credential store. A task resumes exactly where a previous run logged in by reusing the same name. profiles lists them; revokeprofile (profile=<name>) destroys a profile\'s stored logins; forgetprofile clears a revoked name for reuse. ' +
       'Pass `frame` (iframe CSS selector or frame name) to run click/type/fill/select/hover/waitfor/text/extract inside an iframe. ' +
       'Prefix `url:` to open a page and act in one call.',
     parameters: [
-      { name: 'command', type: 'string', description: 'Action: navigate|get|click|type|fill|press|scroll|waitfor|select|hover|text|links|html|inputs|extract|eval|screenshot|snap|tabs|newtab|switchtab|closetab|download|upload', required: true },
-      { name: 'selector', type: 'string', description: 'CSS selector for click/type/fill/select/waitfor/hover/text/links/html/inputs/extract/download/upload; for scroll, a CSS selector or a numeric pixel amount; for waitfor, also a load state (networkidle|load|domcontentloaded) or url:<part>; for switchtab/closetab, a tab index or URL substring', required: false },
+      { name: 'command', type: 'string', description: 'Action: navigate|get|click|type|fill|press|scroll|waitfor|select|hover|text|links|html|inputs|extract|a11y|netlog|eval|screenshot|snap|batch|tabs|newtab|switchtab|closetab|download|upload|profiles|revokeprofile|forgetprofile', required: true },
+      { name: 'selector', type: 'string', description: 'CSS selector for click/type/fill/select/waitfor/hover/text/links/html/inputs/extract/a11y/download/upload; for scroll, a CSS selector or a numeric pixel amount; for waitfor, also a load state (networkidle|load|domcontentloaded), url:<part>, response:<url-part>, or <css>::state:<visible|hidden|enabled|disabled> / <css>::text:<substr>; for switchtab/closetab, a tab index or URL substring; for netlog, an entry count or "clear"', required: false },
       { name: 'text', type: 'string', description: 'Text to type/fill (for type/fill); fallback for press key / select value / tab target', required: false },
       { name: 'key', type: 'string', description: 'Key for press (e.g. Enter, Escape, Tab, ArrowDown)', required: false },
       { name: 'value', type: 'string', description: 'Option value for select', required: false },
       { name: 'url', type: 'string', description: 'URL to navigate to (for navigate/get/newtab, or prefix before acting)', required: false },
       { name: 'path', type: 'string', description: 'Screenshot: output path. download: destination file or directory. upload: file path to attach (comma-separate for multiple)', required: false },
-      { name: 'js', type: 'string', description: 'JavaScript to eval (returns JSON result)', required: false },
+      { name: 'js', type: 'string', description: 'For eval: JavaScript to run (returns JSON result). For batch: a JSON array of steps [{"command":"fill","args":["#sel","text"]}, ...] run in one session', required: false },
       { name: 'frame', type: 'string', description: 'Iframe CSS selector or frame name: run selector commands inside that frame', required: false },
-      { name: 'profile', type: 'string', description: 'Persistent browser profile dir (cookies/login state + tab session); default ~/.cache/mochi/browser-profile', required: false },
+      { name: 'profile', type: 'string', description: 'Browser profile NAME (not a path): the named credential store whose cookies/login state + tab session + network log this call uses. Default "default". For revokeprofile/forgetprofile, the profile to act on', required: false },
       { name: 'waitMs', type: 'integer', description: 'Milliseconds to wait after navigating/clicking before returning', required: false },
       { name: 'timeoutMs', type: 'integer', description: 'Navigation timeout ms (default 30000)', required: false },
     ],
@@ -155,9 +192,45 @@ export const browserTool: Tool = {
   },
   async execute(args, ctx) {
     const command = String(args.command ?? '');
-    if (!command) return 'browser: command required (navigate, click, type, fill, press, scroll, waitfor, select, hover, text, links, html, inputs, extract, eval, screenshot, tabs, newtab, switchtab, closetab, download, upload)';
+    if (!command) return 'browser: command required (navigate, click, type, fill, press, scroll, waitfor, select, hover, text, links, html, inputs, extract, a11y, netlog, eval, screenshot, tabs, newtab, switchtab, closetab, download, upload, profiles, revokeprofile, forgetprofile)';
+
+    // Profile management commands are registry operations — they never
+    // launch a browser, and revocation must work even when the driver is
+    // unavailable (a credential you cannot destroy is a liability).
+    if (command === 'profiles') return summarizeProfiles();
+    if (command === 'revokeprofile' || command === 'forgetprofile') {
+      const name = String(args.profile ?? args.text ?? args.selector ?? '');
+      if (!isProfileName(name)) return `browser: ${command} needs a valid profile name in \`profile\` (got "${name}")`;
+      if (command === 'revokeprofile') {
+        return revokeProfile(name)
+          ? `browser: profile "${name}" revoked — its stored cookies/logins were destroyed. The name stays blocked until forgetprofile clears it.`
+          : `browser: no profile named "${name}" is registered.`;
+      }
+      return forgetProfile(name)
+        ? `browser: profile "${name}" forgotten — the name can be registered fresh (empty state) on next use.`
+        : `browser: profile "${name}" is not in a revoked state (nothing to forget).`;
+    }
+
     const url = args.url ? String(args.url) : undefined;
     const timeoutMs = Number(args.timeoutMs ?? DEFAULT_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS;
+
+    // Resolve the profile NAME to its managed directory. Raw paths are
+    // refused: pointing the browser at an arbitrary directory (e.g. the
+    // user's personal Chrome profile) would hand that credential store
+    // to the agent silently — exactly what the registry exists to stop.
+    const profileName = args.profile ? String(args.profile) : 'default';
+    if (looksLikePath(profileName)) {
+      return `browser: profile must be a NAME, not a path (got "${profileName}"). Profiles are named credential stores managed by mochi — use e.g. profile="default" or profile="work", list them with command=profiles.`;
+    }
+    if (!isProfileName(profileName)) {
+      return `browser: invalid profile name "${profileName}" (lowercase letters, digits, - and _, max 41 chars).`;
+    }
+    let resolvedProfile;
+    try {
+      resolvedProfile = resolveProfileDir(profileName);
+    } catch (e) {
+      return `browser: ${(e as Error).message}`;
+    }
 
     const driverArgs = buildDriverArgs({
       command,
@@ -169,7 +242,7 @@ export const browserTool: Tool = {
       key: args.key ? String(args.key) : undefined,
       value: args.value !== undefined ? String(args.value) : undefined,
       frame: args.frame ? String(args.frame) : undefined,
-      profile: args.profile ? String(args.profile) : undefined,
+      profile: resolvedProfile.entry.dir,
       waitMs: Number(args.waitMs ?? 0) || 0,
       timeoutMs,
     });
@@ -179,7 +252,18 @@ export const browserTool: Tool = {
     });
 
     const raw = await runDriver(driverArgs, timeoutMs + 4000).catch(() => '');
-    const summary = summarizeResult(command, raw);
+    let summary = summarizeResult(command, raw);
+    // Record the use (and the origin host, when the run landed somewhere)
+    // so the registry's listing reflects reality: who holds state for
+    // which sites, and when it was last exercised.
+    try {
+      const data = JSON.parse(raw) as { url?: string };
+      const host = data?.url ? new URL(data.url).hostname : undefined;
+      touchProfile(profileName, host || undefined);
+    } catch { /* unparseable driver output — the use still counts */ try { touchProfile(profileName); } catch { /* registry is best-effort */ } }
+    if (resolvedProfile.created) {
+      summary = `[browser] created new profile "${profileName}" — a fresh credential store: logins made under this name persist across runs until revoked (command=profiles lists profiles, command=revokeprofile destroys one).\n${summary}`;
+    }
     ctx.events.emit({
       type: 'tool:completed', tool: 'browser', agentId: ctx.agentId,
       result: { toolCallId: '', name: 'browser', output: summary, durationMs: 0 },
@@ -210,6 +294,9 @@ export function summarizeResult(command: string, raw: string): string {
     return errs.length ? [base, ...errs].join('\n') : base;
   }
   const parts: string[] = [`[browser ${command}] ok`];
+  if (data.profileMode === 'ephemeral-fallback') {
+    parts.push(`WARNING: ${String(data.profileWarning ?? 'persistent profile unavailable — running ephemeral: cookies/logins will NOT persist after this call')}`);
+  }
   if (data.title) parts.push(`title: ${data.title}`);
   if (data.url) parts.push(`url: ${data.url}`);
   if (data.text) parts.push(`text: ${data.text}`);
@@ -241,6 +328,32 @@ export function summarizeResult(command: string, raw: string): string {
     }
   }
   if (data.html) parts.push(`html: ${data.html}`);
+  if (data.a11y) parts.push(`a11y (${data.a11ySource ?? 'tree'}):\n${String(data.a11y)}`);
+  if (Array.isArray(data.batch)) {
+    const steps = data.batch as Array<Record<string, unknown>>;
+    parts.push(`batch (${steps.length} step(s)):`);
+    steps.forEach((s, i) => {
+      const head = `  [${i + 1}] ${String(s.command ?? '?')} ${s.ok ? 'ok' : `ERROR: ${String(s.error ?? 'failed')}`}`;
+      const extra: string[] = [];
+      if (s.waited) extra.push(`waited: ${String(s.waited)}`);
+      if (s.action) extra.push(`action: ${String(s.action)}`);
+      if (s.a11y) extra.push(`a11y:\n${String(s.a11y).slice(0, 3000)}`);
+      else if (s.text && i < steps.length - 1) extra.push(`text: ${String(s.text).slice(0, 300)}`);
+      parts.push(extra.length ? `${head}\n      ${extra.join('\n      ')}` : head);
+    });
+  }
+  if (Array.isArray(data.netlog)) {
+    const total = typeof data.netlogTotal === 'number' ? data.netlogTotal : data.netlog.length;
+    parts.push(data.cleared ? 'netlog cleared' : `netlog (${data.netlog.length} of ${total}):`);
+    for (const r of data.netlog as Array<{ method?: string; url?: string; status?: number; type?: string; failed?: string }>) {
+      parts.push(`  ${r.method ?? '?'} ${r.url ?? ''}${r.status !== undefined ? ` -> ${r.status}` : ''}${r.type ? ` (${r.type})` : ''}${r.failed ? ` FAILED: ${r.failed}` : ''}`.trimEnd());
+    }
+  }
+  if (data.net && typeof data.net === 'object') {
+    const n = data.net as { captured?: number; failed?: number };
+    if (n.captured || n.failed) parts.push(`network this call: ${n.captured ?? 0} request(s)${n.failed ? `, ${n.failed} failed` : ''} (command=netlog for the session log)`);
+  }
+  if (data.waited) parts.push(`waited: ${data.waited}`);
   if (data.filename !== undefined && data.saved) {
     parts.push(`downloaded: ${data.saved} (${data.size ?? 0} bytes, filename=${data.filename})`);
   } else if (data.saved) parts.push(`saved: ${data.saved}`);

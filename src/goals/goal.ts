@@ -52,6 +52,12 @@ export class GoalEngine {
   private goalStats = { tokens: 0, tokensIn: 0, tokensOut: 0, tokensCached: 0, contextUsed: 0, duration: 0 };
   /** Baseline for the in-flight run (undefined outside runGoal). */
   private runBaseline: VerificationBaseline | Promise<VerificationBaseline | undefined> | undefined;
+  /** Stable run-journal identity for the in-flight run (undefined outside
+   *  runGoal). Set by durable-automation firings so a resumed firing's
+   *  agents journal under the SAME runId instead of a fresh task id —
+   *  the loop then replays completed tool steps instead of re-executing
+   *  their side effects. */
+  private runJournalRunId: string | undefined;
   private baselineCache?: { baseline: VerificationBaseline; cachedAt: number };
   /** Lazy-initialized Hermes-style session store for transcript search. */
   private sessionStoreInstance: SessionStore | undefined;
@@ -254,7 +260,7 @@ Return ONLY the JSON array, no markdown.`;
     return tasks;
   }
 
-  async runGoal(goal: Goal, tasks?: Task[], extraContext: string[] = [], signal?: AbortSignal, sessionId?: string): Promise<GoalResult> {
+  async runGoal(goal: Goal, tasks?: Task[], extraContext: string[] = [], signal?: AbortSignal, sessionId?: string, journalRunId?: string): Promise<GoalResult> {
     const goalHook = await this.hooks.runBefore('before_goal', { goal: goal.id });
     if (!goalHook.allowed) {
       return {
@@ -344,6 +350,7 @@ Return ONLY the JSON array, no markdown.`;
     }
     const verifier = new VerifierEngine({ cwd: this.cwd, workspace: this.workspace, config: this.config, events: this.events, budget, baseline: baselinePromise });
     this.runBaseline = baselinePromise;
+    this.runJournalRunId = journalRunId;
     const scheduler = new TaskScheduler(allTasks, this.events);
     const maxConcurrency = this.config.safety.maxConcurrentAgents;
     // Prefer an externally-created signal (user hit Ctrl-C in the CLI or the
@@ -828,6 +835,14 @@ Return ONLY the JSON array, no markdown.`;
       permPolicy: this.permPolicy,
       approvedAlways: this.approvedAlways,
       extraTools: this.extraTools,
+      // Durable automation: a stable journal identity per task POSITION
+      // (task ids are minted fresh per goal; positions in the decomposed
+      // list are the stable coordinate a resume can reproduce). Unset for
+      // ordinary runs — the loop then journals under the task id as
+      // before.
+      ...(this.runJournalRunId
+        ? { runId: `${this.runJournalRunId}:t${Math.max(0, goalTasks.findIndex((t) => t.id === task.id))}` }
+        : {}),
     });
     // MCH-74: register as a steer target for the lifetime of the run.
     this.liveAgents.set(task.id, agent);

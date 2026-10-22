@@ -215,3 +215,64 @@ describe('browser tool summaries for tabs / download / extract', () => {
     expect(out).not.toContain('r20');
   });
 });
+describe('browser tool wave M surface', () => {
+  it('routes batch steps JSON via the js slot', () => {
+    const steps = JSON.stringify([{ command: 'fill', args: ['#u', 'alice'] }]);
+    expect(buildDriverArgs({ command: 'batch', js: steps })).toEqual(['batch', steps]);
+  });
+
+  it('routes a11y and netlog commands', () => {
+    expect(buildDriverArgs({ command: 'a11y', selector: '#main' })).toEqual(['a11y', '#main']);
+    expect(buildDriverArgs({ command: 'a11y' })).toEqual(['a11y', '']);
+    expect(buildDriverArgs({ command: 'netlog', selector: 'clear' })).toEqual(['netlog', 'clear']);
+    expect(buildDriverArgs({ command: 'netlog' })).toEqual(['netlog', '']);
+  });
+
+  it('summarizes an a11y snapshot with its source', () => {
+    const out = summarizeResult('a11y', JSON.stringify({
+      ok: true, a11y: '- banner\n  - heading "Hi" [level=1]', a11ySource: 'aria',
+    }));
+    expect(out).toContain('a11y (aria):');
+    expect(out).toContain('heading "Hi"');
+  });
+
+  it('summarizes netlog entries with statuses and the session total', () => {
+    const out = summarizeResult('netlog', JSON.stringify({
+      ok: true, netlogTotal: 7,
+      netlog: [
+        { method: 'POST', url: 'http://x.test/api/step', status: 200, type: 'fetch' },
+        { method: 'GET', url: 'http://x.test/missing', status: 404, type: 'document' },
+      ],
+    }));
+    expect(out).toContain('netlog (2 of 7):');
+    expect(out).toContain('POST http://x.test/api/step -> 200');
+    expect(out).toContain('GET http://x.test/missing -> 404');
+  });
+
+  it('summarizes a batch run step-by-step and surfaces the waited marker', () => {
+    const out = summarizeResult('batch', JSON.stringify({
+      ok: true, title: 'Home', url: 'http://x.test/home', text: 'Welcome',
+      batch: [
+        { command: 'navigate', ok: true, url: 'http://x.test/login' },
+        { command: 'waitfor', ok: true, waited: 'url:home' },
+      ],
+    }));
+    expect(out).toContain('batch (2 step(s)):');
+    expect(out).toContain('[1] navigate ok');
+    expect(out).toContain('[2] waitfor ok');
+    expect(out).toContain('waited: url:home');
+  });
+
+  it('surfaces the ephemeral-profile warning loudly', () => {
+    const out = summarizeResult('navigate', JSON.stringify({
+      ok: true, title: 'T', profileMode: 'ephemeral-fallback',
+      profileWarning: 'persistent profile unavailable (locked) — running ephemeral',
+    }));
+    expect(out).toContain('WARNING: persistent profile unavailable (locked)');
+  });
+
+  it('omits the warning on the persistent path', () => {
+    const out = summarizeResult('navigate', JSON.stringify({ ok: true, title: 'T' }));
+    expect(out).not.toContain('WARNING');
+  });
+});

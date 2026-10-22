@@ -1,6 +1,6 @@
 ---
 name: mochi-automation-surface
-description: Use mochi's real automation surface — the headless browser tool with its persistent profile, the web fetch/search/crawl read tools, background tasks, daemon cron schedules, and the opt-in computer tool for desktop (X11) control. Use when the task says "open this page", "click/type into this site", "check what the page shows", "run this in the background", or "schedule this". There is no device/email/docs tool, no live-browser bridge, and no browser CLI subcommand — do not invent them.
+description: Use mochi's real automation surface — the headless browser tool with named persistent profiles, the web fetch/search/crawl read tools, background tasks, daemon cron schedules and journal-backed durable automations, and the opt-in computer tool for desktop (X11) control. Use when the task says "open this page", "click/type into this site", "check what the page shows", "run this in the background", or "schedule this". There is no device/email/docs tool, no live-browser bridge, and no browser CLI subcommand — do not invent them.
 ---
 
 # Mochi's automation surface (browser, fetch, background, cron, computer)
@@ -24,6 +24,7 @@ piece actually does, its failure modes, and how to verify effects.
 | Act on the desktop itself (native apps, OS dialogs) | `computer` (`click`, `type`, `key`, `screenshot`) | X11 pointer/keyboard injection; opt-in only — see the note below the table |
 | Long-running shell work | `bg_task` tool, inspect via `mochi bg list` / `mochi bg logs <id>` | survives the turn; kill via `mochi bg kill <id>` |
 | Recurring scheduled prompt | daemon cron: `mochi daemon cron add "<prompt>" --schedule "every 30m"` | requires the daemon running; list/remove via the same route |
+| Durable automation that must survive a kill/crash | automations in `.mochi/automations.json` (daemon-evaluated) | steps run through the run journal: a slot killed mid-run resumes with completed steps claimed, never replayed. Triggers: `schedule` (same grammar as cron), `file-change` (path fingerprint), `url-change` (body hash). Step kinds: `shell`, `goal`, `fetch`, `browser` |
 
 Desktop control exists as exactly one tool: `computer` (Linux/X11 —
 screenshots, pointer, keyboard). It is **off by default** under its own
@@ -51,17 +52,48 @@ for a tool that doesn't exist.
 - It is **headless Chromium** (the driver supports `--headed`, but the tool
   doesn't expose it). There is no "live" backend attached to the user's own
   browser and no access to the user's existing browser session.
-- **State persists across calls**: the driver launches a persistent context
-  on a profile dir — default `~/.cache/mochi/browser-profile`, override
-  with the `profile` arg or `$MOCHI_BROWSER_PROFILE`. Cookies/localStorage/
-  logins done *in this browser* survive between calls, so multi-step flows
-  (log in → navigate → act) work. There is no `mochi browser login`
-  command; a login is just a `browser` flow you drive with
-  navigate/type/click.
+- **State persists across calls — via NAMED profiles.** The `profile` arg
+  is a profile NAME (e.g. `profile: "work"`), never a directory path —
+  paths are refused, because a profile is a credential store. Profiles
+  live under `~/.mochi/browser-profiles/` with a registry:
+  `browser profiles` lists them (with the origins each has state for),
+  `browser revokeprofile` (profile=<name>) destroys a profile's stored
+  logins, `forgetprofile` clears a revoked name for reuse. First use of a
+  name mints the profile and the result says so. The old default dir
+  (`~/.cache/mochi/browser-profile`) is adopted as the `default` profile,
+  so existing logins carry over. A task resumes exactly where a previous
+  run logged in by reusing the same name; different names are different
+  identities — never share one across tasks by accident.
+- **How persistence actually works**: the driver snapshots Playwright's
+  storageState (cookies incl. SESSION cookies, + localStorage) into the
+  profile at exit and re-applies it at launch — Chromium alone does not
+  restore session cookies from a profile dir, so without the snapshot a
+  "successful" login would silently not survive. If a result carries a
+  `WARNING: … ephemeral` line, the persistent profile was unavailable
+  (locked by a concurrent run) and that call's logins will NOT persist —
+  treat it as a failed persistence, not a successful login.
+- **Multi-action flows need `batch`.** Each call reopens pages from their
+  URLs, so unsubmitted page state (typed form fields) does NOT survive
+  between calls — only cookies/localStorage/tab URLs do. A flow like
+  "fill the login form, then submit" must be ONE call:
+  `command=batch`, `js='[{"command":"fill","args":["#user","alice"]},
+  {"command":"click","args":["#go"]},{"command":"waitfor","args":["url:home"]}]'`.
+  Steps run in one session and stop at the first failure.
 - Actions: `navigate|get`, `click`, `type`, `fill`, `press` (key),
   `scroll` (selector or pixels), `waitfor`, `select`, `hover`, `text`,
-  `links`, `html`, `inputs`, `eval`, `screenshot`, `snap`. Prefix `url:` to
-  open a page and act in one call.
+  `links`, `html`, `inputs`, `extract`, `a11y`, `netlog`, `eval`,
+  `screenshot`, `snap`, `batch`, tab commands, and the profile commands
+  above. Prefix `url:` to open a page and act in one call.
+- **Observing**: `a11y [css]` returns the accessibility tree (roles +
+  names + states) — prefer it over DOM scraping on dynamic pages; it
+  survives layout churn. `netlog [n|clear]` returns the profile session's
+  network request log (method, URL, status) persisted across calls; every
+  result also reports per-call network counts.
+- **Waiting**: `waitfor` takes a selector, a load state
+  (`networkidle|load|domcontentloaded`), `url:<part>`, `response:<url-part>`
+  (wait for the fetch a click triggers, not the DOM), `<css>::state:<visible|
+  hidden|enabled|disabled>`, or `<css>::text:<substr>`. Wait for the signal
+  the next step needs — never a bare `waitMs`.
 - Each call is bounded (45s default tool timeout; navigation 30s). A hung
   page surfaces as a timeout/driver error, not a silent hang.
 
@@ -87,9 +119,14 @@ After any browser action:
 - Login walls, captchas, and 2FA: the browser is headless and unattended —
   it cannot receive a human's 2FA prompt. If a flow needs one, stop and
   tell the user; don't claim the form was submitted.
-- Assuming the user's cookies: the persistent profile is mochi's own,
-  starting empty. Being logged in on the user's daily browser means
-  nothing here.
+- Assuming the user's cookies: mochi's profiles are its own, starting
+  empty. Being logged in on the user's daily browser means nothing here —
+  and pointing a profile at the user's real Chrome directory is refused
+  by design.
+- Passing a path as `profile`: refused. Names are slugs (`a-z0-9_-`);
+  a result line "new browser profile '<name>' created" means the run
+  started from an EMPTY profile — if you expected a login there, you
+  used the wrong name.
 - Using `browser` where `fetch` or `shell`+curl suffices — a browser call
   costs a Chromium launch; plain reads don't need it.
 - Cron confusion: cron jobs live in the daemon (`mochi daemon cron …`,

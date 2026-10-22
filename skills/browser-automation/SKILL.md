@@ -39,10 +39,39 @@ Flaky automation is worse than no automation. The discipline is: stable selector
 
 ## 6. Driving mochi's built-in `browser` tool instead
 For ad-hoc automation (not test suites), mochi's own `browser` tool wraps a
-persistent-profile driver — state survives across calls, so flows are
-sequences of small tool calls, not one script:
-- Session: cookies/login and the open TAB SET persist. `tabs` lists them, `newtab [url]` opens one, `switchtab <index|url-part>` changes the active tab, `closetab` removes one. Site popups join the set on their own.
-- Reading: `extract [css]` returns main content as clean markdown plus the largest table as structured rows — reach for it before `text`/`html`. `waitfor` takes a selector, a load state (`networkidle`, `load`, `domcontentloaded`), or `url:<part>` for route changes.
-- Acting: `click/type/fill/select/hover/press/scroll/waitfor` as in §3, but waits are signal-shaped: wait for the element or state the NEXT step needs, never a bare `waitMs`.
-- Frames and files: pass `frame` (iframe selector or name) to act inside an iframe (payment widgets); `upload <css> <path>` sets a file input; `download <css> [dest]` clicks a trigger and saves the resulting download — the tool registers the wait before the click, so the §5 popup/download race is handled.
-- Console errors and page errors ride along in every result — treat them as verification evidence, per the `mochi-automation-surface` skill's assert-the-effect rule.
+persistent-profile driver. What survives across calls: cookies/localStorage
+(via a storageState snapshot per profile — Chromium alone drops session
+cookies) and the open TAB SET. What does NOT: unsubmitted page state —
+pages reopen from their URLs, so typed-but-unsent form fields are lost
+between calls. Consequences:
+- Profiles: the `profile` arg is a NAME (slugs only; directory paths are
+  refused — a profile is a credential store). `profiles` lists them,
+  `revokeprofile` destroys a profile's logins, `forgetprofile` clears a
+  revoked name. Reuse the same name to resume a login; first use mints
+  the profile and the result says so. A result warning about an
+  `ephemeral` fallback means that call's logins did NOT persist.
+- Multi-action flows are ONE `batch` call: `command=batch` with
+  `js='[{"command":"fill","args":["#user","alice"]}, …]'` — steps run in
+  one live session and stop at the first failure. Single calls are for
+  navigation, reads, and one-shot actions. `tabs` lists the tab set,
+  `newtab [url]` opens one, `switchtab <index|url-part>` changes the
+  active tab, `closetab` removes one.
+- Reading: `extract [css]` returns main content as clean markdown plus
+  the largest table as structured rows. `a11y [css]` returns the
+  accessibility tree (roles/names/states) — more stable than DOM scrapes
+  on dynamic pages. `netlog [n|clear]` returns the session's request log
+  (method/URL/status) for verifying an action actually hit the API.
+- Waiting: `waitfor` takes a selector, a load state (`networkidle`,
+  `load`, `domcontentloaded`), `url:<part>`, `response:<url-part>` (the
+  fetch a click triggers — wait for IT, not the DOM),
+  `<css>::state:<visible|hidden|enabled|disabled>`, or
+  `<css>::text:<substr>`. Waits are signal-shaped (per §3): wait for the
+  signal the next step needs, never a bare `waitMs`.
+- Frames and files: pass `frame` (iframe selector or name) to act inside
+  an iframe (payment widgets); `upload <css> <path>` sets a file input;
+  `download <css> [dest]` clicks a trigger and saves the resulting
+  download — the tool registers the wait before the click, so the §5
+  popup/download race is handled.
+- Console errors and page errors ride along in every result — treat them
+  as verification evidence, per the `mochi-automation-surface` skill's
+  assert-the-effect rule.

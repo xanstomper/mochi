@@ -326,7 +326,7 @@ export class Runtime {
     return this.goals.steerActive(text);
   }
 
-  async goal(objective: string, constraints: string[] = [], opts?: { enhance?: boolean; enhanceMode?: string }, signal?: AbortSignal): Promise<string> {
+  async goal(objective: string, constraints: string[] = [], opts?: { enhance?: boolean; enhanceMode?: string; journalRunId?: string }, signal?: AbortSignal): Promise<string> {
     const r = await this.runGoal(objective, constraints, opts, signal);
     return r.summary;
   }
@@ -335,7 +335,7 @@ export class Runtime {
    *  run stats alongside the summary. Callers that need to correlate a run with
    *  a session (editors, daemon jobs) or show the task DAG (an ACP plan) use
    *  this. */
-  async runGoal(objective: string, constraints: string[] = [], opts?: { enhance?: boolean; enhanceMode?: string }, signal?: AbortSignal): Promise<{ goalId: string; tasks: import('./types.js').Task[]; summary: string; tokensUsed: number; costUsd: number; durationMs: number; status: string }> {
+  async runGoal(objective: string, constraints: string[] = [], opts?: { enhance?: boolean; enhanceMode?: string; journalRunId?: string }, signal?: AbortSignal): Promise<{ goalId: string; tasks: import('./types.js').Task[]; summary: string; tokensUsed: number; costUsd: number; durationMs: number; status: string }> {
     const goal = await this.goals.createGoal(objective, constraints);
     const tasks = await this.goals.decompose(goal);
     const { summary, result } = await this.runGoalTraced(goal, tasks, objective, opts, this.config.planMode, signal);
@@ -343,13 +343,13 @@ export class Runtime {
   }
 
   /** Shared execution: records a run trace, then delegates to GoalEngine. */
-  private async runGoalTraced(goal: import('./types.js').Goal, tasks: import('./types.js').Task[], objective: string, opts?: { enhance?: boolean; enhanceMode?: string }, isPlan = this.config.planMode, signal?: AbortSignal): Promise<{ summary: string; result: import('./goals/goal.js').GoalResult }> {
+  private async runGoalTraced(goal: import('./types.js').Goal, tasks: import('./types.js').Task[], objective: string, opts?: { enhance?: boolean; enhanceMode?: string; journalRunId?: string }, isPlan = this.config.planMode, signal?: AbortSignal): Promise<{ summary: string; result: import('./goals/goal.js').GoalResult }> {
     const { TraceRecorder } = await import('./observability/trace.js');
     const recorder = new TraceRecorder(this.workspace.dir, goal.id).attach(this.events);
     try {
       const extra = await this.enhancedCtx(objective, opts);
       const sessionId = this.activeSessionId ?? (this.activeSessionId = this.goals['store'].begin({ goalId: goal.id, objective: objective.slice(0, 80) }));
-      const result = await this.goals.runGoal(goal, tasks, extra, signal ?? this.abortSignal, sessionId);
+      const result = await this.goals.runGoal(goal, tasks, extra, signal ?? this.abortSignal, sessionId, opts?.journalRunId);
       this.recordUsage(objective, result);
       recorder.log({ t: Date.now(), kind: 'goal:summary', status: result.goal?.status ?? 'unknown', tokensUsed: result.tokensUsed, costUsd: result.costUsd, durationMs: result.durationMs });
       // Plan mode: the agents' plan text is the deliverable.
