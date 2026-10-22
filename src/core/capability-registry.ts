@@ -224,7 +224,7 @@ export function toolToCapability(tool: Tool): Capability {
         const durationMs = Math.round(performance.now() - start);
         // Tools may return a plain string or a {text, images} outcome (the
         // image bridge); the capability layer is text-only, so keep the text.
-        const output = typeof raw === 'string' ? raw : (raw.text ?? '');
+        const output = typeof raw === 'string' ? raw : ((raw as { text?: string }).text ?? '');
         return {
           callId: req.callId,
           name: tool.def.name,

@@ -1,7 +1,6 @@
-import type {MochiConfig, ContentPart} from '../types.js';
+import type {MochiConfig} from '../types.js';
 import type { ToolContext, Tool } from './types.js';
 import { clipToolOutput } from './output-budget.js';
-import { toolImagesToParts } from './image-parts.js';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { readTool } from './read.js';
@@ -67,7 +66,6 @@ import { emailTool } from './email.js';
 import { canvasTool } from './canvas.js';
 import { scheduleTool } from './schedule.js';
 import { deviceTool } from './device.js';
-import { computerTool } from './computer.js';
 
 import { timerTool } from './timer.js';
 import { envTool } from './env.js';
@@ -75,6 +73,7 @@ import { lintTool } from './lint.js';
 import { formatTool } from './format.js';
 import { benchmarkTool } from './benchmark.js';
 import { notesTool } from './notes.js';
+import { selfConfigTool } from './self-config.js';
 import { tuiBuilderTool } from './tui-builder.js';
 import { mcpManageTool } from './mcp-manage.js';
 import { markdownTool } from './markdown.js';
@@ -105,12 +104,12 @@ export const ALL_TOOLS: Tool[] = [
   canvasTool,
   scheduleTool,
   deviceTool,
-  computerTool,
   acceptPlanTool,
   askQuestionTool,
   notebookTool,
   reviewPrTool,
   explainTool,
+  selfConfigTool, // MCH-213/214: agent self-setup (show/probe/set own config)
 ];
 
 export const ALL_TOOLS_MAP = new Map<string, Tool>(ALL_TOOLS.map((t) => [t.def.name, t]));
@@ -129,13 +128,13 @@ export const AUXILIARY_TOOL_NAMES = new Set([
 export const HEAVY_TOOL_NAMES = new Set([
   'browser', 'db_inspect', 'deepwiki', 'sql_codebase_query', 'create_pr', 'review_pr', 'repl',
   'perf', 'clipboard', 'mcp_manage', 'lint', 'format', 'diff', 'tree', 'device',
-  'analyze_code', 'code_similarity', 'type_hierarchy', 'rename_symbol', 'computer',
+  'analyze_code', 'code_similarity', 'type_hierarchy', 'rename_symbol',
   'resolve_conflicts', 'system_info',
 ]);
 
 /** Task text regexes that justify advertising heavy tools up front. */
 const HEAVY_SIGNAL_RE =
-  /\b(browser|web page|screenshot|database|sql|postgres|mysql|sqlite|pull request|github pr|deepwiki|wiki|performance|profile|benchmark|lint|format|refactor across|rename (across|symbol)|merge conflict|clipboard|google doc|gdoc|docs|email|gmail|mail|canvas|diagram|whiteboard|excalidraw|visual plan|roadmap|android|adb|phone|tablet|emulator|ios|simulator|device automation|xdotool|desktop automation|tap|swipe|send|click|scroll|press|control|screenshot|computer|my computer|screen|window|mouse|keyboard)\b/i;
+  /\b(browser|web page|screenshot|database|sql|postgres|mysql|sqlite|pull request|github pr|deepwiki|wiki|performance|profile|benchmark|lint|format|refactor across|rename (across|symbol)|merge conflict|clipboard|google doc|gdoc|docs|email|gmail|mail|canvas|diagram|whiteboard|excalidraw|visual plan|roadmap|android|adb|phone|tablet|emulator|ios|simulator|device automation|xdotool|desktop automation|tap|swipe|send|click|scroll|press|control|screenshot)\b/i;
 
 /** Filter heavy tools out of the advertised map for focused coding tasks.
  *  Returns the number of tools trimmed (0 = nothing trimmed). Authored tools and
@@ -429,13 +428,6 @@ export const TOOL_ALIASES: Record<string, string> = {
   search_web: 'web_search',
   google_search: 'web_search',
   browser_action: 'browser',
-  // Computer control: models reach for many names for "drive the machine".
-  computer_use: 'computer',
-  gui: 'computer',
-  screen: 'computer',
-  desktop_control: 'computer',
-  mouse: 'computer',
-  keyboard: 'computer',
   use_mcp_tool: 'mcp_manage',
   access_mcp_resource: 'mcp_manage',
 
@@ -628,7 +620,7 @@ export async function executeTool(
   rawArgs: Record<string, unknown>,
   ctx: ToolContext,
   tools: Map<string, Tool>,
-): Promise<{ output: string; images?: ContentPart[]; error?: string; durationMs: number }> {
+): Promise<{ output: string; error?: string; durationMs: number }> {
   const name = TOOL_ALIASES[rawName] || rawName;
   const tool = tools.get(name) || ALL_TOOLS_MAP.get(name);
   if (!tool) return { output: '', error: `Unknown tool: ${rawName}`, durationMs: 0 };
@@ -669,18 +661,9 @@ export async function executeTool(
   }
   const start = performance.now();
   try {
-    const raw = await tool.execute(args, ctx);
+    const output = await tool.execute(args, ctx);
     const durationMs = Math.round(performance.now() - start);
-    // A tool may return a plain string (the common case) or an outcome that
-    // also carries images. Images are converted to model-visible content
-    // parts here so the agent loop can hand the model what the tool saw.
-    if (typeof raw === 'string') return { output: raw, durationMs };
-    const { parts, skipped } = toolImagesToParts(raw.images);
-    let output = raw.text ?? '';
-    if (skipped.length > 0) {
-      output += `\n[${skipped.length} image(s) not sent to the model: ${skipped.join(', ')}]`;
-    }
-    return { output, ...(parts.length ? { images: parts } : {}), durationMs };
+    return { output, durationMs };
   } catch (err) {
     const durationMs = Math.round(performance.now() - start);
     const error = err instanceof Error ? err.message : String(err);

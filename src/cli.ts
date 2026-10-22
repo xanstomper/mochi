@@ -2289,6 +2289,33 @@ async function main() {
     }
     return;
   }
+  if (first === 'practice') {
+    // MCH-216: run dataset-shaped practice tasks through the real agent.
+    // Each task runs in a fresh throwaway workspace with a machine-checkable
+    // verify command; failures feed the lesson/skill flywheel.
+    const { SEED_TASKS, runPractice, DATASET_CATALOG } = await import('./core/practice.js');
+    const taskIds = positional.slice(1).filter((p) => !p.startsWith('-'));
+    if (positional[1] === 'datasets') {
+      console.log(`Verified open datasets for practice/trace mining (${DATASET_CATALOG.length}):\n`);
+      for (const d of DATASET_CATALOG) {
+        const gate = d.open ? '' : ' [gated]';
+        console.log(`  ${d.id}${gate}  (${d.focus}, ${d.downloads} downloads)\n    trains: ${d.trains}`);
+      }
+      return;
+    }
+    const { Mochi } = await import('./sdk.js');
+    const client = Mochi.create({ cwd: runtime.cwd });
+    console.log(`Running ${taskIds.length || SEED_TASKS.length} practice task(s) against the live agent...`);
+    const { results, passed, failed } = await runPractice(client, runtime.cwd, { taskIds: taskIds.length ? taskIds : undefined });
+    for (const r of results) {
+      const icon = r.pass ? '✓' : '×';
+      console.log(`  ${icon} ${r.taskId} (${(r.durationMs / 1000).toFixed(1)}s)${r.pass ? '' : `\n      verify: ${r.verifyOutput.slice(0, 200)}`}`);
+    }
+    console.log(`\n${passed} passed, ${failed} failed. Failures recorded to the lesson flywheel.`);
+    if (failed > 0) process.exitCode = 1;
+    return;
+  }
+
   if (first === 'doctor') {
     const { doctorReport, formatDoctor, repairDoctor } = await import('./doctor.js');
     const { daemonRunning, readDaemonInfo } = await import('./daemon/daemon.js');

@@ -80,6 +80,7 @@ export const COMPLETION_COMMANDS: CompletionCommand[] = [
   { name: 'review', description: 'Review the working-tree diff' },
   { name: 'fix', description: 'Fix a diagnosed issue' },
   { name: 'test', description: 'Run the test command' },
+  { name: 'practice', description: 'Run dataset-shaped practice tasks through the agent (practice datasets lists them)' },
   { name: 'doctor', description: 'Diagnose workspace configuration' },
   { name: 'init', description: 'Create MOCHI.md' },
   { name: 'config', description: 'Show effective configuration' },

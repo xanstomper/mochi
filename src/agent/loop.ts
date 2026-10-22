@@ -4621,7 +4621,7 @@ Continue from 'Next:', do not redo completed progress.`,
       callerEmittedEvent: true,
     };
     this.events.emit({ type: 'tool:called', tool: tc.function.name, args, agentId: this.id, tool_call_id: tc.id });
-    const { output, error, durationMs, images } = await executeTool(tc.function.name, args, ctx, this.tools);
+    const { output, error, durationMs, images } = await executeTool(tc.function.name, args, ctx, this.tools) as { output: string; error?: string; durationMs: number; images?: Array<{ type: 'image_url'; image_url: { url: string } }> };
     // MCH-91: `load_tools` mutated the live toolset — re-advertise defs so the
     // newly loaded tools appear in the next packet.
     if (!error && toolName === 'load_tools') {
