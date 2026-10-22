@@ -130,7 +130,7 @@ function indexFile(file: string, rel: string, database: SqliteDb): void {
     } else if (tsc().isClassDeclaration(node) && node.name) {
       const name = node.name.text;
       emit(name, 'class', node.getStart(), node.getText(sf));
-      for (const h of heritage(node)) { try { relIns.run(name, h, 'extends', rel); } catch {} }
+      for (const h of heritage(node)) { try { relIns.run(name, h, 'extends', file); } catch {} }
       for (const m of node.members) {
         if ((tsc().isMethodDeclaration(m) || tsc().isPropertyDeclaration(m)) && tsc().isIdentifier(m.name)) {
           emit(m.name.text, 'method', m.name.getStart(sf), m.getText(sf));
@@ -139,7 +139,7 @@ function indexFile(file: string, rel: string, database: SqliteDb): void {
     } else if (tsc().isInterfaceDeclaration(node) && node.name) {
       const name = node.name.text;
       emit(name, 'interface', node.getStart(), node.getText(sf));
-      for (const h of heritage(node)) { try { relIns.run(name, h, 'extends', rel); } catch {} }
+      for (const h of heritage(node)) { try { relIns.run(name, h, 'extends', file); } catch {} }
     } else if (tsc().isTypeAliasDeclaration(node) && node.name) {
       emit(node.name.text, 'type', node.getStart(), node.getText(sf));
     }
@@ -385,17 +385,32 @@ function tsIndexFile(file: string, rel: string, database: SqliteDb): void {
     if (!tree) return;
     const ins = database.prepare('INSERT INTO symbols(name,line,kind,file,rel,body) VALUES (?,?,?,?,?,?)');
     const callIns = database.prepare('INSERT INTO calls(callee,caller,kind,file,rel,line) VALUES (?,?,?,?,?,?)');
+    const relIns = database.prepare('INSERT INTO relations(src,dst,kind,file) VALUES (?,?,?,?)');
     const kinds = DECL_KINDS[lang] ?? {};
     // Track the enclosing declaration name as we descend so a call row can
     // name its caller (helps findCallers attribute the call site).
     const callerStack: string[] = [];
     const walk = (node: any): void => {
       const kind = kinds[node.type];
+      // Only pop if THIS node actually pushed. A declaration with a kind but
+      // no name (anonymous class/function, malformed code) pushes nothing;
+      // the old unconditional pop removed the PARENT caller from the stack
+      // and misattributed every following call in that parent.
+      let pushed = false;
       if (kind) {
         const name = nameOf(node);
         if (name) {
           ins.run(name, node.startPosition.row + 1, kind, file, rel, node.text.slice(0, 3000));
+          if (kind === 'class' || kind === 'interface') {
+            // relations consumers (typeHierarchy / blast radius) query
+            // src=<this type>, dst=<super-type>, kind='extends', so follow
+            // indexFile's convention: src=name, dst=heritage, file=rel.
+            for (const h of tsHeritageNames(node)) {
+              try { relIns.run(name, h, 'extends', file); } catch { /* duplicate / bad row: skip */ }
+            }
+          }
           callerStack.push(name);
+          pushed = true;
         }
       }
       // Call node -> callee edge. Most grammars expose `function`/`name`/
@@ -408,7 +423,7 @@ function tsIndexFile(file: string, rel: string, database: SqliteDb): void {
         }
       }
       for (const c of namedChildren(node)) walk(c);
-      if (kind && callerStack.length) callerStack.pop();
+      if (pushed) callerStack.pop();
     };
     walk(tree.rootNode);
   } catch { /* per-file error: skip; tsc backend (JS/TS) still works */ }
@@ -427,6 +442,96 @@ function callName(node: any): string | undefined {
   // Skip obvious builtins / punctuation.
   if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(last)) return last;
   return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Heritage extraction for the tree-sitter backend. `indexFile` (tsc backend)
+// emits 'extends' relations for classes/interfaces, but tsIndexFile emitted
+// none, leaving `relations` empty under the default backend. Grammars name
+// the heritage container differently per language, so extraction is a
+// defensive scan of (a) known field names and (b) direct child nodes whose
+// type is a known heritage container, with identifiers collected from inside
+// those containers only (never from the class body).
+//   TS/JS:    class_heritage (> extends_clause / implements_clause),
+//             interface extends_type_clause
+//   Java:     superclass / super_interfaces / extends_interfaces fields
+//   Python:   superclasses field (an argument_list of identifiers)
+//   C#:       base_list child
+//   PHP:      base_clause / class_interface_clause children
+//   Ruby:     superclass field
+//   C++:      base_class_clause child
+// Go has no class heritage and Rust expresses it via impl blocks rather
+// than a heritage node on the type declaration, so both are skipped.
+// ---------------------------------------------------------------------------
+const HERITAGE_CONTAINERS = new Set([
+  'class_heritage', 'heritage_clause', 'heritage', 'extends_type_clause',
+  'extends_clause', 'implements_clause', 'superclass', 'super_interfaces',
+  'superinterfaces', 'extends_interfaces', 'base_clause',
+  'class_interface_clause', 'base_list', 'base_class_clause', 'extends_list',
+]);
+const HERITAGE_IDENT_TYPES = new Set([
+  'identifier', 'type_identifier', 'property_identifier', 'name', 'constant',
+  'simple_identifier', 'field_identifier',
+]);
+
+function pushHeritage(out: string[], seen: Set<string>, raw: string | undefined): void {
+  const name = raw?.trim();
+  if (!name || seen.has(name)) return;
+  if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) return;
+  seen.add(name);
+  out.push(name);
+}
+
+/** Collect heritage type names from inside a heritage container node. */
+function collectHeritage(node: any, out: string[], seen: Set<string>): void {
+  if (!node) return;
+  const type = node.type as string;
+  // Generic arguments / keyword arguments are not heritage types themselves:
+  // `Base<string>` -> Base only; Python `metaclass=X` -> nothing.
+  if (type === 'type_arguments' || type === 'type_argument_list' || type === 'type_parameters' || type === 'keyword_argument' || type === 'access_specifier') return;
+  // Qualified / dotted names: keep only the last segment ("ns.Base" -> "Base").
+  if (type === 'member_expression' || type === 'attribute' || type === 'scoped_identifier' || type === 'scoped_type_identifier' || type === 'scoped_name' || type === 'qualified_name') {
+    pushHeritage(out, seen, String(node.text ?? '').split(/[^A-Za-z0-9_$]+/).filter(Boolean).pop());
+    return;
+  }
+  if (HERITAGE_IDENT_TYPES.has(type)) {
+    pushHeritage(out, seen, node.text);
+    return;
+  }
+  // Generic heritage (`Comparable<Dog>`, `Animal<T>`): the name is the first
+  // named child; the arguments are not super-types.
+  if (type === 'generic_type' || type === 'generic_name' || type === 'parameterized_type' || type === 'subscript') {
+    const first = namedChildren(node)[0];
+    if (first) collectHeritage(first, out, seen);
+    return;
+  }
+  // Mixin-style heritage (`extends mixin()`): the callee is the heritage.
+  if (type === 'call_expression' || type === 'call') {
+    try {
+      const fn = node.childForFieldName?.('function') ?? node.childForFieldName?.('name');
+      if (fn) collectHeritage(fn, out, seen);
+    } catch { /* feature-detect: ignore */ }
+    return;
+  }
+  for (const c of namedChildren(node)) collectHeritage(c, out, seen);
+}
+
+/** Super-type names declared on a tree-sitter class/interface node. */
+function tsHeritageNames(node: any): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  try {
+    for (const field of ['superclass', 'superclasses', 'interfaces', 'base_list', 'heritage']) {
+      try {
+        const f = node.childForFieldName?.(field);
+        if (f) collectHeritage(f, out, seen);
+      } catch { /* field absent in this grammar: ignore */ }
+    }
+    for (const c of namedChildren(node)) {
+      if (HERITAGE_CONTAINERS.has(c.type)) collectHeritage(c, out, seen);
+    }
+  } catch { /* per-file extraction must never break indexing */ }
+  return out;
 }
 
 // Per-cwd in-memory SQLite databases (symbol/relation tables) kept fresh via a
@@ -473,6 +578,9 @@ function db(cwd: string): SqliteDb {
   const useImpl = getParserBackend() === 'tree-sitter';
   const delSym = database.prepare('DELETE FROM symbols WHERE file=?');
   const delRel = database.prepare('DELETE FROM relations WHERE file=?');
+  // Calls must be purged alongside symbols/relations: without this, every
+  // edit left the file's old call edges behind as ghost/duplicate rows.
+  const delCall = database.prepare('DELETE FROM calls WHERE file=?');
 
   for (const full of walkFiles(cwd, cwd, { seen: 0, max: CODEGRAPH_WALK_MAX })) {
     const fp = fingerprint(full);
@@ -482,7 +590,7 @@ function db(cwd: string): SqliteDb {
     }
     prevRels.delete(full); // present -- do not purge below
     files.delete(full);
-    if (cached) { delSym.run(full); delRel.run(full); }
+    if (cached) { delSym.run(full); delRel.run(full); delCall.run(full); }
     if (fp) {
       const rel = relative(cwd, full).replace(/\\/g, '/');
       if (useImpl) tsIndexFile(full, rel, database);
@@ -491,7 +599,7 @@ function db(cwd: string): SqliteDb {
     }
   }
   for (const gone of prevRels) {
-    if (cached) { delSym.run(gone); delRel.run(gone); }
+    if (cached) { delSym.run(gone); delRel.run(gone); delCall.run(gone); }
     files.delete(gone);
   }
 
