@@ -96,7 +96,7 @@ export function candidateTestPaths(srcRel: string): string[] {
 }
 
 /** Strip a module extension and a trailing `/index` to get a comparable stem. */
-function stemOf(rel: string): string {
+export function stemOf(rel: string): string {
   let s = normalizeRel(rel);
   const e = extname(s).toLowerCase();
   if (JS_TS_LIKE.has(e) || e === '.py' || e === '.rb') s = s.slice(0, -e.length);
@@ -107,9 +107,20 @@ function stemOf(rel: string): string {
 const SPECIFIER_RE = /(?:from|require\(|import\()\s*['"]([^'"]+)['"]/g;
 
 /** Resolve a relative import specifier written in `fromRel` to a comparable stem. */
-function resolveSpecifier(fromRel: string, spec: string): string | null {
+export function resolveSpecifierStem(fromRel: string, spec: string): string | null {
   if (!spec.startsWith('.')) return null;
   return stemOf(join(dirname(fromRel), spec));
+}
+
+/** All relative import/require specifiers written in a source file's text. */
+export function extractRelativeSpecifiers(content: string): string[] {
+  const out: string[] = [];
+  const re = new RegExp(SPECIFIER_RE.source, 'g');
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content)) !== null) {
+    if (m[1].startsWith('.')) out.push(m[1]);
+  }
+  return out;
 }
 
 export interface RelatedTests {
@@ -191,7 +202,7 @@ export function selectRelatedTests(
       const re = new RegExp(SPECIFIER_RE.source, 'g');
       let m: RegExpExecArray | null;
       while ((m = re.exec(content)) !== null) {
-        const stem = resolveSpecifier(rel, m[1]);
+        const stem = resolveSpecifierStem(rel, m[1]);
         if (stem && targetStems.has(stem)) {
           found.add(rel);
           break;

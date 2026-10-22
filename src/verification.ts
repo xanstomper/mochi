@@ -12,7 +12,7 @@ import { BudgetEngine } from './budget.js';
 import { runMutationCheck, type MutationCheck } from './core/mutation.js';
 import { classifyContentOnly } from './core/one-shot.js';
 import { isGreenfieldTask } from './core/greenfield.js';
-import { planTargetedTests } from './core/test-select.js';
+import { planVerificationTests } from './core/test-selection.js';
 import {
   analyzeFailure, exitCodeOfEnvelope, flakeCommandKey, formatFlakyHits, gitChangedFiles,
   isKnownFlaky, knownFlakyCommandKeys, loadFlakyRegistry, partitionFlakes, recordCleanPass,
@@ -189,11 +189,14 @@ export class VerifierEngine {
     // suite, typecheck, lint, and build — the common case while the agent is
     // still iterating. The full suite still runs as the authoritative gate on
     // success, so a narrow pass can never stand in for the real verdict.
+    // The subset comes from the blast-radius planner (labeled PARTIAL in the
+    // evidence below); cadence is disabled here because this path ALWAYS
+    // follows with the full gate — cadence governs iterative verify calls.
     const primaryTest = task.verificationCommand ?? repo.testCommand;
     let targetedPlan: { command?: string; reason: string } | undefined;
     if (primaryTest && !contentOnly && !greenfield) {
       try {
-        targetedPlan = await planTargetedTests(this.cwd, repo, primaryTest);
+        targetedPlan = await planVerificationTests(this.cwd, repo, primaryTest, { cadence: false });
       } catch {
         targetedPlan = undefined;
       }
@@ -217,14 +220,14 @@ export class VerifierEngine {
           if (flake.kind === 'flaky') {
             evidence.push({
               source: `command:${targetedPlan.command}`,
-              result: `[TARGETED: ${targetedPlan.reason}] [FLAKY: failed, then passed on re-run with no code changes] ${tRes.slice(0, 1200)}`,
+              result: `[PARTIAL — targeted pre-check: ${targetedPlan.reason}] [FLAKY: failed, then passed on re-run with no code changes] ${tRes.slice(0, 1200)}`,
               passed: true,
               flaky: flake.hits.map((h) => h.id),
             });
           } else {
             evidence.push({
               source: `command:${targetedPlan.command}`,
-              result: `[TARGETED: ${targetedPlan.reason}] ${flake.output.slice(0, 2000)}${flake.note ? `\n${flake.note}` : ''}`,
+              result: `[PARTIAL — targeted pre-check: ${targetedPlan.reason}] ${flake.output.slice(0, 2000)}${flake.note ? `\n${flake.note}` : ''}`,
               passed: false,
             });
             const early = this.build(
