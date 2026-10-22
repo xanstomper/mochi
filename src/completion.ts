@@ -49,7 +49,7 @@ export const COMPLETION_COMMANDS: CompletionCommand[] = [
     ],
   },
   { name: 'session', description: 'Session history (list|search)' },
-  { name: 'trace', description: 'Replay a run trace' },
+  { name: 'trace', description: 'Replay a run trace (--export-trajectory: export a trajectory JSONL for distillation/SFT)' },
   { name: 'apply', description: 'Apply a unified diff atomically (all-or-nothing)' },
   { name: 'checkpoint', description: 'Named snapshots' },
   { name: 'rollback', description: 'Restore a checkpoint' },

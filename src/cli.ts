@@ -2588,6 +2588,14 @@ async function main() {
       ids.push(files[files.length - 1].replace(/\.jsonl$/, ''));
     }
     for (const gid of ids) {
+      if (flags['export-trajectory']) {
+        const { exportTrajectory } = await import('./observability/trajectory.js');
+        const exported = exportTrajectory(runtime.workspace.dir, gid);
+        if (!exported) { console.log(`No trace for ${gid}.`); continue; }
+        const outcomeLabel = exported.record.outcome.stopReason ?? (exported.record.outcome.completed ? 'completed' : 'incomplete');
+        console.log(`Trajectory exported: ${exported.path} (${exported.record.steps.length} steps, outcome: ${outcomeLabel})`);
+        continue;
+      }
       const entries = readTrace(runtime.workspace.dir, gid);
       if (!entries.length) { console.log(`No trace for ${gid}.`); continue; }
       console.log(formatTrace(entries));
