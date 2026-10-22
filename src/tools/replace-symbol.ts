@@ -140,26 +140,6 @@ export async function replaceSymbol(cwd: string, name: string, newBody: string):
   };
 }
 
-/** Insert a new symbol BEFORE an existing one (or at EOF when name is empty). */
-export async function insertSymbolBefore(cwd: string, name: string, text: string): Promise<ReplaceSymbolResult> {
-  const header = name ? await getFunctionSynapse(cwd, name) : '';
-  const m = name ? header.match(/^# \w+ ([\w$]+) — (.+):(\d+)$/m) : null;
-  const insertion = (text.endsWith('\n') ? text : text + '\n') + '\n';
-  if (!m) {
-    // append at EOF
-    // no anchor: need a file — refuse rather than guess
-    return { ok: false, message: 'Provide an anchor symbol (insertBefore) or use the write tool for new files.' };
-  }
-  const [, symName, rel, lineStr] = m;
-  const abs = resolve(cwd, rel);
-  const lines = readFileSync(abs, 'utf8').split('\n');
-  const at = Number(lineStr) - 1;
-  const out = [...lines.slice(0, at), insertion.replace(/\n\n$/, '\n'), ...lines.slice(at)];
-  atomicWriteFileSync(abs, out.join('\n'));
-  return { ok: true, message: `Inserted before ${symName} (${rel}:${lineStr}).`, path: abs };
-}
-
-
 import type { Tool } from './types.js';
 
 /** The agent-facing tool. Works on any indexed language (tree-sitter symbol

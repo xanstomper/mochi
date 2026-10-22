@@ -189,4 +189,103 @@ describe('SpeculativeBranchRacer', () => {
     expect(result.appliedToPrimary).toBe(false);
     expect(result.summary).toContain('All 2 candidate branches failed verification');
   });
+
+  it('runs verification commands with quoted arguments, env assignments, and && chains', async () => {
+    // This command is unparseable by the old `testCmd.split(' ')` route:
+    // it has an env assignment, double- and single-quoted arguments that
+    // contain spaces, and an `&&` chain. Only real shell execution passes it.
+    writeFileSync(resolve(testDir, 'verify-quoted.js'), [
+      'if (process.env.EXPECTED_GREETING !== "hello world") process.exit(1);',
+      'if (process.argv[2] !== "a b") process.exit(2);',
+      'if (process.argv[3] !== "c d") process.exit(3);',
+      'process.exit(0);',
+    ].join('\n'));
+    execFileSync('git', ['add', 'verify-quoted.js'], { cwd: testDir });
+    execFileSync('git', ['commit', '-m', 'add quoted verifier'], { cwd: testDir });
+    const racer = new SpeculativeBranchRacer(testDir);
+
+    const result = await racer.raceCandidates([
+      {
+        name: 'quoted-args-candidate',
+        patches: [{ filePath: 'math.js', newContent: 'function add(a, b) { return a + b; }\nmodule.exports = { add };\n' }],
+      },
+    ], 'EXPECTED_GREETING="hello world" node verify-quoted.js "a b" \'c d\' && node test.js');
+
+    expect(result.candidatesEvaluated.map(({ passed }) => passed)).toEqual([true]);
+    expect(result.winner?.name).toBe('quoted-args-candidate');
+    expect(result.appliedToPrimary).toBe(true);
+    expect(readFileSync(resolve(testDir, 'math.js'), 'utf8')).toContain('return a + b;');
+  });
+
+  it('fails a slow verification command when a short custom timeoutMs is configured', async () => {
+    // The script would pass after ~2s if left alone; with timeoutMs: 150 it
+    // must be timed out and reported as failed, not passed. (This also proves
+    // the timeout is no longer the old hardcoded 30s path for this call —
+    // and, conversely, that a custom value actually reaches the executor.)
+    writeFileSync(resolve(testDir, 'verify-slow.js'), 'setTimeout(() => process.exit(0), 2000);\n');
+    execFileSync('git', ['add', 'verify-slow.js'], { cwd: testDir });
+    execFileSync('git', ['commit', '-m', 'add slow verifier'], { cwd: testDir });
+    const racer = new SpeculativeBranchRacer(testDir);
+
+    const result = await racer.raceCandidates([
+      {
+        name: 'slow-candidate',
+        patches: [{ filePath: 'math.js', newContent: 'function add(a, b) { return a + b; }\nmodule.exports = { add };\n' }],
+      },
+    ], 'node verify-slow.js', { timeoutMs: 150 });
+
+    expect(result.candidatesEvaluated.map(({ passed }) => passed)).toEqual([false]);
+    expect(result.candidatesEvaluated[0].output).toContain('timed out');
+    expect(result.winner).toBeUndefined();
+    expect(result.appliedToPrimary).toBe(false);
+  });
+
+  it('honours the MOCHI_BRANCH_RACE_TIMEOUT_MS env override', async () => {
+    writeFileSync(resolve(testDir, 'verify-slow.js'), 'setTimeout(() => process.exit(0), 2000);\n');
+    execFileSync('git', ['add', 'verify-slow.js'], { cwd: testDir });
+    execFileSync('git', ['commit', '-m', 'add slow verifier'], { cwd: testDir });
+    const racer = new SpeculativeBranchRacer(testDir);
+
+    const previous = process.env.MOCHI_BRANCH_RACE_TIMEOUT_MS;
+    process.env.MOCHI_BRANCH_RACE_TIMEOUT_MS = '150';
+    try {
+      const result = await racer.raceCandidates([
+        {
+          name: 'env-timeout-candidate',
+          patches: [{ filePath: 'math.js', newContent: 'function add(a, b) { return a + b; }\nmodule.exports = { add };\n' }],
+        },
+      ], 'node verify-slow.js');
+
+      expect(result.candidatesEvaluated.map(({ passed }) => passed)).toEqual([false]);
+      expect(result.winner).toBeUndefined();
+      expect(result.appliedToPrimary).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.MOCHI_BRANCH_RACE_TIMEOUT_MS;
+      else process.env.MOCHI_BRANCH_RACE_TIMEOUT_MS = previous;
+    }
+  });
+
+  it('preserves candidate-order results when concurrency is bounded to 1', async () => {
+    const racer = new SpeculativeBranchRacer(testDir);
+
+    const result = await racer.raceCandidates([
+      {
+        name: 'first-bad',
+        patches: [{ filePath: 'math.js', newContent: 'function add(a, b) { return 0; }\nmodule.exports = { add };\n' }],
+      },
+      {
+        name: 'second-good',
+        patches: [{ filePath: 'math.js', newContent: 'function add(a, b) { return a + b; }\nmodule.exports = { add };\n' }],
+      },
+      {
+        name: 'third-bad',
+        patches: [{ filePath: 'math.js', newContent: 'function add(a, b) { return -1; }\nmodule.exports = { add };\n' }],
+      },
+    ], 'node test.js', { maxConcurrency: 1 });
+
+    expect(result.candidatesEvaluated.map(({ name }) => name)).toEqual(['first-bad', 'second-good', 'third-bad']);
+    expect(result.candidatesEvaluated.map(({ passed }) => passed)).toEqual([false, true, false]);
+    expect(result.winner?.name).toBe('second-good');
+    expect(result.appliedToPrimary).toBe(true);
+  });
 });

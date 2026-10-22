@@ -125,6 +125,22 @@ export function createOpenAIProvider(config: ProviderConfig) {
       if (m.role === 'tool') {
         if (m.tool_call_id && declaredToolCallIds.has(m.tool_call_id)) {
           out.push({ role: 'tool', tool_call_id: m.tool_call_id, content: contentText(m) });
+          // Wave H3: the OpenAI wire carries strings only in tool messages,
+          // so image parts (computer screenshots) follow as a user message
+          // with the parts verbatim — the same MCH-109 shape multimodal user
+          // turns already use below. Text-only results are unchanged.
+          if (Array.isArray(m.content)) {
+            const imageParts = m.content.filter((p) => p.type === 'image_url');
+            if (imageParts.length > 0) {
+              out.push({
+                role: 'user',
+                content: [
+                  { type: 'text', text: `[image attached from the ${m.name || 'tool'} tool result above]` },
+                  ...imageParts,
+                ],
+              });
+            }
+          }
         } else {
           // Orphaned tool response: convert to user message with tool notice so provider doesn't reject with 400
           out.push({ role: 'user', content: `[tool output: ${m.name || 'tool'}] ${contentText(m)}` });

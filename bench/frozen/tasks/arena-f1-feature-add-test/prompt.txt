@@ -1,0 +1,1 @@
+Create add.js exporting function add(a,b) that returns a+b, then create add.test.js that imports it and prints add(2,3). Run it with node add.test.js and make sure the output is 5.

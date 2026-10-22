@@ -9,7 +9,8 @@
 //   1. explicit per-key override (config.model.apiKey when set and real)
 //   2. env var(s): MOCHI_<PROVIDER>_KEY, then the canonical <PROVIDER>_API_KEY
 //      (comma/newline-separated list supported => a pool)
-//   3. ~/.config/mochi/keys/<provider>.keys  (one key per line, # comments)
+//   3. ~/.config/mochi/credentials/<provider>.json  ({ "keys": [...] } or a
+//      bare JSON array of key strings)
 //   4. fall back to configuring the single apiKey untouched (no pool)
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -120,12 +121,6 @@ export function retireKey(_provider: string, key: string | null, cooldownMs = 30
 }
 
 /** Redact every key Mochi knows for a provider (used by describeConfig). */
-export function redactPool(provider: string): number {
-  const all = poolKeys(provider);
-  return all.length;
-}
-
-export const noCredentialPool = (provider: string): boolean => poolKeys(provider).length === 0;
 
 /** Human-readable summary (keys masked, never raw). */
 export async function inspectPool(provider: string, current?: string | null) {

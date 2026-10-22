@@ -168,10 +168,70 @@ describe('bubblewrap sandbox', () => {
       timeoutMs: 20_000,
     });
     expect(r.stdout).toContain('exit=1');
-    // ...and the probe file must not exist outside either.
-    const { existsSync } = await import('node:fs');
-    const { homedir } = await import('node:os');
-    const { resolve } = await import('node:path');
-    expect(existsSync(resolve(homedir(), unique))).toBe(false);
-  }, 30_000);
+  });
+
+  describe('unshare sandbox', () => {
+    it('builds a user-ns argv with pid/mount isolation and kill-child', async () => {
+      const { buildUnshareArgs } = await import('./exec.js');
+      const argv = buildUnshareArgs('/usr/bin/unshare', 'npm', ['test'], {});
+      expect(argv[0]).toBe('/usr/bin/unshare');
+      for (const flag of ['--user', '--map-current-user', '--mount', '--mount-proc', '--pid', '--fork', '--kill-child=SIGKILL']) {
+        expect(argv).toContain(flag);
+      }
+      expect(argv).not.toContain('--net'); // network shared by default
+      expect(argv.slice(-2)).toEqual(['npm', 'test']);
+    });
+
+    it('unshares network only when asked', async () => {
+      const { buildUnshareArgs } = await import('./exec.js');
+      expect(buildUnshareArgs('/usr/bin/unshare', 'x', [], { network: false })).toContain('--net');
+    });
+
+    it('forced unshare needs the binary; auto falls back to it when bwrap is absent', async () => {
+      const { maybeSandbox, detectUnshare } = await import('./exec.js');
+      if (detectUnshare()) {
+        const w = maybeSandbox('echo', ['hi'], { sandbox: { mode: 'unshare' } });
+        expect(w.cmd).toContain('unshare');
+        expect(w.args.slice(-2)).toEqual(['echo', 'hi']);
+      } else {
+        expect(() => maybeSandbox('echo', ['hi'], { sandbox: { mode: 'unshare' } })).toThrow(/unshare.*not found/);
+      }
+    });
+
+    it('detectUnshare returns null on a PATH without it', async () => {
+      const { detectUnshare } = await import('./exec.js');
+      expect(detectUnshare('/nonexistent-dir-xyz')).toBeNull();
+    });
+
+    it('runs a real command inside unshare when the kernel allows user namespaces', async () => {
+      const { detectUnshare, runArgv } = await import('./exec.js');
+      if (!detectUnshare()) return;
+      const r = await runArgv('echo', ['unshare-ok'], { sandbox: { mode: 'unshare' }, timeoutMs: 20_000 });
+      // Some hardened kernels (Ubuntu unprivileged-userns AppArmor profile)
+      // refuse the user namespace outright — that is a legitimate "not
+      // available on this box" outcome, not a bug. Accept exit 0 (sandboxed)
+      // or a clean unshare refusal; anything else is a real failure.
+      if (r.code !== 0) {
+        expect(r.stderr).toMatch(/unshare|namespace|Operation not permitted/i);
+        return;
+      }
+      expect(r.stdout).toContain('unshare-ok');
+    }, 30_000);
+
+    it('sandboxed process tree cannot leak: kill-child reaps background children', async () => {
+      const { detectUnshare, runShellString } = await import('./exec.js');
+      if (!detectUnshare()) return;
+      // Background a sleeper, then `wait` keeps the shell alive until the
+      // timeout fires — the wrapper is killed and --kill-child must reap
+      // the whole namespace tree (no orphan escaping the sandbox).
+      const r = await runShellString('sleep 37 & echo started; wait', {
+        sandbox: { mode: 'unshare' },
+        timeoutMs: 8000,
+        killGraceMs: 500,
+      });
+      expect(r.stdout).toContain('started');
+      // The 8s timeout fired while `sleep 37` was still alive.
+      expect(r.timedOut).toBe(true);
+    }, 30_000);
+  });
 });

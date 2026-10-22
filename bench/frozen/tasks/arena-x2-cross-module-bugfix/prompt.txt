@@ -1,0 +1,1 @@
+order.js prints the wrong total for order.test.js — it should print 11. Trace through inventory.js and order.js, fix the bug, then run node order.test.js and make sure the output is 11.

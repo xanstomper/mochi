@@ -1,9 +1,10 @@
 /**
- * Durable project memory — facts the agent has learned that should
- * persist across sessions. Backed by ~/.mochi/memory.jsonl with one fact
- * per line. Memory entries include an `attempts` and `last_failed`
- * counter; facts that have failed 3+ times without success are
- * automatically pruned so the memory doesn't replay the same dead ends.
+ * Durable GLOBAL memory (user-level, not per-project) — facts the agent has
+ * learned that should persist across sessions and projects. Backed by
+ * ~/.mochi/memory.jsonl with one fact per line. Memory entries include an
+ * `attempts` and `last_failed` counter; facts that have failed 3+ times
+ * without success are automatically pruned so the memory doesn't replay
+ * the same dead ends.
  */
 
 import { existsSync, readFileSync, appendFileSync, mkdirSync } from 'node:fs';
@@ -37,6 +38,12 @@ function memoryFile(): string {
     ? resolve(process.env['MOCHI_MEMORY_FILE'])
     : resolve(MEMORY_DIR, 'memory.jsonl');
 }
+/** Absolute path of the active global fact file (env-aware; resolved lazily
+ *  like every read/write so MOCHI_MEMORY_FILE redirection always applies). */
+export function memoryFilePath(): string {
+  return memoryFile();
+}
+
 const MAX_FAILS = 3;
 
 function ensure(): void {
@@ -215,7 +222,7 @@ export function memoryDigest(taskContext?: string): string {
     if (facts.length > 20) facts = facts.slice(0, 20);
   }
   if (facts.length === 0) return '';
-  const lines: string[] = ['# DURABLE MEMORY (project facts)', ''];
+  const lines: string[] = ['# DURABLE MEMORY (global facts)', ''];
   for (const f of facts) {
     noteFactSurfaced(f.id); // MCH-63: so the run outcome can be attributed back
     const tag = `[${f.category}]`;
@@ -224,10 +231,4 @@ export function memoryDigest(taskContext?: string): string {
   lines.push('');
   lines.push('These facts persist across sessions. Act on them when relevant; do not re-derive.');
   return lines.join('\n');
-}
-
-/** One-line pulse for status bar. */
-export function memoryPulse(): string {
-  const n = loadFacts().length;
-  return n === 0 ? '' : `${n} facts`;
 }

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
-import { findMutation, runMutationCheck, changedSourceFiles } from './mutation.js';
+import { findMutation, runMutationCheck, changedSourceFiles, enumerateMutations } from './mutation.js';
 import { execSync } from 'node:child_process';
 
 let dirs: string[] = [];
@@ -184,5 +184,30 @@ describe('mutation.runMutationCheck', () => {
     for (const testFile of ['x.test.ts', 'y_spec.rb', 'FooTest.java', 'test_it.py', 'foo_test.go', 'fluid_test.rs', 'FooTests.cs', 'BarTest.php', 'widget_spec.rb']) {
       expect(files).not.toContain(testFile);
     }
+  });
+});
+describe('mutation.enumerateMutations', () => {
+  it('returns every site in source order, unlike findMutation priority order', () => {
+    const src = 'const s = a + b;\nif (x > 0) return 1;\nif (a === b) return 2;';
+    const sites = enumerateMutations(src);
+    expect(sites.map((s) => s.from)).toEqual(['+', '>', '===']);
+    const idx = sites.map((s) => s.index);
+    expect(idx).toEqual([...idx].sort((a, b) => a - b));
+  });
+
+  it('prefers the longest flip at a position (=== over ==) and never overlaps', () => {
+    const sites = enumerateMutations('if (a === b) return 1;');
+    expect(sites).toEqual([{ index: 6, from: '===', to: '!==' }]);
+  });
+
+  it('skips operators inside strings and comments', () => {
+    const src = '// a === b\nconst s = "x + y";\nif (a && b) return 1;';
+    const sites = enumerateMutations(src);
+    expect(sites.map((s) => s.from)).toEqual(['&&']);
+  });
+
+  it('enumerates Python and/or sites', () => {
+    const sites = enumerateMutations('if a and b or c:\n    return 1');
+    expect(sites.map((s) => s.from)).toEqual([' and ', ' or ']);
   });
 });

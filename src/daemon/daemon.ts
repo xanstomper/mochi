@@ -16,6 +16,7 @@ import { atomicWriteFileSync } from '../core/atomic-fs.js';
 import type { MochiConfig } from '../types.js';
 import { Runtime } from '../runtime.js';
 import { addJob, listJobs, removeJob, getJob, setJobPaused, setJobEnabled, runJobNow, runDueCronJobs } from './cron.js';
+import { runDueAutomations } from './automation.js';
 import { truncateMiddle } from '../util.js';
 
 export interface DaemonInfo {
@@ -242,6 +243,12 @@ export async function startDaemonInProcess(opts: {
       // Serial, timeout-aware, and persisted: a crashing/timing-out job can
       // never wedge the scheduler or re-fire immediately.
       await runDueCronJobs(cwd, (prompt, signal) => runtime.goal(prompt, [], undefined, signal));
+      // Durable automations: resume interrupted slots + fire due triggers.
+      // Journal-backed, so a firing the daemon died inside of completes
+      // exactly once instead of re-executing its side effects.
+      await runDueAutomations(cwd, {
+        runGoal: async (prompt, journalRunId) => (await runtime.runGoal(prompt, [], { journalRunId })).summary,
+      });
     } finally {
       processing = false;
     }
@@ -265,7 +272,101 @@ export async function startDaemonInProcess(opts: {
   };
 }
 
-function getDashboardHtml(token: string): string {
+/** The dashboard HTML may embed the real bearer token ONLY when the request
+ *  itself proved possession of it (tokenOk). An unauthenticated request must
+ *  never receive the token — previously `getDashboardHtml(reqToken ||
+ *  auth.token)` handed the real token to anyone who could reach 127.0.0.1,
+ *  including any website the user visited. Returns '' when not proven. */
+export function dashboardResponseToken(_reqToken: string, tokenOk: boolean, realToken: string): string {
+  return tokenOk ? realToken : '';
+}
+
+const LOCALHOST_ORIGIN_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/** True only for http(s) origins on a loopback host (any local port, so
+ *  local tools like Open WebUI on another port keep working). */
+export function isLocalhostOrigin(origin: string | undefined): boolean {
+  if (!origin) return false;
+  try {
+    const u = new URL(origin);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+    return LOCALHOST_ORIGIN_HOSTNAMES.has(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
+/** CORS headers for a request: reflect the Origin ONLY when it is a
+ *  localhost origin; otherwise no CORS grant at all. Never '*': with '*',
+ *  any website could read authenticated API responses cross-origin. */
+export function corsHeadersForOrigin(origin: string | undefined): Record<string, string> {
+  if (!isLocalhostOrigin(origin)) return {};
+  return {
+    'access-control-allow-origin': origin as string,
+    'access-control-allow-methods': 'GET,POST,OPTIONS',
+    'access-control-allow-headers': 'authorization,content-type',
+    vary: 'Origin',
+  };
+}
+
+/** Token-free login page served for unauthenticated dashboard requests.
+ *  Contains NO token: the user pastes one (stored in localStorage, then the
+ *  browser reloads via /?token=... so the server can verify it), and a
+ *  returning browser with a saved token is auto-redirected through the
+ *  same verified path. */
+export function getDashboardLoginHtml(): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mochi Agent Dashboard — Sign in</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace; background: #0f1117; color: #f8f8f2; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+    .card { background: #1a1d26; border: 1px solid #2e3346; border-radius: 10px; padding: 28px; max-width: 440px; width: 92%; }
+    h1 { font-size: 1.15rem; color: #ff79c6; margin: 0 0 12px; }
+    p { line-height: 1.5; font-size: 0.92rem; color: #a4b1cd; }
+    code { background: #12141c; padding: 1px 5px; border-radius: 4px; }
+    .row { display: flex; gap: 8px; margin-top: 16px; }
+    input { flex: 1; padding: 10px 12px; background: #12141c; border: 1px solid #2e3346; border-radius: 6px; color: #f8f8f2; outline: none; }
+    button { padding: 10px 18px; background: #ff79c6; border: none; border-radius: 6px; color: #000; font-weight: 700; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>🍡 Mochi Dashboard — token required</h1>
+    <p>This dashboard is protected by the daemon's bearer token, which is never
+    sent to unauthenticated browsers. Open it with the signed-in link from
+    <code>mochi dashboard</code> in the workspace, or paste the token from
+    <code>.mochi/daemon/info.json</code> below.</p>
+    <div class="row">
+      <input type="password" id="token-input" placeholder="Daemon token" autocomplete="off" />
+      <button id="token-go">Open</button>
+    </div>
+  </div>
+  <script>
+    // Returning browser: a previously saved token goes through the normal
+    // server-verified /?token= path (the dashboard scrubs it from the URL
+    // and re-saves it). An invalid saved token lands on the 401 page, not
+    // in a redirect loop, because this page is only served with NO token.
+    try {
+      const saved = localStorage.getItem('mochi_token');
+      if (saved) window.location.replace('/?token=' + encodeURIComponent(saved));
+    } catch { /* storage unavailable: manual entry still works */ }
+    function go() {
+      const v = document.getElementById('token-input').value.trim();
+      if (!v) return;
+      try { localStorage.setItem('mochi_token', v); } catch { /* ignore */ }
+      window.location.href = '/?token=' + encodeURIComponent(v);
+    }
+    document.getElementById('token-go').addEventListener('click', go);
+    document.getElementById('token-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+  </script>
+</body>
+</html>`;
+}
+
+export function getDashboardHtml(token: string): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -431,7 +532,7 @@ async function handleRequest(
   runtime: Runtime,
   opts?: { onRotate?: () => void },
 ): Promise<void> {
-  const cors = { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET,POST,OPTIONS', 'access-control-allow-headers': 'authorization,content-type' };
+  const cors = corsHeadersForOrigin(req.headers.origin);
   const send = (code: number, body: unknown) => {
     res.writeHead(code, { 'content-type': 'application/json', ...cors });
     res.end(JSON.stringify(body));
@@ -457,14 +558,25 @@ async function handleRequest(
       res.end('<h1>401 Token expired</h1><p>Run <code>mochi daemon rotate</code> in the workspace, then reconnect with the new token.</p>');
       return;
     }
+    if (!tokenOk) {
+      // No token presented: serve the token-free login page. The real token
+      // must NEVER be embedded here — anyone able to reach 127.0.0.1 (a
+      // local process, or a website driving the user's browser) could
+      // otherwise scrape it and take over the daemon API.
+      res.writeHead(401, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(getDashboardLoginHtml());
+      return;
+    }
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    res.end(getDashboardHtml(reqToken || auth.token));
+    res.end(getDashboardHtml(dashboardResponseToken(reqToken, tokenOk, auth.token)));
     return;
   }
 
-  // CORS preflight (browsers / Open WebUI / AnythingLLM).
+  // CORS preflight (browsers / Open WebUI / AnythingLLM). Only localhost
+  // origins are granted; other origins get no CORS headers at all.
   if (req.method === 'OPTIONS') {
-    res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET,POST,OPTIONS', 'access-control-allow-headers': 'authorization,content-type', 'access-control-max-age': '86400' });
+    const preflightCors = corsHeadersForOrigin(req.headers.origin);
+    res.writeHead(204, { ...preflightCors, ...(Object.keys(preflightCors).length ? { 'access-control-max-age': '86400' } : {}) });
     res.end();
     return;
   }
@@ -472,7 +584,7 @@ async function handleRequest(
   // Unauthenticated health probe (containers / load balancers / CI): version
   // + uptime only, never state or secrets. Must precede the token gate.
   if (req.method === 'GET' && path === '/api/health') {
-    res.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
+    res.writeHead(200, { 'content-type': 'application/json', ...corsHeadersForOrigin(req.headers.origin) });
     res.end(JSON.stringify({ ok: true, version: daemonVersion(), uptimeSec: Math.floor(process.uptime()) }));
     return;
     return;
@@ -687,7 +799,7 @@ async function handleRequest(
       const lastUser = [...messages].reverse().find((m) => m?.role === 'user')?.content ?? messages.map((m) => m?.content ?? '').join('\n');
       const wantsStream = body.stream === true;
       if (wantsStream) {
-        res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive', 'access-control-allow-origin': '*' });
+        res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive', ...corsHeadersForOrigin(req.headers.origin) });
         const chunkId = `chatcmpl-${Date.now()}`;
         const created = Math.floor(Date.now() / 1000);
         const writeChunk = (content: string, finish = false) => {
@@ -792,6 +904,9 @@ export async function serverMain(argv: string[]): Promise<void> {
     processing = true;
     try {
       await runDueCronJobs(cwd, (prompt, signal) => rt.goal(prompt, [], undefined, signal));
+      await runDueAutomations(cwd, {
+        runGoal: async (prompt, journalRunId) => (await rt.runGoal(prompt, [], { journalRunId })).summary,
+      });
     } finally { processing = false; }
   }, 10_000);
   server.listen(Number(port), host, () => {

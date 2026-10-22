@@ -36,6 +36,10 @@ export interface SSEUsage {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  /** Provider-reported billing for the call (OpenRouter-style usage.cost).
+   *  Omitted from the wire entirely when undefined — most providers never
+   *  send it, and a scripted $0 must be expressed as costUsd: 0. */
+  costUsd?: number;
 }
 
 /** Usage as it appears on the wire (snake_case, per the OpenAI contract). */
@@ -43,6 +47,7 @@ export interface SSEWireUsage {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
+  cost?: number;
 }
 
 export interface SSEToolCall {
@@ -134,6 +139,7 @@ export function buildFinishChunk(
       prompt_tokens: usage.promptTokens,
       completion_tokens: usage.completionTokens,
       total_tokens: usage.totalTokens,
+      ...(usage.costUsd !== undefined ? { cost: usage.costUsd } : {}),
     },
   };
   return encodeSSEChunk(chunk);
@@ -164,6 +170,7 @@ export function buildChatCompletion(params: {
     promptTokens,
     completionTokens,
     totalTokens: params.usage?.totalTokens ?? promptTokens + completionTokens,
+    ...(params.usage?.costUsd !== undefined ? { costUsd: params.usage.costUsd } : {}),
   };
 
   const out: string[] = [];

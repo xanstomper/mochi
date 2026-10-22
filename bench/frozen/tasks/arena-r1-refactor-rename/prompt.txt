@@ -1,0 +1,1 @@
+Rename function calcTotal to computeCartTotal in calc.js AND update app.js to use the new name. Then run "node app.js" and confirm it still prints 11.

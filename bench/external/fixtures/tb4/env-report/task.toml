@@ -1,0 +1,15 @@
+# Fixture task in Terminal-Bench 4.0 (Harbor) format — synthetic and tiny.
+[task]
+name = "mochi-fixtures/env-report"
+version = "0.2.0"
+
+[metadata]
+difficulty = "medium"
+tags = ["shell", "fixture"]
+languages = ["shell"]
+
+[agent]
+timeout_sec = 900
+
+[verifier]
+timeout_sec = 60

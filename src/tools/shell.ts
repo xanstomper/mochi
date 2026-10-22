@@ -1,5 +1,6 @@
 import type { Tool } from './types.js';
 import { classifyCommand } from '../security/security.js';
+import { matchHardline } from '../security/hardline.js';
 import { markMutation } from './fs-signal.js';
 import { detectBubblewrap } from '../exec.js';
 
@@ -109,6 +110,18 @@ export const shellTool: Tool = {
       );
     }
 
+    // Hardline floor: catastrophic commands (rm -rf /, mkfs, dd to a block
+    // device, fork bombs, …) are refused under EVERY policy and mode —
+    // including yolo/unattended and safe mode alike. This check sits before
+    // the background early-return on purpose: background tasks spawn via
+    // background-tasks.ts, NOT exec.ts, so this tool gate is the only
+    // chokepoint that sees every agent shell command. (runShellString in
+    // exec.ts enforces the same floor for non-tool shell strings.)
+    const hardline = matchHardline(command);
+    if (hardline) {
+      throw new Error(`Blocked by hardline safety floor (${hardline}): catastrophic commands are refused under every permission policy, including yolo/unattended. Command: ${command.slice(0, 200)}`);
+    }
+
     // Horus-derived command risk gate: in safe mode, destructive or network-
     // touching commands are blocked outright; in auto/ask they run but the
     // classification is visible (agents shouldn't silently rm -rf or push).
@@ -206,7 +219,8 @@ export const shellTool: Tool = {
     // is byte-identical to the old inline spawner.
     const { runShellString } = await import('../exec.js');
     // Sandbox: per-call flag wins, else the safety.sandbox config. `true`
-    // means "sandbox if possible" (auto); omitting means config default.
+    // means "sandbox if possible" (auto). All declared modes ('off', 'auto',
+    // 'bubblewrap', 'unshare') are real exec.ts backends now — pass through.
     const cfgSandbox = ctx.config.safety.sandbox ?? 'off';
     const sandboxMode = args.sandbox === true ? 'auto' : args.sandbox === false ? 'off' : cfgSandbox;
     let r: { stdout: string; stderr: string; code: number | null; timedOut: boolean; cancelled: boolean };

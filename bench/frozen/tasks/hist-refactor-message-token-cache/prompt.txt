@@ -1,0 +1,9 @@
+token-cache.js sizes conversation history for the context engine: estimateHistoryTokens(messages) sums a per-message token estimate (approxTokens over the message's JSON). Sizing runs every turn, and the current implementation re-serializes and re-tokenizes EVERY message on EVERY call — O(history) per turn, O(n²) over a session, for numbers that almost never change.
+
+Add a per-message token cache:
+1. A message's token count is computed once and then reused across sizing calls. Key the cache on the message OBJECT itself with a WeakMap, so entries are garbage-collected with their messages and the cache is never serialized.
+2. Export cachedMessageTokens(m) (the cached per-message count) and invalidateMessageTokens(m) (drops a message's cached count). Because keying is by object identity, in-place mutation is invisible to the cache: every site that rewrites a message's content in place must invalidate it.
+3. shrinkOldToolOutputs rewrites old tool results in place — it must invalidate each message it shrinks, so the next estimate reflects the shrunk content (a cache without this returns stale, pre-shrink totals forever).
+4. Observable behavior must not change: estimates are identical to the uncached computation for any history, shrinking is byte-for-byte the same (same window, threshold, head/tail, marker, saved-token return), and a message appended later is counted exactly once on first sizing.
+
+The work is measured by tokenizer invocations (tokenizeCalls() instruments approxTokens): repeated sizing of an unchanged history must not re-tokenize anything, and after one message is shrunk or invalidated, the next sizing re-tokenizes exactly that one message.

@@ -81,6 +81,69 @@ export function lintSkillDoc(name: string, description: string, body: string): S
   return { ok: !issues.some((i) => i.severity === 'error'), issues };
 }
 
+export interface InjectionScanHit {
+  rule: string;
+  message: string;
+}
+
+/**
+ * Prompt-injection scanner for UNTRUSTED project-supplied text that is
+ * about to enter the prompt (project rule files: MOCHI.md / AGENTS.md /
+ * modular .mochi/rules — see context.ts). Extracted from R6 above and
+ * generalized: R6 caught one phrasing of instruction-override in skills;
+ * this catches the strong-signal family (instruction override, system
+ * prompt exfiltration, fake system-turn markers, jailbreak mode claims).
+ * Patterns are deliberately tight — ordinary project rules ("follow the
+ * style guide", "never commit secrets", "you are working on X") must NOT
+ * trip it, because a hit replaces the whole file's content with an
+ * omission note at the call site. Returns the first hit, or null if clean.
+ */
+const INJECTION_PATTERNS: Array<{ rule: string; re: RegExp; message: string }> = [
+  {
+    rule: 'instruction-override',
+    re: /\b(ignore|disregard|forget|override|bypass)\b[^.\n]{0,60}\b(previous|prior|above|system|original|earlier|your)\b[^.\n]{0,30}\b(instructions?|directives?|prompts?|rules?|guidelines?)\b/i,
+    message: 'instruction-override language (ignore/disregard prior or system instructions)',
+  },
+  {
+    rule: 'instruction-override',
+    re: /^\s*ignore\s+(all\s+)?(previous|prior)\s+instructions/im,
+    message: 'instruction-override language (ignore previous instructions)',
+  },
+  {
+    rule: 'refuse-instructions',
+    re: /\bdo\s+not\s+(follow|obey|comply\s+with)\b[^.\n]{0,40}\b(system|original|previous|prior|your)\b[^.\n]{0,20}\b(instructions?|directives?|rules?)\b/i,
+    message: 'directive to disobey system/original instructions',
+  },
+  {
+    rule: 'system-prompt-exfiltration',
+    re: /\b(reveal|print|output|show|repeat|leak|disclose|dump)\b[^.\n]{0,60}\b(system\s+prompt|your\s+(system\s+)?instructions|initial\s+instructions|hidden\s+instructions)\b/i,
+    message: 'attempt to extract the system prompt / hidden instructions',
+  },
+  {
+    rule: 'fake-system-turn',
+    re: /^\s*\[(system|assistant)\]\s*:/im,
+    message: 'fake [system]/[assistant] turn marker',
+  },
+  {
+    rule: 'new-instructions-marker',
+    re: /\bBEGIN\s+(NEW\s+)?(SYSTEM\s+)?INSTRUCTIONS?\b/i,
+    message: '"BEGIN NEW INSTRUCTIONS" marker',
+  },
+  {
+    rule: 'jailbreak-mode',
+    re: /\b(jailbreak|unrestricted\s+mode|dan\s+mode|developer\s+mode\s+enabled|no\s+restrictions\s+mode)\b/i,
+    message: 'jailbreak / unrestricted-mode claim',
+  },
+];
+
+export function scanPromptInjection(text: string): InjectionScanHit | null {
+  if (!text) return null;
+  for (const p of INJECTION_PATTERNS) {
+    if (p.re.test(text)) return { rule: p.rule, message: p.message };
+  }
+  return null;
+}
+
 /** Render issues into a human-readable lint report. */
 export function formatSkillLint(result: SkillLintResult): string {
   if (!result.issues.length) return 'skill lint: clean';

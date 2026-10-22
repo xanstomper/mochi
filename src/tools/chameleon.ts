@@ -1,5 +1,12 @@
-import { ChameleonEngine } from '../chameleon.js';
 import type { Tool } from './types.js';
+
+// PERF: ChameleonEngine is loaded LAZILY inside execute(), not statically.
+// The static import dragged the whole engine chain (cognitive/chameleon ->
+// model/router -> every provider adapter, ~29ms of module load) into
+// tools/index.js — and from there into context.ts and the agent loop — so
+// EVERY Mochi invocation paid it, even though the engine is only touched
+// when this one tool actually runs. runtime.ts already loads it this way;
+// keep heavy modules behind await import() (see bench/memory.mjs).
 
 export const chameleonTool: Tool = {
   def: {
@@ -17,6 +24,7 @@ export const chameleonTool: Tool = {
     const task = String(args.task ?? '').trim();
     if (!task) throw new Error('chameleon requires a task');
     try {
+      const { ChameleonEngine } = await import('../chameleon.js');
       const engine = new ChameleonEngine(ctx.config);
       // Validate tool args against the engine unions (same rule as the CLI:
       // unknown strings fall back with no silent misbehavior).

@@ -39,4 +39,18 @@ describe('security: redact', () => {
     expect(out.apiKey).toBe('[secret-redacted]');
     expect(out.nested.token).toBe('[secret-redacted]');
   });
+
+  it('redacts a Discord-shaped three-part token (bounded pattern keeps real shapes)', () => {
+    // Segments sized like a real Discord bot token (<= ~40 chars each).
+    const tok = 'MTIzNDU2Nzg5MDEyMzQ1Njc4OTA' + '.' + 'AbCdEf' + '.' + 'xYz9BcDeFgHiJkLmNoPqRsTuVwXyZ0123456789ab';
+    expect(redact(`token is ${tok} ok`)).toBe('token is [secret-redacted] ok');
+  });
+
+  it('does not hang on a long unbroken word-char run (ReDoS bound)', () => {
+    // The unbounded three-part pattern scanned this quadratically
+    // (200K chars ~ 218s). Bounded segments keep it linear-ish; the
+    // assertion is correctness — the suite timeout is the perf bound.
+    const run = 'x'.repeat(200_000);
+    expect(redact(run)).toBe(run);
+  });
 });

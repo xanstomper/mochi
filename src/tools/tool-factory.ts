@@ -147,6 +147,12 @@ export function listAuthoredTools(projectDir: string): AuthoredToolManifest[] {
   const out: AuthoredToolManifest[] = [];
   for (const e of readdirSync(root, { withFileTypes: true })) {
     if (!e.isDirectory() || e.name.startsWith('.')) continue;
+    // Tool Forge bundles (a forge.json provenance file) share this store
+    // but are NOT authored tools: they load through loadForgedTools, which
+    // enforces lifecycle state (probation/active only) and logs every
+    // invocation. Loading them here too would double-register the name and
+    // bypass the forge's gates entirely.
+    if (existsSync(join(root, e.name, 'forge.json'))) continue;
     try {
       const m = JSON.parse(readFileSync(join(root, e.name, 'tool.json'), 'utf8')) as AuthoredToolManifest;
       if (!validateManifest(m)) out.push(m);

@@ -42,3 +42,8 @@ aimbot-venv/
 
 # Scratch dirs used by the plan-mode verify-with-rollback tests (workspace-local, gitignored)
 .revtmp/
+
+# Frozen bench tasks are hash-pinned repository content and must stay
+# trackable — the *token* secrets rule above would otherwise swallow
+# task dirs such as bench/frozen/tasks/hist-fix-dashboard-token-leak/.
+!bench/frozen/**

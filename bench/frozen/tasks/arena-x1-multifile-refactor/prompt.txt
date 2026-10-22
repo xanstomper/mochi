@@ -1,0 +1,1 @@
+Rename the function fmtPrice to formatPrice in util.js, and update every file that uses it (cart.js, util.test.js). Run node util.test.js and make sure the output is 10.50.

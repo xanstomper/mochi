@@ -169,6 +169,34 @@ describe('harness issue ledger', () => {
   });
 });
 
+describe('resolveHarnessIssue', () => {
+  it('marks the matching signature resolved and keeps other entries open', () => {
+    const a = { kind: 'tool_error_loop', title: 'read crashes', evidence: 'EISDIR', signature: 'sig11sig11si' } as any;
+    const b = { kind: 'veto_storm', title: 'veto forever', evidence: 'e', signature: 'sig22sig22si' } as any;
+    recordHarnessIssue(dir, a, 't');
+    recordHarnessIssue(dir, b, 't');
+    expect(resolveHarnessIssue(dir, 'sig11sig11si')).toBe(true);
+    const open = listHarnessIssues(dir, { status: 'open' });
+    const resolved = listHarnessIssues(dir, { status: 'resolved' });
+    expect(open.map((i) => i.signature)).toEqual(['sig22sig22si']);
+    expect(resolved.map((i) => i.signature)).toEqual(['sig11sig11si']);
+  });
+
+  it('returns false for an unknown signature (idempotent, no throw)', () => {
+    expect(resolveHarnessIssue(dir, 'doesnotexist001')).toBe(false);
+  });
+
+  it('lets the same signature be re-opened by a subsequent recordHarnessIssue', () => {
+    const a = { kind: 'tool_error_loop', title: 'read', evidence: 'EISDIR', signature: 'sig33sig33si' } as any;
+    recordHarnessIssue(dir, a, 't');
+    resolveHarnessIssue(dir, 'sig33sig33si');
+    recordHarnessIssue(dir, a, 't');
+    const open = listHarnessIssues(dir, { status: 'open' });
+    expect(open.map((i) => i.signature)).toEqual(['sig33sig33si']);
+    expect(open[0]!.count).toBe(2);
+  });
+});
+
 describe('issuesContextBlock', () => {
   it('returns empty string when nothing is open', () => {
     expect(issuesContextBlock(dir)).toBe('');

@@ -1,0 +1,1 @@
+run.js prints NaN instead of 10. Fix the bug in sum.js (do not change run.js), then run "node run.js" and confirm it prints 10.

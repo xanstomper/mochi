@@ -27,6 +27,8 @@ const defaultConfig = (): MochiConfig => ({
     maxIterations: 80,
     maxRuntimeMinutes: 240,
     maxConcurrentAgents: 3,
+    maxConcurrentSubagents: 4,
+    maxSubagentDepth: 2,
     contextBudgetTokens: 400_000,
   },
   permissions: {
@@ -279,10 +281,10 @@ if (!cfg.model.failover || cfg.model.failover.length === 0) {
       console.error(`Unknown MOCHI_SAFETY "${process.env.MOCHI_SAFETY}" — must be safe|ask|auto|uncensored. Keeping "${cfg.safety.mode}".`);
     }
   }
-  if (process.env.MOCHI_SANDBOX === 'off' || process.env.MOCHI_SANDBOX === 'auto' || process.env.MOCHI_SANDBOX === 'bubblewrap') {
+  if (process.env.MOCHI_SANDBOX === 'off' || process.env.MOCHI_SANDBOX === 'auto' || process.env.MOCHI_SANDBOX === 'bubblewrap' || process.env.MOCHI_SANDBOX === 'unshare') {
     cfg.safety.sandbox = process.env.MOCHI_SANDBOX;
   } else if (process.env.MOCHI_SANDBOX !== undefined && !process.env.VITEST) {
-    console.error(`Unknown MOCHI_SANDBOX "${process.env.MOCHI_SANDBOX}" — must be off|auto|bubblewrap. Ignoring.`);
+    console.error(`Unknown MOCHI_SANDBOX "${process.env.MOCHI_SANDBOX}" — must be off|auto|bubblewrap|unshare. Ignoring.`);
   }
   if (process.env.MOCHI_PERMISSION_READ) cfg.permissions.read = /^(1|true|yes)$/i.test(process.env.MOCHI_PERMISSION_READ.trim());
   if (process.env.MOCHI_PERMISSION_WRITE) cfg.permissions.write = /^(1|true|yes)$/i.test(process.env.MOCHI_PERMISSION_WRITE.trim());
@@ -290,6 +292,21 @@ if (!cfg.model.failover || cfg.model.failover.length === 0) {
   if (process.env.MOCHI_PERMISSION_NETWORK) cfg.permissions.network = /^(1|true|yes)$/i.test(process.env.MOCHI_PERMISSION_NETWORK.trim());
   if (process.env.MOCHI_PERMISSION_GIT_DESTRUCTIVE) cfg.permissions.gitDestructive = /^(1|true|yes)$/i.test(process.env.MOCHI_PERMISSION_GIT_DESTRUCTIVE.trim());
   if (process.env.MOCHI_PERMISSION_ADMIN) cfg.permissions.admin = /^(1|true|yes)$/i.test(process.env.MOCHI_PERMISSION_ADMIN.trim());
+  if (process.env.MOCHI_PERMISSION_COMPUTER) cfg.permissions.computer = /^(1|true|yes)$/i.test(process.env.MOCHI_PERMISSION_COMPUTER.trim());
+  // Per-session opt-in for desktop control (computer tool): MOCHI_COMPUTER=1
+  // is the explicit session grant for the "computer" permission tier. It is
+  // deliberately NOT set by MOCHI_UNCENSORED or the uncensored defaults
+  // above — desktop control always needs its own opt-in.
+  if (process.env.MOCHI_COMPUTER === '1') cfg.permissions.computer = true;
+  if (process.env.MOCHI_SKILLS_PROBATION !== undefined) {
+    // Kill-switch for the evidence-based skill lifecycle: =0/false/no births
+    // authored skills active (legacy behavior); anything else keeps it on.
+    cfg.skills = { ...(cfg.skills ?? {}), probation: !/^(0|false|no)$/i.test(process.env.MOCHI_SKILLS_PROBATION.trim()) };
+  }
+  if (process.env.MOCHI_MEMORY_INJECTION_CHARS) {
+    const n = Number.parseInt(process.env.MOCHI_MEMORY_INJECTION_CHARS.trim(), 10);
+    if (Number.isFinite(n) && n > 0) (cfg.memory ??= {}).injectionChars = n;
+  }
   if (cfg.safety.mode === 'uncensored') {
     cfg.permissions.read = true;
     cfg.permissions.write = true;
@@ -457,11 +474,17 @@ export function validateConfig(config: MochiConfig): string[] {
   if (s.commandTimeoutSeconds < 5 || s.commandTimeoutSeconds > 600) {
     problems.push(`safety.commandTimeoutSeconds (${s.commandTimeoutSeconds}) is out of range 5–600`);
   }
-  if (s.sandbox !== undefined && s.sandbox !== 'off' && s.sandbox !== 'auto' && s.sandbox !== 'bubblewrap') {
-    problems.push(`safety.sandbox ("${s.sandbox}") is invalid — must be "off", "auto", or "bubblewrap"`);
+  if (s.sandbox !== undefined && s.sandbox !== 'off' && s.sandbox !== 'auto' && s.sandbox !== 'bubblewrap' && s.sandbox !== 'unshare') {
+    problems.push(`safety.sandbox ("${s.sandbox}") is invalid — must be "off", "auto", "bubblewrap", or "unshare"`);
   }
   if (s.maxConcurrentAgents < 1 || s.maxConcurrentAgents > 32) {
     problems.push(`safety.maxConcurrentAgents (${s.maxConcurrentAgents}) is out of range 1–32`);
+  }
+  if (s.maxConcurrentSubagents !== undefined && (s.maxConcurrentSubagents < 1 || s.maxConcurrentSubagents > 32)) {
+    problems.push(`safety.maxConcurrentSubagents (${s.maxConcurrentSubagents}) is out of range 1–32`);
+  }
+  if (s.maxSubagentDepth !== undefined && (s.maxSubagentDepth < 0 || s.maxSubagentDepth > 8)) {
+    problems.push(`safety.maxSubagentDepth (${s.maxSubagentDepth}) is out of range 0–8`);
   }
   if (s.mode !== 'safe' && s.mode !== 'ask' && s.mode !== 'auto' && s.mode !== 'uncensored') {
     problems.push(`safety.mode "${s.mode}" is invalid — must be "safe", "ask", "auto", or "uncensored"`);
@@ -473,6 +496,16 @@ export function validateConfig(config: MochiConfig): string[] {
   }
   if (s.maxCostUsd !== undefined && s.maxCostUsd < 0) {
     problems.push(`safety.maxCostUsd (${s.maxCostUsd}) must be >= 0`);
+  }
+  if (s.pricing?.overrides) {
+    for (const [model, rates] of Object.entries(s.pricing.overrides)) {
+      for (const field of ['input', 'output', 'cacheRead', 'cacheWrite'] as const) {
+        const v = rates?.[field];
+        if (v !== undefined && (typeof v !== 'number' || !Number.isFinite(v) || v < 0)) {
+          problems.push(`safety.pricing.overrides["${model}"].${field} (${String(v)}) must be a finite number >= 0 (USD per 1M tokens)`);
+        }
+      }
+    }
   }
 
   // MCP server config: a server is launchable with either a stdio command or

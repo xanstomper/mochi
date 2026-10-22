@@ -34,6 +34,13 @@ function parseEntries(projectDir: string): MemEntry[] {
     });
 }
 
+/** Parsed project-memory entries ({date, text}) for unified search — the
+ *  prefix renderer below works on raw lines, but retrieval needs the
+ *  individual facts. Legacy undated lines come back with date ''. */
+export function loadProjectMemoryEntries(projectDir: string): { date: string; text: string }[] {
+  return parseEntries(projectDir).map((e) => ({ date: e.date, text: e.text }));
+}
+
 /** Read the memory prefix, or '' when absent. */
 export function loadProjectMemory(projectDir: string): string {
   try {

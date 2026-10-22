@@ -70,6 +70,11 @@ function tokenize(text: string): string[] {
     .map((t) => CANON.get(t) ?? t);
 }
 
+/** Shared tokenizer (camel/snake identifier splitting + stopwords + light
+ *  stemming + synonym canonicalization). Exported so other relevance
+ *  consumers (e.g. the task-conditioned repo-map) score text identically. */
+export { tokenize };
+
 /** Proportional overlap of query tokens against candidate tokens. 0..1. */
 export function tokenOverlap(query: string, candidate: string): number {
   const q = new Set(tokenize(query));

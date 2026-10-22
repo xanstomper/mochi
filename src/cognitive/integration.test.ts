@@ -49,7 +49,7 @@ describe('Mochi Cognitive & Chameleon End-to-End Proof', () => {
     expect(packet.systemPrompt).toContain('Test-Time Compute (Chameleon)');
   });
 
-  it('PROVE 2: Volatile context dynamically injects zero-latency MoE invariants & boundary DAGs for coding tasks', async () => {
+  it('PROVE 2: Volatile context dynamically injects zero-latency scaffold invariants & boundary DAGs for coding tasks', async () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-moe-proof-'));
     const config = makeTestConfig(dir);
     const context = new ContextEngine(config, dir);
@@ -61,18 +61,18 @@ describe('Mochi Cognitive & Chameleon End-to-End Proof', () => {
     await primeScaffold(`${task.title} ${task.description ?? ''}`.trim(), dir);
 
     const packet = context.buildPacket(Array.from(tools.values()).map((t) => t.def), task);
-    const stateMsg = packet.messages.find((m) => m.role === 'system' && m.content.includes('LAZY CHAMELEON DENSE SYNTHETIC DATASET'));
+    const stateMsg = packet.messages.find((m) => m.role === 'system' && m.content.includes('TASK SCAFFOLD'));
 
     expect(stateMsg).toBeDefined();
-    expect(stateMsg!.content).toContain('LAZY CHAMELEON DENSE SYNTHETIC DATASET');
+    expect(stateMsg!.content).toContain('TASK SCAFFOLD');
     expect(stateMsg!.content).toContain('[INV-1]');
     expect(stateMsg!.content).toContain('System Invariants');
     expect(stateMsg!.content).toContain('Boundary Conditions');
     expect(stateMsg!.content).toContain('Hazard Mitigation Matrix');
-    expect(stateMsg!.content).toContain('Cellular Execution DAG');
+    expect(stateMsg!.content).toContain('Execution DAG');
   });
 
-  it('PROVE 3: Chameleon tool executes cellular MoE decomposition with zero added latency on flash mode', async () => {
+  it('PROVE 3: Chameleon tool returns the deterministic scaffold with zero added latency on flash mode', async () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-tool-proof-'));
     const config = makeTestConfig(dir);
     const ctx = { config, cwd: dir } as any;
@@ -84,9 +84,9 @@ describe('Mochi Cognitive & Chameleon End-to-End Proof', () => {
 
     expect(result).toContain('Chameleon flash');
     expect(result).toContain('0 tokens');
-    expect(result).toContain('LAZY CHAMELEON DENSE SYNTHETIC DATASET');
+    expect(result).toContain('TASK SCAFFOLD');
     expect(result).toContain('System Invariants');
-    expect(result).toContain('MOE EXPANSION');
+    expect(result).not.toContain('MOE EXPANSION');
   });
 
   it('PROVE 4: AnchorEngine preserves epistemic claims and blocks rejected approach repetition', () => {

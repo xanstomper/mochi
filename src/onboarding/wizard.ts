@@ -9,7 +9,6 @@ import type { OnboardScan } from './detect.js';
 
 export type OnboardStep = 'welcome' | 'providers' | 'models' | 'skills' | 'mcp' | 'editors' | 'done';
 
-export const ONBOARD_STEPS: OnboardStep[] = ['welcome', 'providers', 'models', 'skills', 'mcp', 'editors', 'done'];
 
 const C = {
   reset: '\x1b[0m',

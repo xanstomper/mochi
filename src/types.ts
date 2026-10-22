@@ -16,10 +16,13 @@ export interface ModelConfig {
   /** Speculative reasoning preflight (DeepSeek/Cline-style "think before
    *  acting"). When enabled, hard non-chat tasks run the SpeculativeEngine
    *  once before the main model call and inject its chosen approach + pitfall
-   *  notes as a system hint that biases the main reasoning path. Opt-in so the
-   *  default loop stays lean for simple turns. */
+   *  notes as a system hint that biases the main reasoning path. DEFAULT:
+   *  enabled for structurally complex tasks at medium+ reasoning when unset;
+   *  set `preflight: false` to disable outright, `true` to force it on for
+   *  any non-chat task. MOCHI_SPECULATIVE_PREFLIGHT=0 also disables it. */
   speculative?: {
-    /** Run the preflight on the first iteration of implementation/verify tasks. */
+    /** Run the preflight on the first iteration of implementation/verify tasks.
+     *  Unset = default policy (complex tasks, medium+ reasoning). */
     preflight?: boolean;
     /** On the first verification failure of a hard task, inject a structured
      *  self-critique + repair directive alongside the existing autopsy/lessons
@@ -35,6 +38,11 @@ export interface PermissionConfig {
   network: boolean;
   gitDestructive: boolean;
   admin?: boolean;
+  /** Desktop control (computer tool). Stricter than shell: NO default ever
+   *  sets this — it requires explicit opt-in (config or MOCHI_COMPUTER=1 /
+   *  MOCHI_PERMISSION_COMPUTER=1), and the approval layer never auto-allows
+   *  it, so headless runs deny it by default. */
+  computer?: boolean;
   [key: string]: boolean | undefined;
 }
 
@@ -46,15 +54,43 @@ export interface SafetyConfig {
   maxIterations: number;
   maxRuntimeMinutes: number;
   maxConcurrentAgents: number;
+  /** Multi-agent fanout: max BACKGROUND child runs (spawn_agent with
+   *  background=true / review fleets) executing at once per parent; excess
+   *  spawns queue FIFO instead of failing. Default 4. */
+  maxConcurrentSubagents?: number;
+  /** Multi-agent fanout: deepest delegation tree. An agent at depth d may
+   *  spawn children (at depth d+1) only while d < maxSubagentDepth, so the
+   *  default 2 means: root -> child -> grandchild, and grandchildren cannot
+   *  spawn further. Default 2. */
+  maxSubagentDepth?: number;
   contextBudgetTokens: number;
   maxTokens?: number;
   maxCostUsd?: number;
+  /** Offline price-table cost accounting (C5, src/pricing.ts): when a
+   *  provider reports $0/no cost for a call, BudgetEngine estimates it from
+   *  the built-in per-model table. `overrides` replaces/merges per-model
+   *  rates (USD per 1M tokens; keys are model ids, partial rates merge over
+   *  the built-in entry). `disabled: true` restores report-only accounting. */
+  pricing?: {
+    disabled?: boolean;
+    overrides?: Record<string, { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }>;
+  };
   maxToolCalls?: number;
   maxModelCalls?: number;
-  /** OS-level sandbox for spawned commands: 'off' (default, direct exec),
-   *  'auto' (bubblewrap when available, else direct), 'bubblewrap' (fail
-   *  loudly if bwrap is missing). Env: MOCHI_SANDBOX. */
-  sandbox?: 'off' | 'auto' | 'bubblewrap';
+  /** OS-level sandbox for spawned commands: 'off' (direct exec),
+   *  'auto' (best OS backend — bubblewrap, then unshare namespaces — else
+   *  the labeled SOFT jail: env scrub + cwd clamp), 'bubblewrap' /
+   *  'unshare' (force that backend, fail loudly if unavailable).
+   *  When unset, the tier default applies: engaged ('auto') for
+   *  safe/ask/auto, off for uncensored. Env: MOCHI_SANDBOX. */
+  sandbox?: 'off' | 'auto' | 'bubblewrap' | 'unshare';
+  /** Allow network inside the sandbox for shell commands. Default false:
+   *  sandboxed shell commands are network-isolated unless the operator
+   *  opts in here. Env: MOCHI_SANDBOX_NETWORK=1. */
+  sandboxNetwork?: boolean;
+  /** Extra writable paths inside the sandbox, beyond the workspace, the
+   *  OS tmpdir, and dev-tool caches. */
+  sandboxWritablePaths?: string[];
   maxVerifyRetries?: number;
   /** B27 restructure: hostnames whose POST/PUT/PATCH/DELETE endpoints are
    *  OPERATOR-DECLARED read-only (GraphQL query endpoints, search APIs that
@@ -69,6 +105,33 @@ export interface SafetyConfig {
 
 export type ReasoningLevel = 'low' | 'medium' | 'high' | 'max' | 'off' | 'auto';
 
+/** Reasoning-discipline mechanisms (src/agent/discipline.ts): evidence-gated
+ *  replanning, cross-turn progress forcing, drift snap-back, decisive finish,
+ *  same-failure strategy switch, adaptive reasoning effort. Every mechanism
+ *  defaults ON; set one to false here — or use the env kill-switches
+ *  (MOCHI_DISCIPLINE=0 master, MOCHI_DISCIPLINE_<MECHANISM>=0 per mechanism) —
+ *  to disable it. Only consulted when reasoning is not pinned by the user. */
+/** Evidence-based skill lifecycle (src/skills/): model-authored skills are
+ *  born on PROBATION and are promoted only on verifier-passed runs — the
+ *  structural rubric is a lint gate, never a promotion. Set `probation:
+ *  false` here — or env MOCHI_SKILLS_PROBATION=0 — to restore the legacy
+ *  behavior (authored skills active at birth, no lifecycle transitions). */
+export interface SkillsConfig {
+  /** Master switch for probation enforcement. Default: on. */
+  probation?: boolean;
+}
+
+export interface DisciplineConfig {
+  /** Master switch: false disables every discipline mechanism. */
+  enabled?: boolean;
+  replanGate?: boolean;
+  progressForcing?: boolean;
+  driftSnapback?: boolean;
+  decisiveFinish?: boolean;
+  sameFailureSwitch?: boolean;
+  adaptiveEffort?: boolean;
+}
+
 export interface MochiConfig {
   model: ModelConfig;
   safety: SafetyConfig;
@@ -76,6 +139,14 @@ export interface MochiConfig {
   mcpServers?: Record<string, { command?: string; args?: string[]; url?: string; headers?: Record<string, string>; env?: Record<string, string> }>;
   /** Plan-then-act: in plan mode the agent produces a plan instead of editing. */
   planMode?: boolean;
+  /** Tool exposure policy (P1.3): 'measured' (default) advertises a
+   *  schema-budgeted, usage-ranked subset of the built tools per run;
+   *  'full' restores legacy behavior (every built tool advertised).
+   *  Env MOCHI_TOOLS=full overrides. See tools/tool-exposure.ts. */
+  toolExposure?: 'measured' | 'full';
+  /** Total serialized schema-char budget for measured tool exposure.
+   *  Env MOCHI_TOOL_SCHEMA_BUDGET overrides. Default 24,000 (≈ 6K tokens). */
+  toolSchemaBudgetChars?: number;
   /** Self-repair: when the agent detects a harness-attributable failure, run an
    *  automatic repair pass after the main task. Defaults to on inside Mochi's
    *  own source repo, off elsewhere ( repairs must not surprise users). */
@@ -84,6 +155,24 @@ export interface MochiConfig {
   mode?: string;
   /** Active reasoning effort / compute level: low | medium | high | max. */
   reasoning?: ReasoningLevel;
+  /** Durable-memory prompt injection budget, in chars, for the volatile
+   *  unified-memory block (ContextEngine.loadMemory). Default 4000. Unified
+   *  retrieval ranks across all four memory stores, so the budget buys
+   *  ranked hits rather than a first-come slice of one store. */
+  memory?: { injectionChars?: number };
+  /** Reasoning-discipline mechanisms (see DisciplineConfig). All default on. */
+  discipline?: DisciplineConfig;
+  /** Evidence-based skill lifecycle (see SkillsConfig). Probation default on. */
+  skills?: SkillsConfig;
+  /** Semantic code retrieval (Wave J, src/repo/semantic-index.ts). When an
+   *  embedding model is configured here (or the configured provider is a
+   *  known embedding-capable one), the .mochi/index semantic index embeds
+   *  chunks with that provider model; otherwise it uses a deterministic
+   *  local LEXICAL-fallback embedder — never true semantics, and labelled
+   *  as such everywhere. semanticIndex:false disables the index entirely.
+   *  Env overrides: MOCHI_EMBEDDING_MODEL / MOCHI_EMBEDDING_PROVIDER /
+   *  MOCHI_SEMANTIC_INDEX=0. */
+  retrieval?: { embeddingProvider?: string; embeddingModel?: string; semanticIndex?: boolean };
   telemetry: boolean;
   projectDir: string;
   configDir: string;
@@ -148,7 +237,7 @@ export interface Goal {
   updatedAt: number;
 }
 
-export type AgentRole = 'lead' | 'coder' | 'reviewer' | 'tester' | 'researcher' | 'debugger' | 'security' | 'redteam' | 'architect' | 'devops' | 'db_admin' | 'frontend' | 'backend' | 'performance' | 'tech_writer' | 'qa_engineer' | 'data_scientist' | 'designer' | 'integrator' | 'scout';
+export type AgentRole = 'lead' | 'coder' | 'reviewer' | 'tester' | 'researcher' | 'debugger' | 'security' | 'redteam' | 'architect' | 'devops' | 'db_admin' | 'frontend' | 'backend' | 'performance' | 'tech_writer' | 'qa_engineer' | 'data_scientist' | 'designer' | 'integrator' | 'scout' | 'pr_reviewer' | 'explorer';
 
 export interface AgentProfile {
   role: AgentRole;
@@ -174,7 +263,7 @@ export interface ToolDefinition {
   description: string;
   parameters: ToolParameter[];
   dangerous?: boolean;
-  permission?: 'read' | 'write' | 'shell' | 'network' | 'gitDestructive' | 'admin';
+  permission?: 'read' | 'write' | 'shell' | 'network' | 'gitDestructive' | 'admin' | 'computer';
 }
 
 export interface ToolCall {
@@ -311,15 +400,33 @@ export type MochiEvent =
   | { type: 'agent:completed'; id: string; taskId: string }
   | { type: 'subagent:started'; agentId: string; parentId: string; role: AgentRole; prompt: string }
   | { type: 'subagent:completed'; agentId: string; parentId: string; role: AgentRole; success: boolean; summary: string; tokensUsed: number }
+  /** B21: a mid-run steer was DELIVERED into a running subagent's context
+   *  (emitted by the child at the turn boundary where it drained the
+   *  steer). Carries provenance only — who steered, when, and the steer's
+   *  sha256/length; the raw steer text never rides the bus into traces.
+   *  The trajectory exporter lifts these into the record's steerEvents so
+   *  a steered run's outcome is never credited as unsteered evidence. */
+  | { type: 'subagent:steered'; agentId: string; parentId: string; from: string; at: number; hash: string; chars: number }
   | { type: 'agent:log'; agentId: string; message: string }
+  /** Run-finish skill attribution: which skills the run loaded, joined with
+   *  the run's final verifier-gate verdict. The trajectory exporter lifts
+   *  this into the record's `skills[]`/`verification` so offline tooling can
+   *  compute per-skill fix-rates. Emitted once per run by finishOnce. */
+  | { type: 'skills:attributed'; agentId: string; skills: Array<{ id: string; verdict: 'pass' | 'fail' | 'partial' | 'blocked' | 'none' }>; verifyStatus?: string; taskKind?: string; steered?: boolean }
   | { type: 'agent:reasoning'; content: string; agentId: string }
   | { type: 'agent:iteration'; agentId: string; trace: IterationTrace }
   | { type: 'tool:called'; tool: string; args: unknown; agentId: string; tool_call_id?: string }
   | { type: 'tool:completed'; tool: string; result: ToolResult; agentId: string }
   | { type: 'tool:failed'; tool: string; error: string; agentId: string }
   | { type: 'file:changed'; path: string; operation: 'write' | 'edit' | 'delete'; agentId: string }
+  /** Edit-application telemetry (edit tool): one event per edit call outcome,
+   *  so edit reliability (strategy mix, failure kinds, integrity reverts) is
+   *  measurable per run. Lifted into trajectory records as `editStats`. */
+  | { type: 'edit:applied'; path: string; strategy: 'exact' | 'normalized' | 'relaxed' | 'anchored'; attempts: number; integrity: 'passed' | 'pre-existing-errors'; agentId: string }
+  | { type: 'edit:reverted'; path: string; strategy: 'exact' | 'normalized' | 'relaxed' | 'anchored'; errors: string; agentId: string }
+  | { type: 'edit:failed'; path: string; failureKind: 'not-found' | 'ambiguous' | 'no-change'; attempts: number; nearMisses: number; agentId: string }
   | { type: 'message:chunk'; content: string; agentId: string }
-  | { type: 'usage:updated'; agentId: string; inputTokens: number; outputTokens: number; cacheTokens: number; totalTokens: number; costUsd?: number }
+  | { type: 'usage:updated'; agentId: string; inputTokens: number; outputTokens: number; cacheTokens: number; totalTokens: number; costUsd?: number; model?: string }
   | { type: 'error'; error: string; agentId?: string }
   | { type: 'pulse'; state: AgentState }
   | { type: 'message'; role: 'user' | 'assistant' | 'system'; content: string; agentId?: string }

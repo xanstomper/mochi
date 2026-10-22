@@ -6,7 +6,7 @@
 // Rebranded into Mochi and extended. Kept dependency-free and sync so they
 // can wrap every disk write and tool gate without async plumbing.
 
-import { nativeClassifyCommand } from '../native/core.js';
+import { nativeClassifyCommand, nativeRedactSecrets } from '../native/core.js';
 
 /** Common secret shapes. Broader than Horus's originals (adds OpenAI/Anthropic/
  *  Gemini/JWT/bearer/ghp), because Mochi persists raw model output in
@@ -23,8 +23,12 @@ const SECRET_PATTERNS = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/g, // private key blocks
   /xox[baprs]-[A-Za-z0-9-]{10,}/g,      // Slack
   /glpat-[A-Za-z0-9_-]{20,}/g,          // GitLab
-  // Discord bot token (three base64url chunks)
-  /[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{20,}/g,
+  // Discord bot token (three base64url chunks). Segment lengths are BOUNDED:
+  // the unbounded form is a ReDoS — on a long unbroken word-char run (base64
+  // blob, minified line) the backtracking scan is quadratic (measured: 200K
+  // chars ≈ 218s vs 0.26s bounded), and redact() wraps untrusted tool output
+  // on hot paths. Real Discord segments are ≤ ~40 chars; 128 is 3x headroom.
+  /[A-Za-z0-9_-]{20,128}\.[A-Za-z0-9_-]{6,128}\.[A-Za-z0-9_-]{20,128}/g,
   // Telegram bot token (<bot id>:<secret>)
   /\b\d{5,}:[A-Za-z0-9_-]{20,}\b/g,
   // password assignments / query parameters (password=, password:)
@@ -51,13 +55,17 @@ const SECRET_PATTERNS = [
 
 export function redact(input: string): string {
   if (!input) return input;
-  // TS SECRET_PATTERNS are the single source of truth: the Rust mirror
-  // (native/mochi_core/src/redact.rs) has lagged TS before (Discord webhook
-  // URLs were missing there), and short-circuiting on a non-null native
-  // result silently skipped every TS-only pattern on native hosts. The TS
-  // pass is cheap (patterns only match-and-replace) and idempotent, so the
-  // native fast path is not worth the drift risk.
-  let out = input;
+  // Composed native + TS, the same parity pattern as classifyCommand below:
+  // the native accelerator runs FIRST, but the Rust mirror's pattern list
+  // (native/mochi_core/src/redact.rs) is maintained by hand and has lagged
+  // TS before (Discord webhook URLs were missing there), so its result is
+  // never the final word — the full TS SECRET_PATTERNS pass always runs over
+  // whatever native returned. Redaction is idempotent (the marker
+  // '[secret-redacted]' matches no pattern), so composing is safe: a
+  // lagging mirror can never suppress a TS-only pattern, and native-only
+  // coverage still applies. Native unavailable (null) falls back to the raw
+  // input, i.e. exactly the old TS-only behavior.
+  let out = nativeRedactSecrets(input) ?? input;
   for (const re of SECRET_PATTERNS) out = out.replace(re, '[secret-redacted]');
   return out;
 }

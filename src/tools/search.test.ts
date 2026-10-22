@@ -28,6 +28,17 @@ async function runSearch(query: string, glob?: string): Promise<string> {
   return String(await searchTool.execute({ query, ...(glob ? { glob } : {}) }, ctx));
 }
 
+function isolatedCtx(files: Record<string, string>): { testDir: string; testCtx: ToolContext } {
+  const testDir = mkdtempSync(resolve(tmpdir(), 'mochi-search-mode-'));
+  for (const [name, content] of Object.entries(files)) {
+    writeFileSync(resolve(testDir, name), content);
+  }
+  return {
+    testDir,
+    testCtx: { cwd: testDir, workspace: {} as any, config: {} as any, events: {} as any, agentId: 't' },
+  };
+}
+
 describe('search tool', () => {
   it('finds a literal with line numbers + declaration outline', async () => {
     const out = await runSearch('a + b');
@@ -60,6 +71,89 @@ describe('search tool', () => {
     // so results reflect the post-write tree, not a stale generation).
     expect(third).toContain('src/math.ts');
   }, 60_000);
+
+  it('treats regex metacharacters literally by default', async () => {
+    const { testDir, testCtx } = isolatedCtx({
+      'sample.ts': 'call foo(bar);\ncall fooXbar);\n',
+    });
+    try {
+      const out = String(await searchTool.execute({ query: 'foo(' }, testCtx));
+      expect(out).toContain('call foo(bar);');
+      expect(out).not.toContain('call fooXbar);');
+    } finally {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('matches a pattern when regex is true', async () => {
+    const { testDir, testCtx } = isolatedCtx({
+      'sample.ts': 'call foo(alpha);\ncall bar(beta);\ncall baz(gamma);\n',
+    });
+    try {
+      const out = String(await searchTool.execute({ query: 'foo\\(|bar\\(', regex: true }, testCtx));
+      expect(out).toContain('call foo(alpha);');
+      expect(out).toContain('call bar(beta);');
+      expect(out).not.toContain('call baz(gamma);');
+    } finally {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('matches get\\w+ as a regex against identifiers', async () => {
+    const { testDir, testCtx } = isolatedCtx({
+      'sample.ts': 'export function getUser() {}\nexport function setUser() {}\n',
+    });
+    try {
+      const out = String(await searchTool.execute({ query: 'get\\w+', regex: true }, testCtx));
+      expect(out).toContain('(1 match)');
+      expect(out).toContain('\n1:export function getUser() {}');
+      // The file outline may mention setUser, but it must not be a match line.
+      expect(out).not.toContain('\n2:export function setUser() {}');
+    } finally {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('uses the raw pattern in the fallback walker', async () => {
+    const { testDir, testCtx } = isolatedCtx({
+      'sample.ts': 'const a = "foobar";\nconst b = "foobaz";\n',
+    });
+    try {
+      // Rust regex (ripgrep's default engine) rejects lookahead, so this
+      // JavaScript-supported pattern exercises the bounded-walk fallback.
+      const out = String(await searchTool.execute({ query: 'foo(?=bar)', regex: true }, testCtx));
+      expect(out).toContain('const a = "foobar";');
+      expect(out).not.toContain('\n2:const b = "foobaz";');
+    } finally {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns a tool error instead of throwing for an invalid regex', async () => {
+    const out = String(await searchTool.execute({ query: '[', regex: true }, ctx));
+    expect(out).toContain('Invalid regex:');
+  });
+
+  it('does not share a cache entry between literal and regex modes', async () => {
+    const { testDir, testCtx } = isolatedCtx({
+      'sample.ts': 'const exact = "get.*";\nconst user = getUser();\n',
+    });
+    try {
+      const literal = String(await searchTool.execute({ query: 'get.*' }, testCtx));
+      expect(literal).toContain('(1 match)');
+      expect(literal).toContain('\n1:const exact = "get.*";');
+      // The outline may mention line 2, but only line 1 is a literal match.
+      expect(literal).not.toContain('\n2:const user = getUser();');
+
+      const regex = String(await searchTool.execute({ query: 'get.*', regex: true }, testCtx));
+      expect(regex).not.toContain('[query cache hit]');
+      expect(regex).toContain('(2 matches)');
+      expect(regex).toContain('\n1:const exact = "get.*";');
+      expect(regex).toContain('\n2:const user = getUser();');
+    } finally {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
 
   it('the sync tree walk is bounded by the file budget (freeze guard)', async () => {
     // Regression for the hard freeze: fallbackSearch walked the whole tree

@@ -51,6 +51,13 @@ export function classifyTaskKind(task: Pick<Task, 'title' | 'description' | 'rol
       }
     }
   }
+  // Reviewer roles do read-shaped analysis by construction (the pr_reviewer
+  // spawn preset is tool-scoped read-only): route them to the research lane —
+  // the same lane REVIEW_RE text takes below — never to a mutation kind. A
+  // mutation classification would trip the zero-change verification BLOCK
+  // ("no files changed") on every legitimate review, since a reviewer cannot
+  // change files at all.
+  if (task.role === 'reviewer' || task.role === 'pr_reviewer') return 'research';
   if (ACTION_RE.test(text)) {
     if (FIX_RE.test(text) || task.role === 'debugger') return 'fix';
     if (TEST_RE.test(text) || task.role === 'tester') return 'test';
@@ -90,7 +97,9 @@ export function classifyTaskKind(task: Pick<Task, 'title' | 'description' | 'rol
     return 'chat';
   }
 
-  if (task.role === 'coder' || task.role === 'reviewer' || task.role === 'security') return 'implement';
+  // ('reviewer'/'pr_reviewer' roles returned 'research' at the top of this
+  // function — read-shaped roles never fall through to a mutation kind.)
+  if (task.role === 'coder' || task.role === 'security') return 'implement';
 
   // Short casual messages with no action verb and no kind match are
   // conversation ("hewwo", "whats can u do", "you there?").

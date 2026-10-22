@@ -1,0 +1,1 @@
+Read the src/ directory. Which exact environment variable name does the auth salt come from, and what is the fallback value? Write the answer as two lines "VAR=<name>" and "FALLBACK=<value>" into answer.txt.

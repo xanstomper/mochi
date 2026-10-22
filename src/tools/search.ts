@@ -26,6 +26,11 @@ const SEARCH_KILL_GRACE_MS = 3_000;
 // timer, no trace, no Ctrl-C). Cap files scanned + yield to the loop every N.
 const SEARCH_WALK_MAX_FILES = Number(process.env.MOCHI_SEARCH_WALK_MAX_FILES) || 4000;
 const SEARCH_YIELD_EVERY = 200;
+// Regex patterns are intentionally capped. This does not eliminate every
+// possible catastrophic-backtracking pattern, but it bounds the input while
+// the ripgrep subprocess timeout and bounded walk constrain the tool's
+// execution paths.
+const MAX_REGEX_PATTERN_CHARS = 512;
 
 function nativeSearchBin(): string | undefined {
   try {
@@ -36,7 +41,11 @@ function nativeSearchBin(): string | undefined {
   return undefined;
 }
 
-async function nativeSearch(cwd: string, query: string, glob?: string): Promise<string | null> {
+async function nativeSearch(cwd: string, query: string, glob?: string, regex = false): Promise<string | null> {
+  // The native FFI/binary interface currently exposes literal search only and
+  // has no regex flag. Do not silently give regex callers literal results:
+  // returning null lets the regex-capable ripgrep/walk paths handle the query.
+  if (regex) return null;
   const nat = nativeSearchDir(cwd, query, glob || '', 60);
   if (nat) return nat;
   const bin = nativeSearchBin();
@@ -64,11 +73,15 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-async function ripgrep(cwd: string, query: string, glob?: string): Promise<string | null> {
-  const nat = await nativeSearch(cwd, query, glob);
+async function ripgrep(cwd: string, query: string, glob?: string, regex = false): Promise<string | null> {
+  const nat = await nativeSearch(cwd, query, glob, regex);
   if (nat) return nat;
   return new Promise((resolvePromise) => {
-    const args = ['-n', '--no-heading', '--color=never', '-F', query];
+    const args = ['-n', '--no-heading', '--color=never'];
+    if (regex) args.push('-i');
+    else args.push('-F');
+    // -e keeps a query/pattern beginning with '-' from being parsed as a flag.
+    args.push('-e', query);
     if (glob) {
       args.push('-g', glob);
     } else {
@@ -161,7 +174,7 @@ function fileOutline(cwd: string, rel: string): string {
   return decls.length ? `  decl: ${decls.join(' | ')}` : '';
 }
 
-/** Per-call query cache: repeat searches for the same (query, glob) within a
+/** Per-call query cache: repeat searches for the same (query, glob, mode) within a
  *  task return the prior structured result verbatim, so the model cannot burn
  *  tokens re-fetching identical context. The cache is boundary-keyed by a shared
  *  *mutation generation* that the write/edit/delete tools bump whenever a file
@@ -236,8 +249,29 @@ function buildStructured(cwd: string, groups: GroupResult[], limit: number): str
   return parts.join('\n') || 'No matches.';
 }
 
-async function fallbackSearch(cwd: string, query: string, glob?: string, limit = 60, displayRoot?: string): Promise<string> {
-  const regex = new RegExp(escapeRegex(query), 'i');
+function validateRegex(query: string): string | null {
+  if (query.length > MAX_REGEX_PATTERN_CHARS) {
+    return `Invalid regex: pattern is ${query.length} characters; maximum is ${MAX_REGEX_PATTERN_CHARS}.`;
+  }
+  try {
+    // Compile once here so malformed patterns produce a tool error instead of
+    // escaping from whichever search backend happens to run first.
+    new RegExp(query);
+    return null;
+  } catch (e) {
+    return `Invalid regex: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
+async function fallbackSearch(
+  cwd: string,
+  query: string,
+  glob?: string,
+  limit = 60,
+  displayRoot?: string,
+  useRegex = false,
+): Promise<string> {
+  const regex = useRegex ? new RegExp(query, 'i') : new RegExp(escapeRegex(query), 'i');
   const matches: MatchLine[] = [];
   const budget = { seen: 0, max: SEARCH_WALK_MAX_FILES };
   let sinceYield = 0;
@@ -276,16 +310,17 @@ async function fallbackSearch(cwd: string, query: string, glob?: string, limit =
     : result;
 }
 
-function cacheKey(query: string, glob?: string, dir?: string): string {
-  return `${dir ?? ''}::${query}::${glob ?? ''}`;
+function cacheKey(query: string, glob?: string, dir?: string, regex = false): string {
+  return `${dir ?? ''}::${regex ? 'regex' : 'literal'}::${query}::${glob ?? ''}`;
 }
 
 export const searchTool: Tool = {
   def: {
     name: 'search',
-    description: 'Search project files for a literal string and return matches grouped by file with a per-file declaration outline. Repeating the same query returns the cached structured result.',
+    description: 'Search project files for a literal string (default) or, when regex is true, a regular expression, and return matches grouped by file with a per-file declaration outline. Repeating the same query returns the cached structured result.',
     parameters: [
-      { name: 'query', type: 'string', description: 'Text to search', required: true },
+      { name: 'query', type: 'string', description: 'Text or pattern to search', required: true },
+      { name: 'regex', type: 'boolean', description: 'When true, treat query as a regular expression; otherwise search literally (default: false)', required: false },
       { name: 'glob', type: 'string', description: 'Optional file glob filter', required: false },
       { name: 'path', type: 'string', description: 'Optional directory path to search in (defaults to workspace cwd)', required: false },
       { name: 'limit', type: 'integer', description: 'Maximum result lines to return', required: false },
@@ -295,6 +330,11 @@ export const searchTool: Tool = {
   async execute(args: Record<string, unknown>, ctx: ToolContext) {
     const query = String(args.query ?? '');
     if (!query) throw new Error('No query provided');
+    const useRegex = args.regex === true || args.regex === 'true';
+    if (useRegex) {
+      const regexError = validateRegex(query);
+      if (regexError) return regexError;
+    }
     const globArg = args.glob ? String(args.glob) : undefined;
     const limit = typeof args.limit === 'number' ? Math.max(1, Math.min(200, Math.floor(args.limit))) : 60;
     const rawPath = args.path ? String(args.path) : undefined;
@@ -303,13 +343,13 @@ export const searchTool: Tool = {
       : ctx.cwd;
 
     const gen = mutationGeneration();
-    const key = cacheKey(query, globArg, targetDir);
+    const key = cacheKey(query, globArg, targetDir, useRegex);
     const hit = getCached(targetDir, key, gen);
     if (hit) {
       return hit.result + (hit.result === 'No matches.' ? '' : '\n[query cache hit]');
     }
 
-    const rg = await ripgrep(targetDir, query, globArg);
+    const rg = await ripgrep(targetDir, query, globArg, useRegex);
     let result: string;
     if (rg) {
       const lines = rg.split('\n');
@@ -329,7 +369,7 @@ export const searchTool: Tool = {
       }
       result = buildStructured(targetDir, groupMatches(targetDir, matches), limit);
     } else {
-      result = await fallbackSearch(targetDir, query, globArg, limit, ctx.cwd);
+      result = await fallbackSearch(targetDir, query, globArg, limit, ctx.cwd, useRegex);
     }
     putCached(targetDir, key, result, gen);
     return result;

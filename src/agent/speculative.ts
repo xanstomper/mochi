@@ -187,7 +187,7 @@ export class SpeculativeEngine {
       { role: 'user', content: `Problem: ${question}\nReturn up to ${this.candidateCount} independent strategies as a JSON array of strings. Each string embeds: archetype, approach, riskiest assumption, first evidence step.` },
     ] as import('../types.js').ChatMessage[];
     const response = await this.provider.chat(messages, [], { temperature: 0.3 });
-    if (response.usage) this.budget.recordTokens(response.usage.totalTokens, this.config.model.model, this.config.model.provider, response.usage.costUsd ?? 0);
+    if (response.usage) this.budget.recordUsage(response.usage, this.config.model.model, this.config.model.provider);
     try {
       const parsed = JSON.parse((response.content ?? '[]').replace(/```json\s*|\s*```/g, '').trim());
       if (!Array.isArray(parsed)) return [];
@@ -212,7 +212,7 @@ export class SpeculativeEngine {
       { role: 'user', content: `Problem: ${question}\n\nStrategy: ${strategy}` },
     ] as import('../types.js').ChatMessage[];
     const response = await this.provider.chat(messages, [], { temperature: 0.2 });
-    if (response.usage) this.budget.recordTokens(response.usage.totalTokens, this.config.model.model, this.config.model.provider, response.usage.costUsd ?? 0);
+    if (response.usage) this.budget.recordUsage(response.usage, this.config.model.model, this.config.model.provider);
     return response.content ?? '';
   }
 
@@ -233,7 +233,7 @@ export class SpeculativeEngine {
       { role: 'user', content: `Problem: ${question}\n\n${body}` },
     ] as import('../types.js').ChatMessage[];
     const response = await this.provider.chat(messages, [], { temperature: 0 });
-    if (response.usage) this.budget.recordTokens(response.usage.totalTokens, this.config.model.model, this.config.model.provider, response.usage.costUsd ?? 0);
+    if (response.usage) this.budget.recordUsage(response.usage, this.config.model.model, this.config.model.provider);
     try {
       const parsed = JSON.parse((response.content ?? '{}').replace(/```json\s*|\s*```/g, '').trim());
       const index = Number(parsed.index);

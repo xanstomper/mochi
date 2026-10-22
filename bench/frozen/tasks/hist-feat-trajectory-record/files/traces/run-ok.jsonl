@@ -1,0 +1,7 @@
+{"t":1000,"kind":"task:started","task":{"title":"Fix login","description":"Fix the login redirect"}}
+{"t":1100,"kind":"tool:called","tool":"read","args":{"path":"src/auth.ts"}}
+{"t":1200,"kind":"tool:completed","tool":"read","result":{"output":"file contents","durationMs":12}}
+{"t":1300,"kind":"tool:called","tool":"edit","args":{"path":"src/auth.ts"}}
+{"t":1400,"kind":"tool:completed","tool":"edit","result":"done"}
+{"t":1500,"kind":"usage:updated","inputTokens":100,"outputTokens":50,"totalTokens":150,"costUsd":0.01}
+{"t":5000,"kind":"task:completed","stopReason":"done"}

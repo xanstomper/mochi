@@ -69,7 +69,16 @@ export const COMPLETION_COMMANDS: CompletionCommand[] = [
     ],
   },
   { name: 'session', description: 'Session history (list|search)' },
-  { name: 'trace', description: 'Replay a run trace' },
+  { name: 'trace', description: 'Replay a run trace (--export-trajectory: export a trajectory JSONL for distillation/SFT)' },
+  {
+    name: 'gate', description: 'Frozen regression gate (hash-pinned task set, independent analyser)',
+    subcommands: [
+      { name: 'run', description: 'Run the frozen set against the recorded baseline' },
+      { name: 'baseline', description: 'Record a new gate baseline (explicit only)' },
+      { name: 'freeze', description: 'Re-freeze the task set manifest (invalidates old baselines)' },
+      { name: 'check', description: 'Verify the frozen set hashes and blocklist non-overlap' },
+    ],
+  },
   { name: 'apply', description: 'Apply a unified diff atomically (all-or-nothing)' },
   { name: 'checkpoint', description: 'Named snapshots' },
   { name: 'rollback', description: 'Restore a checkpoint' },
@@ -163,6 +172,14 @@ export const COMPLETION_COMMANDS: CompletionCommand[] = [
   },
   { name: 'chameleon', description: 'Removed standalone — engine runs auto + via --enhance' },
   { name: 'self-train', description: 'Self-review loop (--schedule for nightly learning)', aliases: ['selftrain', 'train'] },
+  { name: 'sleeptime', description: 'Nightly consolidation pipeline (--cap <usd>, --dry-run)' },
+  {
+    name: 'tools', description: 'Tool Forge: self-synthesised tools (audit, disable, forge runs)',
+    subcommands: [
+      { name: 'forged', description: 'Audit view of forged tools (state + provenance); disable/evaluate/run' },
+    ],
+  },
+  { name: 'health', description: 'Proactive repo health scan (--force, --offline)' },
   { name: 'speculate', description: 'Speculative execution' },
   { name: 'usage', description: 'Token usage and cost' },
   { name: 'feedback', description: 'Rate mochi good/bad (feeds self-correction)' },
@@ -198,7 +215,12 @@ export const COMPLETION_COMMANDS: CompletionCommand[] = [
   { name: 'check', description: 'Run checks' },
   { name: 'known-good', description: 'Mark a known-good state' },
   { name: 'gc', description: 'Prune old session/trace files (retention)', aliases: ['prune', 'retention'] },
-  { name: 'selfheal', description: 'Run an automatic repair pass on an open harness issue' },
+  { name: 'selfheal', description: 'Run/list/resolve an open harness issue (--resolve <sig>, --resolved, --list, --status)', subcommands: [
+    { name: 'list', description: 'Show open issues without repairing' },
+    { name: 'status', description: 'Alias for --list' },
+    { name: 'resolved', description: 'Show resolved issues too (--resolved flag)' },
+    { name: 'resolve', description: 'Mark an issue resolved without spawning a repair agent (--resolve <sig>)' },
+  ]},
   { name: 'use', description: 'Use a profile or preset' },
   { name: 'enhance', description: 'Removed standalone — use goal/team --enhance' },
   {

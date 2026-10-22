@@ -17,9 +17,15 @@ import { join, dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import {skillsRoot, archiveRoot, loadUsage, safeSlug, parseFrontmatter, renderSkill} from './skill-manager.js';
 import { writeSkill, markUsed, bumpPatch } from './skill-manager.js';
+import {
+  loadSkillUsage, saveSkillUsage, loadSkillKindStats, skillKindBaseline, resolveSkillsSettings,
+  PROMOTION_MIN_PASSES, PROBATION_EXPIRY_MS, DEMOTION_WINDOW, DEMOTION_MARGIN, DEMOTION_MIN_BASELINE_RUNS,
+  type SkillUsage,
+  loadSkillFailures, clearSkillFailures, type SkillFailureRecord,
+} from './skills.js';
 import { mochiStateDir } from '../core/mochi-dir.js';
 import { loadLessons } from '../lessons.js';
-import { loadSkillFailures, clearSkillFailures, type SkillFailureRecord } from './skills.js';
+import { evaluateForgedToolLifecycle, type ForgedLifecycleResult } from '../tools/tool-forge.js';
 import { lintSkillDoc, formatSkillLint } from './skill-lint.js';
 import { maybeRedact } from '../security/security.js';
 
@@ -175,7 +181,22 @@ export interface CuratorOutput {
   failureNotes: string[];
   /** Regression-doctor result for agent-created skills. */
   doctor?: { scanned: number; healthy: number; failures: number; archived: string[] };
+  /** Lifecycle promotions (probation/demoted → active) on verified evidence. */
+  lifecyclePromoted: string[];
+  /** Evidence-based demotions (active → probation-adjacent 'demoted'). */
+  demoted: Array<{ name: string; reason: string }>;
+  /** Probation spells past expiry without promotion (flagged, not acted on). */
+  probationStale: string[];
+  /** Skills the age rule would have archived but a strong recent record
+   *  protected (evidence beats calendar). */
+  archiveProtected: string[];
+  /** Per-skill quality signals computed this pass (evidence for the above). */
+  signals: SkillSignals[];
   reportPath: string;
+  /** Tool Forge lifecycle outcome of this pass (Wave O): forged tools are
+   *  promoted/trimmed by the same evidence discipline as skills. Absent
+   *  when the evaluation could not run. */
+  forgedTools?: ForgedLifecycleResult;
 }
 
 /** Token-overlap similarity between two skill bodies (keywords ≥5 chars,
@@ -308,7 +329,9 @@ export function promoteLessons(projectDir: string): PromotionResult {
       ``,
     ].join('\n');
     const description = `Auto-learned fix: ${strategy.slice(0, 140)}. Use when output matches the recorded failure signature.`;
-    const r = writeSkill(projectDir, { name, description, body, category: 'learned' });
+    // Lesson promotion is itself outcome-gated (≥3 retrievals, ≥1 fix), so
+    // its skills are born ACTIVE — probation is for unproven authorship.
+    const r = writeSkill(projectDir, { name, description, body, category: 'learned', lifecycle: 'active' });
     if (!r.ok) { skipped.push({ signature: sig, reason: `gate rejected (${String(r.error).slice(0, 120)})` }); continue; }
     try {
       markUsed(projectDir, name, { agentCreated: true, category: 'learned' });
@@ -337,13 +360,242 @@ function appendFailureNotes(path: string, rec: SkillFailureRecord): void {
   writeFileSync(path, next, 'utf8');
 }
 
+// ─── Evidence lifecycle: signals, promotion, demotion (B1) ──────────────
+// The curator is the ONLY writer of lifecycle state transitions (the loop
+// records evidence; writeSkill stamps births). Every decision below cites
+// its evidence — counts and rates computed from the unified registry and
+// the per-kind baseline — because a lifecycle that can't show its work is
+// just self-grading with extra steps (the failure mode this replaces).
+
+export interface SkillSignals {
+  name: string;
+  state?: string;
+  loads: number;
+  wins: number;
+  /** wins/loads over all recorded runs (includes unverified kinds). */
+  fixRate: number | null;
+  /** Loaded runs with a verifier-gate verdict (pass+fail+partial). */
+  verifiedOutcomes: number;
+  /** Gate-PASS share of verified outcomes. */
+  verifiedRate: number | null;
+  /** Gate-PASS share of the rolling last-10 verified window. */
+  windowRate: number | null;
+  /** ACE-style counters: load → PASS (helpful) / FAIL·PARTIAL·BLOCKED. */
+  helpful: number;
+  harmful: number;
+  /** Matched no-skill baseline pass-rate for the kinds this skill serves. */
+  baselineRate: number | null;
+  baselineRuns: number;
+  /** Per-kind verified pass-rates (retrieval→success view: the kinds where
+   *  loading this skill correlates with verified success). */
+  kindRates: Record<string, { loads: number; rate: number | null }>;
+}
+
+function signalsFor(name: string, rec: SkillUsage, kindStats: Record<string, { runs: number; passes: number }>): SkillSignals {
+  const verifiedOutcomes = (rec.verifiedPasses ?? 0) + (rec.verifiedFails ?? 0) + (rec.verifiedPartials ?? 0);
+  const win = rec.recentOutcomes ?? [];
+  const base = skillKindBaseline(rec, kindStats);
+  const kindRates: SkillSignals['kindRates'] = {};
+  for (const [kind, loads] of Object.entries(rec.kindLoads ?? {})) {
+    kindRates[kind] = { loads, rate: loads > 0 ? (rec.kindPasses?.[kind] ?? 0) / loads : null };
+  }
+  return {
+    name,
+    ...(rec.state ? { state: rec.state } : {}),
+    loads: rec.loads,
+    wins: rec.wins,
+    fixRate: rec.loads > 0 ? rec.wins / rec.loads : null,
+    verifiedOutcomes,
+    verifiedRate: verifiedOutcomes > 0 ? (rec.verifiedPasses ?? 0) / verifiedOutcomes : null,
+    windowRate: win.length > 0 ? win.filter((o) => o === 'pass').length / win.length : null,
+    helpful: rec.helpful ?? 0,
+    harmful: rec.harmful ?? 0,
+    baselineRate: base.rate,
+    baselineRuns: base.runs,
+    kindRates,
+  };
+}
+
+/** Quality signals for every skill in the unified registry. */
+export function computeSkillSignals(projectDir: string): SkillSignals[] {
+  const kindStats = loadSkillKindStats(projectDir);
+  const out: SkillSignals[] = [];
+  for (const [name, rec] of loadSkillUsage(projectDir)) out.push(signalsFor(name, rec, kindStats));
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Retrieval→success correlation across the registry: Pearson r between
+ *  per-skill loads and fix-rate, over skills with ≥2 loads and a recorded
+ *  fix-rate. Positive = the skills retrieval reaches for most tend to be
+ *  the winners; negative = retrieval is aimed at losers. A harness-level
+ *  health signal for the curator report — never a per-skill verdict.
+ *  Null with <3 points or zero variance (nothing meaningful to correlate). */
+export function retrievalSuccessCorrelation(signals: SkillSignals[]): number | null {
+  const pts = signals.filter((s) => s.loads >= 2 && s.fixRate !== null);
+  if (pts.length < 3) return null;
+  const xs = pts.map((s) => s.loads);
+  const ys = pts.map((s) => s.fixRate as number);
+  const mx = xs.reduce((a, b) => a + b, 0) / xs.length;
+  const my = ys.reduce((a, b) => a + b, 0) / ys.length;
+  let sxy = 0, sxx = 0, syy = 0;
+  for (let i = 0; i < xs.length; i++) {
+    const dx = xs[i] - mx;
+    const dy = ys[i] - my;
+    sxy += dx * dy; sxx += dx * dx; syy += dy * dy;
+  }
+  if (sxx === 0 || syy === 0) return null;
+  return sxy / Math.sqrt(sxx * syy);
+}
+
+/** Run ONE skill's embedded verification snippet (the Skill Doctor's replay)
+ *  and report the outcome. No snippet = nothing to replay = ok (structure
+ *  was already gated at write time); a snippet that fails blocks promotion.
+ *  Same execution recipe as runSkillDoctor (platform shell, timeout). */
+export function checkSkillReplay(projectDir: string, skillPath: string, timeoutMs = 3000): { ok: boolean; hasSnippet: boolean; error?: string } {
+  let raw: string;
+  try {
+    raw = readFileSync(skillPath, 'utf8');
+  } catch (e) {
+    return { ok: false, hasSnippet: false, error: `unreadable: ${e instanceof Error ? e.message : String(e)}` };
+  }
+  const snippet = extractVerificationSnippet(raw);
+  if (!snippet) return { ok: true, hasSnippet: false };
+  try {
+    if (process.platform === 'win32') {
+      execFileSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', snippet], {
+        cwd: projectDir, timeout: timeoutMs, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env },
+      });
+    } else {
+      execFileSync('/bin/bash', ['-c', snippet], {
+        cwd: projectDir, timeout: timeoutMs, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, PATH: `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${process.env.PATH || ''}` },
+      });
+    }
+    return { ok: true, hasSnippet: true };
+  } catch (err) {
+    const e = err as { stderr?: unknown; message?: string };
+    return { ok: false, hasSnippet: true, error: maybeRedact(String(e.stderr ?? e.message ?? err)).slice(0, 300) };
+  }
+}
+
+export interface LifecycleEvaluation {
+  promoted: string[];
+  demoted: Array<{ name: string; reason: string }>;
+  /** Probation spells past the 14-day expiry without promotion. Flagged
+   *  only — a stale probationer is NEVER silently activated or archived
+   *  by this pass; the curator report surfaces it for a decision. */
+  probationStale: string[];
+  signals: SkillSignals[];
+}
+
+const pct = (r: number): string => `${Math.round(r * 100)}%`;
+
+/** One lifecycle pass over the registry:
+ *  - PROMOTE a probation/demoted skill when ALL hold: ≥3 verified gate-PASS
+ *    runs in its current state, its Skill Doctor replay passes, and (for a
+ *    demoted skill) those passes are fresh — passesInState was reset at
+ *    demotion, so re-promotion IS the strike resolution; strikes clear.
+ *  - DEMOTE an active skill on evidence: its last two verified loads both
+ *    failed the gate, or its full 10-outcome window trails the matched
+ *    no-skill baseline by >15pp with enough baseline data to trust.
+ *  - FLAG probation spells older than 14 days that haven't promoted.
+ *  Skills with no lifecycle state are outside this system (never touched). */
+export function evaluateSkillLifecycle(projectDir: string, opts: { now?: number } = {}): LifecycleEvaluation {
+  const now = opts.now ?? Date.now();
+  const out: LifecycleEvaluation = { promoted: [], demoted: [], probationStale: [], signals: [] };
+  out.signals = computeSkillSignals(projectDir);
+  if (!resolveSkillsSettings().probationEnabled) return out;
+  const usage = loadSkillUsage(projectDir);
+  const kindStats = loadSkillKindStats(projectDir);
+  const pathByName = new Map(scanSkills(projectDir, defaultCuratorConfig()).snapshots.map((s) => [s.name, s.path]));
+  let dirty = false;
+  for (const [name, rec] of usage) {
+    if (!rec.state) continue;
+    if (rec.state === 'probation' || rec.state === 'demoted') {
+      if ((rec.passesInState ?? 0) >= PROMOTION_MIN_PASSES) {
+        const path = pathByName.get(name);
+        const replay = path ? checkSkillReplay(projectDir, path) : { ok: false, hasSnippet: false, error: 'skill file not found in tree' };
+        if (replay.ok) {
+          rec.state = 'active';
+          rec.stateAt = now;
+          rec.demotionStrikes = 0;
+          dirty = true;
+          out.promoted.push(name);
+          continue;
+        }
+      }
+      if (rec.state === 'probation' && now - (rec.probationSince ?? rec.stateAt ?? now) > PROBATION_EXPIRY_MS) {
+        out.probationStale.push(name);
+      }
+    } else if (rec.state === 'active') {
+      const win = rec.recentOutcomes ?? [];
+      let reason: string | null = null;
+      if (win.length >= 2 && win[win.length - 1] === 'fail' && win[win.length - 2] === 'fail') {
+        reason = `last two verified runs that loaded it failed the gate (${rec.verifiedFails ?? 0} verified fails recorded; helpful ${rec.helpful ?? 0} / harmful ${rec.harmful ?? 0})`;
+      } else if (win.length >= DEMOTION_WINDOW) {
+        const windowRate = win.filter((o) => o === 'pass').length / win.length;
+        const base = skillKindBaseline(rec, kindStats);
+        if (base.rate !== null && base.runs >= DEMOTION_MIN_BASELINE_RUNS && windowRate <= base.rate - DEMOTION_MARGIN) {
+          reason = `window pass-rate ${pct(windowRate)} over the last ${win.length} verified loads vs ${pct(base.rate)} matched no-skill baseline (${base.runs} runs, kinds: ${Object.keys(rec.kindLoads ?? {}).join(', ') || 'n/a'})`;
+        }
+      }
+      if (reason) {
+        rec.state = 'demoted';
+        rec.stateAt = now;
+        rec.passesInState = 0;
+        rec.demotionStrikes = (rec.demotionStrikes ?? 0) + 1;
+        rec.lastDemotionReason = reason;
+        dirty = true;
+        out.demoted.push({ name, reason });
+      }
+    }
+  }
+  if (dirty) saveSkillUsage(projectDir, usage);
+  // Signals were computed pre-transition for the report's "before" picture;
+  // refresh states so the report never cites a state the pass just changed.
+  out.signals = computeSkillSignals(projectDir);
+  return out;
+}
+
+/** A skill with a strong recent record is protected from AGE-based
+ *  archiving: the calendar is a backstop for dead skills, not a reason to
+ *  bury a proven one. Strong = ≥5 loads with ≥60% run wins, or ≥5 verified
+ *  outcomes with ≥60% gate passes, or ≥3 helpful and helpful > harmful. */
+export function evidenceProtectsFromArchive(s: SkillSignals): boolean {
+  if (s.loads >= 5 && s.fixRate !== null && s.fixRate >= 0.6) return true;
+  if (s.verifiedOutcomes >= 5 && s.verifiedRate !== null && s.verifiedRate >= 0.6) return true;
+  if (s.helpful >= 3 && s.helpful > s.harmful) return true;
+  return false;
+}
+
 export function runCurator(projectDir: string, cfg: CuratorConfig): CuratorOutput {
   const { snapshots, stale, archive } = scanSkills(projectDir, cfg);
   const agentCreated = snapshots.filter((s) => s.agentCreated);
   const archived: string[] = [];
   const now = Date.now();
+  // Evidence lifecycle runs FIRST: its signals decide both the state
+  // transitions and which age-expired skills the calendar may not bury.
+  let lifecycle: LifecycleEvaluation = { promoted: [], demoted: [], probationStale: [], signals: [] };
+  try {
+    lifecycle = evaluateSkillLifecycle(projectDir);
+  } catch { /* lifecycle is best-effort; age-based curation still proceeds */ }
+  const signalsByName = new Map(lifecycle.signals.map((s) => [s.name, s]));
+  // Tool Forge lifecycle (Wave O): forged tools earn promotion or get
+  // trimmed on the same evidence standard as skills. Best-effort — a
+  // forge failure never blocks skill curation.
+  let forgedTools: ForgedLifecycleResult | undefined;
+  try {
+    forgedTools = evaluateForgedToolLifecycle(projectDir);
+  } catch { /* best-effort */ }
+  // Pinned skills are a user directive: never age-archived. (The dedup
+  // pass below already honored pins; the archive pass now does too.)
+  const pinned = new Set(loadCuratorState(projectDir).pinned ?? []);
+  const archiveProtected: string[] = [];
   const usage = loadUsage(projectDir);
   for (const s of archive) {
+    if (pinned.has(s.name)) continue;
+    const sig = signalsByName.get(s.name);
+    if (sig && evidenceProtectsFromArchive(sig)) { archiveProtected.push(s.name); continue; }
     try {
       const arc = join(archiveRoot(projectDir), safeSlug(s.name), 'SKILL.md');
       mkdirSync(dirname(arc), { recursive: true });
@@ -351,11 +603,16 @@ export function runCurator(projectDir: string, cfg: CuratorConfig): CuratorOutpu
       archived.push(s.name);
     } catch { /* keep going */ }
   }
-  // MCH-201: auto-retire low-quality agent-created skills (score < 15, >= 5 uses)
+  // MCH-201: auto-retire low-quality agent-created skills (score < 15, >= 5 uses).
+  // Evidence-protected skills are exempt: a strong fix-rate/verified record
+  // outweighs a missing legacy score field (undefined scores as 0 must not
+  // retire skills the evidence says are carrying real weight).
   for (const s of agentCreated) {
     if (archived.includes(s.name)) continue; // already archived
     const rec = usage.byName[s.name];
     if (!rec) continue;
+    const sig = signalsByName.get(s.name);
+    if (sig && evidenceProtectsFromArchive(sig)) continue;
     const totalUses = (rec.wins ?? 0) + (rec.losses ?? 0);
     if ((rec.score ?? 0) < 15 && totalUses >= 5) {
       try {
@@ -372,7 +629,6 @@ export function runCurator(projectDir: string, cfg: CuratorConfig): CuratorOutpu
   // skills are never auto-merged, and pinned skills are never merged away.
   // Fresh-but-never-used agent skills still merge: near-duplicates usually
   // come from re-authoring the same procedure in one session.
-  const pinned = new Set(loadCuratorState(projectDir).pinned ?? []);
   const consolidateable = scanSkills(projectDir, cfg).snapshots.filter((s) =>
     (s.agentCreated || usage.byName[s.name]?.agentCreated) && !archived.includes(s.name) && !pinned.has(s.name));
   const consolidated = consolidateSkills(consolidateable, cfg);
@@ -405,18 +661,39 @@ export function runCurator(projectDir: string, cfg: CuratorConfig): CuratorOutpu
     const d = runSkillDoctor(projectDir, { executeSnippets: true, names: new Set(agentCreated.map((s) => s.name)) });
     doctor = { scanned: d.scanned, healthy: d.healthy, failures: d.failures.length, archived: d.archived };
   } catch { /* doctor is best-effort */ }
+  const fmtRate = (r: number | null): string => (r === null ? 'n/a' : `${Math.round(r * 100)}%`);
+  const signalLines = lifecycle.signals
+    .filter((s) => s.state || s.loads > 0)
+    .map((s) => {
+      const kinds = Object.entries(s.kindRates)
+        .map(([k, v]) => `${k} ${fmtRate(v.rate)} (${v.loads})`)
+        .join(', ');
+      return `- ${s.name}${s.state ? ` [${s.state}]` : ''}: fix-rate ${fmtRate(s.fixRate)} (${s.wins}/${s.loads} runs), verified ${fmtRate(s.verifiedRate)} (${s.verifiedOutcomes} gate verdicts), helpful ${s.helpful} / harmful ${s.harmful}, baseline ${fmtRate(s.baselineRate)} (${s.baselineRuns} matched runs)${kinds ? `; kinds: ${kinds}` : ''}`;
+    });
+  const corr = retrievalSuccessCorrelation(lifecycle.signals);
   const report = [
     `# Skill curator report (${new Date(now).toISOString()})`,
     `Scanned: ${snapshots.length} skills (${agentCreated.length} agent-created).`,
     `Stale: ${stale.map((s) => s.name).join(', ') || '(none)'}.`,
     `Archived: ${archived.join(', ') || '(none)'}.`,
+    archiveProtected.length ? `Archive-protected by evidence (strong recent record beats calendar age): ${archiveProtected.join(', ')}.` : '',
+    lifecycle.promoted.length ? `Lifecycle promotions (verified evidence): ${lifecycle.promoted.map((n) => { const rec = loadSkillUsage(projectDir).get(n); return `${n} (${rec?.verifiedPasses ?? 0} verified gate passes)`; }).join(', ')}.` : '',
+    ...lifecycle.demoted.map((d) => `Demoted: ${d.name} — ${d.reason}.`),
+    lifecycle.probationStale.length ? `Probation expired without promotion (flagged, NOT auto-activated): ${lifecycle.probationStale.join(', ')}.` : '',
     consolidated.length ? `Consolidated: ${consolidated.map((c) => `${c.merged} → ${c.kept}`).join(', ')}.` : '',
     promoted.length ? `Promoted: ${promoted.join(', ')}.` : '',
     failureNotes.length ? `Failure notes folded into: ${failureNotes.join(', ')}.` : '',
     doctor ? `Doctor: ${doctor.healthy}/${doctor.scanned} healthy, ${doctor.failures} failure(s)${doctor.archived.length ? `, archived: ${doctor.archived.join(', ')}` : ''}.` : '',
+    ...(forgedTools?.promoted.length ? [`Forged tools promoted (evidence gate): ${forgedTools.promoted.join(', ')}.`] : []),
+    ...(forgedTools?.trimmed.map((t) => `Forged tool trimmed: ${t.name} — ${t.reason}.`) ?? []),
+    ...(forgedTools?.probationStale.length ? [`Forged tools stale on probation (flagged, NOT auto-activated): ${forgedTools.probationStale.join(', ')}.`] : []),
+    ``,
+    'Quality signals (evidence base for lifecycle decisions):',
+    ...(corr !== null ? [`Retrieval→success correlation: r = ${corr.toFixed(2)} (per-skill loads vs fix-rate across the registry; positive means retrieval favours winners).`] : []),
+    ...(signalLines.length ? signalLines : ['(no recorded skill outcomes yet)']),
     ``,
     'Agent-created skills (maintainable):',
-    ...agentCreated.map((s) => `- ${s.name}${s.category ? ` [${s.category}]` : ''} — ${s.patches} patches, active`),
+    ...agentCreated.map((s) => `- ${s.name}${s.category ? ` [${s.category}]` : ''} — ${s.patches} patches, ${signalsByName.get(s.name)?.state ?? 'active'}`),
   ].join('\n');
   const reportDir = join(mochiStateDir(projectDir), 'reports');
   mkdirSync(reportDir, { recursive: true });
@@ -431,7 +708,13 @@ export function runCurator(projectDir: string, cfg: CuratorConfig): CuratorOutpu
     promoted,
     failureNotes,
     ...(doctor ? { doctor } : {}),
+    lifecyclePromoted: lifecycle.promoted,
+    demoted: lifecycle.demoted,
+    probationStale: lifecycle.probationStale,
+    archiveProtected,
+    signals: lifecycle.signals,
     reportPath,
+    ...(forgedTools ? { forgedTools } : {}),
   };
 }
 

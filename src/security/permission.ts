@@ -73,7 +73,20 @@ export class PermissionManager {
 
   /** Returns whether the action should be allowed without prompting. */
   autoAllow(req: PermissionRequest): boolean {
-    if (this.policy === 'yolo') return true;
+    return this.autoAllowAs(this.policy, req);
+  }
+
+  /**
+   * autoAllow evaluated under an arbitrary tier, independent of this
+   * manager's own policy. The agent loop uses this for the headless floor:
+   * with no approval handler attached, calls that the *workspace-safe*
+   * tier would auto-allow (read-only tools, in-workspace edits, low-risk
+   * shell) are "safe without a handler" and may proceed under any policy,
+   * while destructive / network / outside-workspace calls are denied by
+   * default (see the approval gate in agent/loop.ts).
+   */
+  autoAllowAs(policy: PermissionPolicy, req: PermissionRequest): boolean {
+    if (policy === 'yolo') return true;
 
     const readTools = new Set(['read', 'glob', 'search', 'inspect', 'memory', 'git', 'diff', 'tree', 'deepwiki', 'fetch', 'skill', 'todo']);
     if (readTools.has(req.tool)) {
@@ -83,7 +96,7 @@ export class PermissionManager {
       if (!isFetchMutationRequest(req.tool, req.args)) return true;
     }
 
-    if (this.policy === 'workspace-safe') {
+    if (policy === 'workspace-safe') {
       // Allow edits within the project workspace
       const editTools = new Set(['write', 'edit', 'patch', 'delete', 'notebook', 'replace_symbol', 'regex_replace']);
       if (editTools.has(req.tool)) {

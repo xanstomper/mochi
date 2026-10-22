@@ -1,5 +1,5 @@
 import { performance } from 'node:perf_hooks';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 /** Pure read-only shell detection for the parallel batch (exported for
  *  tests). A command may ride the CONCURRENT read-only group only when it
@@ -23,11 +23,11 @@ export function isPureReadOnlyShellCommand(cmd: string): boolean {
 }
 
 import {sortableId} from '../util.js';
-import type { Attempt, ChatMessage, MochiConfig, ModelProfile, Task, ToolDefinition, ToolCall, ToolResult, MochiEvent } from '../types.js';
+import type { Attempt, ChatMessage, ContentPart, MochiConfig, ModelProfile, Task, ToolDefinition, ToolCall, ToolResult, MochiEvent } from '../types.js';
 import { contentText } from '../types.js';
 import type { EventBus } from '../events.js';
 import type { Workspace } from '../workspace.js';
-import { ContextEngine, approxTokens } from '../context.js';
+import { ContextEngine, estimateMessagesTokens } from '../context.js';
 import { MemoryStore } from '../memory/memory.js';
 import { projectMemoryPrefix, recordProjectMemory } from '../memory/project-memory.js';
 import { loadReadCache, saveReadCache } from '../state/read-cache-store.js';
@@ -36,27 +36,62 @@ import { PROVIDERS } from '../model/providers.js';
 import { isMode, modeInstruction } from '../modes.js';
 
 import { executeTool, buildTools, TOOL_ALIASES, normalizeToolArgs, trimHeavyTools, CHAT_TOOL_NAMES } from '../tools/index.js';
+import { parsePatch } from '../tools/patch.js';
 import { refreshAuthoredTools, RESERVED_TOOL_NAMES } from '../tools/tool-factory.js';
 import { isFetchMutationRequest } from '../tools/fetch-methods.js';
 import type { ToolContext, ReadCache } from '../tools/types.js';
 import { detectRepo, languageHint } from '../repo/repo.js';
 import { classifyTaskKind, resolveAutoReasoning, isTrivialWriteTask, isSimpleScriptTask, isReviewTask, scoreTaskComplexity, shouldEscalateComplexity } from '../core/taskkind.js';
-import { trimToLeanTier, trimToReadTier, ALL_TOOLS_MAP } from '../tools/index.js';
+import { trimToLeanTier, trimToReadTier, ALL_TOOLS_MAP, LEAN_TOOL_NAMES, toolsNamedInText } from '../tools/index.js';
+import { applyMeasuredExposure, loadToolUsageLedger, toolExposureMode, toolSchemaBudgetChars, toolsImplicatedBySignals, toolsSchemaChars } from '../tools/tool-exposure.js';
+import { trimForgedProbationTools } from '../tools/tool-forge.js';
 import { classifyTaskTier, nextEscalationTier, type TaskTier } from '../model/model-router.js';
-import { modelContextBudget } from '../model/model-manager.js';
+import { modelContextBudget, modelSupportsVision } from '../model/model-manager.js';
+import { takeLastComputerScreenshot } from '../tools/computer.js';
+import { buildScreenshotImage, SCREENSHOT_INLINE_MAX_BYTES } from '../computer/screenshot-image.js';
 import { learnedWindowBudget, recordContextRejection } from '../model/window-memory.js';
-import { matchesBaseline, type VerificationBaseline } from '../verification.js';
+import { matchesBaseline, type FlakyTestRef, type VerificationBaseline, type VerificationStatus } from '../verification.js';
 import { diagnoseFile, renderDiagnostics } from '../observability/diagnostics.js';
+import { captureCorrection, promoteCorrectionToLesson } from '../observability/corrections.js';
 import type { AgentProfile } from '../types.js';
 import type { PromptUserFn } from '../tools/user-prompt.js';
 import { PermissionManager } from '../security/permission.js';
 import type { PermissionPolicy } from '../security/permission.js';
 import { describeApproval, normalizePolicy } from '../security/approval.js';
-import { classifyCommand } from '../security/security.js';
+import { matchHardline } from '../security/hardline.js';
+import { classifyCommand, redact } from '../security/security.js';
 import { snapshotTree, rollbackTracked, resolveVerifyCommand, type PlanVerifySnapshot } from './plan-verify.js';
 import type { ApprovalHandler } from '../security/approval.js';
 import { AgentProfileService } from '../agents/profile.js';
+import { WorktreeManager } from '../repo/worktree.js';
+import { resolvePreset } from '../teams/presets.js';
+import {
+  ChildRunStore,
+  STRUCTURED_RESULT_CONTRACT,
+  parseChildResult,
+  aggregateReviews,
+  formatChildDigest,
+  formatFleetReport,
+  canSpawnAtDepth,
+  resolveMaxSubagentDepth,
+  resolveMaxConcurrentSubagents,
+  isGitRepo,
+  gitOut,
+  commitWorktreeChanges,
+  summarizeWorktreeDiff,
+  captureReviewDiff,
+  type ChildRunRecord,
+  type ChildSteerEvent,
+} from '../teams/subagent-runtime.js';
 import { BudgetEngine } from '../budget.js';
+import {
+  DisciplineTracker,
+  KIND_CHECKLISTS,
+  resolveDisciplineFlags,
+  verifySummaryEvidenced,
+  type DisciplineFlags,
+  type FailureVerdict,
+} from './discipline.js';
 import { SpeculativeEngine } from './speculative.js';
 import { retrieveSpeculationMemory, recordSpeculationOutcome, speculationMemoryToPrompt, predictNextFiles } from './speculative.js';
 import { join } from 'node:path';
@@ -92,7 +127,13 @@ import { statSync, existsSync, readFileSync } from 'node:fs';
 import { stat, readFile } from 'node:fs/promises';
 import { condenseOutput } from '../core/output-condenser.js';
 import { autoTestCommand, isWeakVerification, cwdForScope, withCwd } from '../core/testdetect.js';
-import { planTargetedTests } from '../core/test-select.js';
+import { planVerificationTests } from '../core/test-selection.js';
+import { runMutationCheck } from '../core/mutation.js';
+import {
+  analyzeFailure, exitCodeOfEnvelope, flakeCommandKey, formatFlakyHits,
+  isKnownFlaky, knownFlakyCommandKeys, loadFlakyRegistry, partitionFlakes,
+  recordCleanPass, recordFlakes, saveFlakyRegistry, type FlakyRegistry,
+} from '../core/flaky.js';
 import { classifyOneShot } from '../core/one-shot.js';
 import { classifyContentOnly } from '../core/one-shot.js';
 import { workspaceListMessage } from '../core/workspace-list.js';
@@ -109,7 +150,10 @@ import { parseCompilerDiagnostics, renderCompilerAdvisory } from './error-diagno
 import { AnchorEngine } from '../cognitive/anchor.js';
 import { summarize, resolveRunStatus } from '../summary/engine.js';
 import { compactSession, compactToPrompt } from '../summary/compact.js';
+import { buildDigestInput } from '../summary/digest-input.js';
+import { buildSummaryLineage, renderSummaryLineage } from '../summary/verified-compaction.js';
 import { ExecutionRegistry } from '../core/execution-registry.js';
+import { RunJournal, isJournalableTool, modelTurnFingerprint } from './run-journal.js';
 import { evaluateTestDensity } from '../core/test-density.js';
 
 export function stripThinkTags(text: string): string {
@@ -342,9 +386,16 @@ export interface AgentOptions {
   extraTools?: Map<string, import('../tools/types.js').Tool>;
   /** When true, the agent plans then waits for approval before editing. */
   planMode?: boolean;
-  /** Depth guard: children spawn with subagentDepth = parent + 1. Subagents
-   *  may not delegate further (depth 1 has no spawnSubagent injected). */
+  /** Depth guard: children spawn with subagentDepth = parent + 1. Spawning
+   *  is injected only while depth < safety.maxSubagentDepth (default 2:
+   *  root -> child -> grandchild; grandchildren cannot spawn further). */
   subagentDepth?: number;
+  /** HARD tool allowlist (multi-agent presets): when set, the agent's tool
+   *  map is pruned to exactly these tools and executeTool rejects any call
+   *  outside the set — a read-only child cannot write even by hallucinating
+   *  a tool name or via load_tools. Children never exceed the scope they
+   *  were spawned with. */
+  toolAllowlist?: string[];
   /** Repo-check failures captured before this run. A verify failure matching
    *  it is pre-existing debt and must not fail the task. */
   verifyBaseline?: VerificationBaseline | Promise<VerificationBaseline | undefined>;
@@ -353,14 +404,38 @@ export interface AgentOptions {
    *  deterministic defaults instead. */
   promptUser?: PromptUserFn;
   /** Interactive approval resolver (TUI allow/deny menu). Unset headless —
-   *  the gate then preserves historical behavior (allow) and only audits. */
+   *  the gate then DENIES any call the policy does not auto-allow
+   *  (deny-by-default), unless unattendedAllow is explicitly set. */
   approvalHandler?: ApprovalHandler;
   /** Permission tier ('yolo' | 'workspace-safe' | 'strict'). Undefined =
-   *  strict; headless runs without a handler still allow (audit-only). */
+   *  strict. */
   permPolicy?: string;
+  /** Explicit host opt-in for unattended runs (daemon/cron/SDK hosts that
+   *  cannot prompt): when true, calls the policy does not auto-allow are
+   *  allowed + audited even with no approval handler. NEVER default:
+   *  unset/false means headless and subagent runs deny non-auto-approved
+   *  calls. Also settable via env MOCHI_UNATTENDED_ALLOW=1. YOLO policy
+   *  auto-allows everything and does not need this flag. */
+  unattendedAllow?: boolean;
   /** Session "allow always" memory, shared across runs by the host
    *  (GoalEngine). Defaults to a private set (single-run memory). */
   approvedAlways?: Set<string>;
+  /** Durable run journal (C6): stable identity of this run for step
+   *  journaling/resume. Defaults to the task id — resuming the same task
+   *  (same id) in a new process replays its completed steps instead of
+   *  re-executing them. */
+  runId?: string;
+  /** Pre-opened journal (hosts/tests that manage the journal themselves).
+   *  Wins over runId. */
+  journal?: RunJournal;
+  /** Disable step journaling for this agent (default: enabled). */
+  journalEnabled?: boolean;
+  /** Record + replay MODEL turns in the run journal (default: enabled).
+   *  When false — or when env MOCHI_JOURNAL_MODEL_TURNS=0 — model turns
+   *  are neither recorded nor served on resume; tool-step journaling is
+   *  unaffected. The provider is then re-called (and re-billed) for
+   *  every turn of a resumed run, exactly as before this feature. */
+  journalModelTurns?: boolean;
 }
 
 export type AgentStopReason =
@@ -406,6 +481,26 @@ export function isManualCheckPass(command: string, output: string): boolean {
   return false;
 }
 
+/**
+ * Speculative-preflight enable policy. Pure (unit-tested) so the loop wiring
+ * stays a one-liner. Precedence: env kill-switch (`MOCHI_SPECULATIVE_PREFLIGHT=0`)
+ * > explicit config (`preflight: false` off, `preflight: true` on for any
+ * kind — the historical opt-in) > default: ON only for structurally complex
+ * tasks at medium-or-higher reasoning. Simple/standard tasks stay lean.
+ */
+export function specPreflightDefault(input: {
+  configured?: boolean;
+  env?: string;
+  complexity?: 'simple' | 'standard' | 'complex';
+  reasoning?: 'off' | 'low' | 'medium' | 'high' | 'max';
+}): boolean {
+  if (input.env === '0') return false;
+  if (input.configured === false) return false;
+  if (input.configured === true) return true;
+  if (input.complexity !== 'complex') return false;
+  return input.reasoning === 'medium' || input.reasoning === 'high' || input.reasoning === 'max';
+}
+
 export interface AgentResult {
   success: boolean;
   summary: string;
@@ -427,6 +522,74 @@ export interface AgentResult {
   runDigest?: string;
 }
 
+/** Spec for one child run, shared by the sync delegate path and the
+ *  background (spawn_agent) runtime. */
+export interface ChildRunSpec {
+  prompt: string;
+  /** Internal: pre-assigned run id (background registry) so the persisted
+   *  record, the child agent id, and the parent's handle all match. */
+  runId?: string;
+  role?: string;
+  /** Spawn preset name (researcher / pr-reviewer / tester / explorer /
+   *  coder): pins role, enforced tool allowlist, and isolation. */
+  preset?: string;
+  scratchpad?: string;
+  timeoutMs?: number;
+  lane?: string;
+  failoverIndex?: number;
+  /** Force a private git worktree even without a worktree preset. */
+  isolate?: boolean;
+  /** Extra system guidance appended after the preset addendum (fleet lens). */
+  extraSystem?: string;
+}
+
+/** A child agent that has been constructed and STARTED. `completion`
+ *  resolves with the child's AgentResult and never rejects (errors are
+ *  fenced so a late child failure can never crash the parent). */
+interface PreparedChild {
+  childId: string;
+  role: import('../types.js').AgentRole;
+  task: Task;
+  abort: AbortController;
+  cwd: string;
+  worktree?: import('../teams/subagent-runtime.js').ChildWorktreeInfo;
+  toolCalls: () => number;
+  stopCounting: () => void;
+  /** B21: hand a mid-run steer to the running child (queued into its
+   *  steer queue, injected at its next turn boundary). Returns false when
+   *  the child's run already finished — the caller must then surface the
+   *  steer as NOT delivered, never drop it silently. The `event` object is
+   *  shared with the child's run record: the child stamps its deliveredAt
+   *  when the steer actually lands in its context. */
+  steerChild: (text: string, event: ChildSteerEvent) => boolean;
+  completion: Promise<{ result?: AgentResult; error?: string }>;
+}
+
+/** One queued mid-run steer line. `user` entries come from Agent.steer()
+ *  (TUI / goals / runtime); `parent` entries arrive via a parent agent's
+ *  steerChildRun (B21) and carry their provenance event — the same object
+ *  the child's run record holds, so delivery can be stamped onto it. */
+interface SteerQueueEntry {
+  text: string;
+  source: 'user' | 'parent';
+  event?: ChildSteerEvent;
+}
+
+/** Live bookkeeping for one background child owned by this agent. */
+interface LiveChildRun {
+  record: ChildRunRecord;
+  spec: ChildRunSpec;
+  prepared?: PreparedChild;
+  /** B21: steers issued while the child was queued or still launching —
+   *  handed to the child in issue order the moment it is prepared. The
+   *  raw text lives ONLY here in memory (and then in the child's own
+   *  queue); the persisted record keeps hash + redacted preview. */
+  pendingSteers: Array<{ text: string; event: ChildSteerEvent }>;
+  /** Settles when the run is fully finalized (record persisted). */
+  promise: Promise<void>;
+  settle: () => void;
+}
+
 /**
  * Tools that mutate the workspace. Used both for the sibling-project scope
  * fence and for the before_edit/after_edit lifecycle hooks. It must be
@@ -444,6 +607,39 @@ const MUTATING_TOOLS = new Set([
   'notebook',
 ]);
 
+/** P0.5: the in-loop completion gate's verdict, in the VerifierEngine's
+ *  vocabulary (src/verification.ts). `passed` stays the binary the loop's
+ *  finish machinery consumes; `status` is the structured verdict — PASS /
+ *  FAIL / PARTIAL (mutation survivor) / BLOCKED (no verifiable deliverable)
+ *  / FLAKY-PASS (green only via flake resolution; passed=true, never
+ *  silent) — and `checks` is the evidence trail of commands executed. */
+export interface LoopVerification {
+  passed: boolean;
+  summary: string;
+  status: VerificationStatus;
+  checks: string[];
+  /** Flakes observed during this verify (status FLAKY-PASS when the run is
+   *  green only via flake resolution). Loud in the summary; never silent. */
+  flaky?: FlakyTestRef[];
+}
+
+/** Task kinds whose deliverable IS a file mutation. A run of one of these
+ *  kinds that changed nothing, or whose changes no check covers, cannot be
+ *  verified — see the P0.5 branches in Agent.verify(). Read-only kinds
+ *  (chat/research/plan, and review which classifies as research) and
+ *  'document' (its deliverable is routinely prose or content checked by the
+ *  content-only path) are deliberately absent. */
+const MUTATION_KINDS: ReadonlySet<string> = new Set(['implement', 'fix', 'refactor', 'test']);
+
+/** Kinds whose zero-change PROSE completions are routed through verify()
+ *  instead of finishing directly (see the P0.5 routing in the no-tool-call
+ *  prose path). 'test' is excluded here — unlike the gate-internal set —
+ *  because for test-kind tasks the tool work itself (running the suite) is
+ *  a legitimate zero-change deliverable; verify()'s internal branches
+ *  still BLOCK test-kind tasks that reach the gate through a gated path
+ *  with no changes and nothing checked. */
+const PROSE_VERIFY_KINDS: ReadonlySet<string> = new Set(['implement', 'fix', 'refactor']);
+
 export class Agent {
   private id: string;
   private profile: AgentProfile;
@@ -456,11 +652,22 @@ export class Agent {
   /** True when the task's deliverable is file content with no behavior change
    *  (docs/config/data): repo-wide suites are vetoed for such tasks. */
   private contentOnly = false;
+  /** Greenfield determination captured at run START. It must not be
+   *  recomputed at verify time: isGreenfieldTask's fileScope branch checks
+   *  that the scoped paths do NOT exist yet, which the run itself falsifies
+   *  by creating them. */
+  private greenfieldTask = false;
+  /** Run-start existence probe for the paths a task names (text tokens +
+   *  fileScope), populated in run() before the model loop. Lets verify()
+   *  distinguish changes to pre-existing files from pure creations. */
+  private namedPathsExistedAtStart = new Map<string, boolean>();
   private budget?: BudgetEngine;
   private abortSignal?: AbortSignal;
   private promptUser?: PromptUserFn;
   private approvalHandler?: ApprovalHandler;
   private permPolicy?: string;
+  /** Explicit unattended opt-in (see AgentOptions.unattendedAllow). */
+  private unattendedAllow: boolean;
   /** Session "allow always" memory: exact (tool, args) keys approved this run.
    *  Host-shared (GoalEngine) across runs; private single-run set by default. */
   private approvedAlways: Set<string>;
@@ -538,6 +745,23 @@ export class Agent {
   private preEditCheckpoint?: CheckpointResult;
   private checkpointFailed = false;
   private executionRegistry = new ExecutionRegistry({ dedupeWindowMs: 1500 });
+  /** Durable run journal (C6): opened per run() — see run-journal.ts. */
+  private journal?: RunJournal;
+  private journalOverride?: RunJournal;
+  private journalRunId?: string;
+  private journalDisabled = false;
+  private journalReplayed = 0;
+  private journalRecorded = 0;
+  /** Model-turn journaling opt-out (option journalModelTurns / env
+   *  MOCHI_JOURNAL_MODEL_TURNS=0). Tool-step journaling ignores this. */
+  private journalModelTurnsDisabled = false;
+  /** True when this run opened a journal holding claimable model turns:
+   *  resume-time prose injections (checkpoint / journal note) are then
+   *  SKIPPED, because any extra context message would change the first
+   *  request's fingerprint and silently disable the exact replay they
+   *  exist alongside. The journaled transcript supersedes the prose. */
+  private modelReplayArmed = false;
+  private journalModelReplayed = 0;
   /** MCH-64: tool_call_ids already spec-executed mid-stream this response, so
    *  the post-stream execution path skips them (results already in context). */
   private midStreamExecutedIds = new Set<string>();
@@ -545,8 +769,17 @@ export class Agent {
   /** MCH-78: current failing-signature cluster (sig + consecutive count). */
   private failureClusterSig: string | null = null;
   private failureClusterCount = 0;
-  /** MCH-74: mid-run steer queue — user guidance injected at next iteration. */
-  private steerQueue: string[] = [];
+  /** MCH-74: mid-run steer queue — guidance injected at next iteration.
+   *  Entries are source-tagged (B21): 'user' lines from steer(), 'parent'
+   *  lines from a parent agent's steerChildRun carrying provenance. */
+  private steerQueue: SteerQueueEntry[] = [];
+  /** B21: true while a run() is in flight — the window in which parent
+   *  steers can be accepted. Set at run() start, cleared at finish(). */
+  private runActive = false;
+  /** B21: parent steers actually DELIVERED into this run's context (the
+   *  provenance events, shared objects with the child's run record).
+   *  Reset per run; stamped onto the skills:attributed event at finish. */
+  private deliveredParentSteers: ChildSteerEvent[] = [];
   private cycleNudges = 0;
   private lastSig = '';
   private sigStreak = 0;
@@ -768,6 +1001,51 @@ export class Agent {
    *  (bounded at 1 so the guard can never itself loop). */
   private proseRunwayNudges = 0;
   private specPreflighted = false;
+  /** Reproduce-first gate (fix/debug kinds): set once a shell/verify/bg_task
+   *  call has actually EXECUTED this run — a failing repro is the point, so
+   *  execution counts regardless of the call's success. */
+  private reproAttempted = false;
+  /** Reproduce-first gate: the one strong veto has been spent. A further
+   *  mutation without a repro is allowed (hard-blocking forever traps tasks
+   *  with no runnable entrypoint) but recorded via reproGateBypassed. */
+  private reproVetoFired = false;
+  /** Reproduce-first gate: the model mutated after the veto without ever
+   *  reproducing — telemetry only (agent:log + this flag), never a block. */
+  private reproGateBypassed = false;
+  /** Reproduce-first gate: `fileChanged` as it stood when run() started.
+   *  The gate's already-changed-files exemption is about resume / warm
+   *  start (a previous run did the changing), so it must read this
+   *  snapshot — reading live `fileChanged` would let an exempt new-file
+   *  creation EARLY IN THIS RUN disarm the gate for a later edit to an
+   *  existing file, which is exactly the mutation the gate exists for. */
+  private reproFileChangedAtRunStart = false;
+  /** Reasoning discipline (src/agent/discipline.ts): per-run tracker +
+   *  resolved kill-switch flags. The tracker is created in run() for
+   *  non-chat kinds; every consult is optional-chained so bare agents
+   *  (unit tests that never call run()) keep legacy behavior. */
+  private discipline?: DisciplineTracker;
+  private disciplineFlags: DisciplineFlags = resolveDisciplineFlags(undefined);
+  /** Progress snapshot for the discipline deliberation detector (distinct
+   *  read/edited/verify-pass counts as of the previous model turn). */
+  private disciplineSnap: ProgressSnap = { read: 0, edited: 0, verifyPass: 0 };
+  /** Progress forcing fired: the next non-mutating response is treated as
+   *  final (continue-nudges suppressed; read-only batches execute, then the
+   *  run finishes decisively). Cleared by any mutating/progress turn. */
+  private disciplineForceArmed = false;
+  /** Whether the most recent model turn contained a mutating call. */
+  private disciplineTurnMutating = false;
+  /** Files mutated since the last verification attempt, tracked directly
+   *  in trackFileChange (context.state.filesModified is DEDUPED, so a
+   *  per-cycle delta computed from it is empty after the first edit of a
+   *  file — useless as an approach fingerprint). Snapshot-and-cleared by
+   *  the verify branch; the list is the "approach" the same-failure
+   *  switch reasons over. */
+  private disciplineEditedSinceVerify: string[] = [];
+  /** A shell tool executed since the last verification attempt. */
+  private disciplineShellRanSinceVerify = false;
+  /** Adaptive effort only applies when the user left reasoning on auto. */
+  private disciplineEffortAuto = false;
+  private lastDisciplineEffort = '';
   private skillNudged = false;
   /** Master prompt compiler: runs once per task (guarded) so the compiled
    *  blueprint is injected exactly once at the active reasoning tier. */
@@ -778,7 +1056,24 @@ export class Agent {
    *  suppressed-check debris the model added before we accept "done". */
   private hygieneNudges = 0;
   private lastVerifyPassed = false;
+  /** The completion gate's most recent STRUCTURED verdict this run
+   *  (PASS/FAIL/PARTIAL/BLOCKED), stamped by the verify() wrapper. Null
+   *  when the gate never ran. This — not the run's self-reported success —
+   *  is the verdict joined to skill loads at finish (skill lifecycle
+   *  evidence + trajectory attribution). Reset per run(). */
+  private lastVerifyStatus: VerificationStatus | null = null;
   private subagentDepth: number;
+  /** Hard tool allowlist for role-scoped (preset) agents — see AgentOptions. */
+  private toolAllowlist?: Set<string>;
+  /** Background child runs owned by this agent (spawn_agent runtime):
+   *  live map + FIFO queue under the concurrency cap. */
+  private childRuns = new Map<string, LiveChildRun>();
+  private childQueue: LiveChildRun[] = [];
+  private childStoreInstance?: ChildRunStore;
+  private worktreeManagerInstance?: WorktreeManager;
+  /** One-line completion notices for finished background children, drained
+   *  into context at the next iteration top (like the steer queue). */
+  private childInbox: string[] = [];
   private mcpClose?: () => void;
   /** Harness-v2 Phase 1: per-run iteration lifecycle tracker (created in run()). */
   private sm?: LoopStateMachine;
@@ -799,7 +1094,12 @@ export class Agent {
     this.promptUser = opts.promptUser;
     this.approvalHandler = opts.approvalHandler;
     this.permPolicy = opts.permPolicy;
+    this.unattendedAllow = opts.unattendedAllow ?? process.env.MOCHI_UNATTENDED_ALLOW === '1';
     this.approvedAlways = opts.approvedAlways ?? new Set<string>();
+    this.journalOverride = opts.journal;
+    this.journalRunId = opts.runId;
+    this.journalDisabled = opts.journalEnabled === false;
+    this.journalModelTurnsDisabled = opts.journalModelTurns === false || process.env.MOCHI_JOURNAL_MODEL_TURNS === '0';
     this.verifyBaseline = opts.verifyBaseline;
     // A shared run-wide cache is preferred so parallel agents that read the same
     // source file don't each re-read it from disk; the cache is keyed on
@@ -814,6 +1114,16 @@ export class Agent {
         if (!this.tools.has(name)) this.tools.set(name, tool);
       }
     }
+    if (opts.toolAllowlist) {
+      // Hard scope cap (multi-agent presets): prune the live tool map to the
+      // allowlist. executeTool ALSO checks ctx.toolAllowlist on every call,
+      // so neither a hallucinated tool name nor load_tools can widen this
+      // agent beyond its preset mid-run.
+      this.toolAllowlist = new Set(opts.toolAllowlist);
+      for (const name of [...this.tools.keys()]) {
+        if (!this.toolAllowlist.has(name)) this.tools.delete(name);
+      }
+    }
     this.planMode = opts.planMode ?? this.config.planMode ?? false;
     this.subagentDepth = opts.subagentDepth ?? 0;
     this.learning = new LearningStore(this.workspace.dir);
@@ -823,6 +1133,101 @@ export class Agent {
     // on first run() so the constructor stays sync; see loadMcpInRun.
     this.provider = createProvider(this.config.model, opts.modelProfile ?? this.profile.defaultModel ?? 'coding');
     this.events.emit({ type: 'agent:spawned', id: this.id, role: opts.role as import('../types.js').AgentRole, taskId: '' });
+  }
+
+  /** Durable journal stats for the current/last run (C6; tests + hosts). */
+  getJournalStats(): import('./run-journal.js').JournalStats | undefined {
+    return this.journal?.stats();
+  }
+
+  /** Fingerprint of the model request the main loop is about to send.
+   *  The temperature literal MUST match the streamChat call in
+   *  gatherStream (0.2) — it is part of the request as sent. Provider
+   *  identity is config.model.provider/model, the same canonical
+   *  identity the budget, usage events and traces use (RawProvider
+   *  exposes no finer identity). */
+  private modelTurnFingerprintFor(messages: import('../types.js').ChatMessage[], reasoningEffort: string | undefined): string {
+    return modelTurnFingerprint({
+      provider: this.config.model.provider ?? '',
+      model: this.config.model.model,
+      messages,
+      tools: this.toolDefs,
+      temperature: 0.2,
+      reasoningEffort: reasoningEffort ?? null,
+    });
+  }
+
+  /** Model-turn replay: if a previous session of this run journaled a
+   *  response to EXACTLY this request (same fingerprint, next in the
+   *  journaled sequence), return that response instead of calling the
+   *  provider. Any mismatch/rail ends replay inside the journal and this
+   *  returns undefined — the caller then calls the provider live.
+   *  Never throws: a journal fault must not block the real call. */
+  private journalClaimModelTurn(
+    messages: import('../types.js').ChatMessage[],
+    reasoningEffort: string | undefined,
+  ): { response: import('../types.js').ModelResponse; seq: number } | undefined {
+    if (!this.journal || this.journalModelTurnsDisabled) return undefined;
+    try {
+      const claimed = this.journal.claimModelTurn(this.modelTurnFingerprintFor(messages, reasoningEffort));
+      if (!claimed) return undefined;
+      const p = claimed.payload as Partial<import('../types.js').ModelResponse>;
+      if (typeof p !== 'object' || p === null || (p.content !== undefined && typeof p.content !== 'string')
+        || (p.toolCalls !== undefined && !Array.isArray(p.toolCalls))) {
+        // Parsed, but not a response shape this loop can consume.
+        this.journal.endModelReplay();
+        return undefined;
+      }
+      return {
+        seq: claimed.entry.seq,
+        response: {
+          content: p.content,
+          ...(p.reasoningContent !== undefined ? { reasoningContent: p.reasoningContent } : {}),
+          toolCalls: p.toolCalls,
+          finishReason: p.finishReason,
+          usage: p.usage,
+          ...(p.looped ? { looped: true } : {}),
+        },
+      };
+    } catch { return undefined; }
+  }
+
+  /** Journal one LIVE-obtained model turn (response payload + usage +
+   *  the fingerprint of the request that produced it), so a later
+   *  resume can replay it. Never call this for a replayed turn: a replay
+   *  re-recorded would duplicate the chain entry and shift every later
+   *  position, breaking multi-resume fidelity. Never throws. */
+  private journalRecordModelTurn(
+    messages: import('../types.js').ChatMessage[],
+    reasoningEffort: string | undefined,
+    response: import('../types.js').ModelResponse,
+    durationMs: number,
+  ): void {
+    if (!this.journal || this.journalModelTurnsDisabled) return;
+    try {
+      const payload = JSON.stringify({
+        content: response.content,
+        ...(response.reasoningContent !== undefined ? { reasoningContent: response.reasoningContent } : {}),
+        toolCalls: response.toolCalls,
+        finishReason: response.finishReason,
+        usage: response.usage,
+        looped: response.looped === true,
+      });
+      this.journal.recordModelTurn({
+        stepId: `turn-${this.journalRecorded + 1}`,
+        output: payload,
+        fingerprint: this.modelTurnFingerprintFor(messages, reasoningEffort),
+        durationMs: Math.round(durationMs),
+        usage: response.usage
+          ? {
+              inputTokens: response.usage.promptTokens,
+              outputTokens: response.usage.completionTokens,
+              ...(response.usage.costUsd !== undefined ? { costUsd: response.usage.costUsd } : {}),
+            }
+          : undefined,
+      });
+      this.journalRecorded++;
+    } catch { /* journaling must never affect the run */ }
   }
 
   /**
@@ -840,6 +1245,39 @@ export class Agent {
   private clearReadStub(): void {
     delete (this.readCache as { __lastRead?: string }).__lastRead;
     this.readTargetCounts.clear();
+  }
+
+  /** P1.3 measured exposure: fit this.tools to the total schema budget —
+   *  always-on LEAN core + tools the task text names/implicates (never
+   *  dropped) + this workspace's historically-used tools (this task kind
+   *  first), ranked from the usage ledger (tools/tool-exposure.ts). Used
+   *  for complex tasks (which previously kept the full ~45K-char schema)
+   *  and as a cap ('tier-cap') when the keyword tiers defer nothing and
+   *  the advertised set is still over budget. Deferred tools stay one
+   *  load_tools call away. Emits the [tools] decision log — the run's
+   *  record of which policy applied and the exposed schema size. */
+  private applyMeasuredExposurePolicy(task: Task, taskKind: string, reason: 'complex' | 'tier-cap'): void {
+    const budgetChars = toolSchemaBudgetChars(this.config);
+    if (reason === 'tier-cap' && toolsSchemaChars(this.toolDefs) <= budgetChars) return;
+    const taskText = `${task.title} ${task.description ?? ''}`;
+    const forced = new Set<string>([...toolsNamedInText(taskText), ...toolsImplicatedBySignals(taskText)]);
+    const sel = applyMeasuredExposure(this.tools, {
+      builtinNames: new Set([...ALL_TOOLS_MAP.keys(), 'load_tools']),
+      coreNames: LEAN_TOOL_NAMES,
+      forcedNames: forced,
+      ledger: loadToolUsageLedger(this.workspace),
+      taskKind,
+      budgetChars,
+    });
+    if (sel.trimmed > 0) {
+      this.toolDefs = [...this.tools.values()].map((t) => t.def);
+    }
+    this.events.emit({
+      type: 'agent:log',
+      agentId: this.id,
+      message: `[tools] measured exposure (${reason}) for ${taskKind} task: ${this.toolDefs.length} tools advertised, ${sel.schemaChars}/${budgetChars} schema chars (forced ${sel.forcedNames.length} core/named/signal, usage-filled ${sel.filledNames.length}, ${sel.trimmed} deferred to load_tools)`,
+    });
+    if (reason === 'complex') this.injectDeferredToolsNote('measured');
   }
 
   /** Anti-manic guard: the todo ledger is per-WORKSPACE and persists across
@@ -882,7 +1320,7 @@ export class Agent {
    *  and the one-call restore path so a struggling model can recover its own
    *  arsenal instead of approximating with shell. No-op when nothing was
    *  deferred or when escalation already restored everything. */
-  private injectDeferredToolsNote(tier: 'lean' | 'read' | 'chat'): void {
+  private injectDeferredToolsNote(tier: 'lean' | 'read' | 'chat' | 'measured'): void {
     if (this.deferredToolsNoteInjected || this.subagentDepth > 0) return;
     const advertised = new Set(this.toolDefs.map((d) => d.name));
     const deferred: string[] = [];
@@ -897,7 +1335,9 @@ export class Agent {
       ? 'This is a conversational turn, so only conversational tools are listed.'
       : tier === 'read'
         ? 'This is a research/reading task, so only read-only tools are listed.'
-        : 'This is a focused coding task, so a lean core toolset is listed.';
+        : tier === 'measured'
+          ? 'This is a complex task, so a measured toolset is listed: an always-on core, the tools this task implicates, and the tools this workspace actually uses, fitted to a total schema budget. The rest are deferred, not disabled.'
+          : 'This is a focused coding task, so a lean core toolset is listed.';
     this.context.addMessage({
       role: 'system',
       content: `TOOLSET NOTE: ${shape} Currently advertised: ${[...advertised].join(', ')}.`
@@ -957,11 +1397,16 @@ export class Agent {
     });
     if (!should) return;
     this.complexityEscalated = true;
+    // Discipline (adaptive effort): mid-run complexity escalation is a
+    // hard signal — the rest of the run thinks one rung deeper.
+    this.discipline?.noteHardSignal();
     this.taskComplexity = 'complex';
     this.context.setTaskComplexity('complex');
     // Restore every registered tool the lean/read/chat tiers deferred, so deeper
     // analysis (find_definitions/analyze_code/blast_radius/...) is available.
+    // A role-scoped agent (toolAllowlist) is NEVER widened by escalation.
     for (const [name, tool] of ALL_TOOLS_MAP) {
+      if (this.toolAllowlist && !this.toolAllowlist.has(name)) continue;
       if (!this.tools.has(name)) this.tools.set(name, tool);
     }
     this.toolDefs = [...this.tools.values()].map((t) => t.def);
@@ -1029,15 +1474,29 @@ export class Agent {
   async run(task: Task): Promise<AgentResult> {
     this.startTime = performance.now();
     this.activeTask = task;
+    // B21: the steer-acceptance window opens with the run; delivered-steer
+    // provenance is per-run evidence (a reused instance must not credit a
+    // previous run's steers to this one).
+    this.runActive = true;
+    this.deliveredParentSteers = [];
     // B2: each run() gets exactly one finish(). A previous run's guard entry
     // must not swallow this run's teardown (auto-resume reuses the instance).
     this.finishPromise = null;
+    // The gate verdict is per-run evidence: a reused instance must not
+    // attribute a previous run's PASS to this run's skill loads.
+    this.lastVerifyStatus = null;
     // Mark the bus position so the finish-time summary covers THIS run only.
     const hist = this.events.snapshot();
     this.runStartMarker = hist.length > 0 ? hist[hist.length - 1] : undefined;
     this.consecutiveVerifyFailures = 0;
     this.escalatedThisTask = false;
     this.complexityEscalated = false;
+    // Reproduce-first gate state is per-run: a reused instance (auto-resume)
+    // must not inherit "already reproduced / already vetoed" from a prior run.
+    this.reproAttempted = false;
+    this.reproVetoFired = false;
+    this.reproGateBypassed = false;
+    this.reproFileChangedAtRunStart = this.fileChanged;
     // Complexity must be computed here — BEFORE resolveReasoning (line ~799)
     // and the tool-advertising gate — so both hard-task levers (max reasoning
     // + full toolset) see a `complex` task. Conservative: only strong
@@ -1111,6 +1570,12 @@ export class Agent {
     // loadOrCreateAutopsy) so failure trajectories are durable and inspectable.
     this.autopsy = loadOrCreateAutopsy(this.workspace.dir, task.id, this.id, task.title);
     this.contentOnly = classifyContentOnly({ title: task.title, description: task.description, acceptanceCriteria: task.acceptanceCriteria, verificationCommand: task.verificationCommand });
+    this.greenfieldTask = isGreenfieldTask(task.title, task.description ?? '', task.fileScope, (p) => { try { return existsSync(resolve(this.cwd, p)); } catch { return false; } });
+    for (const token of [...(task.fileScope ?? []), ...this.taskFileTokens(task)]) {
+      if (!this.namedPathsExistedAtStart.has(token)) {
+        try { this.namedPathsExistedAtStart.set(token, existsSync(resolve(this.cwd, token))); } catch { this.namedPathsExistedAtStart.set(token, false); }
+      }
+    }
     // Warm start on resume: if a previous session already attempted this task
     // and failed, surface those attempts to the model so it does NOT retry the
     // same dead-end hypotheses. The autopsy is loaded (not created) but was
@@ -1138,16 +1603,37 @@ export class Agent {
         });
       }
     } catch { /* plan-cache warm-start must never affect task start */ }
-    // MCH-49: repo-map — surface the structurally most important files
-    // (PageRank over the codegraph symbol graph) so the model plans around
-    // hub files instead of discovering them by trial and error.
+    // MCH-49 + P1.2: repo-map — surface the files most relevant to THIS task
+    // (task-conditioned: PageRank + lexical relevance over the codegraph
+    // symbol graph, with key symbol signatures; deterministic, no model
+    // call, falls back to the global PageRank map when the task carries no
+    // usable terms) so the model starts from the right files instead of
+    // discovering them by sequential grep/read.
     try {
-      const { repoMapText } = await import('../repo/repo-map.js');
-      const mapText = repoMapText(this.workspace.dir);
+      const { taskRepoMapText } = await import('../repo/repo-map.js');
+      const mapText = taskRepoMapText(this.workspace.dir, {
+        task: `${task.title}\n${task.description ?? ''}`,
+        kind: this.taskKind ?? classifyTaskKind(task),
+      });
       if (mapText) {
         this.context.addMessage({ role: 'system', content: mapText });
       }
     } catch { /* repo-map must never affect task start */ }
+    // Wave J: semantic retrieval — hybrid vector+lexical hits from the
+    // persistent .mochi/index, re-ranked by the same task conditioning as
+    // the repo map above. AUGMENTS the map packet (concept matches the
+    // lexical map cannot see), under its own hard char budget; best-effort
+    // and time-boxed exactly like its neighbours. On a cold index it kicks
+    // off a background build and contributes nothing this run.
+    try {
+      const { semanticContextText } = await import('../repo/semantic-index.js');
+      const semText = await semanticContextText(this.workspace.dir, `${task.title}\n${task.description ?? ''}`, {
+        config: this.config,
+      });
+      if (semText) {
+        this.context.addMessage({ role: 'system', content: semText });
+      }
+    } catch { /* semantic retrieval must never affect task start */ }
     // MCH-50: prefetch — fused structural+temporal+runtime prediction of the
     // files this task will likely read next.
     try {
@@ -1173,8 +1659,10 @@ export class Agent {
     } catch { /* prefetch must never affect task start */ }
     // MCH-52: surface mined tool-route patterns from past successful runs.
     try {
-      const { loadToolSeqs, toolPatternText } = await import('../core/tool-sequence.js');
-      const patText = toolPatternText(loadToolSeqs(this.workspace.dir));
+      const { loadToolSeqStore, toolPatternText } = await import('../core/tool-sequence.js');
+      // D9: the v2 store carries per-sequence outcomes, so the pattern hint
+      // can filter to successful runs once outcome evidence exists.
+      const patText = toolPatternText(loadToolSeqStore(this.workspace.dir));
       if (patText) this.context.addMessage({ role: 'system', content: patText });
     } catch { /* tool-seq injection must never affect task start */ }
     if (this.planMode) {
@@ -1184,13 +1672,52 @@ export class Agent {
       });
     }
 
+    // Durable run journal (C6): keyed by the task's stable identity, so a
+    // new process resuming the same task loads the prior session's
+    // completed steps as claimable — runMoolCall replays them instead of
+    // re-executing/re-billing. Journal failures never affect the run.
+    // Opened BEFORE the checkpoint injection below: when the journal
+    // holds claimable model turns, exact model-turn replay supersedes
+    // both prose injections (checkpoint + journal note) — either message
+    // would alter the first request's fingerprint and silently disable
+    // the replay, and the replayed transcript carries strictly more of
+    // the run's real history than the prose summary does.
+    this.modelReplayArmed = false;
+    this.journalModelReplayed = 0;
+    try {
+      if (this.journalDisabled) {
+        this.journal = undefined;
+      } else {
+        this.journal = this.journalOverride
+          ?? RunJournal.open({ baseDir: this.workspace.dir, runId: this.journalRunId ?? task.id, taskId: task.id });
+        this.journalReplayed = 0;
+        this.journalRecorded = 0;
+        const priorSteps = this.journal.completedSteps()
+          .filter((s) => s.sessionId !== this.journal!.sessionId);
+        this.journal.beginRun({ taskId: task.id, title: task.title });
+        this.modelReplayArmed = !this.journalModelTurnsDisabled && this.journal.hasClaimableModelTurns();
+        if (priorSteps.length > 0) {
+          const names = priorSteps.slice(0, 12).map((s) => s.toolName).join(', ');
+          this.events.emit({ type: 'agent:log', agentId: this.id, message: `[journal] resuming run ${task.id}: ${priorSteps.length} completed step(s) journaled — matching calls will replay, not re-execute${this.modelReplayArmed ? '; model-turn replay armed (recorded responses will be served for exact-matching requests)' : ''}` });
+          if (!this.modelReplayArmed) {
+            this.context.addMessage({
+              role: 'system',
+              content: `RUN JOURNAL RESUME: a previous session of this task completed ${priorSteps.length} step(s) (${names}${priorSteps.length > 12 ? ', …' : ''}). Those steps are journaled durably: calling the same tool with the same arguments replays the recorded result WITHOUT re-executing — do not redo their side effects (files already written, commands already run). Continue from the first step that has no journal entry.`,
+            });
+          }
+        }
+      }
+    } catch { this.journal = undefined; }
+
     // Phase 7 (VNext): resume with the last durable checkpoint if one exists
     // for THIS specific goal (e.g. on resume or post-compaction restart).
     // Fresh sessions and unrelated goals do not load old checkpoints.
+    // Skipped when model-turn replay is armed (see the journal block):
+    // the checkpoint prose would poison the first replayed request.
     try {
       const activeGoal = this.context.state.goal;
       const durable = this.workspace.loadCheckpoint(activeGoal);
-      if (durable && durable.checkpoint.trim() && durable.goalId && activeGoal && durable.goalId === activeGoal) {
+      if (!this.modelReplayArmed && durable && durable.checkpoint.trim() && durable.goalId && activeGoal && durable.goalId === activeGoal) {
         this.context.addMessage({
           role: 'system',
           content: `RESUMED SESSION CHECKPOINT (from active goal, saved ${new Date(durable.savedAt).toISOString()}):
@@ -1202,15 +1729,62 @@ Continue from 'Next:', do not redo completed progress.`,
 
     let taskKind = this.taskKind = classifyTaskKind(task);
     this.task = task;
+    // Reasoning discipline: create the per-run tracker and pin the task
+    // contract. Chat runs are exempt (their own turn caps govern them);
+    // every mechanism consults the tracker through the resolved flags, and
+    // MOCHI_DISCIPLINE=0 / config.discipline.enabled=false restores the
+    // legacy loop wholesale. Per-run state resets here because instances
+    // are reused across runs (auto-resume).
+    this.disciplineFlags = resolveDisciplineFlags(this.config.discipline);
+    this.discipline = undefined;
+    this.disciplineSnap = { read: 0, edited: 0, verifyPass: 0 };
+    this.disciplineForceArmed = false;
+    this.disciplineTurnMutating = false;
+    this.disciplineEditedSinceVerify = [];
+    this.disciplineShellRanSinceVerify = false;
+    this.lastDisciplineEffort = '';
+    {
+      const anyDiscipline = Object.values(this.disciplineFlags).some(Boolean);
+      const rawReasoning = (this.config.reasoning || process.env.MOCHI_REASONING || 'auto').trim().toLowerCase();
+      this.disciplineEffortAuto = rawReasoning === 'auto';
+      if (anyDiscipline && taskKind !== 'chat') {
+        this.discipline = new DisciplineTracker(this.disciplineFlags, {
+          goal: task.title,
+          checklist: [
+            ...(task.acceptanceCriteria ?? []),
+            ...(KIND_CHECKLISTS[taskKind] ?? KIND_CHECKLISTS.general),
+          ],
+          scopeFiles: task.fileScope ?? [],
+        });
+        if (this.disciplineFlags.replanGate || this.disciplineFlags.progressForcing || this.disciplineFlags.driftSnapback) {
+          this.context.addMessage({ role: 'system', content: this.discipline.contractMessage() });
+        }
+      }
+    }
+    // P1.3 measured exposure: MOCHI_TOOLS=full / config.toolExposure='full'
+    // is the escape hatch — legacy behavior, every built tool advertised,
+    // no tiering or budgeting at all. Otherwise 'complex' tasks no longer
+    // keep the full ~45K-char schema by default (see the branch below).
+    const exposureFull = toolExposureMode(this.config) === 'full';
+    if (exposureFull) {
+      this.events.emit({ type: 'agent:log', agentId: this.id, message: `[tools] full exposure (escape hatch): advertising all ${this.tools.size} tools, ${toolsSchemaChars(this.toolDefs)} schema chars, no measured budgeting` });
+    }
     // Complexity gate: taskComplexity was already computed at the top of run().
-    // When 'complex', keep the FULL toolset (deep-analysis tools like
-    // find_definitions/analyze_code/type_hierarchy/blast_radius are otherwise
-    // deferred by the lean tier) so hard tasks get Claude Code / Codex-class
-    // capability. Otherwise fall through to the lean/read/heavy tiers, which
-    // preserve the ~2s / ~2.5K-token fast path for simple/standard tasks.
+    // When 'complex', apply measured exposure instead of the old full
+    // toolset: deep-analysis tools (find_definitions/analyze_code/
+    // type_hierarchy/blast_radius) stay advertised when the task implicates
+    // them or this workspace's ledger says they get used; the rest are
+    // deferred to load_tools, not disabled. Otherwise fall through to the
+    // lean/read/heavy tiers, which preserve the ~2s / ~2.5K-token fast path
+    // for simple/standard tasks (with the measured policy as their cap
+    // when they defer nothing and the set is still over budget).
     if (this.taskComplexity === 'complex') {
-      this.events.emit({ type: 'agent:log', agentId: this.id, message: `[complexity] full toolset for ${taskKind} task (score ${this.tasksScoreMeta.score ?? 0}: ${(this.tasksScoreMeta.reasons ?? []).join('; ')})` });
-    } else {
+      if (exposureFull) {
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: `[complexity] full toolset for ${taskKind} task (score ${this.tasksScoreMeta.score ?? 0}: ${(this.tasksScoreMeta.reasons ?? []).join('; ')})` });
+      } else {
+        this.applyMeasuredExposurePolicy(task, taskKind, 'complex');
+      }
+    } else if (!exposureFull) {
       // MCH-91: task-adaptive tool advertising — focused coding tasks don't need
       // browser/db/PR/SQL schemas burning ~4-5K tokens on EVERY call. Trim heavy
       // tools unless the task text itself signals them (trimHeavyTools is a no-op
@@ -1218,8 +1792,9 @@ Continue from 'Next:', do not redo completed progress.`,
       if (taskKind === 'implement' || taskKind === 'fix' || taskKind === 'refactor' || taskKind === 'test') {
         const taskText = `${task.title} ${task.description ?? ''}`;
         // MCH-110: lean tier first — simple focused coding tasks advertise only
-        // the ~20 core tools (~2.5K tokens) instead of ~56 (~7K). Restores are
-        // identical to mch91: the model calls `load_tools` mid-run.
+        // the ~21 core tools (~2.5K tokens) instead of the full default set
+        // (~69 tools, ~11K tokens). Restores are identical to mch91: the
+        // model calls `load_tools` mid-run.
         const leaned = trimToLeanTier(this.tools, taskText);
         if (leaned > 0) {
           this.toolDefs = [...this.tools.values()].map((t) => t.def);
@@ -1231,11 +1806,15 @@ Continue from 'Next:', do not redo completed progress.`,
           this.events.emit({ type: 'agent:log', agentId: this.id, message: `[mch91] trimmed ${trimmed} heavy tools for ${taskKind} task (load_tools restores them)` });
         }
         }
+        // P1.3 cap: if the keyword tiers left the advertised set over the
+        // schema budget (signal-escape kept everything), fit it by usage.
+        this.applyMeasuredExposurePolicy(task, taskKind, 'tier-cap');
         this.injectDeferredToolsNote('lean');
       } else if (taskKind === 'chat') {
             // MCH-111: chat tasks tell the model "do not call any tools", yet were
-            // still advertised ~62 tool schemas (~5K tokens) on every call — the
-            // single largest avoidable latency cost on a trivial question. Advertise
+            // still advertised nearly the full default schema (~69 tools, ~11K
+            // tokens) on every call — the single largest avoidable latency cost
+            // on a trivial question. Advertise
             // only the read-only essentials (+ load_tools for escape hatch); any
             // other tool stays restorable mid-run exactly like mch91/mch110.
             // ask_question stays advertised: it is how the model asks the user back
@@ -1252,10 +1831,10 @@ Continue from 'Next:', do not redo completed progress.`,
             }
             this.injectDeferredToolsNote('chat');
           } else if (taskKind === 'research' || taskKind === 'document' || taskKind === 'plan' || taskKind === 'unknown') {
-            // READ tier: read-only task shapes advertised the full ~65-tool schema
-            // (~10K tokens/call) despite never legitimately mutating (plan mode
-            // vetoes mutations anyway). Advertise the 16 read-only essentials;
-            // anything else restores mid-run via load_tools.
+            // READ tier: read-only task shapes advertised the full default schema
+            // (~69 tools, ~11K tokens/call) despite never legitimately mutating
+            // (plan mode vetoes mutations anyway). Advertise the 17 read-only
+            // essentials; anything else restores mid-run via load_tools.
             const taskText = `${task.title} ${task.description ?? ''}`;
             const readTrimmed = trimToReadTier(this.tools, taskText);
             if (readTrimmed > 0) {
@@ -1268,9 +1847,32 @@ Continue from 'Next:', do not redo completed progress.`,
               this.events.emit({ type: 'agent:log', agentId: this.id, message: `[mch91] trimmed ${trimmed} heavy tools for ${taskKind} task (load_tools restores them)` });
             }
             }
+            // P1.3 cap: same over-budget backstop as the coding branch.
+            this.applyMeasuredExposurePolicy(task, taskKind, 'tier-cap');
             this.injectDeferredToolsNote('read');
       }
     } // end complexity-gate else
+    // Tool Forge (Wave O): probationary forged tools are advertised only
+    // when the exposure signals predict relevance for THIS task (task text
+    // naming the tool / its source sequence, domain signals, or the usage
+    // ledger's history for this task kind). Earned (active) forged tools
+    // always stay. Runs after every tier above so no tier can re-advertise
+    // what the prediction deferred; executeTool remains reachable via the
+    // registry fallback exactly like other deferred tools.
+    {
+      const forgeRemoved = trimForgedProbationTools(
+        this.tools,
+        this.workspace.dir || this.cwd,
+        `${task.title} ${task.description ?? ''}`,
+        loadToolUsageLedger(this.workspace),
+        taskKind,
+      );
+      if (forgeRemoved.length) {
+        const removed = new Set(forgeRemoved);
+        this.toolDefs = this.toolDefs.filter((d) => !removed.has(d.name));
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: `[forge] probationary forged tools not relevant to this task, deferred: ${forgeRemoved.join(', ')}` });
+      }
+    }
     const repo = detectRepo(this.cwd);
     // Harness-v2 perf (FREEZE FIX 2026-08-22): warm codegraph grammars and the
     // Chameleon scaffold strictly in the BACKGROUND - fire-and-forget, never
@@ -1442,14 +2044,16 @@ Continue from 'Next:', do not redo completed progress.`,
       }
     }
 
-    // Speculative reasoning preflight (opt-in via model.speculative.preflight).
-    // For hard non-chat tasks, run the existing SpeculativeEngine once and
-    // inject its chosen approach + pitfall notes as a system hint that biases
-    // the main reasoning path — DeepSeek/Cline-style "think a cheap model ahead,
-    // then commit the fast model to a better plan" before it fires tools.
+    // Speculative reasoning preflight (default ON for complex tasks at
+    // medium+ reasoning; explicit config / env can force or kill it — see
+    // specPreflightEnabled). For hard non-chat tasks, run the existing
+    // SpeculativeEngine once and inject its chosen approach + pitfall notes
+    // as a system hint that biases the main reasoning path —
+    // DeepSeek/Cline-style "think a cheap model ahead, then commit the fast
+    // model to a better plan" before it fires tools.
     // Bounded: runs at most once (guarded by speculativePreflighted), only if
     // budget allows, and swallows any failure so it never blocks the task.
-    if (!this.planMode && taskKind !== 'chat' && this.specPreflightEnabled() && !this.specPreflighted) {
+    if (!this.planMode && taskKind !== 'chat' && this.specPreflightEnabled(task) && !this.specPreflighted) {
       // MCH-43: predictive file pre-fetch — warm the read cache with files the
       // co-change graph predicts we'll need next, before the model asks. Cheap
       // (one git log) and best-effort: any failure is invisible to the task.
@@ -1534,6 +2138,9 @@ Continue from 'Next:', do not redo completed progress.`,
       void this.prefetchForNextTurn();
       // MCH-74: mid-run steer — inject any queued user guidance before the turn.
       this.drainSteerQueue();
+      // Multi-agent: surface background-child completions the same way, so a
+      // parent learns its research/review child landed without polling.
+      this.drainChildInbox();
       // Quality slice: surface the agent's struggle state (consecutive tool
       // errors, empty-response retries, recent known errors) to the model on
       // every turn. Without this, a model in trouble starts each turn fresh —
@@ -1791,7 +2398,38 @@ Continue from 'Next:', do not redo completed progress.`,
         let tailCheckedAt = 0;
         let runawayFlagged = false;
 
-        const activeReasoning = this.resolveReasoning(task);
+        let activeReasoning = this.resolveReasoning(task);
+        // Discipline (adaptive effort): the per-kind base tier is adjusted
+        // by the run's evidence state — raised by hard signals (a new
+        // failure class, complexity escalation), decayed by clean progress.
+        // Only when the user left reasoning on auto; an explicit tier is
+        // the user's choice and is never overridden.
+        if (this.discipline && this.disciplineFlags.adaptiveEffort && this.disciplineEffortAuto) {
+          const adjusted = this.discipline.adjustEffort(activeReasoning);
+          if (adjusted !== activeReasoning && adjusted !== this.lastDisciplineEffort) {
+            this.lastDisciplineEffort = adjusted;
+            this.events.emit({ type: 'agent:log', agentId: this.id, message: `[discipline] effort ${activeReasoning} -> ${adjusted} (adaptive offset ${this.discipline.effortOffset})` });
+          }
+          activeReasoning = adjusted;
+        }
+        // Model-turn replay (run journal): if a previous session of this
+        // run already obtained a response to EXACTLY this request (same
+        // fingerprint — same messages, tools, model, params), serve the
+        // recorded response instead of calling the provider again. The
+        // recorded usage flows through the normal accounting below, so
+        // the turn is billed exactly once across both sessions. A
+        // mismatch ends replay inside the journal (claimModelTurn) and
+        // this falls through to the live stream. The replayed prose is
+        // delivered as a single chunk, as if freshly streamed.
+        const replayedTurn = this.journalClaimModelTurn(messages, activeReasoning);
+        if (replayedTurn) {
+          this.journalModelReplayed++;
+          this.events.emit({ type: 'agent:log', agentId: this.id, message: `[journal] replayed model turn (journal seq ${replayedTurn.seq}) — provider not called, recorded response served` });
+          if (replayedTurn.response.content) {
+            this.events.emit({ type: 'message:chunk', content: replayedTurn.response.content, agentId: this.id });
+          }
+          return replayedTurn.response;
+        }
         sm.enter('stream-guard');
         // MCH-39 (strength/UX): headless runs look FROZEN during a long silent
         // model turn (kimi thinks 60-90s before the first token). A heartbeat
@@ -2051,13 +2689,20 @@ Continue from 'Next:', do not redo completed progress.`,
             content = thinkText;
           }
         }
-        return {
+        const assembled: import('../types.js').ModelResponse = {
           content,
           toolCalls: tool_calls.length ? tool_calls : undefined,
           finishReason: chunks[chunks.length - 1]?.finishReason,
           usage: chunks[chunks.length - 1]?.usage,
           looped,
         };
+        // Journal the completed LIVE turn (response payload + usage +
+        // request fingerprint) so a resume can replay it instead of
+        // re-calling/re-billing the provider. Only live responses reach
+        // this line — the replay path returns above — so a replayed
+        // turn is never re-recorded.
+        this.journalRecordModelTurn(messages, activeReasoning, assembled, Date.now() - turnStartedAt);
+        return assembled;
       };
 
       // Hard per-response stall guard: the stream guards above only fire when
@@ -2400,21 +3045,30 @@ Continue from 'Next:', do not redo completed progress.`,
         // ratio() hit 0 → phase 'exhausted' → canExecuteTool() false → every
         // tool call vetoed (the "token budget exhausted, cannot make edits"
         // failure class). Output tokens are the resource that actually scales
-        // with agent work. Cost is NOT estimated locally at all: it is the
-        // provider's own billing figure when the usage object carries one
-        // (OpenRouter-style usage.cost), else 0 and labeled "not reported".
+        // with agent work. Cost: the provider's own billing figure wins when
+        // nonzero (OpenRouter-style usage.cost); when it reports $0/nothing,
+        // BudgetEngine falls back to the offline price table (pricing.ts)
+        // and ledgers that portion as ESTIMATED (snapshot.costSource), never
+        // as provider-reported.
         const providerCost = u.costUsd ?? 0;
-        this.budget?.recordTokens(
-          u.completionTokens ?? u.totalTokens,
-          this.config.model.model,
-          this.config.model.provider,
-          providerCost,
-        );
+        const costBefore = this.budget?.snapshot(this.config.model.model).usedCostUsd ?? 0;
+        this.budget?.recordUsage(u, this.config.model.model, this.config.model.provider);
+        const costAfter = this.budget?.snapshot(this.config.model.model).usedCostUsd ?? providerCost;
         // Phase 4 (VNext): feed REAL provider usage into the context engine so
         // the compaction floor triggers on actuals instead of the chars/3.8 guess.
         this.context.recordReportedUsage(u.promptTokens);
-        // Surface REAL provider usage to the TUI: input, output, cache reads, and cost in USD.
-        this.costUsd += providerCost;
+        // Surface usage to the TUI: input, output, cache reads, and cost in USD.
+        // costUsd here is THIS CALL's effective cost (provider-reported, or
+        // the budget's price-table estimate when the provider reported $0) —
+        // the per-call delta of the budget ledger, NOT the cumulative total.
+        // Every trace consumer (gate scanRunTraces, trace-cost, trajectory
+        // aggregation) SUMS the per-call values to reconstruct the run total;
+        // emitting the cumulative figure made them double-count any run with
+        // more than one model call. Consumers that display a running total
+        // (the TUI status bar) accumulate the deltas themselves. `model`
+        // rides along so traces can price $0 calls offline.
+        const callCostUsd = Math.max(0, costAfter - costBefore);
+        this.costUsd += callCostUsd;
         this.events.emit({
           type: 'usage:updated',
           agentId: this.id,
@@ -2422,7 +3076,8 @@ Continue from 'Next:', do not redo completed progress.`,
           outputTokens: u.completionTokens ?? 0,
           cacheTokens: u.cachedTokens ?? 0,
           totalTokens: u.totalTokens ?? 0,
-          costUsd: this.budget?.snapshot(this.config.model.model).usedCostUsd ?? providerCost,
+          costUsd: callCostUsd,
+          model: this.config.model.model,
         });
       } else {
         // B25: a response with NO usage object must also reach the context
@@ -2550,6 +3205,40 @@ Continue from 'Next:', do not redo completed progress.`,
       if (response.toolCalls?.length) {
         this.sameAnswerStreak = 0;
         this.lastCompletionAnswer = '';
+      }
+
+      // Discipline (progress forcing): feed this turn to the deliberation
+      // detector. A turn that neither mutates nor covers new ground (no
+      // calls, re-reads of already-read files, near-repeated prose) is
+      // deliberation; the streak escalates commit-directive -> forced
+      // decisive finish. The branches below consume disciplineForceArmed:
+      // no-tool responses fall through to completion instead of eating
+      // another nudge-and-continue, and read-only batches execute and then
+      // finish decisively. Mutating/progress turns clear the arm.
+      if (this.discipline && this.disciplineFlags.progressForcing && !this.planMode && (this.taskKind ?? 'chat') !== 'chat') {
+        const counts = this.context.fileOpCounts();
+        const snap: ProgressSnap = { read: counts.read, edited: counts.edited, verifyPass: this.verifyPassTotal };
+        const progress = heartbeatShowsProgress(this.disciplineSnap, snap);
+        this.disciplineSnap = snap;
+        const calls = response.toolCalls ?? [];
+        const mutating = calls.some((c) => MUTATING_TOOLS.has(TOOL_ALIASES[c.function.name] || c.function.name));
+        const workTool = calls.some((c) => ['shell', 'verify', 'bg_task', 'subagent', 'spawn_subagent', 'git'].includes(TOOL_ALIASES[c.function.name] || c.function.name));
+        this.disciplineTurnMutating = mutating;
+        const verdict = this.discipline.noteTurn({
+          hasToolCalls: calls.length > 0,
+          mutating,
+          workTool,
+          progress,
+          content: response.content ?? '',
+        });
+        if (verdict.action === 'commit') {
+          this.context.addMessage({ role: 'system', content: this.discipline.commitDirective(verdict.streak) });
+          this.events.emit({ type: 'agent:log', agentId: this.id, message: `[discipline] commit directive injected (deliberation streak ${verdict.streak})` });
+        } else if (verdict.action === 'force' && !this.disciplineForceArmed) {
+          this.disciplineForceArmed = true;
+          this.events.emit({ type: 'agent:log', agentId: this.id, message: `[discipline] progress forcing: ${verdict.streak} deliberation turns without acting — decisive path forced` });
+        }
+        if (mutating || progress) this.disciplineForceArmed = false;
       }
 
       if (response.toolCalls && response.toolCalls.length > 0) {
@@ -2897,6 +3586,19 @@ Continue from 'Next:', do not redo completed progress.`,
           });
           this.events.emit({ type: 'agent:log', agentId: this.id, message: '[mch113b] express finish hint sent after first file write' });
         }
+        // Discipline (adaptive effort): a mutating batch that landed with
+        // no outstanding consecutive tool errors is clean progress — it
+        // decays the effort offset (cruising runs get cheaper).
+        if (this.discipline && this.disciplineFlags.adaptiveEffort && this.disciplineTurnMutating && this.consecutiveToolErrorsCount === 0) {
+          this.discipline.noteCleanTurn();
+        }
+        // Discipline (progress forcing): the force was armed and this
+        // batch STILL did not mutate — the deliberation ends here, with
+        // the batch's results already in context. Finish decisively with
+        // the current best state instead of looping.
+        if (this.disciplineForceArmed && !this.disciplineTurnMutating) {
+          return this.disciplineForceFinish(task, repo, response.content);
+        }
         continue;
       }
 
@@ -2907,7 +3609,7 @@ Continue from 'Next:', do not redo completed progress.`,
           // The auto-escape directive asks for one plan turn, then resumed
           // editing. Do not let that plan satisfy the run merely because
           // earlier read-only calls incremented the tool counter.
-          if (this.autoPlanEscapePending && !this.planMode && taskKind !== 'chat') {
+          if (this.autoPlanEscapePending && !this.planMode && taskKind !== 'chat' && !this.disciplineForceArmed) {
             this.context.addMessage({
               role: 'system',
               content: 'RECOVERY PLAN RECEIVED — resume execution now. Call a work tool (write/edit/patch/shell/verify) that changes or checks the task outcome. Do not finish with another plan, summary, or preamble until verification has evidence.',
@@ -2948,7 +3650,7 @@ Continue from 'Next:', do not redo completed progress.`,
           // Phase 9 (VNext): prose runaway guard. A no-tool-call answer that
           // huge is usually padding/repetition (the spam class of bug). Ask
           // ONCE for a terse rewrite; accept whatever comes back after that.
-          if (response.content.length > 12_000 && this.proseRunwayNudges < 1) {
+          if (response.content.length > 12_000 && this.proseRunwayNudges < 1 && !this.disciplineForceArmed) {
             this.proseRunwayNudges++;
             this.context.addMessage({
               role: 'system',
@@ -2973,7 +3675,7 @@ Continue from 'Next:', do not redo completed progress.`,
           const executionPreamble = ['implement', 'fix', 'refactor', 'test', 'document'].includes(taskKind)
             && response.content.trim().length < 500
             && /^(?:I(?:['’]ll| will| am going to)|Let me)\s+(?:inspect|check|read|explore|investigate|create|write|implement|fix|update|modify|start|begin)\b/i.test(response.content.trim());
-          if ((expectsFiles || executionPreamble) && !this.planMode && taskKind !== 'chat' && this.fileGuardNudges < 1) {
+          if ((expectsFiles || executionPreamble) && !this.planMode && taskKind !== 'chat' && this.fileGuardNudges < 1 && !this.disciplineForceArmed) {
             this.fileGuardNudges++;
             this.context.addMessage({
               role: 'system',
@@ -3027,6 +3729,19 @@ Continue from 'Next:', do not redo completed progress.`,
               }
               return this.finish(task, true, `${response.content}\n\n${verification.summary}`, 'completed');
             }
+          }
+          // P0.5: this prose finish is inside the !fileChanged branch — the
+          // run changed NO files. For mutation-expecting kinds that is
+          // exactly the no-change auto-pass hole (previously this return
+          // completed such runs as success without verify() ever running).
+          // Route them through verify(), which BLOCKs the zero-change case;
+          // read-only and other kinds keep the direct prose finish.
+          if (PROSE_VERIFY_KINDS.has(taskKind) && !this.planMode && this.changeExpectationGrounded(task, detectRepo(this.cwd))) {
+            const verification = await this.verify(task, detectRepo(this.cwd));
+            if (!verification.passed) {
+              return this.finish(task, false, `Completion claimed in prose but verification failed:\n${verification.summary}`, 'verification_failed');
+            }
+            return this.finish(task, true, `${response.content}\n\n${verification.summary}`, 'completed');
           }
           return this.finish(task, true, response.content, 'completed');
         }
@@ -3083,9 +3798,30 @@ Continue from 'Next:', do not redo completed progress.`,
       sm.enter('verify');
       const verification = await this.verify(task, repo);
       this.verifyCount++;
+      // Discipline: snapshot-and-clear the files mutated since the last
+      // verification attempt — the list is the "approach" fingerprint the
+      // same-failure switch reasons over (same failure + same files =
+      // same approach).
+      const discEditedDelta = this.disciplineEditedSinceVerify;
+      this.disciplineEditedSinceVerify = [];
+      // Shell-driven mutations never appear in filesModified. When a
+      // cycle's ONLY work was shell commands AND the workspace actually
+      // moved, that is an approach — mark it (consistently, every such
+      // cycle) so shell-retry loops escalate like edit loops. A cycle with
+      // tracked edits needs no marker, and a cycle with no shell work at
+      // all (a bare re-claim) must stay approach-less: re-claiming is
+      // owned by the verify-retry budget, not by the strategy switch.
+      if (discEditedDelta.length === 0 && this.disciplineShellRanSinceVerify && this.shellWorkspaceMoved) {
+        discEditedDelta.push('<shell-mutation>');
+      }
+      this.disciplineShellRanSinceVerify = false;
+      let discFail: FailureVerdict | undefined;
       if (verification.passed) {
         this.lastVerifyPassed = true;
         this.recordVerifyPass(verification.summary);
+        // Discipline: a pass resets the adaptive-effort offset (fresh
+        // evidence state) — struggle pricing must not leak past success.
+        this.discipline?.noteVerifyPass();
         this.consecutiveVerifyFailures = 0;
         this.consecutiveToolErrorsCount = 0;
         this.cycleNudges = 0;
@@ -3121,7 +3857,28 @@ Continue from 'Next:', do not redo completed progress.`,
         // test-blind holes (accidental deletions, dead code, wrong constants,
         // pasted hacks) before we declare done. When it finds a real issue we
         // keep looping so the fix gets verified in the next iteration.
-        if (!this.planMode && (await this.shouldSelfReview(task))) {
+        // Discipline (decisive finish): verification passed on EVIDENCE
+        // (a real check command ran green) on the first attempt, the diff
+        // is small, the task is not complex, and the change came through
+        // tracked edits — the run is DONE. The self-review round below is
+        // an anxiety loop in exactly this case (an extra model call that
+        // can talk a verified pass back into more work), so it is skipped.
+        // A vacuous pass (no real command, `true`, greenfield skip) or any
+        // risk signal keeps the review: that is the case it exists for.
+        let skipSelfReview = false;
+        if (this.discipline && this.disciplineFlags.decisiveFinish && !this.planMode) {
+          const evidenced = verifySummaryEvidenced(verification.summary);
+          const filesN = (this.context.state.filesModified ?? []).length;
+          const risky = this.verifyCount > 1
+            || filesN >= 5
+            || this.taskComplexity === 'complex'
+            || (this.shellWorkspaceMoved && !this.fileChanged);
+          if (evidenced && !risky) {
+            skipSelfReview = true;
+            this.events.emit({ type: 'agent:log', agentId: this.id, message: '[discipline] decisive finish: evidenced first-pass verification — self-review skipped' });
+          }
+        }
+        if (!this.planMode && !skipSelfReview && (await this.shouldSelfReview(task))) {
           const review = await this.selfReview(task, repo);
           if (review.issue) {
             this.selfReviewCount++;
@@ -3163,6 +3920,29 @@ Continue from 'Next:', do not redo completed progress.`,
         }
         this.recordFailure(task, verification.summary);
         return this.finish(task, false, 'Verification failed repeatedly:\n' + verification.summary + rollbackNote, 'verification_failed');
+      }
+      // Discipline (same-failure switch + replan evidence + adaptive
+      // effort): register this failure BEFORE the retry machinery runs.
+      // A new failure class is fresh evidence (replan allowed, effort up);
+      // the same class with the same edited-file set is the same approach
+      // being retried — the third such failure forces a strategy switch,
+      // and one more identical retry after that is refused outright.
+      if (this.discipline) {
+        discFail = this.discipline.noteVerifyFailure(verification.summary, discEditedDelta);
+        if (discFail.isNewClass && this.disciplineFlags.adaptiveEffort) {
+          this.discipline.noteHardSignal();
+          this.events.emit({ type: 'agent:log', agentId: this.id, message: `[discipline] hard signal: new failure class "${discFail.failureClass.slice(0, 80)}" (effort offset ${this.discipline.effortOffset})` });
+        }
+        if (discFail.action === 'refuse' && this.disciplineFlags.sameFailureSwitch) {
+          this.events.emit({ type: 'agent:log', agentId: this.id, message: `[discipline] identical retry refused (failure class "${discFail.failureClass.slice(0, 80)}", ${discFail.classCount} failures, same approach)` });
+          if (this.autopsy) {
+            this.autopsy = finalizeAutopsy(this.workspace.dir, this.autopsy, { outcome: 'unresolved' });
+          }
+          this.recordFailure(task, verification.summary);
+          return this.finish(task, false,
+            `Verification kept failing with the same failure (${discFail.classCount} times) and the recent attempts kept editing the same files (${[...new Set(discEditedDelta.map((f) => f.split('/').pop() ?? f))].join(', ') || 'none'}) even after a forced strategy switch. Refusing another identical retry.\n${verification.summary}`,
+            'verification_failed');
+        }
       }
       this.addAttempt(task, 'verify', [`${repo.testCommand || repo.buildCommand || 'verify'}`], 'failure', verification.summary);
       this.context.addKnownError(verification.summary);
@@ -3207,6 +3987,14 @@ Continue from 'Next:', do not redo completed progress.`,
           role: 'system',
           content: `A stronger model (${escalation.modelId}) is taking over after repeated verification failures. Re-read the failing checks with fresh eyes, change strategy — do NOT repeat the last approach verbatim.`,
         });
+      }
+      // Discipline (same-failure switch): the third failure of this class
+      // with the same approach indicts the approach itself. The directive
+      // lands after the diagnosis/escalation messages so it is the last
+      // word the model reads before its next turn.
+      if (discFail?.action === 'switch' && this.discipline && this.disciplineFlags.sameFailureSwitch) {
+        this.context.addMessage({ role: 'system', content: this.discipline.strategySwitchMessage(discFail, discEditedDelta) });
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: `[discipline] strategy switch forced (failure class "${discFail.failureClass.slice(0, 80)}", ${discFail.classCount} failures, same approach)` });
       }
     }
 
@@ -3269,13 +4057,12 @@ Continue from 'Next:', do not redo completed progress.`,
   private async digestOldMessages(floorTokens: number): Promise<void> {
     const msgs = (this.context as unknown as { messages?: ChatMessage[] }).messages;
     if (!msgs || msgs.length < 12) return;
-    // Use approxTokens() so the native BPE tokenizer runs when available;
-    // the previous raw `length / 4` shortcut bypassed the native path.
-    const est = () => msgs.reduce((s, m) => {
-      const c = m.content;
-      const text = typeof c === 'string' ? c : JSON.stringify(c);
-      return s + approxTokens(text);
-    }, 0);
+    // Unified estimator (context.ts estimateMessagesTokens): the digest
+    // trigger must count the conversation exactly the way buildPacket does
+    // (approxTokens over the JSON message form, cached per message). The
+    // previous content-only estimate disagreed with the packet accounting
+    // by the JSON structure overhead and fired the digest late.
+    const est = () => estimateMessagesTokens(msgs);
     if (est() <= floorTokens) return;
     // Digest window: all but the last RECENT_KEEP messages (current working set).
     // Complex tasks keep a much deeper working set (20 vs 8): the digest throws
@@ -3285,10 +4072,11 @@ Continue from 'Next:', do not redo completed progress.`,
     const oldCount = msgs.length - RECENT_KEEP;
     if (oldCount < 4) return;
     const old = msgs.slice(0, oldCount);
-    const transcript = old
-      .map((m) => `${m.role}: ${(m.content ?? '').slice(0, 400)}`)
-      .join('\n')
-      .slice(0, this.taskComplexity === 'complex' ? 24_000 : 12_000);
+    // Salience-ranked input at the SAME total budget: the legacy
+    // head-slice (400 chars/message + head cut) dropped paths, errors and
+    // decisions that sat past the slice; buildDigestInput keeps a floor
+    // render per message and spends the rest on salient lines.
+    const transcript = buildDigestInput(old, this.taskComplexity === 'complex' ? 24_000 : 12_000);
     const sys = 'Summarize this agent-work transcript into a compact digest (max 300 words). Keep: goal, files touched and their state, commands run and outcomes, errors hit and fixes, open threads. Omit prose fluff. Output ONLY the digest.';
     try {
       const fast = this.getProviderForProfile('fast');
@@ -3303,7 +4091,10 @@ Continue from 'Next:', do not redo completed progress.`,
       const digest = (resp.content ?? '').trim();
       if (!digest) return;
       const before = est();
-      msgs.splice(0, oldCount, { role: 'user' as const, content: `[digest of ${oldCount} earlier messages]\n${digest}` } as ChatMessage);
+      // C7 lineage: the digest is a summary — stamp it with the parent
+      // pointers to the messages it replaces so a later compaction of this
+      // digest can chain back to the raw history.
+      msgs.splice(0, oldCount, { role: 'user' as const, content: `[digest of ${oldCount} earlier messages]\n${digest}\n${renderSummaryLineage(buildSummaryLineage(old))}` } as ChatMessage);
       const after = est();
       this.events.emit({ type: 'agent:log', agentId: this.id, message: `[context] MCH-32 digest: ${oldCount} old messages -> ${digest.length} chars (~${Math.max(0, before - after)} tokens saved)` });
     } catch (err) {
@@ -3375,20 +4166,11 @@ Continue from 'Next:', do not redo completed progress.`,
       this.clearReadStub();
       return;
     }
-    // Render the to-be-dropped slice compactly. Tool outputs carry most of the
-    // context mass, so aggressively cap them in the checkpoint input.
-    const render = (m: ChatMessage): string => {
-      if (m.role === 'tool') {
-        const c = typeof m.content === 'string' ? m.content : '';
-        return `[tool ${m.name ?? ''}] ${c.length > 300 ? c.slice(0, 150) + ' … ' + c.slice(-100) : c}`;
-      }
-      if (m.role === 'assistant' && m.tool_calls?.length) {
-        const calls = m.tool_calls.map((t) => `${t.function.name}(${JSON.stringify(t.function.arguments).slice(0, 120)})`).join('; ');
-        return `[assistant called] ${calls}`;
-      }
-      const c = typeof m.content === 'string' ? m.content : '';
-      return `[${m.role}] ${c.slice(0, 400)}`;
-    };
+    // Render the to-be-dropped slice for the checkpoint summarizer with the
+    // salience-ranked digest builder (same 12K budget as the legacy
+    // per-message head-slice renderer it replaces): floor render per
+    // message, salient lines (paths/errors/decisions) kept from deep inside
+    // long tool outputs instead of only the first 150 chars.
     let checkpoint: string | undefined;
     const skipModelCheckpoint = Boolean(
       (process.env.VITEST && !process.env.TEST_COMPACTION_MODEL) ||
@@ -3396,7 +4178,7 @@ Continue from 'Next:', do not redo completed progress.`,
     );
     if (!skipModelCheckpoint) {
       try {
-        const input = dropped.map(render).join('\n').slice(0, 12_000);
+        const input = buildDigestInput(dropped, 12_000);
         const prompt: ChatMessage[] = [
           { role: 'system', content: 'You maintain a session checkpoint for a coding agent. Summarize the conversation excerpt below in at most 150 words using exactly this format:\nGoal: <what the user ultimately wants>\nProgress: <what has been done, files touched>\nDecisions: <key choices made, max 3>\nNext: <immediate next step>\nBe specific (file paths, commands). No preamble.' },
           { role: 'user', content: input },
@@ -3420,7 +4202,10 @@ Continue from 'Next:', do not redo completed progress.`,
     }
     if (!checkpoint) {
       try {
-        const compactCtx = compactSession(this.events.snapshot(), { goal: this.context.state.goal });
+        // C7 lineage: the heuristic checkpoint summarizes the same dropped
+        // slice compact() is about to cut, so it carries that slice's
+        // lineage (same deterministic id compact() will stamp).
+        const compactCtx = compactSession(this.events.snapshot(), { goal: this.context.state.goal, lineage: buildSummaryLineage(dropped) });
         if (!compactCtx.isEmpty) {
           checkpoint = compactToPrompt(compactCtx);
         }
@@ -3574,6 +4359,10 @@ Continue from 'Next:', do not redo completed progress.`,
    *  (the model recreating the file via shell). */
   private trackFileChange(name: string, args: Record<string, unknown>, toolResult?: { output?: string; error?: unknown }) {
     const canonical = TOOL_ALIASES[name] || name;
+    // Discipline: remember shell activity in the current verify window
+    // (the same-failure switch uses it as an approach marker — see the
+    // verify branch's discEditedDelta computation).
+    if (canonical === 'shell') this.disciplineShellRanSinceVerify = true;
     // Carryover bookkeeping: a successful READ is part of the working context
     // for THIS run and later turns — if compaction drops its content, or a
     // follow-up references "the file you read", the digest/re-seed paths need
@@ -3608,6 +4397,24 @@ Continue from 'Next:', do not redo completed progress.`,
       this.readTargetCounts.clear();
       const path = String(args.path ?? '');
       if (path) this.context.addModifiedFile(resolve(this.cwd, path));
+      // Discipline: record the mutation in the current verify window (the
+      // same-failure switch's approach fingerprint — see the verify
+      // branch). Recorded whether or not the tracker exists; the list is
+      // bounded by the verify cadence and snapshot-cleared each attempt.
+      if (path) this.disciplineEditedSinceVerify.push(resolve(this.cwd, path));
+      // Discipline (drift snap-back): an edit that touches nothing the
+      // pinned contract names is drift evidence. DRIFT_AT consecutive
+      // unrelated edits earn ONE concise snap-back restating the contract
+      // (bounded per run; a message, never a veto — the scope fence above
+      // remains the only hard boundary).
+      if (path && this.discipline && this.disciplineFlags.driftSnapback) {
+        const rel = relative(this.cwd, resolve(this.cwd, path));
+        const dv = this.discipline.noteEdit(rel);
+        if (dv.snapback) {
+          this.context.addMessage({ role: 'system', content: this.discipline.snapbackMessage() });
+          this.events.emit({ type: 'agent:log', agentId: this.id, message: `[discipline] drift snap-back (edits strayed from the task contract)` });
+        }
+      }
       // Just-in-time trust nudge (latency): models waste a full round-trip
       // re-reading a file they just wrote to "verify" it — the write result
       // is already authoritative (system directive 6), and in arena timings
@@ -3839,39 +4646,158 @@ Continue from 'Next:', do not redo completed progress.`,
    *  iteration as a user-role note the model must acknowledge. */
   steer(text: string): void {
     const t = text.trim();
-    if (t) this.steerQueue.push(t);
+    if (t) this.steerQueue.push({ text: t, source: 'user' });
+  }
+
+  /** B21: accept a mid-run steer from a PARENT agent (steerChildRun).
+   *  Same queue, same turn-boundary delivery as a user steer — but the
+   *  entry carries its provenance event, and acceptance is refused once
+   *  the run has finished so the parent can fail loudly instead of the
+   *  steer dying silently in a queue nobody drains. A steer is guidance
+   *  only: it never touches this agent's tool allowlist or permission
+   *  posture (both are fixed at construction). */
+  acceptParentSteer(text: string, event: ChildSteerEvent): boolean {
+    const t = text.trim();
+    if (!t || !this.runActive) return false;
+    this.steerQueue.push({ text: t, source: 'parent', event });
+    return true;
   }
 
   /** Drain any mid-run steering into the transcript (called at each
    *  iteration top). Returns true if anything was injected. */
   private drainSteerQueue(): boolean {
     if (this.steerQueue.length === 0) return false;
-    const lines = this.steerQueue.splice(0, this.steerQueue.length);
-    this.context.addMessage({
-      role: 'user',
-      content: `[mid-run steer] The user sent this while the task was running — take it into account NOW and adjust course if needed:\n${lines.join('\n')}`,
-    });
+    const entries = this.steerQueue.splice(0, this.steerQueue.length);
+    const userLines = entries.filter((e) => e.source === 'user').map((e) => e.text);
+    const parentEntries = entries.filter((e) => e.source === 'parent');
+    if (userLines.length) {
+      this.context.addMessage({
+        role: 'user',
+        content: `[mid-run steer] The user sent this while the task was running — take it into account NOW and adjust course if needed:\n${userLines.join('\n')}`,
+      });
+    }
+    if (parentEntries.length) {
+      this.context.addMessage({
+        role: 'user',
+        content: `[subagent steer] Your parent agent sent this while you were running — take it into account NOW and adjust course if needed. A steer changes your DIRECTION only: it does not change your tools, your permissions, or your output contract.\n${parentEntries.map((e) => e.text).join('\n')}`,
+      });
+      // Provenance: stamp delivery onto each shared event object (the
+      // child's run record holds the same objects), log the events for
+      // the trajectory exporter, and remember them for the run-finish
+      // attribution flag.
+      for (const e of parentEntries) {
+        if (!e.event) continue;
+        e.event.deliveredAt = Date.now();
+        this.deliveredParentSteers.push(e.event);
+        this.events.emit({
+          type: 'subagent:steered',
+          agentId: this.id,
+          parentId: e.event.from,
+          from: e.event.from,
+          at: e.event.at,
+          hash: e.event.hash,
+          chars: e.event.chars,
+        });
+      }
+    }
+    const lines = entries.map((e) => e.text);
     this.events.emit({ type: 'agent:log', agentId: this.id, message: `steer: injected ${lines.length} mid-run guidance line(s)` });
+    // Discipline: an interjection is one of the three legitimate
+    // re-plan triggers — record it as fresh evidence for the gate.
+    this.discipline?.noteEvidence(`steer:${lines.join('\n').slice(0, 160)}`);
+    // B24: correction-shaped steers are also captured as STRUCTURED lesson
+    // candidates (redacted, local-only) instead of living only as raw
+    // transcript text. Only USER lines are captured: a parent agent's
+    // steer is agent-generated guidance, not a user correction, and
+    // capturing it would poison the lessons signal. Best-effort: capture
+    // must never break the loop.
+    try {
+      for (const line of userLines) {
+        const rec = captureCorrection(line, { session: this.id });
+        if (rec) promoteCorrectionToLesson(this.workspace.dir, rec);
+      }
+    } catch { /* correction capture is strictly optional */ }
     return true;
   }
 
-  /** Spawn a fresh child agent on a subtask and return a short summary. The
-   *  child shares this run's config, workspace, events, cwd, abort signal,
-   *  budget, and file read cache so delegation is cheap and consistent. */
-  private async spawnSubagent(
-    prompt: string,
-    opts?: { role?: string; timeoutMs?: number; scratchpad?: string; lane?: string; failoverIndex?: number } | string
-  ): Promise<string> {
-    const roleStr = typeof opts === 'string' ? opts : opts?.role;
-    const timeoutMs = typeof opts === 'object' ? opts?.timeoutMs : undefined;
-    const scratchpad = typeof opts === 'object' ? opts?.scratchpad : undefined;
-    const lane = typeof opts === 'object' ? opts?.lane : undefined;
-    const failoverIndex = typeof opts === 'object' ? opts?.failoverIndex : undefined;
+  /** Lazily-built on-disk store for background child-run records. */
+  private childStore(): ChildRunStore {
+    if (!this.childStoreInstance) this.childStoreInstance = new ChildRunStore(this.workspace);
+    return this.childStoreInstance;
+  }
 
+  /** Lazily-built worktree manager rooted at this agent's cwd. Worktrees it
+   *  creates are registered in its live map, so its own reapOrphans treats
+   *  running children as live (never reaped). */
+  private worktreeManager(): WorktreeManager {
+    if (!this.worktreeManagerInstance) {
+      this.worktreeManagerInstance = new WorktreeManager(this.cwd, this.workspace.dir);
+    }
+    return this.worktreeManagerInstance;
+  }
+
+  /** Tool-context spawner bundle: sync delegation + the background
+   *  spawn/collect/cancel runtime + review fleets. Injected only while this
+   *  agent may still delegate (depth < safety.maxSubagentDepth, default 2),
+   *  so children can themselves delegate but the tree stays bounded. */
+  private spawnerContext(): Partial<ToolContext> {
+    if (!canSpawnAtDepth(this.subagentDepth, resolveMaxSubagentDepth(this.config))) return {};
+    return {
+      spawnSubagent: (prompt: string, opts?: { role?: string; preset?: string; isolate?: boolean; timeoutMs?: number; scratchpad?: string }) => this.spawnSubagent(prompt, opts),
+      spawnSubagents: (tasks: Array<{ prompt: string; role?: string; preset?: string; timeoutMs?: number; scratchpad?: string }>) => this.spawnSubagents(tasks),
+      spawnAgentAsync: (spec) => this.spawnAgentAsync(spec),
+      collectAgent: (id: string, opts?: { waitMs?: number; apply?: boolean }) => this.collectChildResult(id, opts),
+      cancelAgent: (id: string) => this.cancelChildRun(id),
+      steerAgent: (id: string, text: string) => this.steerChildRun(id, text),
+      reviewFleet: (spec) => this.runReviewFleet(spec),
+    };
+  }
+
+  /** Surface finished-background-child notices at the iteration top, next
+   *  to the steer queue: the parent learns a research/review child landed
+   *  without having to poll. Returns true if anything was injected. */
+  private drainChildInbox(): boolean {
+    if (this.childInbox.length === 0) return false;
+    const lines = this.childInbox.splice(0, this.childInbox.length);
+    this.context.addMessage({
+      role: 'user',
+      content: `[subagent updates] Background subagents finished:\n${lines.join('\n')}\nCollect the full result of any of them with collect_agent when you reach a natural pause.`,
+    });
+    return true;
+  }
+
+  /** Construct AND START a child agent for `spec`. Shared by the sync
+   *  delegate path and the background runtime: role/preset resolution,
+   *  per-child scoped budget, output contract, worktree isolation for
+   *  mutating presets, posture inheritance. The child's run is fenced —
+   *  `completion` resolves with {result} or {error} and never rejects, so a
+   *  late child failure can never surface as an unhandled rejection in the
+   *  parent. */
+  private async startChildRun(spec: ChildRunSpec): Promise<PreparedChild> {
+    const preset = resolvePreset(spec.preset);
+    const roleStr = spec.role ?? (preset ? String(preset.role) : undefined);
     const childRole = (roleStr ?? 'coder') as import('../types.js').AgentRole;
     const childProfile = new AgentProfileService(this.workspace.dir).get(childRole) ?? this.profile;
-    const childId = `${this.id}-sub-${Math.random().toString(36).slice(2, 8)}`;
-    const childContext = new ContextEngine(this.config, this.cwd);
+    const childId = spec.runId ?? `${this.id}-sub-${Math.random().toString(36).slice(2, 8)}`;
+
+    // Worktree isolation: mutating presets (and explicit isolate=true) get a
+    // private git worktree + branch. Read-only presets share the parent's
+    // cwd — they cannot write, so sharing is safe. If the cwd is not a git
+    // repo (or worktree creation fails) a mutating child falls back to the
+    // shared cwd and the record says so.
+    let childCwd = this.cwd;
+    let worktree: import('../teams/subagent-runtime.js').ChildWorktreeInfo | undefined;
+    const wantsWorktree = spec.isolate === true || preset?.access === 'worktree';
+    if (wantsWorktree && (await isGitRepo(this.cwd))) {
+      try {
+        const info = await this.worktreeManager().create(`agent-${childRole}`);
+        const baseSha = await gitOut(this.cwd, ['rev-parse', 'HEAD']).catch(() => 'HEAD');
+        worktree = { id: info.id, branch: info.branch, path: info.path, baseSha };
+        childCwd = info.path;
+      } catch { /* fall back to shared cwd */ }
+    }
+
+    const childContext = new ContextEngine(this.config, childCwd);
     // MCH-87a: per-child cost cap. Children previously shared the parent's
     // budget engine, so one runaway subagent could starve all siblings. The
     // child gets its OWN BudgetEngine scoped to a fraction of the parent's
@@ -3894,34 +4820,63 @@ Continue from 'Next:', do not redo completed progress.`,
       scoped.start();
       childBudget = scoped;
     }
-    // MCH-87b: output contract. Every spawned child must end its final message
-    // with a machine-parseable footer so the parent can aggregate outcomes
-    // deterministically instead of free-text prose.
+    // Output contract. Structured spawns (presets, background, fleets) use
+    // the JSON contract the parent aggregates; plain sync delegates keep the
+    // legacy <result> footer (parseChildResult understands both).
+    const structured = Boolean(spec.preset || spec.runId || spec.extraSystem);
     childContext.addMessage({
       role: 'system',
-      content: '[Output contract] End your FINAL message with exactly this footer:\n<result>\nSTATUS: done | partial | blocked\nFILES: comma-separated paths you created or modified (or "none")\nRESULT: one-paragraph summary of the outcome\n</result>',
+      content: structured
+        ? STRUCTURED_RESULT_CONTRACT
+        : '[Output contract] End your FINAL message with exactly this footer:\n<result>\nSTATUS: done | partial | blocked\nFILES: comma-separated paths you created or modified (or "none")\nRESULT: one-paragraph summary of the outcome\n</result>',
     });
-    if (scratchpad) {
+    if (preset) {
+      childContext.addMessage({ role: 'system', content: `[Spawn preset: ${preset.name}] ${preset.systemAddendum}` });
+    }
+    if (spec.extraSystem) {
+      childContext.addMessage({ role: 'system', content: spec.extraSystem });
+    }
+    if (worktree) {
       childContext.addMessage({
         role: 'system',
-        content: `[Shared Context / Scratchpad from Parent Agent]:\n${scratchpad}`,
+        content: `[Isolated worktree] You are working in a PRIVATE git worktree at ${worktree.path} (branch ${worktree.branch}). Edit freely there — nothing you do touches the parent agent's working tree. The parent reviews your diff before applying it.`,
+      });
+    }
+    if (spec.scratchpad) {
+      childContext.addMessage({
+        role: 'system',
+        content: `[Shared Context / Scratchpad from Parent Agent]:\n${spec.scratchpad}`,
       });
     }
     // MCH-54: give spawned subagents the speculative stack — seed the child's
     // context with the parent's fused prefetch hints (parent's read footprint
     // drives the co-change signal, so children land pre-oriented on the files
-    // the parent was actually working in). Best-effort.
-    try {
-      const { prefetchText } = await import('../core/prefetch.js');
-      const touched = Array.from(this.readCache.keys()).slice(-10);
-      const childHint = prefetchText(this.workspace.dir, touched);
-      if (childHint) childContext.addMessage({ role: 'system', content: childHint });
-    } catch { /* subagent prefetch must never affect spawning */ }
+    // the parent was actually working in). Best-effort. (Worktree children
+    // skip it: the hints name parent-cwd paths that differ in the worktree.)
+    if (!worktree) {
+      try {
+        const { prefetchText } = await import('../core/prefetch.js');
+        const touched = Array.from(this.readCache.keys()).slice(-10);
+        const childHint = prefetchText(this.workspace.dir, touched);
+        if (childHint) childContext.addMessage({ role: 'system', content: childHint });
+      } catch { /* subagent prefetch must never affect spawning */ }
+    }
 
     const childAbort = new AbortController();
     const combinedAbort = this.abortSignal
       ? AbortSignal.any([this.abortSignal, childAbort.signal])
       : childAbort.signal;
+
+    // Role-scope cap: a preset child's tool allowlist is enforced in the
+    // child constructor (map pruning) and by executeTool (ctx check). Host
+    // extra tools (MCP) are filtered to the same allowlist — a read-only
+    // child must not inherit a mutating MCP tool from its parent.
+    const toolAllowlist = preset ? preset.tools : undefined;
+    let extraTools = this.extraTools;
+    if (toolAllowlist && extraTools) {
+      const allowed = new Set(toolAllowlist);
+      extraTools = new Map([...extraTools].filter(([name]) => allowed.has(name)));
+    }
 
     const child = new Agent({
       id: childId,
@@ -3929,28 +4884,40 @@ Continue from 'Next:', do not redo completed progress.`,
       // MCH-41 lanes: read-only research roles run the fast profile (breadth
       // not depth, 3-5x cheaper); explicit `lane` overrides; coder keeps its
       // role profile.
-      modelProfile: (lane === 'fast' || (!lane && (childRole === 'researcher' || childRole === 'reviewer')))
+      modelProfile: (spec.lane === 'fast' || (!spec.lane && (childRole === 'researcher' || childRole === 'reviewer')))
         ? ('fast' as import('../types.js').ModelProfile)
         : (childProfile.defaultModel ?? 'coding'),
       // MCH-41 failover-aware fanout: rotate failover entries as the child's
       // PRIMARY so parallel siblings land on distinct endpoints instead of
       // stampeding one free-tier rate limit. Original chain order is kept as
       // each child's fallback path.
-      config: { ...this.config, model: this.fanoutConfig(this.config.model, failoverIndex) },
+      config: { ...this.config, model: this.fanoutConfig(this.config.model, spec.failoverIndex) },
       workspace: this.workspace,
       events: this.events,
-      cwd: this.cwd,
+      cwd: childCwd,
       context: childContext,
       budget: childBudget,
       abortSignal: combinedAbort,
-      readCache: this.readCache,
+      // Worktree children get a FRESH read cache: the shared cache is keyed
+      // to the parent's tree and its "already read" stubs would reference
+      // content at different paths in the child's checkout.
+      readCache: worktree ? new Map() : this.readCache,
       subagentDepth: this.subagentDepth + 1,
-      extraTools: this.extraTools,
+      extraTools,
+      toolAllowlist,
+      // Permission posture is INHERITED, never silently reset: the child
+      // gets the parent's policy tier, its session allow-always memory, and
+      // its explicit unattended opt-in — but NOT the approval handler
+      // (subagents never prompt; with no handler their non-auto-approved
+      // calls are denied by the gate unless inherited posture allows them).
+      permPolicy: this.permPolicy,
+      approvedAlways: this.approvedAlways,
+      unattendedAllow: this.unattendedAllow,
     });
     const task: Task = {
       id: `sub-${Math.random().toString(36).slice(2, 10)}`,
-      title: `Subtask: ${prompt.split('\n')[0].slice(0, 60)}`,
-      description: prompt,
+      title: `Subtask: ${spec.prompt.split('\n')[0].slice(0, 60)}`,
+      description: spec.prompt,
       role: childRole,
       status: 'pending',
       priority: 1,
@@ -3964,44 +4931,65 @@ Continue from 'Next:', do not redo completed progress.`,
       agentId: childId,
       parentId: this.id,
       role: childRole,
-      prompt: prompt.slice(0, 300),
+      prompt: spec.prompt.slice(0, 300),
     });
 
-    let timeoutTimer: NodeJS.Timeout | undefined;
-    const runPromise = child.run(task).catch((err) => {
-      // The parent's Promise.race only awaits the winner. If this child
-      // rejects AFTER the race has already resolved on the timeout (or the
-      // parent cancelled via abort), Node would see an unhandled rejection
-      // for THIS runPromise and could crash the process. Swallow here so
-      // the parent never observes a tail-end child failure that has nothing
-      // to do with its decision.
-      throw err;
+    // Usage accounting: count the child's executed tool calls off the shared
+    // event bus (the child emits tool:completed under its own agentId).
+    let toolCallCount = 0;
+    const stopCounting = this.events.on('tool:completed', (e) => {
+      if (e.agentId === childId) toolCallCount++;
     });
-    // Belt-and-braces: ensure NO path can leak an unhandled rejection from
-    // runPromise, even if the child ignores abort and rejects later. The
-    // microtask handler is a no-op once we've already reported the outcome.
-    const fence = runPromise.finally(() => {});
-    fence.catch(() => { /* handled by the .then above / parent catch */ });
+
+    const completion: Promise<{ result?: AgentResult; error?: string }> = (async () => {
+      try {
+        const result = await child.run(task);
+        return { result };
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err) };
+      }
+    })();
+
+    return {
+      childId,
+      role: childRole,
+      task,
+      abort: childAbort,
+      cwd: childCwd,
+      worktree,
+      toolCalls: () => toolCallCount,
+      stopCounting,
+      steerChild: (text: string, event: ChildSteerEvent) => child.acceptParentSteer(text, event),
+      completion,
+    };
+  }
+
+  /** Await a started child with the historical sync-delegate semantics:
+   *  optional wall-clock timeout (aborts the child), subagent:completed
+   *  event, and the [completed=...] string with its contract tail. */
+  private async runChildSync(prepared: PreparedChild, timeoutMs?: number): Promise<string> {
+    let timeoutTimer: NodeJS.Timeout | undefined;
     const timeoutPromise = timeoutMs && timeoutMs > 0
       ? new Promise<never>((_, reject) => {
           timeoutTimer = setTimeout(() => {
-            childAbort.abort('Subagent execution timed out');
+            prepared.abort.abort('Subagent execution timed out');
             reject(new Error(`Subagent timed out after ${timeoutMs}ms`));
           }, timeoutMs);
         })
       : null;
-
     try {
-      const result = timeoutPromise
-        ? await Promise.race([runPromise, timeoutPromise])
-        : await runPromise;
+      const outcome = timeoutPromise
+        ? await Promise.race([prepared.completion, timeoutPromise])
+        : await prepared.completion;
       if (timeoutTimer) clearTimeout(timeoutTimer);
-
+      prepared.stopCounting();
+      if (outcome.error) throw new Error(outcome.error);
+      const result = outcome.result!;
       this.events.emit({
         type: 'subagent:completed',
-        agentId: childId,
+        agentId: prepared.childId,
         parentId: this.id,
-        role: childRole,
+        role: prepared.role,
         success: result.success,
         summary: result.summary,
         tokensUsed: result.tokensUsed,
@@ -4017,26 +5005,513 @@ Continue from 'Next:', do not redo completed progress.`,
       return `[completed=${result.success}] ${result.summary}${contractTail} (${result.tokensUsed} tokens, ${result.durationMs}ms)`;
     } catch (err) {
       if (timeoutTimer) clearTimeout(timeoutTimer);
-      // Wait briefly for the orphaned child to honour the abort signal so its
-      // tail-end rejection (if any) is consumed by the fence above rather
-      // than racing to log an "unhandled" after we've already reported.
-      const settleMs = 1500;
-      await new Promise<void>((res) => {
-        const t = setTimeout(res, settleMs);
-        runPromise.finally(() => { clearTimeout(t); res(); }).catch(() => {});
-      });
+      prepared.stopCounting();
+      // Wait briefly for the orphaned child to honour the abort signal so
+      // its tail-end outcome is consumed by the fence in startChildRun
+      // rather than racing past this report.
+      await Promise.race([
+        prepared.completion,
+        new Promise<void>((res) => setTimeout(res, 1500)),
+      ]);
       const msg = err instanceof Error ? err.message : String(err);
       this.events.emit({
         type: 'subagent:completed',
-        agentId: childId,
+        agentId: prepared.childId,
         parentId: this.id,
-        role: childRole,
+        role: prepared.role,
         success: false,
         summary: msg,
         tokensUsed: 0,
       });
       throw err;
     }
+  }
+
+  /** Spawn a fresh child agent on a subtask and return a short summary. The
+   *  child shares this run's config, workspace, events, abort signal and
+   *  (unless worktree-isolated) cwd, so delegation is cheap and consistent. */
+  private async spawnSubagent(
+    prompt: string,
+    opts?: { role?: string; preset?: string; isolate?: boolean; timeoutMs?: number; scratchpad?: string; lane?: string; failoverIndex?: number } | string
+  ): Promise<string> {
+    const spec: ChildRunSpec = typeof opts === 'string'
+      ? { prompt, role: opts }
+      : {
+          prompt,
+          role: opts?.role,
+          preset: opts?.preset,
+          isolate: opts?.isolate,
+          scratchpad: opts?.scratchpad,
+          lane: opts?.lane,
+          failoverIndex: opts?.failoverIndex,
+        };
+    const timeoutMs = typeof opts === 'object' ? opts?.timeoutMs : undefined;
+    const prepared = await this.startChildRun(spec);
+    const text = await this.runChildSync(prepared, timeoutMs);
+    // A synchronous worktree child has no collect step, so surface where its
+    // changes live instead of letting them vanish into an unknown branch.
+    if (prepared.worktree) {
+      try {
+        await commitWorktreeChanges(prepared.worktree.path, `mochi: subagent ${prepared.childId} (${prepared.role})`);
+        const diffSummary = await summarizeWorktreeDiff(prepared.worktree.path, prepared.worktree.baseSha);
+        return `${text}\n[worktree: branch ${prepared.worktree.branch} at ${prepared.worktree.path} — ${diffSummary}. NOT merged into your tree; review/apply it with git when ready.]`;
+      } catch { /* the summary still stands */ }
+    }
+    return text;
+  }
+
+  // ---------------------------------------------------------------------
+  // Background child runtime (spawn_agent): async spawn + collect + cancel
+  // with a concurrency cap, FIFO queueing, on-disk durability, and an
+  // inbox notice on completion. "Async" here means in-process background:
+  // children are Agent instances on this process's event loop, started
+  // without awaiting; their state is persisted at every transition so a
+  // restarted parent can still collect finished results from disk.
+  // ---------------------------------------------------------------------
+
+  /** Register a background child: persist its record, enqueue it under the
+   *  concurrency cap, and return the live handle immediately. */
+  private registerChild(spec: ChildRunSpec): LiveChildRun {
+    const preset = resolvePreset(spec.preset);
+    const id = spec.runId ?? `sub-${randomUUID().slice(0, 8)}`;
+    const record: ChildRunRecord = {
+      id,
+      parentAgentId: this.id,
+      role: spec.role ?? (preset ? String(preset.role) : 'coder'),
+      preset: preset?.name,
+      promptPreview: spec.prompt.slice(0, 300),
+      status: 'queued',
+      access: preset?.access ?? (spec.isolate ? 'worktree' : 'shared'),
+      cwd: this.cwd,
+      createdAt: Date.now(),
+    };
+    let settle!: () => void;
+    const promise = new Promise<void>((res) => { settle = res; });
+    const live: LiveChildRun = { record, spec: { ...spec, runId: id }, promise, settle, pendingSteers: [] };
+    this.childRuns.set(id, live);
+    this.childQueue.push(live);
+    this.childStore().save(record);
+    this.pumpChildQueue();
+    return live;
+  }
+
+  /** Start queued children while concurrency slots are free. Fully
+   *  synchronous: launchTrackedChild flips the record to 'running' in its
+   *  synchronous prefix, so the cap counts correctly across the loop. */
+  private pumpChildQueue(): void {
+    try {
+      for (;;) {
+        const running = [...this.childRuns.values()].filter((l) => l.record.status === 'running').length;
+        if (running >= resolveMaxConcurrentSubagents(this.config)) return;
+        const idx = this.childQueue.findIndex((l) => l.record.status === 'queued');
+        if (idx < 0) return;
+        const [next] = this.childQueue.splice(idx, 1);
+        this.launchTrackedChild(next);
+      }
+    } catch { /* the pump must never break the parent run */ }
+  }
+
+  /** Launch one queued child: mark it running NOW, then construct + start
+   *  it asynchronously and wire its completion into finalizeChild. */
+  private launchTrackedChild(live: LiveChildRun): void {
+    const rec = live.record;
+    rec.status = 'running';
+    rec.startedAt = Date.now();
+    this.childStore().save(rec);
+    void (async () => {
+      let timeoutTimer: NodeJS.Timeout | undefined;
+      try {
+        const prepared = await this.startChildRun(live.spec);
+        live.prepared = prepared;
+        // B21: hand over any steers issued while this child was queued or
+        // launching, in issue order. startChildRun returns with the
+        // child's run() parked before its first turn, so a steer handed
+        // over here still lands ahead of the first drain — the child sees
+        // it as guidance from the start, never as a lost message.
+        if (live.pendingSteers.length) {
+          const pending = live.pendingSteers.splice(0, live.pendingSteers.length);
+          for (const p of pending) {
+            if (!prepared.steerChild(p.text, p.event)) {
+              p.event.undelivered = true;
+              this.childStore().save(rec);
+              this.childInbox.push(`${rec.id} — a steer from ${p.event.from} could not be delivered (the run ended before it started).`);
+            }
+          }
+        }
+        // Cancel landed while the child was still being constructed:
+        // honour it now that there is something to abort.
+        if (rec.status === 'cancelled') prepared.abort.abort('Cancelled by parent agent');
+        rec.cwd = prepared.cwd;
+        if (prepared.worktree) {
+          rec.worktree = prepared.worktree;
+          rec.access = 'worktree';
+          this.childStore().save(rec);
+        }
+        if (live.spec.timeoutMs && live.spec.timeoutMs > 0) {
+          timeoutTimer = setTimeout(() => {
+            prepared.abort.abort('Subagent execution timed out');
+          }, live.spec.timeoutMs);
+        }
+        const outcome = await prepared.completion;
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        await this.finalizeChild(live, outcome);
+      } catch (err) {
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        await this.finalizeChild(live, { error: err instanceof Error ? err.message : String(err) });
+      }
+    })();
+  }
+
+  /** Fold a finished background child into its persisted record: structured
+   *  result parse, worktree commit + diff summary, inbox notice, next
+   *  queued child. Never throws. */
+  private async finalizeChild(
+    live: LiveChildRun,
+    outcome: { result?: AgentResult; error?: string },
+  ): Promise<void> {
+    const rec = live.record;
+    const prepared = live.prepared;
+    try {
+      prepared?.stopCounting();
+      if (rec.status === 'cancelled') {
+        // Parent cancelled while running: discard the unapplied worktree,
+        // keep the record as cancelled (no result fold-back).
+        if (prepared?.worktree) {
+          await this.discardWorktree(prepared.worktree).catch(() => { /* best effort */ });
+        }
+      } else if (outcome.result) {
+        const result = outcome.result;
+        const parsed = parseChildResult(result.summary, {
+          success: result.success,
+          filesModified: result.filesModified,
+          tokensUsed: result.tokensUsed,
+          toolCalls: prepared?.toolCalls() ?? 0,
+          durationMs: result.durationMs,
+        });
+        rec.result = parsed;
+        rec.status = parsed.status;
+        if (outcome.result.stopReason === 'aborted') rec.error = 'aborted';
+        this.events.emit({
+          type: 'subagent:completed',
+          agentId: rec.id,
+          parentId: this.id,
+          role: rec.role as import('../types.js').AgentRole,
+          success: result.success,
+          summary: result.summary,
+          tokensUsed: result.tokensUsed,
+        });
+        if (prepared?.worktree) {
+          try {
+            await commitWorktreeChanges(prepared.worktree.path, `mochi: subagent ${rec.id} (${rec.preset ?? rec.role})`);
+            rec.diffSummary = await summarizeWorktreeDiff(prepared.worktree.path, prepared.worktree.baseSha);
+          } catch { /* diff summary is advisory */ }
+        }
+        this.childInbox.push(`${rec.id} (${rec.preset ?? rec.role}) ${rec.status}${parsed.verdict ? ` · verdict ${parsed.verdict}` : ''}: ${parsed.summary.slice(0, 160)}`);
+      } else {
+        rec.status = 'failed';
+        rec.error = outcome.error ?? 'child run failed';
+        this.events.emit({
+          type: 'subagent:completed',
+          agentId: rec.id,
+          parentId: this.id,
+          role: rec.role as import('../types.js').AgentRole,
+          success: false,
+          summary: rec.error,
+          tokensUsed: 0,
+        });
+        if (prepared?.worktree) {
+          // Keep a failed child's partial work inspectable on its branch.
+          try {
+            await commitWorktreeChanges(prepared.worktree.path, `mochi: subagent ${rec.id} (failed, partial)`);
+            rec.diffSummary = await summarizeWorktreeDiff(prepared.worktree.path, prepared.worktree.baseSha);
+          } catch { /* best effort */ }
+        }
+        this.childInbox.push(`${rec.id} (${rec.preset ?? rec.role}) FAILED: ${rec.error.slice(0, 160)}`);
+      }
+    } catch { /* finalize must never break the parent */ } finally {
+      // B21: reconcile steer provenance before the record goes durable.
+      // A steer whose shared event was never stamped deliveredAt by the
+      // child did not land — mark it undelivered (never silently dropped)
+      // and, unless the run was cancelled anyway, warn via the inbox.
+      if (rec.steers?.length) {
+        let lost = 0;
+        for (const s of rec.steers) {
+          if (s.deliveredAt === undefined && !s.undelivered) {
+            s.undelivered = true;
+            lost++;
+          }
+        }
+        rec.steered = rec.steers.some((s) => s.deliveredAt !== undefined);
+        if (lost > 0 && rec.status !== 'cancelled') {
+          this.childInbox.push(`${rec.id} — ${lost} steer(s) arrived too late and were NOT delivered (the run had already finished).`);
+        }
+      }
+      rec.finishedAt = Date.now();
+      this.childStore().save(rec);
+      live.settle();
+      this.pumpChildQueue();
+    }
+  }
+
+  /** Start a background child and return its handle immediately — the
+   *  parent keeps working and collects the result when ready. */
+  async spawnAgentAsync(spec: {
+    prompt: string;
+    role?: string;
+    preset?: string;
+    scratchpad?: string;
+    timeoutMs?: number;
+    isolate?: boolean;
+  }): Promise<{ id: string; status: string; note: string }> {
+    if (!canSpawnAtDepth(this.subagentDepth, resolveMaxSubagentDepth(this.config))) {
+      return {
+        id: '',
+        status: 'refused',
+        note: `Delegation depth cap reached (safety.maxSubagentDepth=${resolveMaxSubagentDepth(this.config)}): agents at this depth cannot spawn children.`,
+      };
+    }
+    const live = this.registerChild({ ...spec });
+    const cap = resolveMaxConcurrentSubagents(this.config);
+    return {
+      id: live.record.id,
+      status: live.record.status,
+      note: live.record.status === 'queued'
+        ? `Queued behind running siblings (concurrency cap ${cap}); it starts automatically as a slot frees.`
+        : `Running in the background (${live.record.preset ?? live.record.role}, ${live.record.access}). Its result is persisted under .mochi/state/subagents/${live.record.id}.json.`,
+    };
+  }
+
+  /** Collect a background child's result digest. Live runs report their
+   *  live status (or are awaited up to waitMs); finished runs fold back the
+   *  structured digest. When this process no longer owns the run (parent
+   *  restarted), the persisted record is served instead — finished results
+   *  survive restarts. apply=true squash-merges a finished worktree child's
+   *  branch into this tree (the ONLY way child changes land — never
+   *  automatic). */
+  async collectChildResult(id: string, opts?: { waitMs?: number; apply?: boolean }): Promise<string> {
+    const live = this.childRuns.get(id);
+    if (live) {
+      if ((live.record.status === 'running' || live.record.status === 'queued') && opts?.waitMs && opts.waitMs > 0) {
+        await Promise.race([
+          live.promise,
+          new Promise<void>((res) => setTimeout(res, opts.waitMs)),
+        ]);
+      }
+      if (opts?.apply) {
+        const msg = await this.applyChildWorktree(live.record);
+        return `${msg}\n${formatChildDigest(live.record)}`;
+      }
+      return formatChildDigest(live.record);
+    }
+    const rec = this.childStore().load(id);
+    if (!rec) {
+      return `No subagent run with id "${id}": not live under this agent and no persisted record in .mochi/state/subagents/. Check the id from the spawn result.`;
+    }
+    if (opts?.apply) {
+      const msg = await this.applyChildWorktree(rec);
+      return `${msg}\n${formatChildDigest(rec)}`;
+    }
+    const orphan = rec.status === 'running' || rec.status === 'queued'
+      ? `\nNote: the process that owned this run is gone (record left at "${rec.status}") — there is no live child to collect from.`
+      : '';
+    return formatChildDigest(rec) + orphan;
+  }
+
+  /** Cancel a background child: queued children are dropped, running
+   *  children are aborted (their worktrees are discarded at finalize), and
+   *  orphaned records (owning process gone) are marked cancelled with
+   *  their worktree cleaned up by path/branch. */
+  async cancelChildRun(id: string): Promise<string> {
+    const live = this.childRuns.get(id);
+    if (live) {
+      const rec = live.record;
+      if (rec.status === 'queued') {
+        this.childQueue = this.childQueue.filter((l) => l !== live);
+        rec.status = 'cancelled';
+        // B21: steers queued for a child that will now never start are
+        // marked undelivered on the record — never silently dropped.
+        for (const s of rec.steers ?? []) {
+          if (s.deliveredAt === undefined) s.undelivered = true;
+        }
+        live.pendingSteers.length = 0;
+        rec.finishedAt = Date.now();
+        this.childStore().save(rec);
+        live.settle();
+        return `Subagent ${id} was queued and is now cancelled — it never ran.`;
+      }
+      if (rec.status === 'running') {
+        rec.status = 'cancelled';
+        this.childStore().save(rec);
+        live.prepared?.abort.abort('Cancelled by parent agent');
+        return `Subagent ${id} cancellation signalled — it is aborting and its unapplied worktree will be discarded.`;
+      }
+      return formatChildDigest(rec);
+    }
+    const rec = this.childStore().load(id);
+    if (!rec) {
+      return `No subagent run with id "${id}": not live under this agent and no persisted record in .mochi/state/subagents/.`;
+    }
+    if (rec.status === 'running' || rec.status === 'queued') {
+      rec.status = 'cancelled';
+      rec.finishedAt = Date.now();
+      this.childStore().save(rec);
+      if (rec.worktree) await this.discardWorktree(rec.worktree).catch(() => { /* best effort */ });
+      return `Subagent ${id} belonged to a process that is gone; marked cancelled${rec.worktree ? ' and its worktree discarded' : ''}.`;
+    }
+    return formatChildDigest(rec);
+  }
+
+  /** B21: steer a background child MID-RUN — redirect what it is doing
+   *  without killing it and losing its context. The steer rides the
+   *  child's own steer channel (the MCH-74 pattern, extended from the
+   *  main loop) and is injected at its next turn boundary with framing
+   *  that names it as parent steering. Steering changes DIRECTION only:
+   *  the child's role allowlist and permission posture are fixed at
+   *  construction — a steer that asks for a forbidden tool is just a
+   *  message, and the allowlist still refuses the call. Provenance: every
+   *  steer is logged on the child's run record (who / when / sha256 /
+   *  redacted preview — raw text is never persisted); the child stamps
+   *  delivery when the steer lands, and a steer that cannot land is
+   *  reported as NOT delivered, never silently dropped. Steering a
+   *  queued child queues the steer for its first turn. */
+  async steerChildRun(id: string, text: string, opts?: { from?: string }): Promise<string> {
+    const t = text.trim();
+    if (!t) {
+      return `steer_agent needs a non-empty message — there is nothing to steer subagent ${id} with. (No steer recorded.)`;
+    }
+    const event: ChildSteerEvent = {
+      at: Date.now(),
+      from: opts?.from ?? this.id,
+      hash: createHash('sha256').update(t, 'utf8').digest('hex'),
+      chars: t.length,
+      preview: redact(t).slice(0, 160),
+    };
+    const live = this.childRuns.get(id);
+    if (live) {
+      const rec = live.record;
+      if (rec.status === 'queued') {
+        (rec.steers ??= []).push(event);
+        live.pendingSteers.push({ text: t, event });
+        this.childStore().save(rec);
+        return `Steer queued for subagent ${id} — it has not started yet, so the steer will be part of its context from its first turn. Delivery is stamped on its run record when it starts.`;
+      }
+      if (rec.status === 'running') {
+        (rec.steers ??= []).push(event);
+        const prepared = live.prepared;
+        if (!prepared) {
+          // Still launching (startChildRun in flight): the launch path
+          // hands pending steers over the moment the child exists.
+          live.pendingSteers.push({ text: t, event });
+          this.childStore().save(rec);
+          return `Steer queued for subagent ${id} — its run is starting; the steer will be handed over before its first turn.`;
+        }
+        if (prepared.steerChild(t, event)) {
+          this.childStore().save(rec);
+          return `Steer sent to subagent ${id} — it lands in the child's context at its next turn boundary, and delivery is stamped on its run record (.mochi/state/subagents/${id}.json). A steer redirects the child; it does not change its tools or permissions.`;
+        }
+        // The child finished between the status check and the handoff.
+        event.undelivered = true;
+        this.childStore().save(rec);
+        return `Subagent ${id} finished before the steer could be delivered — the steer was NOT delivered. Collect its result; if the work still needs redirecting, spawn a new subagent with the corrected instructions.`;
+      }
+      return `Subagent ${id} already ${rec.status} — a steer cannot be delivered to a finished run (steer NOT delivered). Collect its result; if the work still needs redirecting, spawn a new subagent with the corrected instructions.`;
+    }
+    const rec = this.childStore().load(id);
+    if (!rec) {
+      return `No subagent run with id "${id}": not live under this agent and no persisted record in .mochi/state/subagents/. Check the id from the spawn result. (Steer NOT delivered.)`;
+    }
+    if (rec.status === 'running' || rec.status === 'queued') {
+      return `Subagent ${id} belonged to a process that is gone (record left at "${rec.status}") — there is no live child to steer. (Steer NOT delivered.)`;
+    }
+    return `Subagent ${id} already ${rec.status} — a steer cannot be delivered to a finished run (steer NOT delivered). Spawn a new subagent with the corrected instructions if the work still needs redirecting.`;
+  }
+
+  /** Squash-merge a finished worktree child's branch into this tree.
+   *  Explicit parent action only — nothing merges child work implicitly. */
+  private async applyChildWorktree(record: ChildRunRecord): Promise<string> {
+    if (!record.worktree) {
+      return `Subagent ${record.id} has no worktree to apply (it ran ${record.access} in the shared tree).`;
+    }
+    if (record.applied) return `Subagent ${record.id}'s worktree was already applied.`;
+    if (record.status === 'running' || record.status === 'queued') {
+      return `Subagent ${record.id} is still ${record.status} — collect it after it finishes before applying.`;
+    }
+    const wt = record.worktree;
+    try {
+      const mgr = this.worktreeManager();
+      let sha: string;
+      if (mgr.get(wt.id)) {
+        sha = await mgr.merge(wt.id, `mochi: apply subagent ${record.id} (${record.preset ?? record.role})`);
+      } else {
+        // The manager that created this worktree is gone (parent restarted):
+        // squash-merge by branch name, which survives in the repo.
+        await gitOut(this.cwd, ['merge', '--squash', wt.branch]);
+        await gitOut(this.cwd, ['commit', '-m', `mochi: apply subagent ${record.id} (${record.preset ?? record.role})`, '--allow-empty']);
+        sha = await gitOut(this.cwd, ['rev-parse', 'HEAD']);
+      }
+      record.applied = true;
+      this.childStore().save(record);
+      await this.discardWorktree(wt).catch(() => { /* cleanup is best effort */ });
+      return `Applied subagent ${record.id}: squash-merged ${wt.branch} into this tree as ${sha.slice(0, 10)}.`;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return `Could not apply subagent ${record.id}: ${msg} — the branch ${wt.branch} is untouched; resolve any conflicts in your tree and retry.`;
+    }
+  }
+
+  /** Remove a worktree + branch by info, via the live manager when it owns
+   *  the registration, else by raw git (post-restart records). */
+  private async discardWorktree(wt: import('../teams/subagent-runtime.js').ChildWorktreeInfo): Promise<void> {
+    const mgr = this.worktreeManager();
+    if (mgr.get(wt.id)) {
+      await mgr.discard(wt.id);
+      return;
+    }
+    await gitOut(this.cwd, ['worktree', 'remove', '--force', wt.path]).catch(() => { /* already gone */ });
+    await gitOut(this.cwd, ['branch', '-D', wt.branch]).catch(() => { /* already gone */ });
+  }
+
+  /** Fan out N pr-reviewer children over the SAME diff — one per lens —
+   *  and return a single aggregated report: findings deduplicated by
+   *  file+line+issue, verdicts merged (any request-changes wins). */
+  async runReviewFleet(spec: {
+    target?: string;
+    lenses?: string[];
+    instructions?: string;
+  }): Promise<string> {
+    if (!canSpawnAtDepth(this.subagentDepth, resolveMaxSubagentDepth(this.config))) {
+      return `Review fleet unavailable: delegation depth cap reached (safety.maxSubagentDepth=${resolveMaxSubagentDepth(this.config)}).`;
+    }
+    const LENS_GUIDANCE: Record<string, string> = {
+      correctness: 'Judge ONLY correctness: logic errors, edge cases, off-by-ones, broken invariants, wrong error handling, regressions against the stated intent.',
+      security: 'Judge ONLY security: injection, authn/authz gaps, secret exposure, unsafe deserialization, path traversal, SSRF, missing validation of untrusted input.',
+      tests: 'Judge ONLY tests: is the change covered by tests that would actually fail if the change were wrong? Name missing cases and flaky patterns.',
+      performance: 'Judge ONLY performance: hot-path regressions, N+1 patterns, needless allocations/copies, unbounded work, missing caching where the codebase already caches.',
+    };
+    const { label, diff } = await captureReviewDiff(this.cwd, spec.target ?? 'working');
+    const lenses = (spec.lenses?.length ? spec.lenses : ['correctness', 'security', 'tests'])
+      .map((l) => l.trim().toLowerCase())
+      .filter(Boolean)
+      .slice(0, 6);
+    if (!lenses.length) return 'Review fleet: no lenses given.';
+    const lives = lenses.map((lens) =>
+      this.registerChild({
+        preset: 'pr-reviewer',
+        prompt: `Review this change through the ${lens} lens. The diff is in your context (scratchpad). ${spec.instructions ? `Change intent / extra instructions: ${spec.instructions}` : ''} Read surrounding code only where a hunk cannot be judged from the diff alone.`,
+        scratchpad: `[Change under review: ${label}]\n\n${diff}`,
+        extraSystem: `[Review lens: ${lens}] ${LENS_GUIDANCE[lens] ?? `Judge ONLY the ${lens} aspect of this change.`}`,
+      }),
+    );
+    await Promise.all(lives.map((l) => l.promise));
+    const reviewed = lives
+      .map((l, i) => ({ lens: lenses[i], result: l.record.result }))
+      .filter((r): r is { lens: string; result: NonNullable<ChildRunRecord['result']> } => !!r.result);
+    if (!reviewed.length) {
+      const errors = lives.map((l) => l.record.error).filter(Boolean).join('; ');
+      return `Review fleet over ${label}: every reviewer failed${errors ? ` (${errors})` : ''}.`;
+    }
+    const agg = aggregateReviews(reviewed);
+    return formatFleetReport(agg, { target: label, reviewers: reviewed.length });
   }
 
   /** MCH-41: failover-aware fanout. Rotate the failover chain so sibling N's
@@ -4056,7 +5531,7 @@ Continue from 'Next:', do not redo completed progress.`,
    *  max_concurrent_children): N unbounded Promise.allSettled would OOM or
    *  hammer a free-tier provider. Runs in a fixed pool, reusing spawnSubagent. */
   private async spawnSubagents(
-    tasks: Array<{ prompt: string; role?: string; timeoutMs?: number; scratchpad?: string }>
+    tasks: Array<{ prompt: string; role?: string; preset?: string; timeoutMs?: number; scratchpad?: string }>
   ): Promise<string[]> {
     // MCH-41 (agents v2): two upgrades to the pool.
     // (1) PRIORITY LANES — read-only research tasks (role=researcher/reviewer)
@@ -4086,14 +5561,14 @@ Continue from 'Next:', do not redo completed progress.`,
         // worst-case latency. Retry never re-runs a SUCCESSFUL child.
         try {
           const lane = (t as { lane?: string }).lane;
-          const val = await this.spawnSubagent(t.prompt, { role: t.role, timeoutMs: t.timeoutMs, scratchpad: t.scratchpad, lane, failoverIndex: i });
+          const val = await this.spawnSubagent(t.prompt, { role: t.role, preset: t.preset, timeoutMs: t.timeoutMs, scratchpad: t.scratchpad, lane, failoverIndex: i });
           results[i] = `[Subagent #${i + 1} (${t.role ?? 'coder'})]: ${val}`;
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           try {
             const lane = (t as { lane?: string }).lane;
             const retryTimeout = t.timeoutMs && t.timeoutMs > 0 ? Math.max(30_000, Math.floor(t.timeoutMs / 2)) : undefined;
-            const val = await this.spawnSubagent(t.prompt, { role: t.role, timeoutMs: retryTimeout, scratchpad: t.scratchpad, lane, failoverIndex: i + tasks.length });
+            const val = await this.spawnSubagent(t.prompt, { role: t.role, preset: t.preset, timeoutMs: retryTimeout, scratchpad: t.scratchpad, lane, failoverIndex: i + tasks.length });
             results[i] = `[Subagent #${i + 1} (${t.role ?? 'coder'}, retried after: ${msg.slice(0, 120)})]: ${val}`;
           } catch (err2) {
             const msg2 = err2 instanceof Error ? err2.message : String(err2);
@@ -4132,6 +5607,7 @@ Continue from 'Next:', do not redo completed progress.`,
         agentId: this.id,
         abortSignal: this.abortSignal,
         readCache: this.readCache,
+        taskKind: this.taskKind,
         callerEmittedEvent: true,
         // Interactive questions are a top-level affordance: subagents were
         // promised "the child cannot ask questions", so they resolve defaults.
@@ -4164,6 +5640,38 @@ Continue from 'Next:', do not redo completed progress.`,
       this.vetoToolCall(tc, `You have already called ${toolName} with these exact arguments ${this.toolSigRepeat} times in a row. The result will not change. Do NOT call it again — use the result you already have and proceed to the next step of the task.`);
       return;
     }
+    // Durable journal replay (C6): a step a PREVIOUS session of this run
+    // already completed (same tool_call_id, or same tool+args signature —
+    // a resumed model regenerates ids) is served from the on-disk journal
+    // instead of re-executing: no side effect repeated, no tool re-billed.
+    // The step already passed every gate when it first ran, so replay
+    // short-circuits the gates below. Session-local/interactive tools
+    // (load_tools, ask_question) are never journaled or replayed.
+    if (this.journal && isJournalableTool(toolName)) {
+      try {
+        const jArgs = normalizeToolArgs(toolName, this.parseArgs(tc.function.arguments));
+        const prior = this.journal.claim({ stepId: tc.id, toolName, args: jArgs });
+        if (prior) {
+          this.journalReplayed++;
+          const replayOutput = prior.output ?? '';
+          this.events.emit({ type: 'agent:log', agentId: this.id, message: `[journal] replayed completed step ${toolName} (journal seq ${prior.seq}) — not re-executed` });
+          this.context.addMessage({ role: 'tool', tool_call_id: tc.id, name: tc.function.name, content: replayOutput });
+          this.events.emit({
+            type: 'tool:completed',
+            tool: tc.function.name,
+            result: { toolCallId: tc.id, name: tc.function.name, output: replayOutput, durationMs: 0 },
+            agentId: this.id,
+          });
+          // Bookkeeping parity with a real execution: a replayed shell/
+          // verify counts as the repro attempt it originally was, and a
+          // replayed mutation restores fileChanged (its effect is already
+          // on disk) so the completion gate sees the run's true state.
+          if (toolName === 'shell' || toolName === 'verify') this.reproAttempted = true;
+          this.trackFileChange(toolName, jArgs, { output: replayOutput });
+          return;
+        }
+      } catch { /* a journal fault must never block the real execution */ }
+    }
     // Chat/Q&A turns are conversational: the deliverable is the answer text,
     // never file or shell mutations. A model reaching for write/edit/shell on
     // a greeting ("hi") produced the visible "tool spam + no-such-file error
@@ -4194,11 +5702,55 @@ Continue from 'Next:', do not redo completed progress.`,
       this.toolDefs = [...this.tools.values()].map((t) => t.def);
       this.events.emit({ type: 'agent:log', agentId: this.id, message: `[chat-escape] ${this.chatMutationVetoes} chat-lane mutation vetoes but the model insists — task reclassified to implement so the deliverable can proceed.` });
     }
+    // REPRODUCE-FIRST GATE (fix/debug kinds): the kind hint has always TOLD
+    // the model to reproduce before editing, but nothing enforced it — a
+    // model that edits immediately and passes the suite sails through, and
+    // symptom-patches ship. The FIRST mutating call on a fix task is vetoed
+    // once, before the approval gate (no point asking a human to approve a
+    // call the harness will refuse), with a directive to observe the failure
+    // first via shell/verify/bg_task. Exactly ONE veto: if the model comes
+    // back and mutates again without reproducing, the call proceeds and the
+    // bypass is recorded — some fixes have no runnable entrypoint yet, and a
+    // permanent block would trap those runs (same philosophy as the
+    // chat-lane escape above). Read/search/glob never reach this gate.
+    // NEW-FILE EXEMPTION: the gate guards changes to EXISTING behavior. A
+    // mutation whose every determinable target does not exist yet is
+    // creating a brand-new artifact (a greeting file, a repro script, a
+    // fresh test file) — there is no pre-existing failure in that file to
+    // observe, and vetoing it broke create-then-fix runs whose first step
+    // is the creation itself. Such calls skip the gate entirely: the one
+    // veto is NOT spent and no bypass is recorded, so a later edit to an
+    // existing file still hits the gate. Calls whose target cannot be
+    // determined from the args (replace_symbol) keep the gate.
+    if (MUTATING_TOOLS.has(toolName) && !this.reproAttempted && this.reproGateApplies()
+      && this.reproMutationTargetState(toolName, tc.function.arguments ?? '') !== 'absent') {
+      if (!this.reproVetoFired) {
+        this.reproVetoFired = true;
+        this.vetoLog.push({ tool: tc.function.name, reason: 'reproduce-first gate: first mutation vetoed pending a repro attempt' });
+        if (this.vetoLog.length > 20) this.vetoLog.shift();
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: '[repro-first] vetoed first mutating call on a fix task — no reproduction attempted yet' });
+        this.vetoToolCall(tc, 'REPRODUCE FIRST: this is a fix/debug task and you have not yet observed the failure. Before editing any code, reproduce it: run the failing test/command or a minimal repro script (shell or verify tool) and look at the actual failure output. Then edit, and re-run the same check to prove the fix. If no runnable check exists for this failure, attempt the closest one you can (e.g. run the affected module/test file directly) — after that attempt, or if you retry this edit, the edit will be allowed through.');
+        return;
+      }
+      if (!this.reproGateBypassed) {
+        this.reproGateBypassed = true;
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: '[repro-first] model mutated without reproducing after the veto — allowed through, bypass recorded' });
+      }
+    }
     // APPROVAL GATE (the tiers in security/permission.ts finally enforced):
     // anything the policy does not auto-allow needs a human decision when a
     // UI handler is attached (TUI menu: allow once / always / deny), and is
-    // audit-logged either way. Headless runs (no handler) and subagents
-    // (depth > 0, never prompt) preserve historical behavior: allow + audit.
+    // audit-logged either way. With NO handler (headless CLI, daemon, ACP,
+    // SDK) — and for subagents, which never prompt — the gate is
+    // DENY-BY-DEFAULT for approval-requiring calls (destructive/network
+    // shell, outside-workspace writes, remote mutations): only the
+    // headless-safe floor may proceed (what the workspace-safe tier
+    // auto-allows: read-only tools, in-workspace edits, low-risk shell).
+    // An explicit host opt-in (unattendedAllow /
+    // MOCHI_UNATTENDED_ALLOW=1, or the yolo tier) restores allow + audit
+    // beyond the floor for unattended runs, but it is never the default.
+    // Shell commands on the hardline floor are denied under EVERY policy,
+    // yolo included.
     // Plan-mode mutating calls never reach here (batch veto above).
     {
       const policy = normalizePolicy(this.permPolicy);
@@ -4208,6 +5760,16 @@ Continue from 'Next:', do not redo completed progress.`,
       const parsedArgs = this.parseArgs(tc.function.arguments);
       const auto = this.permMgr.mgr.autoAllow({ tool: toolName, args: parsedArgs, cwd: this.cwd, workspaceDir: this.workspace.dir });
       const auditBase = { ts: new Date().toISOString(), tool: toolName, args: parsedArgs, policy } as const;
+      const hardline = toolName === 'shell' ? matchHardline(typeof parsedArgs.command === 'string' ? parsedArgs.command : '') : null;
+      if (hardline) {
+        // Hardline floor: refused even under yolo / allow-always / an
+        // interactive allow — no standing consent covers catastrophic
+        // commands. (The shell tool and exec.ts enforce the same floor for
+        // calls that never reach this gate, e.g. speculative execution.)
+        this.permMgr.mgr.audit({ ...auditBase, decision: 'deny' });
+        this.vetoToolCall(tc, `Refused by the hardline safety floor (${hardline}): this command is catastrophic and is denied under every permission policy, including yolo. Do not retry it or rephrase it to evade the floor; find a non-destructive way to achieve the goal.`);
+        return;
+      }
       if (auto || policy === 'yolo') {
         this.permMgr.mgr.audit({ ...auditBase, decision: 'allow' });
       } else {
@@ -4215,9 +5777,54 @@ Continue from 'Next:', do not redo completed progress.`,
         if (this.approvedAlways.has(alwaysKey)) {
           this.permMgr.mgr.audit({ ...auditBase, decision: 'allow' });
         } else if (this.subagentDepth > 0 || !this.approvalHandler) {
-          // No one to ask (headless host or child agent): allow, loudly
-          // audited — identical to pre-gate behavior, never a hang.
-          this.permMgr.mgr.audit({ ...auditBase, decision: 'allow' });
+          // No one to ask (headless host or child agent). Deny by default
+          // for approval-requiring calls — destructive/network shell,
+          // writes outside the workspace, remote mutations — the
+          // fail-closed behavior approval.ts always documented. The
+          // headless floor: calls the workspace-safe tier would auto-allow
+          // (read-only tools, in-workspace edits, low-risk shell) are
+          // "safe without a handler" and proceed under any policy, so an
+          // unattended coding run can still do ordinary workspace work.
+          // Beyond the floor, only an explicit unattended opt-in from the
+          // host (unattendedAllow / MOCHI_UNATTENDED_ALLOW=1) allows.
+          const permReq = { tool: toolName, args: parsedArgs, cwd: this.cwd, workspaceDir: this.workspace.dir };
+          let headlessSafe = this.permMgr.mgr.autoAllowAs('workspace-safe', permReq)
+            // File-mutation tools: TARGET containment is the scope fence's
+            // job — it runs below in every mode and vetoes sibling-project,
+            // out-of-workspace, and out-of-fileScope targets with its own
+            // streak protocol. Denying them here too would pre-empt the
+            // fence's richer veto and break its bookkeeping, without
+            // changing the outcome (the write never lands either way).
+            || MUTATING_TOOLS.has(toolName)
+            // Host-registered tools: extraTools (SDK registerTool) and
+            // MCP-namespaced tools (`server__tool`) exist only because the
+            // operator configured them — registration is standing consent.
+            || (this.extraTools?.has(toolName) ?? false)
+            || toolName.includes('__');
+          if (!headlessSafe && this.planMode) {
+            // Plan-mode exemptions the batch gate above already vetted:
+            // operator-allowlisted network reads (planModeNetworkReads)
+            // and low-risk verify commands under snapshot/rollback
+            // containment (agent/plan-verify.ts). Re-denying them here
+            // would silently override the operator's plan-mode config.
+            if (toolName === 'fetch') {
+              const hosts = (this.config.safety?.planModeNetworkReads ?? []).map((h) => h.toLowerCase());
+              try {
+                headlessSafe = hosts.includes(new URL(String(parsedArgs.url ?? '')).hostname.toLowerCase());
+              } catch { headlessSafe = false; }
+            } else if (toolName === 'verify') {
+              const resolved = resolveVerifyCommand(parsedArgs, this.cwd);
+              headlessSafe = resolved !== null && classifyCommand(resolved) === 'low';
+            }
+          }
+          if (this.unattendedAllow || headlessSafe) {
+            this.permMgr.mgr.audit({ ...auditBase, decision: 'allow' });
+          } else {
+            this.permMgr.mgr.audit({ ...auditBase, decision: 'deny' });
+            const { summary } = describeApproval(toolName, parsedArgs);
+            this.vetoToolCall(tc, `Denied by default: ${summary} requires approval, but this run has no interactive approver (headless or subagent) and it is outside the headless-safe tier (read-only tools, in-workspace edits, low-risk shell). Proceed WITHOUT it using headless-safe tools, or ask the user to run interactively, switch policy, or explicitly enable unattended approvals (MOCHI_UNATTENDED_ALLOW=1). Do not just retry the same call.`);
+            return;
+          }
         } else {
           const { summary, risk } = describeApproval(toolName, parsedArgs);
           let decision: 'allow-once' | 'allow-always' | 'deny' = 'deny';
@@ -4607,14 +6214,12 @@ Continue from 'Next:', do not redo completed progress.`,
       agentId: this.id,
       abortSignal: this.abortSignal,
       readCache: this.readCache,
-      // Top-level and first-level agents (depth < 2) can delegate; bounding
-      // the delegation tree to 2 levels so complex multi-agent flows work reliably.
-      ...(this.subagentDepth < 2
-        ? {
-            spawnSubagent: (prompt: string, opts?: { role?: string; timeoutMs?: number; scratchpad?: string }) => this.spawnSubagent(prompt, opts),
-            spawnSubagents: (tasks: Array<{ prompt: string; role?: string; timeoutMs?: number; scratchpad?: string }>) => this.spawnSubagents(tasks),
-          }
-        : {}),
+      taskKind: this.taskKind,
+      toolAllowlist: this.toolAllowlist,
+      // Delegation bundle (sync + background spawn/collect/cancel + review
+      // fleets), present only while this agent may still delegate —
+      // depth < safety.maxSubagentDepth (default 2).
+      ...this.spawnerContext(),
       // Interactive questions are a top-level affordance (see above): deeper
       // agents resolve ask_question to deterministic defaults instead.
       ...(this.subagentDepth === 0 && this.promptUser ? { promptUser: this.promptUser } : {}),
@@ -4622,6 +6227,14 @@ Continue from 'Next:', do not redo completed progress.`,
     };
     this.events.emit({ type: 'tool:called', tool: tc.function.name, args, agentId: this.id, tool_call_id: tc.id });
     const { output, error, durationMs, images } = await executeTool(tc.function.name, args, ctx, this.tools) as { output: string; error?: string; durationMs: number; images?: Array<{ type: 'image_url'; image_url: { url: string } }> };
+    // Reproduce-first gate: a shell/verify/bg_task call that EXECUTED counts
+    // as a reproduction attempt — success or failure (a failing run IS the
+    // reproduction). Set here, past every veto path, so only calls that
+    // actually ran count. bg_task merely queues work, so it counts only when
+    // the queueing itself succeeded.
+    if (!this.reproAttempted && (toolName === 'shell' || toolName === 'verify' || (toolName === 'bg_task' && !error))) {
+      this.reproAttempted = true;
+    }
     // MCH-91: `load_tools` mutated the live toolset — re-advertise defs so the
     // newly loaded tools appear in the next packet.
     if (!error && toolName === 'load_tools') {
@@ -4782,6 +6395,10 @@ Continue from 'Next:', do not redo completed progress.`,
         try {
           const saved = this.workspace.readJson<{ plan?: string }>('state/plan.json', {});
           if (typeof saved.plan === 'string' && saved.plan) this.planAcceptedText = saved.plan;
+        // Discipline: an adopted plan defines what "on-task" means — its
+        // files and vocabulary join the contract's relevance set, so the
+        // drift guard measures against the PLAN, not just the task title.
+        if (this.planAcceptedText) this.discipline?.adoptPlan(this.planAcceptedText);
         } catch { /* fall back to prose */ }
       }
       // Quality slice 5: track result-hash redundancy. When the model re-reads
@@ -4790,13 +6407,36 @@ Continue from 'Next:', do not redo completed progress.`,
       // injector on the next iteration. Cap entries at 50 to bound memory.
       this.trackToolResultHash(toolName, foldedOutput);
     }
-    this.context.addMessage({ role: 'tool', tool_call_id: tc.id, content: foldedOutput, name: tc.function.name });
-    // EYES: a tool that produced pictures (a screenshot of the screen, a
-    // rendered page) hands them to the model as image parts on a follow-up
-    // user turn — otherwise the agent photographs the screen and then acts
-    // on it blind. The image turn sits right after the tool result so the
-    // model's next turn is grounded in what the tool actually saw.
-    if (images && images.length > 0) {
+    // Wave H3 + EYES: the computer tool's screenshot rides inline in the tool
+    // message for vision-capable models (capped/downscaled by
+    // buildScreenshotImage; text-only models degrade to the path-only result).
+    // Any OTHER tool that produced pictures (rendered pages, captures) hands
+    // them to the model as image parts on a follow-up user turn — otherwise
+    // the agent photographs the screen and then acts on it blind.
+    let toolContent: string | ContentPart[] = foldedOutput;
+    if (toolName === 'computer') {
+      const shot = takeLastComputerScreenshot(this.workspace.stateDir);
+      if (shot && !err && foldedOutput.includes(shot.path)
+        && modelSupportsVision(this.config.model.model, this.config.model.provider)) {
+        const built = buildScreenshotImage(shot.png);
+        if (built) {
+          const note = built.downscaled
+            ? `\n[screenshot inlined at ${built.width}x${built.height}, downscaled from ${built.origWidth}x${built.origHeight} — image coordinates map to display pixels at x${(built.origWidth / built.width).toFixed(2)}]`
+            : '\n[screenshot inlined below]';
+          toolContent = [
+            { type: 'text', text: foldedOutput + note },
+            { type: 'image_url', image_url: { url: built.dataUri } },
+          ];
+        } else {
+          toolContent = `${foldedOutput}\n[screenshot not inlined: the frame exceeds the ${SCREENSHOT_INLINE_MAX_BYTES}-byte inline cap even after downscaling — read the file at the path above to view it]`;
+        }
+      }
+    }
+    this.context.addMessage({ role: 'tool', tool_call_id: tc.id, content: toolContent, name: tc.function.name });
+    // EYES (generic tools): images returned by non-computer tools go on a
+    // user turn right after the tool result so the model's next turn is
+    // grounded in what the tool actually saw.
+    if (toolName !== 'computer' && images && images.length > 0) {
       this.context.addMessage({
         role: 'user',
         content: [
@@ -4847,6 +6487,17 @@ Continue from 'Next:', do not redo completed progress.`,
       this.lastVerifyPassed = true;
       this.recordVerifyPass(`Manual check passed: \`${args.command.slice(0, 120)}\` (exit 0)`);
       this.consecutiveVerifyFailures = 0;
+    }
+    // Durable journal (C6): record the step as it completes — synchronous
+    // fsynced append, so a kill after this point never re-executes it on
+    // resume. Only real executions reach here (vetoes return early and are
+    // never journaled); failed steps are recorded for audit but are not
+    // replayable — a resume retries them.
+    if (this.journal && isJournalableTool(toolName)) {
+      try {
+        this.journal.recordToolResult({ toolCallId: tc.id, toolName, args, output: foldedOutput, error: err, durationMs });
+        this.journalRecorded++;
+      } catch { /* journal must never affect the run */ }
     }
     this.trackFileChange(toolName, args, { output: out, error: err });
   }
@@ -5009,20 +6660,173 @@ Continue from 'Next:', do not redo completed progress.`,
    *  cd so the command runs from the agent already-fixed cwd. */
   private sanitizeVerify(cmd: string): string { return sanitizeVerifyCommand(cmd); }
 
-  private async verify(task: Task, repo: ReturnType<typeof detectRepo>): Promise<{ passed: boolean; summary: string }> {
+  // P0.5 — one evidence standard on the default path. verify() now speaks
+  // the VerifierEngine's verdict vocabulary (see LoopVerification below) and
+  // enforces its three load-bearing behaviors in-loop: scoped git-diff
+  // evidence (the mutation check scopes itself to this run's changed files),
+  // the adversarial mutation downgrade on genuine test passes, and
+  // BLOCKED-instead-of-PASS when a mutation-expecting task has no verifiable
+  // deliverable. The engine itself is NOT re-run here: it would re-execute
+  // the whole check set a second time on every completion attempt and spend
+  // the run's model budget on its judge. The judge remains a goals-layer
+  // step, run once per task on top of this gate.
+
+  /** P0.5 grounding for the no-change BLOCK: the completion gate only
+   *  demands file changes when the workspace/task actually ground that
+   *  expectation — a git repo, a detected repo check, an explicit
+   *  verification command / criteria / fileScope, or a task that names a
+   *  file that exists. A mutation-kind task in a completely empty scratch
+   *  directory (no repo, no files, nothing runnable) has nothing to mutate
+   *  and nothing to check against; prose remains its only possible
+   *  deliverable and keeps the historical pass. */
+  private changeExpectationGrounded(task: Task, repo: ReturnType<typeof detectRepo>): boolean {
+    return this.isGitWorkspace()
+      || Boolean(repo.testCommand || repo.buildCommand)
+      || Boolean(task.verificationCommand)
+      || (task.acceptanceCriteria?.length ?? 0) > 0
+      || (task.fileScope?.length ?? 0) > 0
+      || this.taskMentionsExistingFile(task);
+  }
+
+  /** File-path tokens named by the task text (title + description). */
+  private taskFileTokens(task: Task): string[] {
+    const text = `${task.title} ${task.description ?? ''}`;
+    return (text.match(/[\w./-]+\.[a-z]{1,6}\b/g) ?? [])
+      .map((t) => t.replace(/^\.\//, '').replace(/[.,;:)]+$/, ''))
+      .filter((t) => t && !t.includes('://'));
+  }
+
+  /** Does the task text name a file that exists in the workspace? */
+  private taskMentionsExistingFile(task: Task): boolean {
+    for (const token of this.taskFileTokens(task)) {
+      try { if (existsSync(resolve(this.cwd, token))) return true; } catch { /* keep looking */ }
+    }
+    return false;
+  }
+
+  /** Was the run's own verification attempt vetoed by policy (approval
+   *  denial / hook) this run? The completion gate must not BLOCK a run for
+   *  missing evidence that the user's own policy forbade it to gather —
+   *  "verification was denied; reporting without it" is the designed
+   *  outcome of a denied verify call. */
+  private verifyWasPolicyDenied(): boolean {
+    return this.vetoLog.some((v) => v.tool === 'verify');
+  }
+
+  /** Did any file the task names (text tokens or fileScope) exist when the
+   *  run STARTED? Judged from the run-start probe (populated in run());
+   *  direct verify() calls without a run fall back to current existence.
+   *  This is the creation-vs-modification line for the checks-empty BLOCK:
+   *  a deliverable the run created from nothing carries file existence as
+   *  its evidence (the greenfield standard), while a change to a file that
+   *  was already there is exactly what must not pass unchecked. */
+  private taskNamesPreExistingFile(task: Task): boolean {
+    const tokens = [...(task.fileScope ?? []), ...this.taskFileTokens(task)];
+    for (const token of tokens) {
+      const probed = this.namedPathsExistedAtStart.get(token);
+      if (probed !== undefined) { if (probed) return true; continue; }
+      try { if (existsSync(resolve(this.cwd, token))) return true; } catch { /* keep looking */ }
+    }
+    return false;
+  }
+
+  /** Does the git worktree show a change to a TRACKED file (modification,
+   *  deletion, rename) as opposed to pure creations (untracked '??' or
+   *  staged-new 'A*')? Best-effort: any git failure reads as "no tracked
+   *  modification known". */
+  private async gitShowsModifiedTrackedFile(): Promise<boolean> {
+    if (!this.isGitWorkspace()) return false;
+    try {
+      const out = await this.runShell('git status --porcelain', 15);
+      if (!/^exit_code: 0\b/.test(out)) return false;
+      return this.filterHarnessStatus(out).split('\n').filter(Boolean)
+        .some((line) => { const xy = line.slice(0, 2); return xy !== '??' && !xy.startsWith('A'); });
+    } catch { return false; }
+  }
+
+  /** Files this run changed, for the flaky gate's anti-gaming rule: tool-
+   *  tracked modifications plus the live git status (shell mutations never
+   *  reach filesModified). Harness state (.mochi) is filtered out — a flake
+   *  in a file the HARNESS touched is not the model's own edit. */
+  private async changedFilesForFlakeGate(): Promise<string[]> {
+    const files = new Set<string>();
+    for (const f of this.context.state.filesModified) files.add(f.replace(/^\.\//, ''));
+    if (this.isGitWorkspace()) {
+      try {
+        const out = await this.runShell('git status --porcelain', 15);
+        if (/^exit_code: 0\b/.test(out)) {
+          for (const line of this.filterHarnessStatus(out).split('\n')) {
+            if (line.length < 4) continue;
+            const p = (line.slice(3).trim().replace(/^"|"$/g, '').split(' -> ').pop() ?? '').trim();
+            if (p) files.add(p);
+          }
+        }
+      } catch { /* best-effort: tool-tracked files still apply */ }
+    }
+    return [...files];
+  }
+
+  /** Gate entry point: runs the completion gate and stamps its structured
+   *  verdict on the run (lastVerifyStatus) so finish-time attribution —
+   *  skill lifecycle evidence, trajectory export — reads the GATE's final
+   *  word rather than re-deriving it from success booleans. */
+  private async verify(task: Task, repo: ReturnType<typeof detectRepo>): Promise<LoopVerification> {
+    const v = await this.verifyGate(task, repo);
+    this.lastVerifyStatus = v.status;
+    return v;
+  }
+
+  /** The run's final verdict for skill attribution, in trajectory
+   *  vocabulary. The gate's structured status is authoritative; the
+   *  verifyCount/lastVerifyPassed pair is only a fallback for paths that
+   *  counted attempts without a gate call (defensive — the wrapper stamps
+   *  every gate call). 'none' = no verification evidence exists, and
+   *  attribution must not invent any. */
+  private skillRunVerdict(): 'pass' | 'fail' | 'partial' | 'blocked' | 'none' {
+    if (this.lastVerifyStatus) {
+      switch (this.lastVerifyStatus) {
+        case 'PASS': return 'pass';
+        case 'FAIL': return 'fail';
+        case 'PARTIAL': return 'partial';
+        case 'BLOCKED': return 'blocked';
+      }
+    }
+    if (this.verifyCount > 0) return this.lastVerifyPassed ? 'pass' : 'fail';
+    return 'none';
+  }
+
+  private async verifyGate(task: Task, repo: ReturnType<typeof detectRepo>): Promise<LoopVerification> {
     if (this.profile?.verification === 'none') {
-      return { passed: true, summary: 'Verification skipped by profile.' };
+      return { passed: true, status: 'PASS', checks: [], summary: 'Verification skipped by profile.' };
     }
     const taskKind = this.taskKind ?? classifyTaskKind(task);
     if (taskKind === 'chat' || taskKind === 'research' || taskKind === 'plan' || this.planMode) {
-      return { passed: true, summary: `No verification required for ${taskKind} task.` };
+      return { passed: true, status: 'PASS', checks: [], summary: `No verification required for ${taskKind} task.` };
     }
     // Refresh the shell-mutation flag BEFORE any gate consults it: the model
     // may have mutated the workspace entirely via shell (`sed -i`, scaffolds),
     // which never sets fileChanged.
     await this.shellMovedWorkspace();
     if (!this.fileChanged && !this.shellWorkspaceMoved && !task.verificationCommand) {
-      return { passed: true, summary: 'No changes made to verify.' };
+      // P0.5 — the no-change auto-pass hole is closed. A task whose kind
+      // promises file mutations (fix/implement/refactor/test) but produced
+      // ZERO changes has not delivered anything verifiable; the old code
+      // passed it, teaching completion (and every downstream trajectory
+      // label) that "did nothing" == "resolved". It now returns the
+      // VerifierEngine's BLOCKED verdict as a failed verify, so the run
+      // retries and ends verification_failed instead of completed.
+      // Exemptions mirror the reproduce-first gate's, for the same reasons:
+      // warm starts (this run's changes predate it — reproFileChangedAtRunStart
+      // — and were judged by the run that made them) and simple-script tasks
+      // (create-and-run shape; the run itself is the deliverable check).
+      // Read-only kinds (chat/research/plan, review→research) returned above.
+      if (MUTATION_KINDS.has(taskKind) && task.role !== 'reviewer' && task.role !== 'pr_reviewer' && !this.verifyWasPolicyDenied() && !this.reproFileChangedAtRunStart && !isSimpleScriptTask(task) && this.changeExpectationGrounded(task, repo)) {
+        return {
+          passed: false, status: 'BLOCKED', checks: [],
+          summary: `Verification blocked: this ${taskKind} task requires file changes, but the run changed no files (no write/edit/patch and no shell-side workspace changes). Do the work the task asks for, then finish — completion without changes is not verifiable.`,
+        };
+      }
+      return { passed: true, status: 'PASS', checks: [], summary: 'No changes made to verify.' };
     }
 
     const checks: string[] = [];
@@ -5032,9 +6836,11 @@ Continue from 'Next:', do not redo completed progress.`,
     // of "command not found" failures where the runner lives under the
     // fileScope's package.json but the project root has no test runner.
     const scopeDir = cwdForScope(this.cwd, task.fileScope);
+    let pushedTaskCmd: string | undefined;
     if (task.verificationCommand) {
       const cmd = this.sanitizeVerify(task.verificationCommand);
-      checks.push(withCwd(cmd, scopeDir));
+      pushedTaskCmd = withCwd(cmd, scopeDir);
+      checks.push(pushedTaskCmd);
     }
     // Repo-level commands (testCommand/typecheckCommand/lintCommand/buildCommand)
     // describe the PROJECT ROOT, not the task's fileScope directory. If the
@@ -5060,8 +6866,8 @@ Continue from 'Next:', do not redo completed progress.`,
       if (repo.buildCommand && commandAvailable(repo.buildCommand, this.cwd)) checks.push(repo.buildCommand);
     } else if (greenfield && checks.length === 0) {
       const criteriaFailGreen = this.checkArtifactCriteria(task);
-      if (criteriaFailGreen) return { passed: false, summary: criteriaFailGreen };
-      if (this.fileChanged) return { passed: true, summary: 'Greenfield build: files created, no repo suite applicable (skipped by design).' };
+      if (criteriaFailGreen) return { passed: false, status: 'FAIL', checks, summary: criteriaFailGreen };
+      if (this.fileChanged) return { passed: true, status: 'PASS', checks, summary: 'Greenfield build: files created, no repo suite applicable (skipped by design).' };
     }
     // Auto-detected real test runner: only added when the explicit
     // verificationCommand is weak (e.g. `test -f ... && grep ...`) so the
@@ -5071,20 +6877,94 @@ Continue from 'Next:', do not redo completed progress.`,
     // auto-added repo suite burns tokens / fails correct work on debt.
     // Also skipped for greenfield builds: a new game file must not trigger
     // the host repo's suite.
+    let autoTestCmd: string | undefined;
     if (isWeakVerification(task.verificationCommand) && !this.contentOnly && !greenfield) {
       const auto = autoTestCommand(this.cwd, task.fileScope);
-      if (auto) checks.push(auto);
+      if (auto) { autoTestCmd = auto; checks.push(auto); }
     }
     // MCH-31: independent acceptance-criteria gate runs BEFORE any command
     // logic — a task can state concrete criteria with no verification command
     // at all, and those must still gate completion (Codex re-checks acceptance
     // independently of whatever evidence the builder collected).
     const criteriaFail = this.checkArtifactCriteria(task);
-    if (criteriaFail) return { passed: false, summary: criteriaFail };
+    if (criteriaFail) return { passed: false, status: 'FAIL', checks, summary: criteriaFail };
 
-    if (checks.length === 0) return { passed: true, summary: 'No verification configured.' };
+    if (checks.length === 0) {
+      // P0.5 (VerifierEngine parity): files changed but NO runnable check
+      // and no artifact criterion covers them. The engine returns BLOCKED
+      // here, not PASS — a diff nobody can check is not a verified
+      // deliverable. Content-only tasks keep the pass: for content, the
+      // direct check IS the proportionate evidence, and it would have been
+      // an entry in `checks`.
+      // Modification evidence is required: pure creations (a new file in a
+      // workspace with no check infrastructure — the one-shot build flow)
+      // carry file existence as their proportionate evidence and keep the
+      // historical pass; the BLOCK targets changes to PRE-EXISTING code
+      // (a tracked file modified per git status, or a task-named file that
+      // existed at run start) that nothing checks.
+      if (MUTATION_KINDS.has(taskKind) && !this.contentOnly && !greenfield && !this.greenfieldTask
+        && (await this.gitShowsModifiedTrackedFile() || this.taskNamesPreExistingFile(task))) {
+        return {
+          passed: false, status: 'BLOCKED', checks,
+          summary: 'Verification blocked: files were changed, but no verification command, repo check, or artifact acceptance criterion covers them. Add a verification command or acceptance criteria for the changed files, or run the project tests so the change is actually checked.',
+        };
+      }
+      return { passed: true, status: 'PASS', checks, summary: 'No verification configured.' };
+    }
 
     const baseline = await this.verifyBaseline;
+    // Flaky-test quarantine (src/core/flaky.ts): a failed check gets a
+    // bounded re-run classification before it may fail the run — flakes are
+    // excused loudly, consistent failures stand, and flakes in files THIS
+    // run changed are never excused (anti-gaming). Registry persists at
+    // .mochi/state/flaky-tests.json across runs.
+    const flakyRegistry: FlakyRegistry = loadFlakyRegistry(this.workspace);
+    const knownFlakyAtStart = new Set(knownFlakyCommandKeys(flakyRegistry));
+    const flakyRefs: FlakyTestRef[] = [];
+    const flakeTargets = [...(task.fileScope ?? []), ...this.taskFileTokens(task)];
+    const resolveFlakyFailure = async (
+      cmd: string,
+      firstOut: string,
+    ): Promise<{ kind: 'flaky'; hits: FlakyTestRef[] } | { kind: 'fail'; output: string; note?: string }> => {
+      const analysis = await analyzeFailure(
+        cmd,
+        { exitCode: exitCodeOfEnvelope(firstOut), output: firstOut },
+        async () => {
+          const out = await this.runShell(cmd, 180);
+          return { exitCode: exitCodeOfEnvelope(out), output: out };
+        },
+      );
+      if (analysis.flakyIds.length > 0) {
+        recordFlakes(flakyRegistry, flakeCommandKey(cmd), analysis.flakyIds, firstOut);
+        saveFlakyRegistry(this.workspace, flakyRegistry);
+      }
+      if (!analysis.eligible || !analysis.resolved || analysis.flakyIds.length === 0) {
+        return {
+          kind: 'fail',
+          output: analysis.eligible ? analysis.lastOutput : firstOut,
+          note: analysis.flakyIds.length > 0
+            ? `Note: ${analysis.flakyIds.join(', ')} flaked during re-runs (recorded in the flaky registry), but no re-run went fully green, so this failure stands.`
+            : undefined,
+        };
+      }
+      const parts = partitionFlakes(analysis.flakyIds, await this.changedFilesForFlakeGate(), flakeTargets);
+      const hits: FlakyTestRef[] = parts.excused.map((id) => ({
+        id, command: cmd, known: isKnownFlaky(flakyRegistry, id), ownTarget: parts.ownTarget.includes(id),
+      }));
+      flakyRefs.push(...hits);
+      if (parts.ownEdit.length > 0) {
+        return {
+          kind: 'fail',
+          output: analysis.lastOutput,
+          note: `Flake excuse DENIED for ${parts.ownEdit.join(', ')}: the test file was changed by this run, so its failure is treated as a real failure, not flakiness.`,
+        };
+      }
+      this.events.emit({
+        type: 'agent:log', agentId: this.id,
+        message: `[flaky] ${cmd}: ${hits.map((h) => h.id).join(', ')} flaked (passed on re-run, tree unchanged) — excused and recorded in the flaky registry`,
+      });
+      return { kind: 'flaky', hits };
+    };
     // Intent gate on debt-masking: when the TASK ITSELF demands green checks
     // ("make npm test pass", "fix so pytest passes"), a failing check IS the
     // success criterion - pre-existing identical failure must NOT mask it.
@@ -5093,21 +6973,29 @@ Continue from 'Next:', do not redo completed progress.`,
       `${task.title} ${task.description} ${(task.acceptanceCriteria ?? []).join(' ')}`,
     );
 
-    // Fast-fail with the tests related to the changed files before paying for
-    // the full suite. A targeted failure is breakage in the code the agent just
-    // touched, so surface it now and skip the slow checks this iteration; on a
-    // targeted pass we still run the authoritative full set below (a narrow
-    // pass never stands in for the real gate).
+    // Fast-fail with the blast-radius subset for the changed files before
+    // paying for the full suite. A targeted failure is breakage in the code
+    // the agent just touched, so surface it now and skip the slow checks this
+    // iteration; on a targeted pass we still run the authoritative full set
+    // below (a narrow pass never stands in for the real gate — the subset is
+    // a PARTIAL result, labeled as such in the summary).
     if (repo.testCommand && checks.includes(repo.testCommand)) {
       try {
-        const plan = await planTargetedTests(this.cwd, repo, repo.testCommand);
+        const plan = await planVerificationTests(this.cwd, repo, repo.testCommand, { cadence: false });
         if (plan.command) {
           const out = await this.runShell(plan.command, 180);
           const exitLine = out.match(/^exit_code: (\d+)/);
           const failedNow = !((exitLine && Number(exitLine[1]) === 0) || out.trim().endsWith('PASS'));
           if (failedNow && (wantsGreen || !matchesBaseline(baseline, plan.command, out))) {
-            const condensed = condenseOutput(out, { maxLines: 60, preserveContext: 3 });
-            return { passed: false, summary: `Check failed: ${plan.command} (targeted: ${plan.reason})\n${condensed.condensed}` };
+            // Flake classification before the fast-fail: a targeted failure
+            // that goes green on a bounded re-run of the unchanged command
+            // is a flake — fall through to the authoritative full set rather
+            // than failing the run on a coin flip.
+            const flake = await resolveFlakyFailure(plan.command, out);
+            if (flake.kind === 'fail') {
+              const condensed = condenseOutput(flake.output, { maxLines: 60, preserveContext: 3 });
+              return { passed: false, status: 'FAIL', checks: [plan.command], summary: `Check failed: ${plan.command} (PARTIAL targeted pre-check: ${plan.reason})\n${condensed.condensed}${flake.note ? `\n${flake.note}` : ''}` };
+            }
           }
         }
       } catch {
@@ -5121,11 +7009,21 @@ Continue from 'Next:', do not redo completed progress.`,
     const outcomes = await Promise.all(
       checks.map(async (cmd) => ({ cmd, out: await this.runShell(cmd, 180) })),
     );
+    // Genuine passes (strict exit-0 parse, NOT baseline-masked) — the
+    // mutation gate below keys on these, mirroring the VerifierEngine's
+    // rule that only a test command that really ran green counts.
+    const genuinePasses: string[] = [];
     for (const { cmd, out } of outcomes) {
       // Strict exit-code parse: the old substring check false-PASSed when
       // "exit_code: 0" was echoed inside stdout/stderr of a failing command.
       const exitLine = out.match(/^exit_code: (\d+)/);
+      if (exitLine && Number(exitLine[1]) === 0) genuinePasses.push(cmd);
       if ((exitLine && Number(exitLine[1]) === 0) || out.trim().endsWith('PASS')) {
+        // A clean first-attempt pass decays this command's flaky scores —
+        // healing evidence, persisted only when it changes the registry.
+        if (exitLine && Number(exitLine[1]) === 0 && recordCleanPass(flakyRegistry, flakeCommandKey(cmd))) {
+          saveFlakyRegistry(this.workspace, flakyRegistry);
+        }
         continue;
       }
       // Pre-existing failure: identical failure captured before this run
@@ -5133,10 +7031,96 @@ Continue from 'Next:', do not redo completed progress.`,
       if (!wantsGreen && matchesBaseline(baseline, cmd, out)) {
         continue;
       }
-      const condensed = condenseOutput(out, { maxLines: 60, preserveContext: 3 });
-      return { passed: false, summary: `Check failed: ${cmd}\n${condensed.condensed}` };
+      // Flake classification: bounded re-runs of the unchanged command.
+      // Excused flakes do NOT join genuinePasses — a command that just
+      // flaked is not a trustworthy mutation-check baseline either.
+      const flake = await resolveFlakyFailure(cmd, out);
+      if (flake.kind === 'flaky') continue;
+      const condensed = condenseOutput(flake.output, { maxLines: 60, preserveContext: 3 });
+      return { passed: false, status: 'FAIL', checks, summary: `Check failed: ${cmd}\n${condensed.condensed}${flake.note ? `\n${flake.note}` : ''}` };
     }
-    return { passed: true, summary: `All checks passed: ${checks.join(', ')}` };
+
+    // P0.5 — adversarial mutation check (VerifierEngine parity). A suite
+    // that passes but cannot catch an injected logic bug in the very files
+    // this run changed is not evidence the change is guarded. The engine
+    // downgrades PASS → PARTIAL on a surviving mutant; this binary gate
+    // expresses PARTIAL as a failed verify carrying the engine's
+    // harden-your-tests recommendation, so the model gets bounded retries
+    // to close the coverage hole instead of completing on a hollow pass.
+    // Gating mirrors the engine: a real (non-weak) test command must have
+    // genuinely passed above — baseline-masked failures and missing-tool
+    // skips do not count. Content-only and greenfield runs skip it: there
+    // is no behavior for a suite to guard. Best-effort like the engine's:
+    // a machinery error never fails verification by itself.
+    if (!this.contentOnly && !greenfield && !this.greenfieldTask) {
+      const mutationCmd =
+        (autoTestCmd && genuinePasses.includes(autoTestCmd) ? autoTestCmd : undefined) ??
+        (repo.testCommand && genuinePasses.includes(repo.testCommand) ? repo.testCommand : undefined) ??
+        (pushedTaskCmd && genuinePasses.includes(pushedTaskCmd) && !isWeakVerification(task.verificationCommand) ? pushedTaskCmd : undefined);
+      // Flaky commands are excluded from the mutation check (VerifierEngine
+      // parity): a baseline that flips on its own makes killed/survived
+      // verdicts unreadable. Known = quarantined in the registry, or flaked
+      // during this very verify.
+      const mutationCmdFlaky = Boolean(mutationCmd) && (
+        knownFlakyAtStart.has(flakeCommandKey(mutationCmd as string)) ||
+        flakyRefs.some((f) => f.command === mutationCmd)
+      );
+      if (mutationCmd && mutationCmdFlaky) {
+        this.events.emit({
+          type: 'agent:log', agentId: this.id,
+          message: `[flaky] mutation check skipped for ${mutationCmd}: known-flaky command (quarantine) — flaky baselines make mutant verdicts unreadable`,
+        });
+      }
+      if (mutationCmd && !mutationCmdFlaky) {
+        try {
+          const mutation = await runMutationCheck(
+            this.cwd,
+            mutationCmd,
+            async (c) => {
+              const out = await this.runShell(c, 180);
+              const m = out.match(/^exit_code: (\d+)/);
+              return m ? Number(m[1]) : 1;
+            },
+            async (c) => {
+              const out = await this.runShell(c, 180);
+              return out.replace(/^exit_code: \d+\n/, '');
+            },
+            task.fileScope,
+            // The default path inherits arbitrary repo test scripts; a
+            // command that prints nothing on a green run (placeholder
+            // scripts like `node -e "process.exit(0)"`) cannot observe a
+            // mutant, so its "survival" must not downgrade the gate.
+            { requireObservableBaseline: true },
+          );
+          if (mutation.applied && mutation.survived) {
+            return {
+              passed: false, status: 'PARTIAL', checks,
+              summary: `All checks passed (${checks.join(', ')}), but the mutation check failed: ${mutation.note ?? 'an injected logic bug was NOT caught by the tests'} — the tests do not guard the changed logic. Harden the tests to cover this path, then finish.`,
+            };
+          }
+        } catch {
+          /* adversarial best-effort; never fail verification on its own machinery */
+        }
+      }
+    }
+    // FLAKY-PASS: green only via flake resolution. Completion is NOT blocked
+    // (the suite demonstrably passed with the tree unchanged), but the
+    // verdict is a distinct status and the summary names the flakes loudly —
+    // a coin-flip pass must never masquerade as a trustworthy one.
+    if (flakyRefs.length > 0) {
+      const byCommand = new Map<string, FlakyTestRef[]>();
+      for (const ref of flakyRefs) {
+        const list = byCommand.get(ref.command) ?? [];
+        list.push(ref);
+        byCommand.set(ref.command, list);
+      }
+      const flakyNote = [...byCommand.entries()].map(([cmd, hits]) => formatFlakyHits(hits, cmd)).join('\n');
+      return {
+        passed: true, status: 'FLAKY-PASS', checks, flaky: flakyRefs,
+        summary: `All checks passed: ${checks.join(', ')}\n${flakyNote}`,
+      };
+    }
+    return { passed: true, status: 'PASS', checks, summary: `All checks passed: ${checks.join(', ')}` };
   }
 
   /**
@@ -5177,15 +7161,129 @@ Continue from 'Next:', do not redo completed progress.`,
   }
 
   /**
-   * Speculative reasoning preflight. Opt-in gate: only active when
-   * model.speculative.preflight is true AND the primary provider is configured
-   * with a 'reasoning' profile we can borrow (the SpeculativeEngine builds its
-   * own provider from this.config.model). We bind the engine to a fresh budget
-   * that borrows the shared run budget's limits so a runaway preflight can't
-   * silently overspend the task's model-call allocation.
+   * Reproduce-first gate: does this mutating call touch something that
+   * ALREADY EXISTS on disk? Creating a brand-new file is building an
+   * artifact (very often the repro/regression script itself), not patching
+   * existing behavior, so it must not trip the gate, spend its one veto,
+   * or be recorded as a bypass. Returns:
+   *  - 'exists': at least one determinable target exists → gate applies.
+   *  - 'absent': targets were determined and NONE exist → skip the gate.
+   *  - 'unknown': the target(s) cannot be determined from the args (e.g.
+   *    replace_symbol, whose file is resolved from the codegraph at
+   *    execution time) → keep the gate (pre-exemption behavior).
    */
-  private specPreflightEnabled(): boolean {
-    return !!this.config.model?.speculative?.preflight;
+  private reproMutationTargetState(toolName: string, rawArgs: string): 'exists' | 'absent' | 'unknown' {
+    const args = normalizeToolArgs(toolName, this.parseArgs(rawArgs));
+    const candidates: string[] = [];
+    const push = (v: unknown): void => { if (typeof v === 'string' && v.trim()) candidates.push(v); };
+    switch (toolName) {
+      case 'patch': {
+        // Multi-target: the gate fires only if at least one section
+        // targets an existing file; a patch that only adds new files is
+        // pure creation. An unparseable patch is 'unknown' (gate fires).
+        const text = typeof args.patch === 'string' ? args.patch : '';
+        if (!text) return 'unknown';
+        let sections: Array<{ path: string }>;
+        try { sections = parsePatch(text); } catch { return 'unknown'; }
+        if (!sections.length) return 'unknown';
+        for (const s of sections) push(s.path);
+        break;
+      }
+      case 'move_file':
+      case 'copy_file':
+        push(args.source);
+        push(args.destination);
+        break;
+      case 'search_replace_multi':
+      case 'rename_symbol':
+        // `path` is an optional SCOPE (a file or a directory). Without it
+        // the tool sweeps the whole workspace — the individual targets are
+        // undeterminable here and the workspace itself exists, so the gate
+        // keeps its current behavior.
+        if (typeof args.path !== 'string' || !args.path.trim()) return 'unknown';
+        push(args.path);
+        break;
+      case 'replace_symbol':
+        // No path arg at all: the file is resolved from the codegraph by
+        // symbol name at execution time — undeterminable at gate time.
+        return 'unknown';
+      default:
+        // write / edit / delete / regex_replace / notebook /
+        // create_directory / mkdir: a single `path` arg (aliases were
+        // normalized into `path` by normalizeToolArgs).
+        push(args.path);
+        break;
+    }
+    if (!candidates.length) return 'unknown';
+    for (const c of candidates) {
+      try { if (existsSync(this.resolveTargetPath(c))) return 'exists'; } catch { /* unreadable -> treat as absent */ }
+    }
+    return 'absent';
+  }
+
+  /**
+   * Reproduce-first gate eligibility for the CURRENT run. Enforced only where
+   * "edit first, understand later" is the observed failure mode: fix/debug
+   * kinds on an existing codebase. Never fires for chat (mutations already
+   * vetoed there), plan mode (mutations already vetoed there), greenfield /
+   * content-only creation (nothing exists to reproduce yet), or runs whose
+   * instance already changed files BEFORE this run started (resume / warm
+   * start — the repro, if any, happened in the earlier session). The
+   * run-start snapshot is deliberate: an exempt new-file creation during
+   * THIS run flips live `fileChanged` too, and must not disarm the gate
+   * for a later edit to an existing file. Kill-switch: MOCHI_REPRO_FIRST=0.
+   */
+  private reproGateApplies(): boolean {
+    if (process.env.MOCHI_REPRO_FIRST === '0') return false;
+    // Test seam: scripted-fake harnesses can't adapt to a one-shot veto, so
+    // scripted-e2e configs disable the gate explicitly.
+    if ((this.config.safety as { skipReproGate?: boolean } | undefined)?.skipReproGate) return false;
+    if (this.planMode || this.contentOnly || this.reproFileChangedAtRunStart) return false;
+    const kind = this.taskKind;
+    if (kind !== 'fix') return false;
+    const task = this.activeTask;
+    if (!task) return false;
+    // The classifier's 'fix' lane also catches pure-logic one-shot script
+    // fixes ("fix sum.js, run node run.js") — those ARE create-and-run tasks
+    // whose "repro" is the run after the edit, so the gate would only tax
+    // them. Same exemption the reasoning tiers already grant this shape.
+    if (isSimpleScriptTask(task)) return false;
+    // NOTE: no isGreenfieldTask exemption here, deliberately. That heuristic
+    // (creation-verb + greenfield-noun) misfires on genuine fix tasks —
+    // "diagnose the existing CODE" + "the repro SCRIPT fails" trips both
+    // halves — and a task the classifier put in the fix lane is by
+    // definition about existing behavior. Greenfield creation tasks
+    // classify as implement/content kinds, never fix, and content-only
+    // deliverables are exempted above.
+    return true;
+  }
+
+  /**
+   * Speculative reasoning preflight gate. The SpeculativeEngine builds its
+   * own provider from this.config.model (bound to a 'reasoning' profile we
+   * can borrow), and we bind the engine to a fresh budget that borrows the
+   * shared run budget's limits so a runaway preflight can't silently
+   * overspend the task's model-call allocation.
+   *
+   * DEFAULT (changed 2026-10): preflight used to be strictly opt-in
+   * (config.model.speculative.preflight === true), which meant Mochi's best
+   * reasoning feature never ran in practice. It now defaults ON for
+   * structurally COMPLEX tasks at medium+ reasoning — the tasks where a
+   * cheap multi-candidate pass pays for itself — while simple/standard
+   * tasks keep the lean path (the cost concern that made it opt-in).
+   * Explicit config wins both ways: `preflight: true` forces it on for any
+   * non-chat kind (the historical behavior), `preflight: false` disables it
+   * outright. MOCHI_SPECULATIVE_PREFLIGHT=0 is a hard env kill-switch.
+   * Exported as a pure function (specPreflightDefault) so the policy is
+   * unit-testable without orchestrating the whole loop.
+   */
+  private specPreflightEnabled(task?: Task): boolean {
+    return specPreflightDefault({
+      configured: this.config.model?.speculative?.preflight,
+      env: process.env.MOCHI_SPECULATIVE_PREFLIGHT,
+      complexity: this.taskComplexity,
+      reasoning: task ? this.resolveReasoning(task) : undefined,
+    });
   }
 
   private async maybeSpeculativePreflight(task: Task): Promise<void> {
@@ -5381,6 +7479,28 @@ Continue from 'Next:', do not redo completed progress.`,
       this.anchor.rejectApproach(top.description, failureText.slice(0, 120));
     }
 
+    // Discipline (evidence-gated replanning): the diagnosis package below
+    // is a RECONSIDERATION device — it asks the model to re-derive its
+    // approach from hypotheses. Reconsideration is only permitted on new
+    // evidence (a failure class not seen before, a fresh tool-error
+    // signature, a user steer). The same failure recurring with nothing new
+    // gets a terse continuation instead: the plan stands, execute it. The
+    // bookkeeping above (autopsy, lessons, probes) still ran — only the
+    // model-facing re-plan is gated.
+    if (this.discipline && this.disciplineFlags.replanGate) {
+      const gate = this.discipline.gateReconsideration('verify-failure');
+      if (!gate.allowed) {
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: '[discipline] replan suppressed (verify-failure: no new evidence)' });
+        this.context.addMessage({
+          role: 'system',
+          content: this.autoPlanEscapePending
+            ? 'Same failure as the previous cycle — no new evidence. The plan-escape above is this cycle\'s reconsideration: answer it, then act. Do not re-plan again.'
+            : 'Same failure as the previous cycle — no new evidence, so no re-plan. Continue the current plan: take the next step you already identified, or make the smallest change that tests your leading hypothesis, then re-verify.',
+        });
+        return;
+      }
+    }
+
     // Surface the diagnostic to the model. Lessons first (they're the most
     // actionable), then the hypothesis ordering, then the raw failure text.
     const parts = ['Verification failed. Treat this as a HYPOTHESIS rather than a generic retry:'];
@@ -5433,6 +7553,33 @@ Continue from 'Next:', do not redo completed progress.`,
    *  burning the remaining budget. Skipped for content-only (chat) tasks,
    *  where acting isn't the point. Returns a finish result when stopping,
    *  null otherwise (caller returns it directly). */
+  /** Discipline (progress forcing): the decisive finish after a forced
+   *  deliberation stop. The model's read-only batch (if any) has already
+   *  executed and its results are in context. If work exists, verification
+   *  is the verdict — pass completes, fail reports honestly. If no work
+   *  exists, the run stops as stuck instead of burning the remaining
+   *  iterations re-deliberating. Never manufactures a success. */
+  private async disciplineForceFinish(task: Task, repo: ReturnType<typeof detectRepo>, lastContent?: string): Promise<AgentResult> {
+    if (this.discipline) this.discipline.stats.forceFinishes++;
+    this.disciplineForceArmed = false;
+    this.events.emit({ type: 'agent:log', agentId: this.id, message: '[discipline] force-finished a deliberation loop' });
+    if (this.fileChanged || this.shellWorkspaceMoved) {
+      const v = await this.verify(task, repo);
+      if (v.passed) {
+        this.recordVerifyPass(v.summary);
+        const summary = (lastContent && lastContent.trim())
+          ? `${lastContent.trim()}\n\n${v.summary}`
+          : `Complete (verified): ${v.summary}`;
+        return this.finish(task, true, summary, 'completed');
+      }
+      return this.finish(task, false, `Stopped a deliberation loop; verification does not pass:\n${v.summary}`, 'verification_failed');
+    }
+    return this.finish(task, false,
+      'Stopped: consecutive turns were spent deliberating (re-reading known files, re-stating the same considerations) without acting or covering new ground, and no work product exists. ' +
+      'Narrow the task or provide direction and re-run.',
+      'stuck_no_progress');
+  }
+
   /** Record a passing verification (harness or recognized manual check).
    *  Arms the post-pass finish drive: the NEXT non-editing tool turns count
    *  toward nudging/stopping instead of wandering forever after success. */
@@ -5646,6 +7793,20 @@ Continue from 'Next:', do not redo completed progress.`,
    *  work instead of accepting it as completion. Cleared by tool execution. */
   private autoPlanEscapePending = false;
   private injectAutoPlanEscape(failureText: string): void {
+    // Discipline (evidence-gated replanning): the escape is a forced
+    // re-plan. Register the current tool-error total as potential evidence
+    // (a GROWN total is new evidence; an unchanged one is not), then peek:
+    // with no new evidence since the last reconsideration, the escape is
+    // suppressed — the model already re-planned for this exact situation.
+    // Peeking does not consume; observeFailure's gate consumes. Bare
+    // agents (no run tracker — direct unit-test calls) skip the gate.
+    if (this.discipline && this.disciplineFlags.replanGate) {
+      this.discipline.noteEvidence(`toolerrors:${this.totalToolErrors()}`);
+      if (!this.autoPlanEscaped && !this.planMode && !this.discipline.peekReconsideration()) {
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: '[discipline] replan suppressed (auto-plan-escape: no new evidence)' });
+        return;
+      }
+    }
     if (this.autoPlanEscaped || this.planMode) return;
     this.autoPlanEscaped = true;
     this.autoPlanEscapePending = true;
@@ -5715,12 +7876,8 @@ Continue from 'Next:', do not redo completed progress.`,
         agentId: this.id,
         abortSignal: this.abortSignal,
         readCache: this.readCache,
-        ...(this.subagentDepth < 2
-          ? {
-              spawnSubagent: (p: string, o?: { role?: string; timeoutMs?: number; scratchpad?: string }) => this.spawnSubagent(p, o),
-              spawnSubagents: (tasks: Array<{ prompt: string; role?: string; timeoutMs?: number; scratchpad?: string }>) => this.spawnSubagents(tasks),
-            }
-          : {}),
+        toolAllowlist: this.toolAllowlist,
+        ...this.spawnerContext(),
       };
       const { output, error } = await executeTool('shell', { command, timeout: 20 }, ctx, this.tools);
       return error ? `Error: ${error}\n${output}` : output;
@@ -6119,6 +8276,10 @@ Continue from 'Next:', do not redo completed progress.`,
   private finishPromise: Promise<AgentResult> | null = null;
 
   private finish(task: Task, success: boolean, summary: string, stopReason: AgentStopReason = success ? 'completed' : 'aborted'): Promise<AgentResult> {
+    // B21: the run is over — parent steers can no longer be accepted, so a
+    // late steer fails loudly at the parent instead of queueing into a
+    // context that will never drain again.
+    this.runActive = false;
     if (this.finishPromise) return this.finishPromise;
     const p = this.finishOnce(task, success, summary, stopReason);
     // Clear on rejection so an outer retry can attempt a finish again; while
@@ -6154,12 +8315,20 @@ Continue from 'Next:', do not redo completed progress.`,
     // MCH-57: attribute run outcome to every skill loaded this run. Success ->
     // each participant gets a win; failure -> load stands without a win, so
     // win-rate (wins/loads) self-corrects the MCH-40 relevance boost.
+    // B1: the same join, with the GATE's verdict, is the skill lifecycle's
+    // evidence (recordSkillOutcome) and the trajectory exporter's skills[]
+    // (the skills:attributed event below, lifted by buildTrajectory). The
+    // verdict comes from lastVerifyStatus — the completion gate's final
+    // structured word — never from the run's self-reported success.
     try {
       const { getSkillsLoadedThisRun, clearSkillsLoadedThisRun } = await import('../tools/skill.js');
-      const { recordSkillUsage, recordSkillFailure, clearSkillFailures } = await import('../skills/skills.js');
-      const loaded = getSkillsLoadedThisRun();
-      for (const name of loaded) {
+      const { recordSkillUsage, recordSkillFailure, clearSkillFailures, recordSkillOutcome, recordSkillKindOutcome } = await import('../skills/skills.js');
+      const loadedSkills = getSkillsLoadedThisRun();
+      const verdict = this.skillRunVerdict();
+      const kind = this.taskKind ?? classifyTaskKind(task);
+      for (const name of loadedSkills) {
         recordSkillUsage(this.workspace.dir, name, success === true);
+        recordSkillOutcome(this.workspace.dir, name, verdict, kind);
         // MCH-201: accrue win/loss outcome into the skill quality score DB.
         try {
           const { markUsed } = await import('../skills/skill-manager.js');
@@ -6170,6 +8339,21 @@ Continue from 'Next:', do not redo completed progress.`,
         if (success === true) clearSkillFailures(this.workspace.dir, name);
         else recordSkillFailure(this.workspace.dir, name, String(this.lastToolError ?? summary).slice(0, 500));
       }
+      // Baseline arm: every verified run feeds its kind's totals, whether or
+      // not it loaded skills — the curator subtracts a skill's own loads to
+      // get the matched no-skill comparison.
+      if (verdict !== 'none') recordSkillKindOutcome(this.workspace.dir, kind, verdict === 'pass');
+      this.events.emit({
+        type: 'skills:attributed',
+        agentId: this.id,
+        skills: loadedSkills.map((id) => ({ id, verdict })),
+        verifyStatus: this.lastVerifyStatus ?? 'NONE',
+        taskKind: kind,
+        // B21: a run whose course was corrected mid-flight by a parent
+        // steer is marked, so skill evidence never credits an unsteered
+        // success with what the steer caused (lifted by buildTrajectory).
+        steered: this.deliveredParentSteers.length > 0,
+      });
       clearSkillsLoadedThisRun();
     } catch { /* skill outcome attribution must never affect task completion */ }
     // Lesson attribution: a retrieved lesson that was actually injected gets
@@ -6193,6 +8377,9 @@ Continue from 'Next:', do not redo completed progress.`,
     } catch { /* fact attribution must never affect task completion */ }
     this.mcpClose?.();
     this.mcpClose = undefined;
+    // Durable journal (C6): audit marker only — step entries stay claimable
+    // so a later session with the same run id resumes by replay.
+    try { this.journal?.finishRun(success ? 'completed' : stopReason); } catch { /* best effort */ }
     this.budget?.recordAgentEnd();
     // Skill curator pass (on by default): archives stale agent-created skills,
     // writes a report, keeps the skill tree healthy as experience accumulates.
@@ -6358,16 +8545,73 @@ Continue from 'Next:', do not redo completed progress.`,
           }
         }
       } catch { /* project memory must never affect task completion */ }
+      // Unified memory (P1.5): record ONE substantive success fact in the
+      // GLOBAL fact store — what was accomplished, which files changed, and
+      // how verification ended. addFact() previously had no caller in the
+      // loop at all (SDK only), so durable memory learned from failures and
+      // files-touched lines but never from a win. Deduped against
+      // near-identical facts by trigram similarity inside
+      // recordRunSuccessFact, so re-runs don't stack copies. Subagents skip
+      // (the parent run records the outcome); chat/plan kinds skip (no work
+      // product to remember). Under vitest the write is skipped unless
+      // MOCHI_MEMORY_FILE points at a test-owned file, so the suite never
+      // pollutes the real ~/.mochi store.
+      try {
+        if (
+          stopReason === 'completed'
+          && this.subagentDepth === 0
+          && !(process.env.VITEST && !process.env.MOCHI_MEMORY_FILE)
+        ) {
+          const kind = this.taskKind ?? classifyTaskKind(task);
+          if (kind !== 'chat' && kind !== 'plan') {
+            const { recordRunSuccessFact } = await import('../memory/unified-search.js');
+            const relFiles = [...new Set(this.context['state'].filesModified)]
+              .map((p) => (p.startsWith(this.cwd) ? p.slice(this.cwd.length + 1) : p))
+              .slice(0, 25);
+            recordRunSuccessFact({
+              kind,
+              taskTitle: task.title,
+              summary,
+              filesChanged: relFiles,
+              verification: this.verifyCount === 0 ? 'not run' : this.lastVerifyPassed ? 'passed' : 'failed',
+            });
+          }
+        }
+      } catch { /* success memory must never affect task completion */ }
       // MCH-52: persist this run's tool sequence for route-pattern mining.
       try {
-        const { loadToolSeqs, saveToolSeq } = await import('../core/tool-sequence.js');
-        if (this.toolSeq.length > 0) saveToolSeq(this.workspace.dir, loadToolSeqs(this.workspace.dir), this.toolSeq);
+        // D9: persist the v2 record (outcome + gate-verified + task kind)
+        // instead of the bare v1 sequence — the store's legacy `seqs` view
+        // is derived from records, so MCH-52/55 consumers are unaffected.
+        const { loadToolSeqStore, saveToolSeqRecord } = await import('../core/tool-sequence.js');
+        if (this.toolSeq.length > 0) saveToolSeqRecord(this.workspace.dir, loadToolSeqStore(this.workspace.dir), {
+          tools: this.toolSeq,
+          outcome: 'success',
+          verified: this.skillRunVerdict() === 'pass',
+          taskKind: this.taskKind ?? classifyTaskKind(task),
+          endedAt: Date.now(),
+        });
         // MCH-55: habitual opening routes become auto-drafted skills.
         const { draftSkillFromToolRoutes } = await import('../skills/skill-curator.js');
         await draftSkillFromToolRoutes(this.workspace.dir);
         // MCH-56: archive stale never-used auto skills so the list stays dense.
         const { curateAutoSkills } = await import('../skills/skill-manager.js');
         curateAutoSkills(this.workspace.dir);
+      } catch { /* tool-route persistence must never affect task completion */ }
+    }
+    // D9: failed runs are recorded too (outcome 'failure', never verified) —
+    // v2 mining filters on outcome, and the negative evidence keeps
+    // toolPatternText / induction honest about what did NOT work.
+    if (!success) {
+      try {
+        const { loadToolSeqStore, saveToolSeqRecord } = await import('../core/tool-sequence.js');
+        if (this.toolSeq.length > 0) saveToolSeqRecord(this.workspace.dir, loadToolSeqStore(this.workspace.dir), {
+          tools: this.toolSeq,
+          outcome: 'failure',
+          verified: false,
+          taskKind: this.taskKind ?? classifyTaskKind(task),
+          endedAt: Date.now(),
+        });
       } catch { /* tool-route persistence must never affect task completion */ }
     }
     const durationMs = Math.round(performance.now() - this.startTime);

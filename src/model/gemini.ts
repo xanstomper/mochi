@@ -125,17 +125,24 @@ export function createGeminiProvider(config: ProviderConfig) {
           return { role: 'model', parts: parts.length ? parts : [{ text: '' }] };
         }
         if (m.role === 'tool') {
-          return {
-            role: 'user',
-            parts: [
-              {
-                functionResponse: {
-                  name: m.name ?? 'tool',
-                  response: { name: m.name ?? 'tool', content: contentText(m) },
-                },
+          // Wave H3: image parts in a tool result (computer screenshots)
+          // ride in the same user turn as inlineData parts next to the
+          // functionResponse — Gemini accepts mixed parts in one content.
+          // Data URIs only, matching the multimodal user branch below;
+          // text-only results keep the exact pre-H3 shape.
+          const parts: Array<Record<string, unknown>> = [
+            {
+              functionResponse: {
+                name: m.name ?? 'tool',
+                response: { name: m.name ?? 'tool', content: contentText(m) },
               },
-            ],
-          };
+            },
+          ];
+          const { images: toolImages } = splitContent(m.content);
+          for (const img of toolImages) {
+            if ('data' in img) parts.push({ inlineData: { mimeType: img.mime, data: img.data } });
+          }
+          return { role: 'user', parts };
         }
         // Multimodal user turn: data-URI images become inlineData parts.
         // Remote http(s) URLs have no Gemini-native inline form (fileData

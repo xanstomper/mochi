@@ -5,6 +5,7 @@
 // API for shell-free execution, and an audit hook for risk logging.
 // Long-lived processes (background tasks, daemons, PTY) keep their own
 // lifecycle owners and are intentionally OUT of scope.
+import { matchHardline } from './security/hardline.js';
 import { spawn, spawnSync, execFile } from 'node:child_process';
 import { homedir, tmpdir } from 'node:os';
 import { resolve, delimiter } from 'node:path';
@@ -12,8 +13,9 @@ import { accessSync, constants } from 'node:fs';
 
 export interface SandboxOptions {
   /** 'off' (default) runs directly; 'bubblewrap' forces bwrap (fails if
-   *  missing); 'auto' uses bwrap when available, else runs directly. */
-  mode: 'off' | 'auto' | 'bubblewrap';
+   *  missing); 'unshare' forces util-linux `unshare` (fails if missing);
+   *  'auto' uses bwrap when available, then unshare, else runs directly. */
+  mode: 'off' | 'auto' | 'bubblewrap' | 'unshare';
   /** Allow network inside the sandbox. Default true (npm/tests need it). */
   network?: boolean;
   /** Extra read-write paths beyond cwd + tmpdir + devtool caches. */
@@ -241,6 +243,22 @@ export function runArgv(cmd: string, args: readonly string[], opts: ExecOptions 
  *  composition (pipes, redirects) is the feature. Harness internals must
  *  use runArgv instead. */
 export function runShellString(command: string, opts: ExecOptions & { shellBin?: string } = {}): Promise<ExecResult> {
+  // Hardline floor (security/hardline.ts): catastrophic commands are refused
+  // here — the one function every shell-string execution flows through — so
+  // no caller, policy, or mode (yolo included) can run them. Returned as a
+  // 126 result (shell's "cannot execute") instead of a throw, matching this
+  // function's result-envelope contract.
+  const hardline = matchHardline(command);
+  if (hardline) {
+    return Promise.resolve({
+      stdout: '',
+      stderr: `Blocked by hardline safety floor (${hardline}): catastrophic commands are refused under every permission policy, including yolo/unattended. Command: ${command.slice(0, 200)}`,
+      code: 126,
+      timedOut: false,
+      cancelled: false,
+      durationMs: 0,
+    });
+  }
   const startedAt = Date.now();
   const isWin = process.platform === 'win32';
   const shellBin = opts.shellBin ?? (isWin ? (process.env.ComSpec || 'cmd.exe') : (process.env.SHELL || '/bin/bash'));
@@ -348,12 +366,56 @@ export function buildBubblewrapArgs(
   return [bwrapBin, ...argv];
 }
 
+/** Absolute path to `unshare`, or null when unavailable. Cached the same way
+ *  as detectBubblewrap (pathEnv-seamed for tests). */
+export function detectUnshare(pathEnv = process.env.PATH ?? ''): string | null {
+  if (cachedUnshare !== undefined && pathEnv === (process.env.PATH ?? '')) return cachedUnshare;
+  let found: string | null = null;
+  for (const dir of pathEnv.split(delimiter).filter(Boolean)) {
+    const full = resolve(dir, 'unshare');
+    try {
+      accessSync(full, constants.X_OK);
+      found = full;
+      break;
+    } catch { /* not here */ }
+  }
+  if (pathEnv === (process.env.PATH ?? '')) cachedUnshare = found;
+  return found;
+}
+let cachedUnshare: string | null | undefined;
+
+/** Pure argv builder for the unshare backend. Uses an unprivileged user
+ *  namespace (--user --map-current-user) so the mount/PID namespaces it
+ *  layers on top are allowed without root: mount-proc needs a mount ns,
+ *  which needs the user ns first. --fork + --kill-child so the sandboxed
+ *  process tree dies with the wrapper (no orphans escaping the timeout).
+ *  Network is removed only when network === false. Exported for tests. */
+export function buildUnshareArgs(
+  unshareBin: string,
+  cmd: string,
+  args: readonly string[],
+  opts: { network?: boolean } = {},
+): string[] {
+  const argv = [
+    '--user',
+    '--map-current-user',
+    '--mount',
+    '--mount-proc',
+    '--pid',
+    '--fork',
+    '--kill-child=SIGKILL',
+  ];
+  if (opts.network === false) argv.push('--net');
+  argv.push('--', cmd, ...args);
+  return [unshareBin, ...argv];
+}
+
 /** Wrap [cmd, args] per opts.sandbox. Returns the command unchanged when the
- *  sandbox is off or unavailable in auto mode — or throws in `bubblewrap` mode
- *  when bwrap is missing (explicit request, fail loudly, never silently run
- *  unsandboxed). NOTE: no win32 early-return — bubblewrap is POSIX-only, so a
- *  forced request on Windows must throw the loud "bwrap not found" error
- *  instead of silently running unsandboxed. */
+ *  sandbox is off or unavailable in auto mode — or throws in `bubblewrap`/
+ *  `unshare` mode when the requested binary is missing (explicit request,
+ *  fail loudly, never silently run unsandboxed). NOTE: no win32 early-return
+ *  — both backends are POSIX-only, so a forced request on Windows must throw
+ *  the loud "not found" error instead of silently running unsandboxed. */
 export function maybeSandbox(
   cmd: string,
   args: readonly string[],
@@ -361,17 +423,26 @@ export function maybeSandbox(
 ): { cmd: string; args: string[] } {
   const sb = opts.sandbox;
   if (!sb || sb.mode === 'off') return { cmd, args: [...args] };
-  const bwrap = detectBubblewrap();
-  if (!bwrap) {
-    if (sb.mode === 'bubblewrap') {
-      throw new Error('Sandbox requested (bubblewrap) but `bwrap` was not found on PATH. Install bubblewrap or use sandbox mode "off".');
+  const forced = sb.mode === 'bubblewrap' || sb.mode === 'unshare';
+  // Explicit request names the backend; auto prefers bwrap (bind-mount
+  // filesystem policy) and falls back to unshare (namespace-only).
+  const bwrap = sb.mode === 'unshare' ? null : detectBubblewrap();
+  const unshare = sb.mode === 'bubblewrap' ? null : bwrap ? null : detectUnshare();
+  if (!bwrap && !unshare) {
+    if (forced) {
+      const want = sb.mode === 'bubblewrap' ? '`bwrap`' : '`unshare`';
+      throw new Error(`Sandbox requested (${sb.mode}) but ${want} was not found on PATH. Install ${want === '`bwrap`' ? 'bubblewrap' : 'util-linux'} or use sandbox mode "off".`);
     }
     return { cmd, args: [...args] };
   }
-  const full = buildBubblewrapArgs(bwrap, cmd, args, {
-    cwd: opts.cwd,
-    network: sb.network,
-    writablePaths: sb.writablePaths,
-  });
+  if (bwrap) {
+    const full = buildBubblewrapArgs(bwrap, cmd, args, {
+      cwd: opts.cwd,
+      network: sb.network,
+      writablePaths: sb.writablePaths,
+    });
+    return { cmd: full[0], args: full.slice(1) };
+  }
+  const full = buildUnshareArgs(unshare!, cmd, args, { network: sb.network });
   return { cmd: full[0], args: full.slice(1) };
 }

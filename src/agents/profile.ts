@@ -116,6 +116,3 @@ export class AgentProfileService {
   }
 }
 
-export function loadDefaultProfiles(): AgentProfile[] {
-  return listRoles().map(getProfile);
-}

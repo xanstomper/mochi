@@ -17,6 +17,10 @@ function makeConfig(dir: string, url: string): MochiConfig {
       provider: 'openai',
       baseUrl: url,
       model: 'fake-model',
+      // Scripted-fake tests count every model call; muse's speculative
+      // preflight (default-on for complex tasks) fires an extra strategy call
+      // that would consume the first scripted response.
+      speculative: { preflight: false },
     },
     safety: {
       mode: 'auto',
@@ -25,6 +29,9 @@ function makeConfig(dir: string, url: string): MochiConfig {
       maxRuntimeMinutes: 5,
       maxConcurrentAgents: 1,
       contextBudgetTokens: 4000,
+      // The reproduce-first gate vetoes the first scripted write on fix tasks
+      // (desyncing the response script); real models adapt, fakes can't.
+      skipReproGate: true,
     },
     permissions: { read: true, write: true, shell: true, network: true, gitDestructive: true },
     telemetry: false,
@@ -1333,7 +1340,7 @@ goSuite('polyglot: go repo end-to-end', () => {
     execSync('git config user.email t@t && git config user.name t', { cwd: dir });
     writeFileSync(resolve(dir, 'go.mod'), 'module example.com/fib\n\ngo 1.22\n');
     writeFileSync(resolve(dir, 'fib.go'), 'package fib\n\nfunc Fib(n int) int {\n    if n <= 1 {\n        return n\n    }\n    return Fib(n-1) + Fib(n-2) + 1\n}\n');
-    writeFileSync(resolve(dir, 'fib_test.go'), 'package fib\n\nimport "testing"\n\nfunc TestFib(t *testing.T) {\n    if got := Fib(5); got != 5 {\n        t.Fatalf("Fib(5) = %d, want 5", got)\n    }\n}\n');
+    writeFileSync(resolve(dir, 'fib_test.go'), 'package fib\n\nimport "testing"\n\nfunc TestFib(t *testing.T) {\n    cases := []struct{ n, want int }{ {0, 0}, {1, 1}, {2, 1}, {3, 2}, {4, 3}, {5, 5} }\n    for _, c := range cases {\n        if got := Fib(c.n); got != c.want {\n            t.Fatalf("Fib(%d) = %d, want %d", c.n, got, c.want)\n        }\n    }\n}\n');
     execSync('git add -A && git commit -qm init', { cwd: dir });
 
     const writeCall = (id: string, path: string, content: string) => ({

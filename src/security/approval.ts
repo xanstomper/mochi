@@ -8,8 +8,20 @@
 // asks the user (allow once / allow always this session / deny).
 //
 // Headless hosts (CLI non-TTY, daemon, ACP, SDK, tests) attach no handler:
-// the gate preserves historical behavior (allow) and only writes the audit
-// trail. Subagents never prompt — they are vetoed on non-approved tools.
+// the gate is DENY-BY-DEFAULT there for approval-requiring calls —
+// destructive/network shell, writes outside the workspace, and remote
+// mutations are vetoed and the denial is written to the audit trail. The
+// headless-safe floor still proceeds under any policy: what the
+// workspace-safe tier auto-allows (PermissionManager.autoAllowAs —
+// read-only tools, in-workspace edits, low-risk shell). A host may
+// explicitly opt an unattended run into allow+audit beyond the floor
+// (AgentOptions.unattendedAllow / MOCHI_UNATTENDED_ALLOW=1), and the yolo
+// tier auto-allows everything — but neither is ever the default.
+// Subagents never prompt — they are vetoed on non-approved tools beyond
+// the same floor (inheriting the parent's policy, allow-always memory,
+// and unattended opt-in, never a weaker posture).
+// Independently of all of the above, the hardline floor
+// (./hardline.ts) refuses catastrophic shell commands under every policy.
 
 import { classifyCommand } from './security.js';
 import { isFetchMutationRequest } from '../tools/fetch-methods.js';

@@ -11,7 +11,6 @@ import type { ReadCache } from '../tools/types.js';
 
 export type CapabilityKind = 'native' | 'mcp' | 'acp' | 'subagent' | 'skill';
 
-export type CapabilityPermissionLevel = 'ALLOW' | 'DENY' | 'ASK' | 'SANDBOX';
 
 // NOTE: the read cache is the tools-layer Map (mtime/size/content entries),
 // shared by reference with the agent loop — a single definition in

@@ -7,7 +7,6 @@
 //   cat crash.log | mochi fix --auto-commit
 //   mochi review --diff-only          # print the raw unified diff
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 
 export interface ReviewFinding {
   severity: 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO';
@@ -115,10 +114,4 @@ function runGit(cwd: string, args: string[]): string {
     const stderr = (e as { stderr?: Buffer }).stderr?.toString() ?? '';
     throw new Error(`git ${args.join(' ')} failed${stderr ? ': ' + stderr.trim() : ''}`);
   }
-}
-
-/** Read a local file into the prompt (bounded). */
-export function readLocalInput(file: string): string {
-  const raw = readFileSync(file, 'utf8');
-  return raw.length > MAX_STDIN_BYTES ? raw.slice(0, MAX_STDIN_BYTES) : raw;
 }

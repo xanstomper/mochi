@@ -1,0 +1,10 @@
+{"t":1000,"kind":"task:started","task":"Search for the bug"}
+{"t":1100,"kind":"tool:called","tool":"search","args":{"query":"login"}}
+{"t":1200,"kind":"tool:completed","tool":"search","result":{"output":"3 hits"}}
+{"t":1300,"kind":"tool:called","tool":"search","args":{"query":"login"}}
+{"t":1400,"kind":"tool:completed","tool":"search","result":{"output":"3 hits"}}
+{"t":1500,"kind":"tool:called","tool":"search","args":{"query":"login"}}
+{"t":1600,"kind":"tool:completed","tool":"search","result":{"output":"3 hits"}}
+{"t":1700,"kind":"tool:called","tool":"shell","args":{"cmd":"npm test"}}
+{"t":1800,"kind":"tool:failed","tool":"shell","error":"boom"}
+{"t":5000,"kind":"task:failed","stopReason":"tool_loop","reason":"repeated"}

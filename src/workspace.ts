@@ -179,7 +179,7 @@ export class Workspace {
 
   listGoals(): string[] {
     if (!existsSync(this.stateDir)) return [];
-    const EXCLUDED = new Set(['agent.json', 'workspace.json', 'checkpoint.json', 'todo.json', 'undefined.json', 'usage.json']);
+    const EXCLUDED = new Set(['agent.json', 'workspace.json', 'checkpoint.json', 'todo.json', 'undefined.json', 'usage.json', 'tool-usage.json']);
     const files = readdirSync(this.stateDir)
       .filter((f) => f.endsWith('.json') && !f.endsWith('.tasks.json') && !EXCLUDED.has(f));
     return files.sort((a, b) => {

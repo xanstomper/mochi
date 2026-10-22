@@ -1,0 +1,5 @@
+Inspect src/exec.ts in this workdir — the shell-command executor from this codebase snapshot (the file is an excerpt: its header and defaults sections). Answer three factual questions about the executor's built-in defaults and write the answers to answer.txt in the workdir root, exactly one per line, in exactly this format, as plain integers with no units or separators:
+TIMEOUT_MS=<the default per-command timeout, in milliseconds>
+MAX_OUTPUT_BYTES=<the default maximum captured output size, in bytes>
+KILL_GRACE_MS=<the default grace period between SIGTERM and SIGKILL when a command is killed, in milliseconds>
+Find the actual default values declared in the file — do not guess from conventions in other tools.

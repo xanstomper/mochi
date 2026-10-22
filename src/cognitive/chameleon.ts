@@ -125,11 +125,13 @@ function tierFor(mode: ChameleonMode): number {
   }
 }
 
-import { synthesizeDenseDataset } from '../chameleon/dense-dataset-synthesizer.js';
+import { buildTaskScaffold } from '../chameleon/task-scaffold.js';
 
 /**
- * Deterministically generates instant synthetic parameter guidance and dense real datasets in 0ms
- * without requiring any extra network round-trips or API tokens, splitting through cellular MoEs.
+ * Assembles the deterministic prompt context for a task: the template-based
+ * task scaffold (invariants, boundaries, hazards, execution steps — grounded
+ * in repo detection, codegraph symbols, and autopsy traps) plus OWL/SISPIS
+ * guardrail sections. No model calls and no generated dataset.
  */
 // Scaffold cache (harness-v2 perf): the deterministic scaffold is task-derived
 // and immutable, so prime it ONCE asynchronously (codegraph grammar load is
@@ -171,10 +173,10 @@ export function synthesizeDeterministicContext(task: string, cwd = process.cwd()
   const owl = evaluateOwl(task);
   const sispis = evaluateSispis(task, owl.cumulativeWeight);
   const dox = loadDoxContract(cwd);
-  const denseData = synthesizeDenseDataset(task, cwd);
+  const scaffoldData = buildTaskScaffold(task, cwd);
 
   const sections: string[] = [
-    denseData.rawDatasetText,
+    scaffoldData.rawScaffoldText,
     `Cognitive Mode: SISPIS ${sispis.mode} (Entropy: ${sispis.entropy.toFixed(2)})`,
   ];
 
@@ -254,7 +256,7 @@ export class ChameleonEngine {
         const chunk = response.content ?? '';
         if (response.usage) {
           tokensUsed += response.usage.totalTokens;
-          budget.recordTokens(response.usage.totalTokens, this.config.model.model, this.config.model.provider, response.usage.costUsd ?? 0);
+          budget.recordUsage(response.usage, this.config.model.model, this.config.model.provider);
           costUsd += response.usage.costUsd ?? 0;
         }
         runs.push(chunk);

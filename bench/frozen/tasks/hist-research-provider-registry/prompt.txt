@@ -1,0 +1,5 @@
+Inspect src/model/providers.ts in this workdir — the model provider registry as it stood in this codebase snapshot. Answer three factual questions about it and write the answers to answer.txt in the workdir root, exactly one per line, in exactly this format:
+PROVIDERS=<the number of provider entries in the registry>
+ANTIGRAVITY_DEFAULT_MODEL=<the defaultModel of the provider whose id is 'antigravity'>
+LOCAL_11434_PROVIDER=<the id of the provider whose baseUrl uses port 11434>
+Count carefully: entries are object literals in the PROVIDERS array (a few use double quotes). Do not guess from provider names you may know from elsewhere — the registry in THIS workdir is the only source.

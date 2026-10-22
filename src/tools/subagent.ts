@@ -12,10 +12,13 @@ export const subagentTool: Tool = {
   def: {
     name: 'subagent',
     description:
-      'Delegate a well-scoped subtask (or batch of subtasks) to fresh child agents: single "prompt" (+ optional "role") or a "tasks" list to parallelize research, testing, or isolated subproblems. Returns child summaries. Keep prompts self-contained — the child cannot ask questions.',
+      'Delegate a well-scoped subtask (or batch of subtasks) to fresh child agents: single "prompt" (+ optional "role") or a "tasks" list to parallelize research, testing, or isolated subproblems. Returns child summaries. Keep prompts self-contained — the child cannot ask questions. With "background": true the child starts NOW and you get a handle immediately — keep working, then fetch its structured result with collect_agent. "preset" picks a scoped specialist: researcher / pr-reviewer / explorer (read-only), tester / coder (own git worktree; changes surface as a diff you apply explicitly).',
     parameters: [
       { name: 'prompt', type: 'string', description: 'Self-contained instructions for a single subtask', required: false },
-      { name: 'role', type: 'string', description: 'Specialized role for the child: lead, coder, reviewer, tester, researcher, debugger, security, architect, devops, db_admin, frontend, backend, performance, tech_writer, qa_engineer, data_scientist (defaults to coder)', required: false },
+      { name: 'role', type: 'string', description: 'Specialized role for the child: lead, coder, reviewer, tester, researcher, debugger, security, architect, devops, db_admin, frontend, backend, performance, tech_writer, qa_engineer, data_scientist, redteam, designer, integrator, scout (defaults to coder)', required: false },
+      { name: 'preset', type: 'string', description: 'Scoped spawn preset: researcher | pr-reviewer | explorer (read-only, share your cwd) or tester | coder (isolated git worktree). Sets role + enforced tool scope + isolation in one step.', required: false },
+      { name: 'background', type: 'boolean', description: 'Start the child in the background and return a handle immediately instead of waiting. Collect the result later with collect_agent. Ideal for research/review while you keep coding.', required: false },
+      { name: 'isolate', type: 'boolean', description: 'Force a private git worktree for this child even outside a preset (mutating children are isolated by default when a preset is used).', required: false },
       { name: 'scratchpad', type: 'string', description: 'Optional shared context, architectural notes, or constraints for the child agent', required: false },
       { name: 'timeoutMs', type: 'number', description: 'Optional execution timeout in milliseconds for the subtask', required: false },
       { name: 'tasks', type: 'string', description: 'Optional JSON array of subtasks [{prompt: string, role?: string, scratchpad?: string, timeoutMs?: number}] for concurrent multi-agent fanout', required: false },
@@ -24,7 +27,7 @@ export const subagentTool: Tool = {
   },
   async execute(args, ctx) {
     // Handle batch subagents if tasks parameter is supplied
-    let rawTasks: Array<{ prompt: string; role?: string; scratchpad?: string; timeoutMs?: number }> | undefined;
+    let rawTasks: Array<{ prompt: string; role?: string; preset?: string; scratchpad?: string; timeoutMs?: number }> | undefined;
     if (Array.isArray(args.tasks)) {
       rawTasks = args.tasks;
     } else if (typeof args.tasks === 'string' && args.tasks.trim().startsWith('[')) {
@@ -40,6 +43,23 @@ export const subagentTool: Tool = {
       throw new Error('A non-empty prompt (or tasks array) is required for subagent');
     }
 
+    // Background fanout: start the child now, hand back a handle, and let
+    // the parent keep working. The result is collected via collect_agent.
+    if (args.background === true && prompt) {
+      if (!ctx.spawnAgentAsync) {
+        return 'Background subagents are not available in this context (no async spawner injected). Use a synchronous subagent call instead.';
+      }
+      const handle = await ctx.spawnAgentAsync({
+        prompt,
+        role: args.role ? String(args.role) : undefined,
+        preset: args.preset ? String(args.preset) : undefined,
+        scratchpad: typeof args.scratchpad === 'string' ? args.scratchpad : undefined,
+        timeoutMs: typeof args.timeoutMs === 'number' ? args.timeoutMs : undefined,
+        isolate: args.isolate === true ? true : undefined,
+      });
+      return `Background subagent started: id=${handle.id} status=${handle.status}. ${handle.note} Keep working on your own task; when you need its result call collect_agent with {"id": "${handle.id}"}.`;
+    }
+
     if (!ctx.spawnSubagent && !ctx.spawnSubagents) {
       return 'Subagent delegation is not available in this context (no spawner injected).';
     }
@@ -49,6 +69,7 @@ export const subagentTool: Tool = {
         .map((t) => ({
           prompt: String(t?.prompt ?? '').trim(),
           role: t?.role ? String(t.role) : undefined,
+          preset: t?.preset ? String(t.preset) : undefined,
           scratchpad: t?.scratchpad ? String(t.scratchpad) : undefined,
           timeoutMs: typeof t?.timeoutMs === 'number' ? t.timeoutMs : undefined,
         }))
@@ -65,7 +86,7 @@ export const subagentTool: Tool = {
 
       // Fallback to Promise.allSettled if only spawnSubagent is available
       const results = await Promise.allSettled(
-        validTasks.map((t) => ctx.spawnSubagent!(t.prompt, { role: t.role, scratchpad: t.scratchpad, timeoutMs: t.timeoutMs }))
+        validTasks.map((t) => ctx.spawnSubagent!(t.prompt, { role: t.role, preset: t.preset, scratchpad: t.scratchpad, timeoutMs: t.timeoutMs }))
       );
       const formatted = results.map((r, i) => {
         const role = validTasks[i]?.role ?? 'coder';
@@ -81,6 +102,8 @@ export const subagentTool: Tool = {
       const scratchpad = typeof args.scratchpad === 'string' ? args.scratchpad : undefined;
       const result = await ctx.spawnSubagent!(prompt, {
         role: args.role ? String(args.role) : undefined,
+        preset: args.preset ? String(args.preset) : undefined,
+        isolate: args.isolate === true ? true : undefined,
         timeoutMs,
         scratchpad,
       });

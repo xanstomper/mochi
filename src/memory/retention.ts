@@ -1,8 +1,17 @@
 // Disk retention / GC (master rebuild hygiene): bounded cleanup of session state
 // (.mochi/state) and trace files (.mochi/traces) so long-lived agents don't
 // accumulate unbounded disk usage.
+//
+// Corpus exception for traces: a completed run's trace (terminal
+// task:completed/task:failed event) is NOT GC'd until its trajectory export
+// exists in exports/ — the raw trace is the only copy of the step-level
+// record the export is built from, and age alone must not destroy the
+// distillation corpus. Incomplete/crashed traces age out as before. The
+// check lives in observability/trace.ts (isUnexportedCompletedTrace) and
+// is shared with pruneTraces so both janitors apply the identical rule.
 import { readdirSync, statSync, unlinkSync, existsSync, mkdirSync, appendFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { exportedTrajectoryRunIds, isUnexportedCompletedTrace } from '../observability/trace.js';
 
 export interface RetentionResult {
   deletedFiles: number;
@@ -12,7 +21,7 @@ export interface RetentionResult {
 
 const DEFAULT_AGE_DAYS = 60;
 
-function pruneDir(dirPath: string, maxAgeMs: number): RetentionResult {
+function pruneDir(dirPath: string, maxAgeMs: number, protect?: (filePath: string, fileName: string) => boolean): RetentionResult {
   const res: RetentionResult = { deletedFiles: 0, freedBytes: 0, remainingFiles: 0 };
   if (!existsSync(dirPath)) return res;
   try {
@@ -25,7 +34,7 @@ function pruneDir(dirPath: string, maxAgeMs: number): RetentionResult {
         const s = statSync(fp);
         if (!s.isFile()) continue;
         const age = Date.now() - s.mtimeMs;
-        if (age > maxAgeMs) {
+        if (age > maxAgeMs && !(protect?.(fp, f) ?? false)) {
           const size = s.size;
           unlinkSync(fp);
           res.deletedFiles++;
@@ -52,7 +61,11 @@ export function runRetention(opts: {
   const stateDir = resolve(workspaceDir, 'state');
   const tracesDir = resolve(workspaceDir, 'traces');
   const stateRes = pruneDir(stateDir, maxAgeMs);
-  const tracesRes = pruneDir(tracesDir, maxAgeMs);
+  // Traces get corpus protection (see header): scan the exports dir once
+  // for the whole pass, and only content-check files old enough to delete.
+  const exported = exportedTrajectoryRunIds(workspaceDir);
+  const tracesRes = pruneDir(tracesDir, maxAgeMs, (fp, f) =>
+    f.endsWith('.jsonl') && isUnexportedCompletedTrace(workspaceDir, fp, exported));
   const logDir = resolve(workspaceDir, 'logs');
   try { mkdirSync(logDir, { recursive: true }); } catch { /* ignore */ }
   const logPath = resolve(logDir, 'retention.log');

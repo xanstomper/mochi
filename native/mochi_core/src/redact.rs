@@ -1,13 +1,14 @@
 //! High-performance secret-pattern redaction for tool output, traces, and
-//! prompts. Mirrors the patterns in `src/security.ts` so a single byte-level
-//! matcher defines what counts as a secret — Rust and TS must agree.
+//! prompts. Mirrors the patterns in `src/security/security.ts` on a
+//! best-effort basis — the TS pass always runs over this module's output
+//! (see redact() there), so lag here can cost speed but never coverage.
 //!
 //! This module is intentionally ZERO-DEPENDENCY. The mochi_core crate ships
 //! with no `regex` dep (see Cargo.toml); we hand-roll a byte-scanner DFA
 //! that's faster than `regex`'s allocation per match anyway, and keeps the
 //! 1.4MB static-binary footprint that benchmarks (BENCHMARKS.md) promise.
 //!
-//! Pattern contract (must match `src/security.ts` SECRET_PATTERNS exactly):
+//! Pattern contract (aim to match `src/security/security.ts` SECRET_PATTERNS):
 //!   * Each match is replaced byte-for-byte with the literal `[secret-redacted]`.
 //!   * Matching is ASCII-only. UTF-8 sequences whose continuation bytes could
 //!     plausibly extend a key (none of the patterns include non-ASCII) are

@@ -110,6 +110,10 @@ Usage:
   mochi memory
   mochi inspect "<query>"
   mochi trace [<goalId>]             # replay the run trace for a goal
+  mochi gate run|baseline|freeze|check  # frozen regression gate (bench/frozen/)
+  mochi sleeptime [--cap <usd>] [--dry-run]  # nightly consolidation pipeline (repair+curator+gate+health+curriculum, hard spend cap)
+  mochi tools forged [disable <name>|evaluate|run]  # Tool Forge audit view: self-synthesised tools, provenance + state
+  mochi health [--force] [--offline]  # proactive repo health scan (tests/deps/TODOs/dead code/hotspots digest)
   mochi session list                 # list past sessions
   mochi session search "<text>"       # full-text search past transcripts
   mochi speculate "<question>"
@@ -191,6 +195,18 @@ Environment:
 function cliDirname(): string {
   // dist/cli.js → dist/; src/cli.ts → src/. Resolves relative to this file.
   return dirname(fileURLToPath(import.meta.url));
+}
+
+/** Compact "3m ago" / "2d ago" / "never" string. Sub-1m inputs render as "just now"
+ *  so the operator's eye doesn't churn on sub-second noise from fresh failures. */
+function formatAgeAgo(ms: number, now: number = Date.now()): string {
+  if (!ms || ms <= 0) return 'never';
+  const diff = now - ms;
+  if (diff < 0) return 'just now';
+  if (diff < 60_000) return 'just now';
+  if (diff < 3_600_000) return `${Math.max(1, Math.floor(diff / 60_000))}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  return `${Math.floor(diff / 86_400_000)}d ago`;
 }
 
 function srcFileNewer(dir: string, mtime: number): boolean {
@@ -571,7 +587,7 @@ async function main() {
     // daily) so learning compounds unattended. Unit in
     // ./self-train-schedule.js; this stays a thin adapter.
     if (flags.schedule !== undefined) {
-      const { validateTrainSchedule, trainSchedule, trainCronPrompt } = await import('./self-train-schedule.js');
+      const { validateTrainSchedule, trainSchedule, sleeptimeCronPrompt } = await import('./self-train-schedule.js');
       const bad = validateTrainSchedule(flags.schedule === true ? undefined : flags.schedule);
       if (bad) { console.error(bad); process.exit(1); }
       const rest = positional.slice(1);
@@ -587,7 +603,7 @@ async function main() {
       const res = await fetch(`http://127.0.0.1:${info?.port}/api/cron`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${info?.token}` },
-        body: JSON.stringify({ action: 'add', prompt: trainCronPrompt(focus), schedule: trainSchedule(flags.schedule === true ? undefined : flags.schedule) }),
+        body: JSON.stringify({ action: 'add', prompt: sleeptimeCronPrompt(focus), schedule: trainSchedule(flags.schedule === true ? undefined : flags.schedule) }),
       });
       const data = (await res.json()) as { ok?: boolean; error?: string; id?: string };
       if (!res.ok || data.error) { console.error(data.error ?? 'Daemon error'); process.exit(1); }
@@ -2671,11 +2687,38 @@ async function main() {
   // open harness issue (Mochi repairs itself). Works even when the run happened
   // elsewhere because issues persist in `.mochi/reports/harness-issues.json`.
   if (first === 'selfheal') {
-    const { listHarnessIssues, buildRepairPrompt } = await import('./core/harness-issues.js');
-    const open = listHarnessIssues(runtime.workspace.dir, { status: 'open' }).sort((a, b) => b.count - a.count);
-    if (flags.list || flags.status || flags.summary) {
-      if (open.length === 0) console.log('No open harness issues.');
-      else { console.log(`Open harness issues (${open.length}):`); for (const i of open) console.log(`  ${i.signature}  ${i.kind} x${i.count}  ${i.title}`); }
+    const { listHarnessIssues, resolveHarnessIssue, buildRepairPrompt } = await import('./core/harness-issues.js');
+    const all = listHarnessIssues(runtime.workspace.dir).sort((a, b) => b.count - a.count);
+    const open = all.filter((i) => i.status === 'open');
+    const showResolved = Boolean(flags.resolved);
+    // --resolve <sig>: mark an issue resolved without spawning a repair agent.
+    // Use it when the operator knows the entry is stale (e.g. an old workspace
+    // remigrated a 2024 read-on-dir EISDIR signature) or when the failure was
+    // task-specific and not actually a harness defect. Idempotent.
+    const resolveArg = typeof flags.resolve === 'string' ? flags.resolve : undefined;
+    if (resolveArg) {
+      const match = all.find((i) => i.signature.startsWith(resolveArg));
+      if (!match) { console.error(`No harness issue with signature prefix "${resolveArg}".`); process.exitCode = 1; return; }
+      const ok = resolveHarnessIssue(runtime.workspace.dir, match.signature);
+      console.log(`${ok ? 'Resolved' : 'No-op'}: ${match.signature} (${match.kind} x${match.count}) — ${match.title}`);
+      return;
+    }
+    if (flags.list || flags.status || flags.summary || showResolved) {
+      const visible = showResolved ? all : open;
+      if (visible.length === 0) {
+        console.log(showResolved ? 'No harness issues (open or resolved).' : 'No open harness issues.');
+      } else {
+        console.log(`${showResolved ? 'All' : 'Open'} harness issues (${visible.length}):`);
+        for (const i of visible) {
+          // Show when the issue was last seen AND last repaired at — the
+          // 24h auto-repair cooldown (REPAIR_COOLDOWN_MS) gates auto-spawn
+          // on `lastRepairAt`, so an operator triaging the ledger needs to
+          // see both ages to decide whether to retry manually.
+          const lastSeenAgo = formatAgeAgo(i.lastSeen);
+          const lastRepairAgo = i.lastRepairAt ? formatAgeAgo(i.lastRepairAt) : 'never';
+          console.log(`  ${i.signature}  ${i.kind} x${i.count}  [${i.status}]  last-seen=${lastSeenAgo}  last-repair=${lastRepairAgo}  ${i.title}`);
+        }
+      }
       return;
     }
     if (open.length === 0) { console.log('No open harness issues. Nothing to do.'); return; }
@@ -2685,6 +2728,30 @@ async function main() {
     console.log(`Running self-repair for ${target!.signature} (${target!.kind}, seen ${target!.count}x)...`);
     const summary = await runtime.runPrompt(buildRepairPrompt(target!), { sessionId: runtime.activeSessionId });
     console.log(summary);
+    return;
+  }
+
+  if (first === 'gate') {
+    const { handleGateCommand } = await import('./evals/gate-cli.js');
+    await handleGateCommand({ positional, flags, cwd });
+    return;
+  }
+
+  if (first === 'sleeptime') {
+    const { handleSleeptimeCommand } = await import('./sleeptime/cli.js');
+    await handleSleeptimeCommand({ positional, flags, cwd });
+    return;
+  }
+
+  if (first === 'health') {
+    const { handleHealthCommand } = await import('./health/cli.js');
+    await handleHealthCommand({ positional, flags, cwd });
+    return;
+  }
+
+  if (first === 'tools') {
+    const { handleToolsCommand } = await import('./tools/forge-cli.js');
+    await handleToolsCommand({ positional, flags, cwd });
     return;
   }
 
@@ -2701,6 +2768,14 @@ async function main() {
       ids.push(files[files.length - 1].replace(/\.jsonl$/, ''));
     }
     for (const gid of ids) {
+      if (flags['export-trajectory']) {
+        const { exportTrajectory } = await import('./observability/trajectory.js');
+        const exported = exportTrajectory(runtime.workspace.dir, gid);
+        if (!exported) { console.log(`No trace for ${gid}.`); continue; }
+        const outcomeLabel = exported.record.outcome.stopReason ?? (exported.record.outcome.completed ? 'completed' : 'incomplete');
+        console.log(`Trajectory exported: ${exported.path} (${exported.record.steps.length} steps, outcome: ${outcomeLabel})`);
+        continue;
+      }
       const entries = readTrace(runtime.workspace.dir, gid);
       if (!entries.length) { console.log(`No trace for ${gid}.`); continue; }
       console.log(formatTrace(entries));

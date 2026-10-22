@@ -1,0 +1,270 @@
+{
+  "passed": 24,
+  "total": 24,
+  "results": [
+    {
+      "id": "exact-basic",
+      "title": "Clean exact match",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "exact",
+      "nearMissInMessage": false,
+      "message": "Edited a.ts (exact match; strategy: exact; syntax check: passed)"
+    },
+    {
+      "id": "exact-dollar-patterns",
+      "title": "newText containing $$ / $& replacement patterns stays verbatim",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "exact",
+      "nearMissInMessage": false,
+      "message": "Edited a.ts (exact match; strategy: exact; syntax check: passed)"
+    },
+    {
+      "id": "whitespace-indent-drift",
+      "title": "Model re-indented the block",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "normalized",
+      "nearMissInMessage": false,
+      "message": "Edited a.ts (fuzzy match (whitespace differences were tolerated); strategy: normalized; syntax check: passed)"
+    },
+    {
+      "id": "tabs-vs-spaces",
+      "title": "File uses tabs, model sent spaces",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "normalized",
+      "nearMissInMessage": false,
+      "message": "Edited a.ts (fuzzy match (whitespace differences were tolerated); strategy: normalized; syntax check: passed)"
+    },
+    {
+      "id": "trailing-whitespace",
+      "title": "File lines carry trailing spaces",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "normalized",
+      "nearMissInMessage": false,
+      "message": "Edited a.ts (fuzzy match (whitespace differences were tolerated); strategy: normalized; syntax check: passed)"
+    },
+    {
+      "id": "quote-style-drift",
+      "title": "Single vs double quotes across a block",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "normalized",
+      "nearMissInMessage": false,
+      "message": "Edited a.ts (fuzzy match (whitespace differences were tolerated); strategy: normalized; syntax check: passed)"
+    },
+    {
+      "id": "semicolon-drift",
+      "title": "Model omitted trailing semicolons",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "normalized",
+      "nearMissInMessage": false,
+      "message": "Edited a.ts (fuzzy match (whitespace differences were tolerated); strategy: normalized; syntax check: passed)"
+    },
+    {
+      "id": "stale-lines-in-block",
+      "title": "Two middle lines rewritten since the model read the file; anchors intact",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "anchored",
+      "nearMissInMessage": false,
+      "message": "Edited checkout.ts (fuzzy match (anchored: block located via its first/last lines; drifted lines inside were replaced); strategy: anchored; syntax check: passed)\nAnchored match similarity 0.80 — the replaced region was located via its first/last lines; verify the drifted middle lines were replaced as intended."
+    },
+    {
+      "id": "inserted-line-drift",
+      "title": "A log line was inserted inside the block since the model read it",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "anchored",
+      "nearMissInMessage": false,
+      "message": "Edited checkout.ts (fuzzy match (anchored: block located via its first/last lines; drifted lines inside were replaced); strategy: anchored; syntax check: passed)\nAnchored match similarity 0.93 — the replaced region was located via its first/last lines; verify the drifted middle lines were replaced as intended."
+    },
+    {
+      "id": "deleted-line-drift",
+      "title": "The model remembers a line the file no longer has",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "anchored",
+      "nearMissInMessage": false,
+      "message": "Edited checkout.ts (fuzzy match (anchored: block located via its first/last lines; drifted lines inside were replaced); strategy: anchored; syntax check: passed)\nAnchored match similarity 0.73 — the replaced region was located via its first/last lines; verify the drifted middle lines were replaced as intended."
+    },
+    {
+      "id": "duplicated-snippet-refuse",
+      "title": "oldText occurs twice verbatim — must refuse, never guess",
+      "expect": "refused",
+      "outcome": "refused",
+      "fileChanged": false,
+      "pass": true,
+      "strategyHint": null,
+      "nearMissInMessage": true,
+      "message": "oldText matches 2 locations in a.ts (at lines 1, 2); include more surrounding context so it is unique\n  candidate lines 1–1: const v = 1;\n  candidate lines 2–2: const v = 2;\nstrategies tried: exact. Retry with oldText extended by unique surrounding lines from ONE candidate site."
+    },
+    {
+      "id": "duplicated-block-exact-wins",
+      "title": "One copy matches exactly, the other only after normalization — exact site wins",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "exact",
+      "nearMissInMessage": false,
+      "message": "Edited a.ts (exact match; strategy: exact; syntax check: passed)"
+    },
+    {
+      "id": "similar-wrong-site-refuse",
+      "title": "Two similar functions; sent block is a garbled mix of both — must refuse",
+      "expect": "refused",
+      "outcome": "refused",
+      "fileChanged": false,
+      "pass": true,
+      "strategyHint": null,
+      "nearMissInMessage": true,
+      "message": "oldText matches 2 locations in pricing.ts (at lines 6, 2); include more surrounding context so it is unique\n  candidate lines 6–10: export function priceWholesale(item: Item): number {\n  candidate lines 2–2: const base = item.cost * 1.4;\n  note: needle line 2 (\"const base = item.cost * 1.4;\") does not match inside the anchored region but appears verbatim at line 2 — the block may mix two sites\nstr"
+    },
+    {
+      "id": "crlf-file",
+      "title": "CRLF file, LF oldText",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "normalized",
+      "nearMissInMessage": false,
+      "message": "Edited a.ts (fuzzy match (whitespace differences were tolerated); strategy: normalized; syntax check: passed)"
+    },
+    {
+      "id": "unicode-content",
+      "title": "Unicode identifiers/emoji with whitespace drift",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "normalized",
+      "nearMissInMessage": false,
+      "message": "Edited a.ts (fuzzy match (whitespace differences were tolerated); strategy: normalized; syntax check: passed)"
+    },
+    {
+      "id": "gutter-copy",
+      "title": "oldText pasted from read output with line-number gutters",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "exact",
+      "nearMissInMessage": false,
+      "message": "Edited main.py (exact match; strategy: exact; syntax check: passed)"
+    },
+    {
+      "id": "syntax-break-revert",
+      "title": "Edit drops a closing brace — broken code must not stay on disk",
+      "expect": "reverted",
+      "outcome": "refused",
+      "fileChanged": false,
+      "pass": true,
+      "strategyHint": null,
+      "nearMissInMessage": true,
+      "message": "Edit to a.ts (exact match) introduced syntax errors and was REVERTED — the file is unchanged:\n  Line 1: Unclosed opening bracket '{' at line 1\nFix newText and retry."
+    },
+    {
+      "id": "syntax-break-preexisting",
+      "title": "File already broken elsewhere; clean unrelated edit must still apply",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "exact",
+      "nearMissInMessage": true,
+      "message": "Edited a.ts (exact match; strategy: exact; syntax check: pre-existing errors only)\nNote: this file has pre-existing syntax errors not introduced by this edit: Line 1: Unclosed opening bracket '(' at line 1"
+    },
+    {
+      "id": "json-valid-edit",
+      "title": "Valid JSON edit applies",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "exact",
+      "nearMissInMessage": false,
+      "message": "Edited cfg.json (exact match; strategy: exact; syntax check: passed)"
+    },
+    {
+      "id": "json-break-revert",
+      "title": "Edit that corrupts JSON must not stay on disk",
+      "expect": "reverted",
+      "outcome": "refused",
+      "fileChanged": false,
+      "pass": true,
+      "strategyHint": null,
+      "nearMissInMessage": true,
+      "message": "Edit to cfg.json (exact match) introduced syntax errors and was REVERTED — the file is unchanged:\n  Line 4: Expected ',' or '}' after property value in JSON at position 36 (line 4 column 1)\nFix newText and retry."
+    },
+    {
+      "id": "python-indent-break-revert",
+      "title": "Edit that breaks Python indentation must not stay on disk",
+      "expect": "reverted",
+      "outcome": "refused",
+      "fileChanged": false,
+      "pass": true,
+      "strategyHint": null,
+      "nearMissInMessage": true,
+      "message": "Edit to main.py (exact match) introduced syntax errors and was REVERTED — the file is unchanged:\n  Line 1: IndentationError: unexpected indent\nFix newText and retry."
+    },
+    {
+      "id": "not-found-honest",
+      "title": "oldText simply absent — must refuse",
+      "expect": "refused",
+      "outcome": "refused",
+      "fileChanged": false,
+      "pass": true,
+      "strategyHint": null,
+      "nearMissInMessage": true,
+      "message": "oldText not found in a.ts — no unique match (strategies tried: exact, normalized, relaxed, anchored)\n  anchored: no anchor lines found verbatim\nClosest regions in the current file:\n  1. lines 1–1 (similarity 0.40): export const present = true;\n     first difference at needle line 1:\n       you sent: export const absent = computeSomethingEntirelyDifferent();\n       file has: export const present = "
+    },
+    {
+      "id": "no-change-edit",
+      "title": "oldText === newText — must refuse as a no-op",
+      "expect": "refused",
+      "outcome": "refused",
+      "fileChanged": false,
+      "pass": true,
+      "strategyHint": null,
+      "nearMissInMessage": false,
+      "message": "oldText was found but replacement did not change a.ts"
+    },
+    {
+      "id": "big-file-beyond-tolerant-bound",
+      "title": "3000-line file, 40-line block, one drifted line (tolerant stage work-bound)",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "anchored",
+      "nearMissInMessage": false,
+      "message": "Edited big.ts (fuzzy match (anchored: block located via its first/last lines; drifted lines inside were replaced); strategy: anchored; syntax check: passed)\nAnchored match similarity 1.00 — the replaced region was located via its first/last lines; verify the drifted middle lines were replaced as intended."
+    }
+  ]
+}

@@ -77,8 +77,6 @@ export function lerp(a: [number, number, number], b: [number, number, number], t
 
 export const RESULT = '⌿';
 export const MAX_COLLAPSED_LINES = 5;
-/** Cline caps its home view at 60; chat transcript reads best near this. */
-export const TRANSCRIPT_MAX_WIDTH = 100;
 
 // ---- Shared helpers --------------------------------------------------------
 // Cell-aware ANSI/width primitives live in wrap.ts (single source of truth —
@@ -1230,21 +1228,8 @@ export function renderEntry(entry: RenderEntry, _expandTools = false): string[] 
   }
 }
 
-/**
- * Render a thin hairline separator between user→assistant turns. Use this
- * between turns to visually segment the transcript on the grid. Optional —
- * calls renderEntry do NOT emit this automatically (kept composable).
- */
-export function turnRule(width: number, accent: string = T.rule): string {
-  const w = Math.max(0, Math.floor(width / 2));
-  return `  ${accent}${'─'.repeat(w)}${T.reset}`;
-}
 
 // ---- Input bar (Cline input-bar.tsx: ❯ + hairline rules) -------------------
-export interface ComposerModel {
-  text: string;
-  placeholder: string;
-}
 
 export function composerTopRule(width: number): string {
   return `${T.rule}┌${'─'.repeat(Math.max(0, width - 2))}┐${T.reset}`;

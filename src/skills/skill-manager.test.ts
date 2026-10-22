@@ -574,7 +574,9 @@ describe('MCH-200..204 skill quality & mining', () => {
     recordSkillFailure(proj, 'deploy-check', 'health check 404');
     recordSkillFailure(proj, 'deploy-check', 'health check 404 again');
     const rec = loadUsage(proj).byName['deploy-check'];
-    expect(rec.agentCreated ?? false).toBe(false);
+    // Merged semantics: writeSkill marks model-authored (muse lifecycle needs
+    // agentCreated=true to fold failure notes + patch-eligibility into it).
+    expect(rec.agentCreated ?? false).toBe(true);
     expect(rec.score ?? 100).toBeLessThan(40);
     expect((loadSkillFailures(proj)['deploy-check'] as { count?: number } | undefined)?.count ?? 0).toBeGreaterThanOrEqual(2);
     for (let i = 0; i < 5; i++) bumpPatch(proj, 'deploy-check');

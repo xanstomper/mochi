@@ -305,8 +305,10 @@ describe('skill usage stats', () => {
     recordSkillUsage(proj, 'deploy', true);
     recordSkillUsage(proj, 'other', false);
     const m = loadSkillUsage(proj);
-    expect(m.get('deploy')).toEqual({ loads: 2, wins: 1 });
-    expect(m.get('other')).toEqual({ loads: 1, wins: 0 });
+    // Unified registry: records also carry createdAt/lastUsedAt stamps.
+    expect(m.get('deploy')).toEqual(expect.objectContaining({ loads: 2, wins: 1 }));
+    expect(m.get('other')).toEqual(expect.objectContaining({ loads: 1, wins: 0 }));
+    expect(m.get('deploy')?.lastUsedAt).toBeGreaterThan(0);
 
     // Malformed entries are dropped, corrupt files never throw.
     writeFileSync(skillUsagePath(proj), JSON.stringify({ bad: { loads: 'x' }, good: { loads: 1, wins: 0 } }));

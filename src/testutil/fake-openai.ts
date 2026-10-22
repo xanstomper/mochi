@@ -34,6 +34,9 @@ export interface FakeScriptResponse {
   finishReason?: string;
   promptTokens?: number;
   completionTokens?: number;
+  /** Provider-reported billing sent as usage.cost (OpenRouter-style). Leave
+   *  undefined for providers that report no cost (the $0 path). */
+  costUsd?: number;
   /** Hold the response open without writing chunks or [DONE] — simulates a
    *  provider that silently stalls (no data, no error). */
   stall?: boolean;
@@ -173,6 +176,7 @@ export async function startFakeOpenAI(script?: FakeScriptResponse[]): Promise<Fa
         usage: {
           promptTokens: resp.promptTokens ?? 1,
           completionTokens: resp.completionTokens ?? (content ? Math.max(1, Math.ceil(content.length / 4)) : 0),
+          ...(resp.costUsd !== undefined ? { costUsd: resp.costUsd } : {}),
           totalTokens: resp.completionTokens !== undefined
             ? (resp.promptTokens ?? 1) + resp.completionTokens
             : (resp.promptTokens ?? 1) + (content ? Math.max(1, Math.ceil(content.length / 4)) : 0),

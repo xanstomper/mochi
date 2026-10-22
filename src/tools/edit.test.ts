@@ -97,6 +97,85 @@ describe('edit tool', () => {
     expect(readFileSync(resolve(dir, F), 'utf8')).toContain('goodbye world');
   });
 
+  it('applies a drifted block via the anchored strategy and says so', async () => {
+    seed([
+      'export function checkout(cart: Cart): number {',
+      '  const subtotal = cart.items.reduce(sumPrices, 0);',
+      '  const total = applyDiscount(subtotal, cart.coupon);',
+      '  return chargeCard(total, cart.payment);',
+      '}',
+      '',
+    ].join('\n'));
+    const out = String(await editTool.execute({
+      path: F,
+      oldText: [
+        'export function checkout(cart: Cart): number {',
+        '  const subtotal = price * qty;',
+        '  const total = subtotal - discount;',
+        '  return chargeCard(total, cart.payment);',
+        '}',
+      ].join('\n'),
+      newText: [
+        'export function checkout(cart: Cart): number {',
+        '  const subtotal = cart.items.reduce(sumPrices, 0);',
+        '  const total = applyDiscount(subtotal, cart.coupon);',
+        '  return chargeCard(total, cart.payment, { idempotent: true });',
+        '}',
+      ].join('\n'),
+    }, ctx));
+    expect(out).toContain('strategy: anchored');
+    expect(readFileSync(resolve(dir, F), 'utf8')).toContain('idempotent: true');
+  });
+
+  it('reverts an edit that introduces syntax errors and leaves the file unchanged', async () => {
+    const before = 'export function ok(): number {\n  return 1;\n}\n';
+    seed(before);
+    const emitted: Array<{ type: string }> = [];
+    const evCtx = { ...ctx, events: { emit: (e: { type: string }) => { emitted.push(e); } } as any };
+    await expect(editTool.execute({
+      path: F,
+      oldText: 'export function ok(): number {\n  return 1;\n}',
+      newText: 'export function ok(): number {\n  return 2;',
+    }, evCtx)).rejects.toThrow(/REVERTED/);
+    expect(readFileSync(resolve(dir, F), 'utf8')).toBe(before);
+    expect(emitted.some((e) => e.type === 'edit:reverted')).toBe(true);
+    expect(emitted.some((e) => e.type === 'file:changed')).toBe(false);
+  });
+
+  it('does not revert a clean edit in a file with pre-existing syntax errors', async () => {
+    seed('export function broken(: number {\n  return 1;\n}\nexport const target = 1;\n');
+    const out = String(await editTool.execute({ path: F, oldText: 'export const target = 1;', newText: 'export const target = 2;' }, ctx));
+    expect(out).toContain('pre-existing errors only');
+    expect(readFileSync(resolve(dir, F), 'utf8')).toContain('target = 2');
+  });
+
+  it('emits edit telemetry for applied and failed edits', async () => {
+    seed('function x() {\n    return 1;\n}\n');
+    const emitted: Array<Record<string, unknown>> = [];
+    const evCtx = { ...ctx, events: { emit: (e: Record<string, unknown>) => { emitted.push(e); } } as any };
+    await editTool.execute({ path: F, oldText: '  function x() {\n    return 1;\n  }', newText: 'function x() {\n  return 2;\n}' }, evCtx);
+    const appliedEv = emitted.find((e) => e.type === 'edit:applied');
+    expect(appliedEv).toMatchObject({ strategy: 'normalized', integrity: 'passed' });
+
+    await expect(editTool.execute({ path: F, oldText: 'totally absent text here', newText: 'x' }, evCtx)).rejects.toThrow(/not found/);
+    const failedEv = emitted.find((e) => e.type === 'edit:failed');
+    expect(failedEv).toMatchObject({ failureKind: 'not-found' });
+  });
+
+  it('not-found errors carry near-miss regions the model can act on', async () => {
+    seed('export function alpha(input: number): number {\n  const doubled = input * 2;\n  return doubled + 1;\n}\n');
+    const err = await editTool.execute({
+      path: F,
+      oldText: 'export function beta(value: string): string {\n  const parsed = parseInput(value);\n  return renderOutput(parsed);\n}',
+      newText: 'export function beta(value: string): string {\n  return "";\n}',
+    }, ctx).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain('Closest regions');
+    expect((err as Error).message).toContain('first difference');
+    expect((err as Error).message).toContain('beta');
+    expect((err as Error).message).toContain('alpha');
+  });
+
   it('inserts $ replacement patterns in newText literally (no $$ / $& mangling)', async () => {
     seed('const shell = "PID";\n');
     await editTool.execute({ path: F, oldText: 'const shell = "PID";', newText: 'const shell = "$$:$&";' }, ctx);
