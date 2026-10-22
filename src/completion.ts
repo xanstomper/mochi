@@ -59,6 +59,19 @@ export const COMPLETION_COMMANDS: CompletionCommand[] = [
       { name: 'check', description: 'Verify the frozen set hashes and blocklist non-overlap' },
     ],
   },
+  {
+    name: 'costs', description: 'Measured cost accounting surfaces',
+    subcommands: [
+      { name: 'routing', description: 'Cost-per-solve routing table per task kind × model (--rebuild re-derives from traces)' },
+    ],
+  },
+  {
+    name: 'bench', description: 'Benchmarks and the task-class scorecard',
+    subcommands: [
+      { name: 'classes', description: 'Task-class scorecard: run|report|history|check (one honest table per kind of work)' },
+    ],
+  },
+  { name: 'learn', description: 'Learn this repo into an architecture skill with execution-verified claims' },
   { name: 'apply', description: 'Apply a unified diff atomically (all-or-nothing)' },
   { name: 'checkpoint', description: 'Named snapshots' },
   { name: 'rollback', description: 'Restore a checkpoint' },

@@ -66,6 +66,9 @@ export function configFromFlags(flags: Record<string, string | boolean>): FlagOv
   if (flags.model) {
     const m = String(flags.model);
     model.model = m;
+    // An explicit --model is a user pin: cost-per-solve routing measures
+    // the run but must never second-guess the choice (ModelConfig.modelPinned).
+    model.modelPinned = true;
     // The effective per-tier model comes from `model.profiles`, not
     // `model.model` (resolveModel/profile override in createRawProvider). The
     // default config fills every profile, so setting only `model.model` left
