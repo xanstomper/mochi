@@ -28,6 +28,7 @@ import { contentText } from '../types.js';
 import type { EventBus } from '../events.js';
 import type { Workspace } from '../workspace.js';
 import { ContextEngine, estimateMessagesTokens } from '../context.js';
+import { cacheHitRatio, type PrefixStats } from '../prompt/stable-prefix.js';
 import { MemoryStore } from '../memory/memory.js';
 import { projectMemoryPrefix, recordProjectMemory } from '../memory/project-memory.js';
 import { loadReadCache, saveReadCache } from '../state/read-cache-store.js';
@@ -42,16 +43,25 @@ import { isFetchMutationRequest } from '../tools/fetch-methods.js';
 import type { ToolContext, ReadCache } from '../tools/types.js';
 import { detectRepo, languageHint } from '../repo/repo.js';
 import { classifyTaskKind, resolveAutoReasoning, isTrivialWriteTask, isSimpleScriptTask, isReviewTask, scoreTaskComplexity, shouldEscalateComplexity } from '../core/taskkind.js';
+import { decideFastLane, referencedFilesFor, countRepoFiles, resolveFastLaneEnabled, fastLaneToolNames, fastLaneEscalationReason, FASTLANE_LIMITS, type FastLaneDecision, type FastLaneEscalationReason } from '../core/fastlane.js';
+import { recordFastLaneEntry, recordFastLaneEscalation, recordFastLaneOutcome } from '../core/fastlane-stats.js';
+import { classifyTask as classifyChameleonTask } from '../chameleon/task-classifier.js';
 import { trimToLeanTier, trimToReadTier, ALL_TOOLS_MAP, LEAN_TOOL_NAMES, toolsNamedInText } from '../tools/index.js';
 import { applyMeasuredExposure, loadToolUsageLedger, toolExposureMode, toolSchemaBudgetChars, toolsImplicatedBySignals, toolsSchemaChars } from '../tools/tool-exposure.js';
 import { trimForgedProbationTools } from '../tools/tool-forge.js';
-import { classifyTaskTier, nextEscalationTier, type TaskTier } from '../model/model-router.js';
+import { classifyTaskTier, nextEscalationTier, ESCALATE_AFTER_FAILURES, type TaskTier } from '../model/model-router.js';
+import {
+  chooseEscalationTarget, chooseStartModel, escalationBudgetBlock, loadRoutingTable,
+  resolveRoutingSettings, MAX_ROUTING_ESCALATIONS_PER_RUN,
+  type RoutingTable, type RoutingTrigger,
+} from '../observability/routing-table.js';
 import { modelContextBudget, modelSupportsVision } from '../model/model-manager.js';
 import { takeLastComputerScreenshot } from '../tools/computer.js';
 import { buildScreenshotImage, SCREENSHOT_INLINE_MAX_BYTES } from '../computer/screenshot-image.js';
 import { learnedWindowBudget, recordContextRejection } from '../model/window-memory.js';
 import { matchesBaseline, type FlakyTestRef, type VerificationBaseline, type VerificationStatus } from '../verification.js';
 import { diagnoseFile, renderDiagnostics } from '../observability/diagnostics.js';
+import { synthesizeRepro, reproSynthEnabled } from '../observability/repro-synth.js';
 import { captureCorrection, promoteCorrectionToLesson } from '../observability/corrections.js';
 import type { AgentProfile } from '../types.js';
 import type { PromptUserFn } from '../tools/user-prompt.js';
@@ -92,6 +102,18 @@ import {
   type DisciplineFlags,
   type FailureVerdict,
 } from './discipline.js';
+import {
+  MilestoneTracker,
+  buildMilestonePlan,
+  loadMilestoneState,
+  planMilestonesWithChat,
+  resolveLongtaskFlags,
+  runMilestoneCheck,
+  saveMilestoneState,
+  type Milestone,
+  type MilestoneEvent,
+  type MilestoneInput,
+} from './milestones.js';
 import { SpeculativeEngine } from './speculative.js';
 import { retrieveSpeculationMemory, recordSpeculationOutcome, speculationMemoryToPrompt, predictNextFiles } from './speculative.js';
 import { join } from 'node:path';
@@ -128,6 +150,7 @@ import { stat, readFile } from 'node:fs/promises';
 import { condenseOutput } from '../core/output-condenser.js';
 import { autoTestCommand, isWeakVerification, cwdForScope, withCwd } from '../core/testdetect.js';
 import { planVerificationTests } from '../core/test-selection.js';
+import { planTargetedTests } from '../core/test-select.js';
 import { runMutationCheck } from '../core/mutation.js';
 import {
   analyzeFailure, exitCodeOfEnvelope, flakeCommandKey, formatFlakyHits,
@@ -154,6 +177,9 @@ import { buildDigestInput } from '../summary/digest-input.js';
 import { buildSummaryLineage, renderSummaryLineage } from '../summary/verified-compaction.js';
 import { ExecutionRegistry } from '../core/execution-registry.js';
 import { RunJournal, isJournalableTool, modelTurnFingerprint } from './run-journal.js';
+import { RunResultCache } from './result-cache.js';
+import { buildObjection, renderObjection, renderObjectionClosed, objectionDigestLine, OBJECTION_MARKER, type VerifierObjection } from './verifier-objection.js';
+import { calibratedBaseTier, recordEffortOutcome } from './effort-calibration.js';
 import { evaluateTestDensity } from '../core/test-density.js';
 
 export function stripThinkTags(text: string): string {
@@ -436,6 +462,22 @@ export interface AgentOptions {
    *  unaffected. The provider is then re-called (and re-billed) for
    *  every turn of a resumed run, exactly as before this feature. */
   journalModelTurns?: boolean;
+  /** Long-task strategy (src/agent/milestones.ts): host-supplied milestone
+   *  decomposition for this run. When set (or milestonePlanner is), the
+   *  milestone layer activates regardless of the complexity score. */
+  milestonePlan?: MilestoneInput[];
+  /** Long-task strategy: host-supplied planner for the initial
+   *  decomposition and for evidence-gated re-plans. On a re-plan it
+   *  receives the open milestones + the evidence that justified revising
+   *  them and returns replacement milestones for the REMAINING work (or
+   *  null to decline — the run then tightens instead of re-planning). */
+  milestonePlanner?: (req: {
+    task: Task;
+    current?: Milestone;
+    remaining: Milestone[];
+    evidence: string[];
+    replan: boolean;
+  }) => Promise<MilestoneInput[] | null>;
 }
 
 export type AgentStopReason =
@@ -515,11 +557,21 @@ export interface AgentResult {
    *  actually consumed (prompt+completion, straight from the usage object). */
   tokensCached?: number;
   contextUsed?: number;
+  /** P5: cache-hit ratio over the run's MEASURED calls (cachedTokens /
+   *  promptTokens where the provider reported cache figures). Null =
+   *  UNMEASURED (the provider reported nothing) — never a fabricated 0. */
+  cacheHitRatio?: number | null;
+  cacheMeasured?: boolean;
+  /** P5: stable-prefix hashes + every attributed mid-run prefix break. */
+  prefixCache?: PrefixStats;
   durationMs: number;
   /** MCH-82: real per-run cost attribution (from budget ledger estimate). */
   costUsd: number;
   stopReason: AgentStopReason;
   runDigest?: string;
+  /** Fast-lane record for this run (absent when the lane was not entered):
+   *  whether it escalated to the standard profile mid-run, and why. */
+  fastLane?: { entered: boolean; escalated: boolean; escalationReason?: string };
 }
 
 /** Spec for one child run, shared by the sync delegate path and the
@@ -640,6 +692,22 @@ const MUTATION_KINDS: ReadonlySet<string> = new Set(['implement', 'fix', 'refact
  *  with no changes and nothing checked. */
 const PROSE_VERIFY_KINDS: ReadonlySet<string> = new Set(['implement', 'fix', 'refactor']);
 
+/** S4: read-only tools whose results the run result cache must NOT serve —
+ *  either the result depends on mutable harness/run state rather than the
+ *  workspace (todo list, memory recall, loaded-skill text, the model's own
+ *  scratch state), or it is a measurement that re-running is the point of
+ *  (perf), or it is remote and time-varying (fetch / web_search). 'read'
+ *  is excluded for a different reason: the read tool owns read dedup
+ *  itself, with file-precise (mtime/size) invalidation and range-aware
+ *  stubs — strictly better than this cache's coarse epoch for the single
+ *  most-repeated call in any run. The cacheable remainder are pure
+ *  functions of workspace content + args. */
+const RESULT_CACHE_EXCLUDE: ReadonlySet<string> = new Set([
+  'read',
+  'todo', 'memory', 'session_recall', 'skill', 'think', 'accept_plan', 'ask_question',
+  'chameleon', 'perf', 'perf_audit', 'system_info', 'fetch', 'web_search',
+]);
+
 export class Agent {
   private id: string;
   private profile: AgentProfile;
@@ -686,6 +754,12 @@ export class Agent {
   private tokensOut = 0;
   /** Provider-reported cached-input tokens (usage.prompt_tokens_details etc.). */
   private tokensCached = 0;
+  /** P5: per-call usage for the run's cache-hit ratio. cachedTokens stays
+   *  undefined on calls where the provider reported no cache figure — the
+   *  ratio is computed over measured calls only (never a fabricated 0). */
+  private cacheCalls: Array<{ promptTokens: number; cachedTokens?: number }> = [];
+  /** P5: prefix-break count last surfaced in the run log (delta logger). */
+  private lastLoggedBreaks = 0;
   /** Context consumed by the LATEST request: the model's own prompt+completion
    *  counts — real window occupancy, not a chars/4 estimate. */
   private lastContextUsed = 0;
@@ -710,6 +784,21 @@ export class Agent {
   private verifyCount = 0;
   private consecutiveVerifyFailures = 0;
   private escalatedThisTask = false;
+  /** Cost-per-solve routing (B22): per-run ladder state. The routing table
+   *  itself is loaded lazily from workspace state on first use per run —
+   *  a fresh table derived between runs is picked up by the NEXT run, never
+   *  swapped mid-run under a live ladder. */
+  private routingTableCache: RoutingTable | null | undefined;
+  private routingEscalationsThisRun = 0;
+  private routingAttemptedModels = new Set<string>();
+  /** Candidate models snapshotted at run start, BEFORE any routed start or
+   *  escalation collapses the profiles via setActiveModel — the ladder must
+   *  be computed from the configuration the user actually wrote, not from
+   *  the post-switch state where every profile points at the active model. */
+  private routingCandidatesSnapshot: string[] = [];
+  /** verifyCount at the last routing escalation: two triggers firing on the
+   *  SAME failure may not buy two ladder rungs for one piece of evidence. */
+  private routingLastEscalationVerifyCount = -1;
   /** One-way promotion flag for the self-tuning complexity signal. */
   private complexityEscalated = false;
   private autopsy: Autopsy | undefined;
@@ -743,6 +832,21 @@ export class Agent {
   private preEditCheckpoint?: CheckpointResult;
   private checkpointFailed = false;
   private executionRegistry = new ExecutionRegistry({ dedupeWindowMs: 1500 });
+  /** S4: run-scoped read-only result cache (see result-cache.ts). Consulted
+   *  before re-issuing an identical read-only call; invalidated by any
+   *  non-read-only completion (epoch) and any history rewrite (generation).
+   *  Kill-switch: MOCHI_RESULT_CACHE=0. */
+  private resultCache = new RunResultCache();
+  private resultCacheEnabled = process.env.MOCHI_RESULT_CACHE !== '0';
+  /** S4: the currently-open verifier objection (structured form of the last
+   *  gate rejection), pinned as ONE refreshed transcript block so every
+   *  retry carries it. Null when no rejection is outstanding. */
+  private openObjection: VerifierObjection | null = null;
+  /** S4: the reasoning tier this run started at (pre-discipline-offset),
+   *  captured on the first main-loop turn; finish() attributes the run's
+   *  gate verdict to it in the effort-calibration table. */
+  private runBaseReasoningTier: string | undefined;
+  private effortCalibrationLogged = false;
   /** Durable run journal (C6): opened per run() — see run-journal.ts. */
   private journal?: RunJournal;
   private journalOverride?: RunJournal;
@@ -836,6 +940,20 @@ export class Agent {
   private taskComplexity?: import('../core/taskkind.js').TaskComplexity;
   /** Scored complexity breakdown for the current task (score + reasons). */
   private tasksScoreMeta: { complexity?: string; score?: number; reasons?: string[] } = {};
+  /** Short-task fast lane (src/core/fastlane.ts): entered at run start when
+   *  the up-front evidence proves the task short/simple; exited one-way via
+   *  maybeEscalateFastLane when the run itself proves otherwise. */
+  private fastLane = false;
+  private fastLaneEscalated = false;
+  private fastLaneEscalationReason: FastLaneEscalationReason | undefined;
+  private fastLaneDecision: FastLaneDecision | undefined;
+  /** Struggle-gated recall (B19): memory stays gated until this flips. */
+  private fastLaneMemoryReleased = false;
+  private fastLaneLoadToolsCalls = 0;
+  private fastLaneOutcomeRecorded = false;
+  /** Effective iteration cap for this run (fast lane tightens it;
+   *  escalation restores the configured cap). Set at loop start. */
+  private iterationCap = 0;
   /** Scope-fence (drift guard) state: consecutive out-of-scope write vetoes. */
   private scopeVetoCount = 0;
 
@@ -1017,6 +1135,10 @@ export class Agent {
    *  creation EARLY IN THIS RUN disarm the gate for a later edit to an
    *  existing file, which is exactly the mutation the gate exists for. */
   private reproFileChangedAtRunStart = false;
+  /** Reproduce-first gate: repro synthesis (observability/repro-synth.ts)
+   *  has been attempted for this run — synthesis is tried at most once, at
+   *  the moment the veto fires, and never blocks the gate on failure. */
+  private reproSynthTried = false;
   /** Reasoning discipline (src/agent/discipline.ts): per-run tracker +
    *  resolved kill-switch flags. The tracker is created in run() for
    *  non-chat kinds; every consult is optional-chained so bare agents
@@ -1044,6 +1166,18 @@ export class Agent {
   /** Adaptive effort only applies when the user left reasoning on auto. */
   private disciplineEffortAuto = false;
   private lastDisciplineEffort = '';
+  /** Long-task milestone strategy (src/agent/milestones.ts): per-run
+   *  tracker + host inputs, created/resumed in run() when the layer
+   *  activates (host plan/planner, or a 'complex' classification). Every
+   *  consult is guarded on ltTracker so other runs keep legacy behavior. */
+  private ltTracker?: MilestoneTracker;
+  private ltPlanInputs?: MilestoneInput[];
+  private ltPlannerFn?: AgentOptions['milestonePlanner'];
+  /** Spend baselines for per-milestone attribution: tokensOut and the
+   *  iteration index as of the last pacing sample. */
+  private ltLastTokensOut = 0;
+  private ltLastIteration = 0;
+  private ltPacing = true;
   private skillNudged = false;
   /** Master prompt compiler: runs once per task (guarded) so the compiled
    *  blueprint is injected exactly once at the active reasoning tier. */
@@ -1098,6 +1232,8 @@ export class Agent {
     this.journalRunId = opts.runId;
     this.journalDisabled = opts.journalEnabled === false;
     this.journalModelTurnsDisabled = opts.journalModelTurns === false || process.env.MOCHI_JOURNAL_MODEL_TURNS === '0';
+    this.ltPlanInputs = opts.milestonePlan;
+    this.ltPlannerFn = opts.milestonePlanner;
     this.verifyBaseline = opts.verifyBaseline;
     // A shared run-wide cache is preferred so parallel agents that read the same
     // source file don't each re-read it from disk; the cache is keyed on
@@ -1228,6 +1364,12 @@ export class Agent {
     } catch { /* journaling must never affect the run */ }
   }
 
+  /** Fast-lane entry decision for the current/last run (tests + hosts):
+   *  the signals the classifier saw and its evidence trail, eligible or not. */
+  getFastLaneDecision(): FastLaneDecision | undefined {
+    return this.fastLaneDecision;
+  }
+
   /**
    * After compaction the model no longer has earlier tool output in context, so
    * a read "cache-hit, reuse it from context" stub would strand it with no
@@ -1243,6 +1385,21 @@ export class Agent {
   private clearReadStub(): void {
     delete (this.readCache as { __lastRead?: string }).__lastRead;
     this.readTargetCounts.clear();
+  }
+
+  /** S4: history was ACTUALLY rewritten (a digest splice or a compaction
+   *  cut — NOT the periodic checkpoint's no-drop path, which also calls
+   *  clearReadStub and must not void run-scoped claims about a history
+   *  that is still intact). The run-scoped read stubs and the loop result
+   *  cache both claim "already in your context" — after a rewrite that
+   *  claim is void until re-earned; the pinned verifier-objection block
+   *  may have been cut, so it is re-upserted. */
+  private onHistoryRewritten(): void {
+    delete (this.readCache as { __servedReads?: Map<string, string> }).__servedReads;
+    this.resultCache.noteHistoryRewrite();
+    if (this.openObjection) {
+      this.context.upsertMarkedSystemMessage(OBJECTION_MARKER, renderObjection(this.openObjection));
+    }
   }
 
   /** P1.3 measured exposure: fit this.tools to the total schema budget —
@@ -1413,6 +1570,10 @@ export class Agent {
       agentId: this.id,
       message: `[complexity] escalated to complex mid-run (iter ${iteration}, toolErrors ${toolErrors}, verifyFails ${this.consecutiveVerifyFailures}) — full toolset + context preservation restored`,
     });
+    // A task that outgrew its classification mid-run is routing evidence
+    // too: if the measured ladder has a stronger model for this kind, the
+    // rest of the run gets it. One-way, like the complexity promotion.
+    this.tryRoutingEscalation('complexity_escalation');
     // Tell the MODEL (not just the TUI log): the tiers earlier injected a
     // "deferred tools" note, and toolGuidelines dropped the guidance lines for
     // the deep-analysis tools. Without this the model keeps approximating with
@@ -1422,6 +1583,115 @@ export class Agent {
       this.context.addMessage({
         role: 'system',
         content: `TASK COMPLEXITY ESCALATED: this run shows sustained struggle, so the FULL toolset is now advertised — including ${restored.join(', ')}. The earlier "deferred tools" note is obsolete; you no longer need load_tools for these. For the remaining work: re-ground in the actual code (read the current implementation, check blast_radius before risky edits) instead of repeating the failing approach.`,
+      });
+    }
+  }
+
+  /** True while fast-lane memory gating is in force (entered, not yet
+   *  released by struggle or escalation). */
+  private fastLaneMemoryGated(): boolean {
+    return this.fastLane && !this.fastLaneEscalated && !this.fastLaneMemoryReleased;
+  }
+
+  /** Fast lane: restrict the ADVERTISED tool set to the lane allowlist for
+   *  the task kind (+ tools the task text names explicitly). Only defs
+   *  change — executeTool still resolves any deferred tool from the full
+   *  registry, and load_tools re-advertises mid-run. */
+  private applyFastLaneToolProfile(task: Task, kind: import('../core/taskkind.js').TaskKind): void {
+    const allowed = new Set<string>(fastLaneToolNames(kind));
+    for (const n of toolsNamedInText(`${task.title} ${task.description ?? ''}`)) allowed.add(n);
+    if (this.toolAllowlist) {
+      for (const n of [...allowed]) if (!this.toolAllowlist.has(n)) allowed.delete(n);
+    }
+    const defs: import('../types.js').ToolDefinition[] = [];
+    for (const n of allowed) {
+      const t = this.tools.get(n) ?? ALL_TOOLS_MAP.get(n);
+      if (t) defs.push(t.def);
+    }
+    this.toolDefs = defs;
+    this.events.emit({
+      type: 'agent:log', agentId: this.id,
+      message: `[fastlane] advertised ${defs.length} tools (${toolsSchemaChars(defs)} schema chars) for ${kind} task`,
+    });
+  }
+
+  /**
+   * Fast-lane exit check, run every iteration beside maybeEscalateComplexity.
+   * Two-stage: (1) struggle-gated recall — the FIRST hard struggle signal
+   * (a verify failure, repeated tool errors) releases memory injection while
+   * the run stays in the lane (B19: minimal brief first, deeper recall only
+   * when the run shows it needs it); (2) full escalation — when the pure
+   * predicate in core/fastlane.ts says the run has produced not-short
+   * evidence, restore the standard profile wholesale: configured turn cap,
+   * the standard kind tier's toolset, memory, and the repo map the lane
+   * skipped. One-way: an escalated run never re-enters the lane.
+   */
+  private async maybeEscalateFastLane(iteration: number): Promise<void> {
+    if (!this.fastLane || this.fastLaneEscalated) return;
+    if (!this.fastLaneMemoryReleased && (this.consecutiveVerifyFailures >= 1 || this.totalToolErrors() >= 2)) {
+      this.fastLaneMemoryReleased = true;
+      this.context.setMemoryInjectionEnabled(true);
+      this.events.emit({
+        type: 'agent:log', agentId: this.id,
+        message: '[fastlane] memory released on struggle signal — full recall available for the rest of the run',
+      });
+    }
+    const reason = fastLaneEscalationReason({
+      filesEdited: new Set(this.context.state.filesModified).size,
+      filesRead: this.readCache.size,
+      toolErrors: this.totalToolErrors(),
+      consecutiveVerifyFailures: this.consecutiveVerifyFailures,
+      loadToolsCalls: this.fastLaneLoadToolsCalls,
+      iteration,
+    });
+    if (!reason) return;
+    this.fastLaneEscalated = true;
+    this.fastLaneEscalationReason = reason;
+    this.iterationCap = this.config.safety.maxIterations;
+    recordFastLaneEscalation(this.workspace, reason);
+    this.discipline?.noteHardSignal();
+    // Restore the standard tool profile: full registry first (a role-scoped
+    // agent's allowlist is NEVER widened), then the same kind tier the
+    // standard profile would have applied at run start.
+    for (const [name, tool] of ALL_TOOLS_MAP) {
+      if (this.toolAllowlist && !this.toolAllowlist.has(name)) continue;
+      if (!this.tools.has(name)) this.tools.set(name, tool);
+    }
+    const task = this.task;
+    const kind = this.taskKind ?? (task ? classifyTaskKind(task) : 'implement');
+    const taskText = task ? `${task.title} ${task.description ?? ''}` : '';
+    if (kind === 'implement' || kind === 'fix' || kind === 'refactor' || kind === 'test') {
+      if (trimToLeanTier(this.tools, taskText) === 0) trimHeavyTools(this.tools, taskText);
+      this.toolDefs = [...this.tools.values()].map((t) => t.def);
+    } else if (kind === 'document' || kind === 'research' || kind === 'plan' || kind === 'unknown') {
+      trimToReadTier(this.tools, taskText);
+      this.toolDefs = [...this.tools.values()].map((t) => t.def);
+    } else {
+      // chat: the standard profile advertises only the chat tier's defs.
+      this.toolDefs = [...this.tools.values()].filter((t) => CHAT_TOOL_NAMES.has(t.def.name)).map((t) => t.def);
+    }
+    // Memory back on (it may already be, via the struggle release above).
+    this.context.setMemoryInjectionEnabled(true);
+    this.fastLaneMemoryReleased = true;
+    // The repo map the lane skipped: build and inject it now.
+    let mapText = '';
+    if (task) {
+      try {
+        const { taskRepoMapText } = await import('../repo/repo-map.js');
+        mapText = taskRepoMapText(this.workspace.dir, {
+          task: `${task.title}\n${task.description ?? ''}`,
+          kind,
+        }) ?? '';
+      } catch { /* repo-map must never affect the run */ }
+    }
+    this.events.emit({
+      type: 'agent:log', agentId: this.id,
+      message: `[fastlane] escalated to standard profile at iteration ${iteration}: ${reason} — full toolset, repo map, memory, and turn budget restored`,
+    });
+    if (!this.subagentDepth) {
+      this.context.addMessage({
+        role: 'system',
+        content: `FAST LANE EXITED (${reason}): this task is bigger than it looked, so the standard profile is restored — full toolset, memory recall, repo context, and the full turn budget. Re-ground in the actual code before continuing instead of repeating the approach that struggled.${mapText ? `\n\n${mapText}` : ''}`,
       });
     }
   }
@@ -1460,7 +1730,19 @@ export class Agent {
       // trivial one-file edit-and-run tasks — the same "don't burn 50k thinking
       // tokens on a 1-line task" budget the isTrivialWriteTask guard serves.
       if (this.taskComplexity === 'simple') return 'low';
-      return resolveAutoReasoning(kind);
+      // S4 effort calibration: the static per-kind tier is only a prior.
+      // Verified outcome history (kind x tier -> runs/solved, recorded at
+      // finish from the gate's verdict) may move the base ONE rung — down
+      // when a lower tier has proven it solves this kind, up when the
+      // static tier is demonstrably starved. Thresholds live in
+      // effort-calibration.ts; a user-pinned tier never reaches this code.
+      const staticTier = resolveAutoReasoning(kind);
+      const calibrated = calibratedBaseTier(this.workspace.dir, kind, staticTier);
+      if (calibrated.reason && !this.effortCalibrationLogged) {
+        this.effortCalibrationLogged = true;
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: `[effort-calibration] kind=${kind} base ${staticTier} -> ${calibrated.tier} (${calibrated.reason})` });
+      }
+      return calibrated.tier;
     }
     // Guard against any stray invalid value (config re-validates, but stay safe).
     if (raw === 'off' || raw === 'low' || raw === 'medium' || raw === 'high' || raw === 'max' || raw === 'extreme' || raw === 'deep' || raw === 'hard' || raw === 'easy') {
@@ -1488,12 +1770,26 @@ export class Agent {
     this.runStartMarker = hist.length > 0 ? hist[hist.length - 1] : undefined;
     this.consecutiveVerifyFailures = 0;
     this.escalatedThisTask = false;
+    this.routingTableCache = undefined;
+    this.routingEscalationsThisRun = 0;
+    this.routingAttemptedModels = new Set();
+    this.routingLastEscalationVerifyCount = -1;
+    this.routingCandidatesSnapshot = this.routingCandidates();
     this.complexityEscalated = false;
+    // Fast-lane state is per-run (instances are reused on auto-resume).
+    this.fastLane = false;
+    this.fastLaneEscalated = false;
+    this.fastLaneEscalationReason = undefined;
+    this.fastLaneDecision = undefined;
+    this.fastLaneMemoryReleased = false;
+    this.fastLaneLoadToolsCalls = 0;
+    this.fastLaneOutcomeRecorded = false;
     // Reproduce-first gate state is per-run: a reused instance (auto-resume)
     // must not inherit "already reproduced / already vetoed" from a prior run.
     this.reproAttempted = false;
     this.reproVetoFired = false;
     this.reproGateBypassed = false;
+    this.reproSynthTried = false;
     this.reproFileChangedAtRunStart = this.fileChanged;
     // Complexity must be computed here — BEFORE resolveReasoning (line ~799)
     // and the tool-advertising gate — so both hard-task levers (max reasoning
@@ -1512,6 +1808,45 @@ export class Agent {
     );
     this.taskComplexity = complexityScore.complexity;
     this.tasksScoreMeta = { complexity: complexityScore.complexity, score: complexityScore.score, reasons: complexityScore.reasons };
+    // Fast-lane entry decision (src/core/fastlane.ts): cheap up-front signals
+    // only — task text, kind, complexity verdict, referenced files, repo
+    // size, chameleon difficulty. No model call. Entered ONLY on positive
+    // proof of shortness; the decision (and later, any escalation) is
+    // recorded in .mochi/state/fastlane.json so the false-short rate is
+    // measured, not assumed. Subagents keep the standard profile: their
+    // scope is set by the parent's role preset, not by task text.
+    {
+      const kind = classifyTaskKind(task);
+      const decision = decideFastLane({
+        kind,
+        complexity: complexityScore.complexity,
+        complexityScore: complexityScore.score,
+        referencedFiles: referencedFilesFor(task),
+        textChars: `${task.title} ${task.description ?? ''}`.length,
+        acceptanceCriteria: task.acceptanceCriteria?.length ?? 0,
+        chameleonDifficulty: classifyChameleonTask(`${task.title} ${task.description ?? ''}`).difficulty,
+        repoFiles: countRepoFiles(this.cwd),
+        role: task.role,
+        simpleScript: isSimpleScriptTask(task),
+        trivialWrite: isTrivialWriteTask(task),
+      }, resolveFastLaneEnabled(this.config.fastlane) && !this.subagentDepth && !this.planMode);
+      this.fastLaneDecision = decision;
+      if (!decision.eligible) {
+        // A reused ContextEngine must never inherit a previous run's gate.
+        this.context.setMemoryInjectionEnabled(true);
+      }
+      if (decision.eligible) {
+        this.fastLane = true;
+        recordFastLaneEntry(this.workspace, kind);
+        // Struggle-gated recall (B19): the lane starts from a minimal
+        // brief; memory is released on struggle or escalation.
+        this.context.setMemoryInjectionEnabled(false);
+        this.events.emit({
+          type: 'agent:log', agentId: this.id,
+          message: `[fastlane] entered for "${task.title}" (${decision.reasons.join('; ')}) — lean profile: ≤${FASTLANE_LIMITS.maxIterations} turns, targeted verify only, memory gated until struggle`,
+        });
+      }
+    }
     // Clamp the working budget to the active model's REAL window. The configured
     // budget can be larger than what the provider actually accepts (a stale
     // default, or a model switch), which pushed the compaction floor past the
@@ -1591,7 +1926,9 @@ export class Agent {
     }
     // MCH-47: warm-start from the plan cache — if a similar task previously
     // succeeded with an accepted plan, surface it as a starting hypothesis.
-    try {
+    // Fast lane: skipped — a proven-short task pays for no warm-start
+    // machinery; escalation restores the standard profile wholesale.
+    if (!this.fastLane) try {
       const { findPriorPlan } = await import('../core/plan-cache.js');
       const priorPlan = findPriorPlan(this.workspace.dir, task.title, task.description ?? '');
       if (priorPlan) {
@@ -1607,7 +1944,9 @@ export class Agent {
     // call, falls back to the global PageRank map when the task carries no
     // usable terms) so the model starts from the right files instead of
     // discovering them by sequential grep/read.
-    try {
+    // Fast lane: skipped — targeted reads only; the map is built and
+    // injected at escalation time if the run proves to need it.
+    if (!this.fastLane) try {
       const { taskRepoMapText } = await import('../repo/repo-map.js');
       const mapText = taskRepoMapText(this.workspace.dir, {
         task: `${task.title}\n${task.description ?? ''}`,
@@ -1634,7 +1973,8 @@ export class Agent {
     } catch { /* semantic retrieval must never affect task start */ }
     // MCH-50: prefetch — fused structural+temporal+runtime prediction of the
     // files this task will likely read next.
-    try {
+    // Fast lane: skipped (prediction machinery is the overhead being cut).
+    if (!this.fastLane) try {
       const pf = await import('../core/prefetch.js');
       // MCH-54: seed the temporal signal with this run's actual read footprint
       // (main loop) — subagents start with an empty footprint, which is fine.
@@ -1656,7 +1996,8 @@ export class Agent {
       this.prefetchWarmed = new Set(Array.from(this.readCache.keys()));
     } catch { /* prefetch must never affect task start */ }
     // MCH-52: surface mined tool-route patterns from past successful runs.
-    try {
+    // Fast lane: skipped (pattern injection is context the lane does without).
+    if (!this.fastLane) try {
       const { loadToolSeqStore, toolPatternText } = await import('../core/tool-sequence.js');
       // D9: the v2 store carries per-sequence outcomes, so the pattern hint
       // can filter to successful runs once outcome evidence exists.
@@ -1727,6 +2068,12 @@ Continue from 'Next:', do not redo completed progress.`,
 
     let taskKind = this.taskKind = classifyTaskKind(task);
     this.task = task;
+    // Cost-per-solve routing (B22): with a stored routing table, the run
+    // STARTS on the cheapest model with a measured cost-per-solve for this
+    // task kind instead of the configured default — the default is a guess,
+    // the table is a measurement. No table / no proven cell / user-pinned
+    // model → the run starts exactly where it always did.
+    this.applyRoutingStart(taskKind);
     // Reasoning discipline: create the per-run tracker and pin the task
     // contract. Chat runs are exempt (their own turn caps govern them);
     // every mechanism consults the tracker through the resolved flags, and
@@ -1735,6 +2082,11 @@ Continue from 'Next:', do not redo completed progress.`,
     // are reused across runs (auto-resume).
     this.disciplineFlags = resolveDisciplineFlags(this.config.discipline);
     this.discipline = undefined;
+    // S4 per-run resets: result cache, open objection, effort attribution.
+    this.resultCache.clear();
+    this.openObjection = null;
+    this.runBaseReasoningTier = undefined;
+    this.effortCalibrationLogged = false;
     this.disciplineSnap = { read: 0, edited: 0, verifyPass: 0 };
     this.disciplineForceArmed = false;
     this.disciplineTurnMutating = false;
@@ -1759,6 +2111,23 @@ Continue from 'Next:', do not redo completed progress.`,
         }
       }
     }
+    // Long-task milestone strategy: decompose complex/long tasks into
+    // verified milestones with budget slices, checkpoints at milestone
+    // boundaries, and budget pacing (src/agent/milestones.ts). Inert
+    // unless activated (host plan/planner or a 'complex' score); any
+    // failure here leaves the run exactly as it was.
+    try {
+      await this.initLongtask(task, taskKind);
+    } catch { this.ltTracker = undefined; }
+    // S4: hand the context engine the task's open obligations (the
+    // contract checklist, which already folds in the acceptance criteria)
+    // so verified compaction carries them in the ledger and probes them
+    // as must-survive facts — the pinned contract message alone is a
+    // droppable transcript message. Without a discipline contract (chat /
+    // discipline off), the bare acceptance criteria still count.
+    this.context.setObligations(
+      this.discipline ? [...this.discipline.contract.checklist] : [...(task.acceptanceCriteria ?? [])],
+    );
     // P1.3 measured exposure: MOCHI_TOOLS=full / config.toolExposure='full'
     // is the escape hatch — legacy behavior, every built tool advertised,
     // no tiering or budgeting at all. Otherwise 'complex' tasks no longer
@@ -1871,6 +2240,12 @@ Continue from 'Next:', do not redo completed progress.`,
         this.events.emit({ type: 'agent:log', agentId: this.id, message: `[forge] probationary forged tools not relevant to this task, deferred: ${forgeRemoved.join(', ')}` });
       }
     }
+    // Fast lane: shrink the ADVERTISED set to the lane's allowlist (plus any
+    // tool the task text names explicitly — implicated tools are never
+    // dropped, the measured-exposure rule). Execution is unaffected:
+    // executeTool resolves deferred tools from the full registry, and
+    // load_tools re-advertises on demand (its use is an escalation signal).
+    if (this.fastLane) this.applyFastLaneToolProfile(task, taskKind);
     const repo = detectRepo(this.cwd);
     // Harness-v2 perf (FREEZE FIX 2026-08-22): warm codegraph grammars and the
     // Chameleon scaffold strictly in the BACKGROUND - fire-and-forget, never
@@ -1965,7 +2340,9 @@ Continue from 'Next:', do not redo completed progress.`,
         this.resumeProtocolInjected = true;
         if (repo) {
           const memPrefix = projectMemoryPrefix(this.workspace.dir);
-          if (memPrefix) this.context.addMessage({ role: 'system', content: memPrefix });
+          // Fast lane: the project-memory prefix is memory injection too —
+          // gated until struggle/escalation like the volatile block.
+          if (memPrefix && !this.fastLaneMemoryGated()) this.context.addMessage({ role: 'system', content: memPrefix });
         }
         this.context.addMessage({ role: 'system', content: TASK_FOCUS_PROTOCOL });
         this.maybeInjectStaleTodoNote();
@@ -1973,6 +2350,9 @@ Continue from 'Next:', do not redo completed progress.`,
     }
 
     const maxIterations = this.config.safety.maxIterations;
+    // Fast lane: tight turn budget. Escalation restores the configured cap
+    // (this.iterationCap is the loop's live bound, not this local).
+    this.iterationCap = this.fastLane ? Math.min(maxIterations, FASTLANE_LIMITS.maxIterations) : maxIterations;
     const runtimeLimit = this.config.safety.maxRuntimeMinutes * 60 * 1000;
 
     if (oneShot.suggests && !this.planMode) {
@@ -2122,7 +2502,7 @@ Continue from 'Next:', do not redo completed progress.`,
     // Shell-mutation baseline: as late as possible (all harness setup writes
     // to .mochi/ already happened) but before the model can touch anything.
     await this.captureGitBaseline();
-    for (let i = 0; i < maxIterations; i++) {
+    for (let i = 0; i < this.iterationCap; i++) {
       // Hot-reload agent-authored tools (tool_factory): if the agent created,
       // patched, or removed one last iteration, merge it into the live toolset
       // and re-advertise defs to the model (same pattern as MCP hot-load).
@@ -2151,6 +2531,9 @@ Continue from 'Next:', do not redo completed progress.`,
       // (full toolset + context preservation) once real hard-task evidence
       // accumulates — no separate classification LLM call on the fast path.
       this.maybeEscalateComplexity(i);
+      // Fast lane: exit to the standard profile the moment the run itself
+      // produces not-short evidence (see maybeEscalateFastLane).
+      await this.maybeEscalateFastLane(i);
       // Progress heartbeat: stop honestly on sustained no-progress wandering
       // instead of burning all 80 iterations going in circles.
       const heartbeat = await this.progressHeartbeat(i, task);
@@ -2200,6 +2583,14 @@ Continue from 'Next:', do not redo completed progress.`,
         this.budget.recordModelCall();
       }
 
+      // Long-task pacing: attribute the last iteration's spend to the
+      // current milestone and judge burn vs progress. Fires before the
+      // model call so an escalation never pays for one more turn.
+      if (this.ltTracker) {
+        const lt = await this.ltPace(task, i);
+        if (lt) return lt;
+      }
+
       if (i === 0 && this.taskKind !== 'chat') await this.loadMcpInRun();
       if (i > 0 && i % 8 === 0) await this.checkpointAndCompact('periodic');
 
@@ -2244,6 +2635,19 @@ Continue from 'Next:', do not redo completed progress.`,
       }
 
       const packet = this.context.buildPacket(this.toolDefs, task, repo);
+      // P5: surface prefix breaks as they happen — a changed stable prefix
+      // or an in-place history rewrite means the provider cache re-warms
+      // on the next call; the cause names the segment or rewrite.
+      {
+        const stats = this.context.prefixStats();
+        if (stats.breakCount > this.lastLoggedBreaks) {
+          const fresh = stats.breaks.slice(this.lastLoggedBreaks);
+          this.lastLoggedBreaks = stats.breakCount;
+          for (const b of fresh) {
+            this.events.emit({ type: 'agent:log', agentId: this.id, message: `[prefix-cache] prefix break at packet ${b.packet} (cause: ${b.cause}) — provider cache will re-warm` });
+          }
+        }
+      }
       // Large-rewrite protocol: for substantive coding work (not chat), inject a
       // one-time discipline directive on the first iteration. This is the
       // Cline/Codex harness shape — plan first, track with todo, check blast
@@ -2265,8 +2669,9 @@ Continue from 'Next:', do not redo completed progress.`,
       if (taskKind !== 'chat' && repo && !this.resumeProtocolInjected) {
         this.resumeProtocolInjected = true;
         // MCH-76: stable cross-session project-memory prefix, before the protocol.
+        // Fast lane: gated until struggle/escalation (struggle-gated recall).
         const memPrefix = projectMemoryPrefix(this.workspace.dir);
-        if (memPrefix) this.context.addMessage({ role: 'system', content: memPrefix });
+        if (memPrefix && !this.fastLaneMemoryGated()) this.context.addMessage({ role: 'system', content: memPrefix });
         this.context.addMessage({ role: 'system', content: TASK_FOCUS_PROTOCOL });
         this.maybeInjectStaleTodoNote();
       }
@@ -2397,6 +2802,9 @@ Continue from 'Next:', do not redo completed progress.`,
         let runawayFlagged = false;
 
         let activeReasoning = this.resolveReasoning(task);
+        // S4: remember the run's starting (pre-discipline-offset) tier so
+        // finish() can attribute the outcome to the tier actually used.
+        if (this.runBaseReasoningTier === undefined) this.runBaseReasoningTier = activeReasoning;
         // Discipline (adaptive effort): the per-kind base tier is adjusted
         // by the run's evidence state — raised by hard signals (a new
         // failure class, complexity escalation), decayed by clean progress.
@@ -3033,6 +3441,7 @@ Continue from 'Next:', do not redo completed progress.`,
         this.tokensIn += u.promptTokens ?? 0;
         this.tokensOut += u.completionTokens ?? 0;
         this.tokensCached += u.cachedTokens ?? 0;
+        this.cacheCalls.push({ promptTokens: u.promptTokens ?? 0, cachedTokens: u.cachedTokens });
         // Context consumed by THIS request = the model's own prompt+completion
         // counts. No local estimation — the provider measured it.
         this.lastContextUsed = (u.promptTokens ?? 0) + (u.completionTokens ?? 0);
@@ -3073,6 +3482,7 @@ Continue from 'Next:', do not redo completed progress.`,
           inputTokens: Math.max(0, (u.promptTokens ?? 0) - (u.cachedTokens ?? 0)),
           outputTokens: u.completionTokens ?? 0,
           cacheTokens: u.cachedTokens ?? 0,
+          cacheMeasured: u.cachedTokens !== undefined,
           totalTokens: u.totalTokens ?? 0,
           costUsd: callCostUsd,
           model: this.config.model.model,
@@ -3471,6 +3881,13 @@ Continue from 'Next:', do not redo completed progress.`,
           // model sees it even after the nudge message is far back.
           this.context.stuckSignal = `You have issued ${this.nudgeInjections} repeated-tool-call nudges. Change strategy or answer now.`;
         }
+        // Fast lane: count load_tools calls — needing the deferred arsenal
+        // repeatedly is escalation evidence (see FASTLANE_LIMITS).
+        if (this.fastLane && !this.fastLaneEscalated) {
+          for (const c of response.toolCalls) {
+            if ((TOOL_ALIASES[c.function.name] || c.function.name) === 'load_tools') this.fastLaneLoadToolsCalls++;
+          }
+        }
         this.toolCallsTotal++;
         // Cumulative repeated-tool-name breaker. Previously: ANY 4 calls to the
         // same mutating tool without a file change would finish the task as a
@@ -3543,6 +3960,10 @@ Continue from 'Next:', do not redo completed progress.`,
           return this.finish(task, false, 'Too many tool calls; stopping to avoid an infinite loop.', 'tool_loop');
         }
         await this.executeToolCalls(response.toolCalls);
+        // Long-task: if this batch ran the current milestone's own check
+        // command verbatim, the harness re-runs it and closes the
+        // milestone on a pass (checkpoint without a claim round-trip).
+        try { await this.ltMaybeCloseOnShellCheck(response.toolCalls); } catch { /* milestone bookkeeping never breaks the loop */ }
         // Post-verify-pass finish drive: verified work + a wandering model
         // gets nudged to conclude, then harness-finished. Edits disarm
         // (pass is stale); reads/shells-only turns count up.
@@ -3793,6 +4214,14 @@ Continue from 'Next:', do not redo completed progress.`,
         continue;
       }
 
+      // Long-task: a completion claim is judged by the CURRENT
+      // milestone's harness-run check first. Only when every milestone
+      // is closed does the claim reach the task-level verify gate.
+      if (this.ltTracker) {
+        const lt = await this.ltMilestoneClaim(task);
+        if (lt === 'continue') continue;
+        if (lt !== 'proceed') return lt;
+      }
       sm.enter('verify');
       const verification = await this.verify(task, repo);
       this.verifyCount++;
@@ -3821,6 +4250,13 @@ Continue from 'Next:', do not redo completed progress.`,
         // evidence state) — struggle pricing must not leak past success.
         this.discipline?.noteVerifyPass();
         this.consecutiveVerifyFailures = 0;
+        // S4: the gate passed — close the pinned verifier objection in
+        // place, so no stale OPEN objection outlives its resolution (the
+        // transcript keeps exactly one objection block, now CLOSED).
+        if (this.openObjection) {
+          this.context.upsertMarkedSystemMessage(OBJECTION_MARKER, renderObjectionClosed(this.openObjection.attempt));
+          this.openObjection = null;
+        }
         this.consecutiveToolErrorsCount = 0;
         this.cycleNudges = 0;
         this.nudgeInjections = 0;
@@ -3943,7 +4379,29 @@ Continue from 'Next:', do not redo completed progress.`,
         }
       }
       this.addAttempt(task, 'verify', [`${repo.testCommand || repo.buildCommand || 'verify'}`], 'failure', verification.summary);
-      this.context.addKnownError(verification.summary);
+      // S4 verifier-objection threading: pin the STRUCTURED objection as
+      // the one live retry context — failing checks, salient evidence,
+      // what closes it — refreshed in place on every rejection (never a
+      // growing stack of stale objections). state.knownErrors gets a
+      // one-line digest instead of the full summary: the state block is
+      // re-rendered into EVERY later prompt, so appending the whole
+      // summary per failure was a per-turn tax that grew with each retry
+      // while burying the current objection among dead ones. The full
+      // summary still reaches recordFailure/observeFailure unchanged.
+      // Kill-switch: MOCHI_OBJECTION_THREADING=0 restores the legacy
+      // full-summary knownErrors entry (and no pinned block).
+      if (process.env.MOCHI_OBJECTION_THREADING !== '0') {
+        const objection = buildObjection({
+          status: verification.status,
+          summary: verification.summary,
+          attempt: this.consecutiveVerifyFailures + 1,
+        });
+        this.openObjection = objection;
+        this.context.upsertMarkedSystemMessage(OBJECTION_MARKER, renderObjection(objection));
+        this.context.addKnownError(objectionDigestLine(objection));
+      } else {
+        this.context.addKnownError(verification.summary);
+      }
       // Quality slice 3: auto plan-mode escape. After 2+ verify failures AND
       // 2+ tool errors, the agent is in a loop and is going to keep producing
       // the same broken diff over and over. Force a structured recovery plan:
@@ -3964,11 +4422,21 @@ Continue from 'Next:', do not redo completed progress.`,
       // a clean streak and an explicit handoff note instead of inheriting
       // the weaker model's doomed trajectory mid-thought.
       this.consecutiveVerifyFailures++;
+      // Cost-per-solve routing gets first claim on the escalation: when the
+      // measured ladder has a demonstrably stronger model for this kind, it
+      // outranks the static profile ladder (which was configured by guess).
+      // A routing escalation consumes the streak exactly like a tier one —
+      // the stronger model starts with a clean failure count.
+      let routingEscalated = false;
+      if (this.consecutiveVerifyFailures >= ESCALATE_AFTER_FAILURES) {
+        routingEscalated = this.tryRoutingEscalation('verify_failures');
+        if (routingEscalated) this.consecutiveVerifyFailures = 0;
+      }
       const baseTier: TaskTier =
         this.profile.defaultModel === 'fast' ? 'fast'
         : this.profile.defaultModel === 'reasoning' ? 'reasoning'
         : 'standard';
-      const escalation = nextEscalationTier(
+      const escalation = routingEscalated ? null : nextEscalationTier(
         baseTier,
         this.consecutiveVerifyFailures,
         this.escalatedThisTask,
@@ -3993,11 +4461,325 @@ Continue from 'Next:', do not redo completed progress.`,
       if (discFail?.action === 'switch' && this.discipline && this.disciplineFlags.sameFailureSwitch) {
         this.context.addMessage({ role: 'system', content: this.discipline.strategySwitchMessage(discFail, discEditedDelta) });
         this.events.emit({ type: 'agent:log', agentId: this.id, message: `[discipline] strategy switch forced (failure class "${discFail.failureClass.slice(0, 80)}", ${discFail.classCount} failures, same approach)` });
+        // The same failure with the same approach, three times, is also
+        // routing evidence: the current model has demonstrated it cannot
+        // crack this class. Offer the measured ladder a say (the guard in
+        // tryRoutingEscalation stops one failure buying two rungs when the
+        // verify-streak path already escalated on this same verify).
+        this.tryRoutingEscalation('same_failure');
       }
     }
 
-    this.addAttempt(task, 'exhausted', [], 'failure', `Reached maximum iterations (${maxIterations})`);
-    return this.finish(task, false, `Reached maximum iterations (${maxIterations})`, 'max_iterations');
+    this.addAttempt(task, 'exhausted', [], 'failure', `Reached maximum iterations (${this.iterationCap})`);
+    return this.finish(task, false, `Reached maximum iterations (${this.iterationCap})`, 'max_iterations');
+  }
+
+  // ── Long-task milestone strategy (src/agent/milestones.ts) ──────────
+  //
+  // The loop owns the side effects; MilestoneTracker owns the decisions.
+  // Wiring points: initLongtask (run start, after the journal opens),
+  // ltPace (every iteration, after the budget sample), ltMilestoneClaim
+  // (a completion claim is judged by the CURRENT milestone's check before
+  // the task-level verify gate), ltMaybeCloseOnShellCheck (a tool batch
+  // that ran the milestone's own check command verbatim).
+
+  /** Event sink for the tracker: persist the plan state, journal the
+   *  event (toolName 'milestone' — never a real tool, so the journal's
+   *  replay-claim path never mistakes these for tool steps), and log it. */
+  private ltOnEvent(e: MilestoneEvent): void {
+    const t = this.ltTracker;
+    if (!t) return;
+    try { saveMilestoneState(this.workspace, t.state); } catch { /* best-effort */ }
+    let message = '';
+    let output = '';
+    let milestoneId = '';
+    switch (e.type) {
+      case 'plan':
+        message = `[longtask] milestone plan adopted: ${e.state.milestones.length} milestones (${e.state.milestones.map((m) => m.title).join(' → ')})`;
+        output = t.planOverview();
+        break;
+      case 'passed':
+        milestoneId = e.milestone.id;
+        message = `[longtask] milestone PASSED: "${e.milestone.title}" (check attempt ${e.milestone.attempts}) — checkpoint journaled`;
+        output = e.milestone.lastCheckOutput ?? '';
+        break;
+      case 'check-failed':
+        milestoneId = e.milestone.id;
+        message = `[longtask] milestone check FAILED: "${e.milestone.title}" (attempt ${e.milestone.attempts})`;
+        output = e.output;
+        break;
+      case 'tightened':
+        milestoneId = e.milestoneId;
+        message = `[longtask] budget pacing TIGHTENED (${e.reason}); dropped: ${e.droppedIds.join(', ') || 'none'}`;
+        output = e.reason;
+        break;
+      case 'dropped':
+        milestoneId = e.milestone.id;
+        message = `[longtask] optional milestone DROPPED under pacing: "${e.milestone.title}"`;
+        output = e.reason;
+        break;
+      case 'replanned':
+        message = `[longtask] plan REVISED — trigger: ${e.record.trigger} (replaced: ${e.record.replacedIds.join(', ') || 'none'}; added: ${e.record.addedIds.join(', ') || 'none'})`;
+        output = e.record.trigger;
+        break;
+      case 'escalated':
+        message = `[longtask] budget pacing ESCALATED: ${e.reason}`;
+        output = e.reason;
+        break;
+    }
+    try {
+      this.journal?.recordStep({
+        stepId: `milestone:${e.type}:${milestoneId}:${t.state.updatedAt}`,
+        toolName: 'milestone',
+        args: { event: e.type, ...(milestoneId ? { milestone: milestoneId } : {}) },
+        output: output.slice(0, 2000),
+      });
+    } catch { /* journaling must never break the run */ }
+    if (message) this.events.emit({ type: 'agent:log', agentId: this.id, message });
+  }
+
+  /** Write the workspace checkpoint at a milestone boundary (or an
+   *  escalation), formatted for the existing resume injection, whose
+   *  contract is "Continue from 'Next:'". */
+  private ltWriteCheckpoint(note: string): void {
+    const t = this.ltTracker;
+    if (!t) return;
+    try {
+      const goal = this.context.state.goal || this.activeTask?.title || t.state.title;
+      this.workspace.saveCheckpoint(goal, t.checkpointText(note));
+    } catch { /* best-effort */ }
+  }
+
+  private async ltProviderPlan(
+    task: Task,
+    opts?: { remainingTitles?: string[]; evidence?: string[] },
+  ): Promise<MilestoneInput[] | null> {
+    return planMilestonesWithChat(task, async (messages) => {
+      const provider = createProvider(this.config.model, 'reasoning');
+      const res = await provider.chat(messages as import('../types.js').ChatMessage[], [], { temperature: 0.2 });
+      return { content: res.content };
+    }, opts);
+  }
+
+  /** Activate the milestone layer for this run: restore a persisted plan
+   *  (resume at the first open boundary) or decompose fresh (host plan →
+   *  host planner → provider decomposition). Any dead end leaves
+   *  ltTracker unset and the run proceeds exactly as before. */
+  private async initLongtask(task: Task, taskKind: string): Promise<void> {
+    this.ltTracker = undefined;
+    const flags = resolveLongtaskFlags(this.config.longtask);
+    if (!flags.enabled || this.planMode) return;
+    if (!['implement', 'fix', 'refactor', 'test'].includes(taskKind)) return;
+    const hostActivated = this.ltPlanInputs !== undefined || this.ltPlannerFn !== undefined;
+    if (!hostActivated && this.taskComplexity !== 'complex') return;
+    this.ltPacing = flags.pacing;
+    const budget = {
+      tokens: Number.isFinite(this.config.safety.maxTokens) ? (this.config.safety.maxTokens as number) : 0,
+      turns: this.config.safety.maxIterations,
+    };
+    const saved = loadMilestoneState(this.workspace, task.id);
+    if (saved) {
+      if (!saved.milestones.some((m) => m.status !== 'passed' && m.status !== 'dropped')) {
+        return; // a prior session closed the whole plan: nothing to strategize
+      }
+      const tracker = new MilestoneTracker(saved, (e) => this.ltOnEvent(e));
+      this.ltTracker = tracker;
+      this.ltLastTokensOut = this.tokensOut;
+      this.ltLastIteration = 0;
+      const cur = tracker.activate();
+      if (cur) {
+        const pos = tracker.position();
+        this.events.emit({
+          type: 'agent:log', agentId: this.id,
+          message: `[longtask] resuming milestone plan at ${pos.index}/${pos.total} — ${tracker.passedCount()} milestone(s) already passed, checkpointed and journaled`,
+        });
+        this.context.addMessage({ role: 'system', content: tracker.brief(true) });
+      }
+      return;
+    }
+    let inputs: MilestoneInput[] | null = this.ltPlanInputs ?? null;
+    if (!inputs && this.ltPlannerFn) {
+      inputs = await this.ltPlannerFn({ task, remaining: [], evidence: [], replan: false }).catch(() => null);
+    }
+    if (!inputs) inputs = await this.ltProviderPlan(task);
+    if (!inputs || inputs.length === 0) return;
+    let plan;
+    try {
+      plan = buildMilestonePlan(task.id, task.title, inputs, budget);
+    } catch { return; }
+    const tracker = new MilestoneTracker(plan, (e) => this.ltOnEvent(e));
+    this.ltTracker = tracker;
+    this.ltLastTokensOut = this.tokensOut;
+    this.ltLastIteration = 0;
+    tracker.activate();
+    this.ltOnEvent({ type: 'plan', state: plan });
+    this.context.addMessage({ role: 'system', content: `${tracker.planOverview()}\n\n${tracker.brief()}` });
+  }
+
+  /** Per-iteration pacing: attribute this iteration's spend to the
+   *  current milestone, then let the tracker judge burn vs progress.
+   *  Returns a finished result only when pacing escalates. */
+  private async ltPace(task: Task, i: number): Promise<AgentResult | null> {
+    const t = this.ltTracker;
+    if (!t) return null;
+    const dTokens = Math.max(0, this.tokensOut - this.ltLastTokensOut);
+    this.ltLastTokensOut = this.tokensOut;
+    const dTurns = Math.max(0, i - this.ltLastIteration);
+    this.ltLastIteration = i;
+    if (dTokens > 0 || dTurns > 0) {
+      t.noteSpend(dTokens, dTurns);
+      try { saveMilestoneState(this.workspace, t.state); } catch { /* best-effort */ }
+    }
+    if (!this.ltPacing) return null;
+    const a = t.assessPacing();
+    if (a.action === 'none') return null;
+    if (a.action === 'tighten') {
+      const dropped = t.applyTightening(a.reason);
+      if (t.current()) this.context.addMessage({ role: 'system', content: t.tightenMessage(a.reason, dropped) });
+      return null;
+    }
+    if (a.action === 'replan') {
+      const done = await this.ltTryReplan(task, `pacing: ${a.reason}`);
+      if (!done) {
+        const dropped = t.applyTightening(`${a.reason} (re-plan unavailable — tightening instead)`);
+        if (t.current()) this.context.addMessage({ role: 'system', content: t.tightenMessage(a.reason, dropped) });
+      }
+      return null;
+    }
+    // escalate: stop loudly, checkpointed, with the precise state.
+    t.markEscalated(a.reason);
+    this.ltWriteCheckpoint(`escalated by budget pacing: ${a.reason}`);
+    const summary = t.stateSummary(
+      `LONG-TASK ESCALATION — budget pacing stopped this run before it could die silently mid-milestone. ${a.reason}. ` +
+      'Work is checkpointed at the last passed milestone boundary; resume with "mochi resume" (with a larger budget or trimmed scope) to continue from there.',
+    );
+    return this.finish(task, false, summary, 'budget');
+  }
+
+  /** Evidence-gated re-plan of the remaining milestones. The tracker's
+   *  gate consumes the pending evidence, so when both pacing and a check
+   *  failure want a re-plan, whoever asks first with fresh evidence
+   *  wins; the other finds the gate closed and tightens instead. */
+  private async ltTryReplan(task: Task, source: string): Promise<boolean> {
+    const t = this.ltTracker;
+    if (!t) return false;
+    const gate = t.gateReplan(source);
+    if (!gate.allowed) return false;
+    const current = t.current();
+    const remaining = t.state.milestones.filter((m) => m.status === 'pending' || m.status === 'active');
+    let inputs: MilestoneInput[] | null = null;
+    if (this.ltPlannerFn) {
+      inputs = await this.ltPlannerFn({ task, current, remaining, evidence: [gate.reason], replan: true }).catch(() => null);
+    }
+    if (!inputs) {
+      const passedTitles = t.state.milestones.filter((m) => m.status === 'passed').map((m) => m.title);
+      const evidence = [gate.reason];
+      if (current?.lastCheckOutput) {
+        evidence.push(`last check output for "${current.title}": ${current.lastCheckOutput.slice(0, 400)}`);
+      }
+      inputs = await this.ltProviderPlan(task, { remainingTitles: passedTitles, evidence });
+    }
+    if (!inputs || inputs.length === 0) return false;
+    try {
+      t.applyReplan(inputs, `${source}; ${gate.reason}`);
+    } catch { return false; }
+    t.activate();
+    this.context.addMessage({
+      role: 'system',
+      content: `PLAN REVISED — the remaining milestones were re-decomposed from new evidence (${gate.reason}). The revised plan:\n${t.planOverview()}\n\n${t.brief()}`,
+    });
+    return true;
+  }
+
+  /** A completion claim under an active plan is judged by the CURRENT
+   *  milestone's check — executed harness-side — before the task-level
+   *  verify gate sees it. 'proceed' = all milestones closed, fall through
+   *  to the normal gate (the run's final judge); 'continue' = keep
+   *  working; an AgentResult = pacing escalated and finished the run. */
+  private async ltMilestoneClaim(task: Task): Promise<'proceed' | 'continue' | AgentResult> {
+    const t = this.ltTracker;
+    if (!t) return 'proceed';
+    const m = t.current();
+    if (!m) return 'proceed';
+    const result = await runMilestoneCheck(m.check, this.cwd, (cmd, secs) => this.runShell(cmd, secs));
+    const closed = t.recordCheck(result.passed, result.output);
+    // The claim was ADJUDICATED by a harness-run check: the state it
+    // referred to has changed (milestone closed, check failed with a
+    // directive injected, or the plan revised). A model that repeats the
+    // same claim sentence about the NEW state is not stagnating — reset
+    // the same-answer guard, whose streak would otherwise eat the next
+    // claim unseen and finish the run as tool_loop before the milestone
+    // layer's own bounded responses (re-plan gate, pacing escalation)
+    // can engage. Runs without an active plan never touch this.
+    this.lastCompletionAnswer = '';
+    this.sameAnswerStreak = 0;
+    if (result.passed && closed) {
+      this.ltWriteCheckpoint(`milestone passed: ${closed.title}`);
+      if (t.allPassed()) return 'proceed';
+      t.activate();
+      this.context.addMessage({
+        role: 'system',
+        content: `MILESTONE PASSED — "${closed.title}" is closed and checkpointed.\n\n${t.brief()}`,
+      });
+      return 'continue';
+    }
+    // A repeated failure of the same milestone indicts the milestone
+    // SPEC (a wrong assumption baked into its check), not just the work:
+    // attempt an evidence-gated re-plan of what remains before asking
+    // the model to push on against a check that may never pass.
+    if (m.attempts >= 2) {
+      const replanned = await this.ltTryReplan(task, `milestone check failed ${m.attempts}x: ${m.id}`);
+      if (replanned) return 'continue';
+      if (this.ltPacing) {
+        const a = t.assessPacing();
+        if (a.action === 'escalate') {
+          t.markEscalated(a.reason);
+          this.ltWriteCheckpoint(`escalated: ${a.reason}`);
+          const summary = t.stateSummary(
+            `LONG-TASK ESCALATION — ${a.reason}. Work is checkpointed at the last passed milestone boundary; resume with "mochi resume" to continue.`,
+          );
+          return this.finish(task, false, summary, 'budget');
+        }
+      }
+    }
+    this.context.addMessage({ role: 'system', content: t.checkFailedMessage(m, result.output) });
+    return 'continue';
+  }
+
+  /** When a tool batch ran the current milestone's own check command
+   *  verbatim, re-run the check harness-side and close the milestone on
+   *  a pass — a checkpoint the model just demonstrated should not cost
+   *  a separate claim round-trip. (The harness re-runs it: milestone
+   *  evidence is never the model's own report of its command.) */
+  private async ltMaybeCloseOnShellCheck(
+    toolCalls: Array<{ function: { name: string; arguments: string } }>,
+  ): Promise<void> {
+    const t = this.ltTracker;
+    if (!t) return;
+    const m = t.current();
+    if (!m || m.check.kind !== 'command') return;
+    const want = m.check.command.trim();
+    const ranCheck = toolCalls.some((c) => {
+      const name = TOOL_ALIASES[c.function.name] || c.function.name;
+      if (name !== 'shell') return false;
+      try {
+        const args = JSON.parse(c.function.arguments) as { command?: string };
+        return typeof args.command === 'string' && args.command.trim() === want;
+      } catch { return false; }
+    });
+    if (!ranCheck) return;
+    const result = await runMilestoneCheck(m.check, this.cwd, (cmd, secs) => this.runShell(cmd, secs));
+    const closed = t.recordCheck(result.passed, result.output);
+    if (result.passed && closed) {
+      this.ltWriteCheckpoint(`milestone passed: ${closed.title}`);
+      if (!t.allPassed()) {
+        t.activate();
+        this.context.addMessage({
+          role: 'system',
+          content: `MILESTONE PASSED — "${closed.title}" is closed and checkpointed (its check ran green).\n\n${t.brief()}`,
+        });
+      }
+    }
   }
 
   /**
@@ -4095,6 +4877,10 @@ Continue from 'Next:', do not redo completed progress.`,
       msgs.splice(0, oldCount, { role: 'user' as const, content: `[digest of ${oldCount} earlier messages]\n${digest}\n${renderSummaryLineage(buildSummaryLineage(old))}` } as ChatMessage);
       const after = est();
       this.events.emit({ type: 'agent:log', agentId: this.id, message: `[context] MCH-32 digest: ${oldCount} old messages -> ${digest.length} chars (~${Math.max(0, before - after)} tokens saved)` });
+      // S4: a digest rewrites history exactly like a compaction does —
+      // the same stub/objection invalidation applies.
+      this.clearReadStub();
+      this.onHistoryRewritten();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.events.emit({ type: 'agent:log', agentId: this.id, message: `[context] digest failed (non-fatal, falling back to compaction): ${msg.slice(0, 120)}` });
@@ -4216,6 +5002,7 @@ Continue from 'Next:', do not redo completed progress.`,
     // slice that compact() then keeps.
     await this.context.compact(checkpoint, keepFloor);
     this.clearReadStub();
+    this.onHistoryRewritten();
     // Phase 7: durable checkpoint — survives process restarts for resume.
     if (checkpoint) {
       try { this.workspace.saveCheckpoint('', checkpoint); } catch { /* best-effort */ }
@@ -4248,6 +5035,157 @@ Continue from 'Next:', do not redo completed progress.`,
       return m;
     }
     return undefined;
+  }
+
+  /** Models this install can actually run for the current provider: the
+   *  primary, every configured profile, and failover entries on the SAME
+   *  provider (a model swap keeps provider/key/baseUrl — see setActiveModel —
+   *  so another provider's models are not reachable candidates). */
+  private routingCandidates(): string[] {
+    const out = new Set<string>();
+    const add = (m: string | undefined): void => { if (m && m.trim()) out.add(m); };
+    add(this.config.model.model);
+    for (const v of Object.values(this.config.model.profiles ?? {})) add(v);
+    for (const fb of this.config.model.failover ?? []) {
+      if ((fb.provider || '').toLowerCase() === (this.config.model.provider || '').toLowerCase()) add(fb.model);
+    }
+    return [...out];
+  }
+
+  /** The candidate pool routing decisions draw from: the run-start snapshot
+   *  once taken, the live configuration before that. */
+  private routingPool(): string[] {
+    return this.routingCandidatesSnapshot.length > 0 ? this.routingCandidatesSnapshot : this.routingCandidates();
+  }
+
+  /** The stored routing table, loaded at most once per run. Undefined until
+   *  first consulted; null when no table exists (cold start). A table that
+   *  was derived against a different minSamples than the config asks for is
+   *  still honored — its cells carry their own sufficiency flags — because
+   *  re-deriving is the stats pass's job, not the loop's. */
+  private routingTable(): RoutingTable | null {
+    if (this.routingTableCache === undefined) {
+      try {
+        this.routingTableCache = loadRoutingTable(this.workspace.dir);
+      } catch {
+        this.routingTableCache = null;
+      }
+    }
+    return this.routingTableCache;
+  }
+
+  /** Start-of-run routing decision (see the run() call site). Emits exactly
+   *  one routing:decision event when routing is enabled AND there is a
+   *  decision to record (a stored table, or a user pin to defer to); a cold
+   *  start with neither is silent — the legacy default rules, unremarked. */
+  private applyRoutingStart(kind: string): void {
+    const settings = resolveRoutingSettings(this.config.routing);
+    if (!settings.enabled) return;
+    const current = this.config.model.model;
+    if (this.config.model.modelPinned) {
+      this.routingAttemptedModels.add(current);
+      this.events.emit({ type: 'routing:decision', agentId: this.id, taskKind: kind, model: current, source: 'pinned' });
+      return;
+    }
+    const table = this.routingTable();
+    if (!table) return;
+    const choice = chooseStartModel(table, kind, this.routingPool(), this.config.safety.pricing?.overrides);
+    if (!choice) {
+      this.routingAttemptedModels.add(current);
+      this.events.emit({ type: 'routing:decision', agentId: this.id, taskKind: kind, model: current, source: 'insufficient-data' });
+      return;
+    }
+    if (choice.model === current) {
+      this.routingAttemptedModels.add(current);
+      this.events.emit({
+        type: 'routing:decision', agentId: this.id, taskKind: kind, model: current, source: 'already-optimal',
+        costPerSolveUsd: choice.cell.costPerSolveUsd ?? undefined, solveRate: choice.cell.solveRate, samples: choice.cell.runs,
+      });
+      return;
+    }
+    this.setActiveModel(choice.model);
+    this.routingAttemptedModels.add(choice.model);
+    // The context-window clamp in run() was computed against the pre-routing
+    // model; re-clamp so a smaller-window routed model compacts earlier
+    // instead of dying on the provider's hard limit.
+    const reclamped = Math.min(
+      this.effectiveBudgetTokens ?? Number.POSITIVE_INFINITY,
+      modelContextBudget(choice.model, this.config.model.provider),
+      learnedWindowBudget(choice.model, this.config.model.provider) ?? Number.POSITIVE_INFINITY,
+    );
+    if (Number.isFinite(reclamped) && reclamped !== this.effectiveBudgetTokens) {
+      this.effectiveBudgetTokens = reclamped;
+      this.context.setBudgetTokens(reclamped);
+    }
+    this.events.emit({
+      type: 'routing:decision', agentId: this.id, taskKind: kind, model: choice.model, source: 'routed',
+      fromModel: current, costPerSolveUsd: choice.cell.costPerSolveUsd ?? undefined,
+      solveRate: choice.cell.solveRate, samples: choice.cell.runs,
+    });
+    this.events.emit({
+      type: 'agent:log', agentId: this.id,
+      message: `[routing] start model ${choice.model} for kind "${kind}" — measured cost-per-solve $${(choice.cell.costPerSolveUsd ?? 0).toFixed(4)} over ${choice.cell.runs} runs (solve rate ${(choice.cell.solveRate * 100).toFixed(0)}%), replacing default ${current}`,
+    });
+  }
+
+  /** Attempt one escalation up the MEASURED ladder, bought by `trigger`
+   *  evidence. Returns true when the run's model actually changed. Every
+   *  refusal is silent except the budget block, which is an event + a note
+   *  to the model: the trajectory must never imply the stronger model was
+   *  tried when the budget forbade it. De-escalation does not exist here —
+   *  see tryRoutingEscalation's contract in RESULT.md (a run only ever
+   *  moves UP the ladder; a weaker later model would inherit a transcript
+   *  written by a stronger one and strand the failure evidence). */
+  private tryRoutingEscalation(trigger: RoutingTrigger): boolean {
+    const settings = resolveRoutingSettings(this.config.routing);
+    if (!settings.enabled) return false;
+    if (this.config.model.modelPinned) return false;
+    if (this.routingEscalationsThisRun >= MAX_ROUTING_ESCALATIONS_PER_RUN) return false;
+    if (trigger !== 'complexity_escalation' && this.routingLastEscalationVerifyCount === this.verifyCount) return false;
+    const kind = this.taskKind ?? 'unknown';
+    const table = this.routingTable();
+    if (!table) return false;
+    const current = this.config.model.model;
+    const choice = chooseEscalationTarget(
+      table, kind, current, this.routingPool(), this.routingAttemptedModels,
+      this.config.safety.pricing?.overrides,
+    );
+    if (!choice) return false;
+    const block = escalationBudgetBlock(this.budget);
+    if (block) {
+      this.events.emit({
+        type: 'routing:escalation-blocked', agentId: this.id, taskKind: kind,
+        fromModel: current, toModel: choice.model, trigger, reason: block,
+      });
+      this.events.emit({
+        type: 'agent:log', agentId: this.id,
+        message: `[routing] escalation to ${choice.model} (${trigger}) blocked: ${block} — continuing on ${current}`,
+      });
+      this.context.addMessage({
+        role: 'system',
+        content: `A stronger model (${choice.model}) was warranted by repeated failures, but the run's budget forbids switching (${block}). Continue on the current model and finish as far as the budget allows.`,
+      });
+      return false;
+    }
+    this.setActiveModel(choice.model);
+    this.routingAttemptedModels.add(choice.model);
+    this.routingEscalationsThisRun++;
+    this.routingLastEscalationVerifyCount = this.verifyCount;
+    this.syncStallBudget();
+    this.events.emit({
+      type: 'routing:escalated', agentId: this.id, taskKind: kind,
+      fromModel: current, toModel: choice.model, trigger,
+      costPerSolveUsd: choice.cell.costPerSolveUsd ?? undefined, solveRate: choice.cell.solveRate,
+    });
+    this.events.emit({
+      type: 'agent:log', agentId: this.id,
+      message: `[routing] escalated ${current} -> ${choice.model} on ${trigger} — measured solve rate ${(choice.cell.solveRate * 100).toFixed(0)}% over ${choice.cell.runs} ${kind} runs (cost-per-solve $${(choice.cell.costPerSolveUsd ?? 0).toFixed(4)})`,
+    });
+    this.context.addMessage({
+      role: 'system',
+      content: `A stronger model (${choice.model}) is taking over after ${trigger === 'verify_failures' ? 'repeated verification failures' : trigger === 'same_failure' ? 'the same failure recurring' : 'the task proving harder than classified'}. Re-read the failing checks with fresh eyes, change strategy — do NOT repeat the last approach verbatim.`,
+    });
+    return true;
   }
 
   /** Swap the active model in-place: same provider/key/baseUrl, new model id.
@@ -4317,6 +5255,16 @@ Continue from 'Next:', do not redo completed progress.`,
     return false;
   }
 
+  /** S4: the canonical cache key name for a call, or null when the call is
+   *  not result-cacheable (not read-only, or an excluded stateful /
+   *  measurement / remote tool). Consulted identically at lookup and at
+   *  store time so the two can never disagree about a call's identity. */
+  private resultCacheName(name: string, args: Record<string, unknown>): string | null {
+    const canonical = TOOL_ALIASES[name] || name;
+    if (RESULT_CACHE_EXCLUDE.has(canonical)) return null;
+    return this.isReadOnly(canonical, args) ? canonical : null;
+  }
+
   private isReadOnly(name: string, args?: Record<string, unknown>): boolean {
     const canonical = TOOL_ALIASES[name] || name;
     // B27: fetch POST/PUT/PATCH/DELETE mutate REMOTE state — never treat them
@@ -4377,6 +5325,10 @@ Continue from 'Next:', do not redo completed progress.`,
     // Failed calls count too: partial shell mutations are exactly the case
     // fileChanged misses.
     if (!this.isReadOnly(canonical, args)) this.shellProbePending = true;
+    // S4: the same completions invalidate the run result cache — any
+    // non-read-only call may have changed what a cached read-only result
+    // would return, so no stored result survives it (epoch bump).
+    if (!this.isReadOnly(canonical, args)) this.resultCache.noteMutation();
     if (['write', 'edit', 'delete', 'patch'].includes(canonical)) {
       if (toolResult?.error) {
         this.failedMutation = true;
@@ -4847,6 +5799,15 @@ Continue from 'Next:', do not redo completed progress.`,
     // extra tools (MCP) are filtered to the same allowlist — a read-only
     // child must not inherit a mutating MCP tool from its parent.
     const toolAllowlist = preset ? preset.tools : undefined;
+    // P5 fork inheritance: a child with the parent's full tool universe
+    // inherits the parent's stable head verbatim (the child engine applies
+    // it only when its own head signature matches — same project root,
+    // tool set, root rules, repo info). Pruned-tool children render their
+    // own head: their guidelines legitimately differ.
+    if (!toolAllowlist) {
+      const snap = this.context.stableHeadSnapshot();
+      if (snap) childContext.inheritStableHead(snap.text, snap.sig);
+    }
     let extraTools = this.extraTools;
     if (toolAllowlist && extraTools) {
       const allowed = new Set(toolAllowlist);
@@ -5704,7 +6665,12 @@ Continue from 'Next:', do not redo completed progress.`,
         this.vetoLog.push({ tool: tc.function.name, reason: 'reproduce-first gate: first mutation vetoed pending a repro attempt' });
         if (this.vetoLog.length > 20) this.vetoLog.shift();
         this.events.emit({ type: 'agent:log', agentId: this.id, message: '[repro-first] vetoed first mutating call on a fix task — no reproduction attempted yet' });
-        this.vetoToolCall(tc, 'REPRODUCE FIRST: this is a fix/debug task and you have not yet observed the failure. Before editing any code, reproduce it: run the failing test/command or a minimal repro script (shell or verify tool) and look at the actual failure output. Then edit, and re-run the same check to prove the fix. If no runnable check exists for this failure, attempt the closest one you can (e.g. run the affected module/test file directly) — after that attempt, or if you retry this edit, the edit will be allowed through.');
+        // Before sending the model off to hand-write a repro, try to
+        // synthesise a validated one from the failure material already in
+        // the task (repro-synth.ts). Best-effort: on any failure the veto
+        // message is exactly the historical one.
+        const synthesized = await this.trySynthesizeRepro();
+        this.vetoToolCall(tc, 'REPRODUCE FIRST: this is a fix/debug task and you have not yet observed the failure. Before editing any code, reproduce it: run the failing test/command or a minimal repro script (shell or verify tool) and look at the actual failure output. Then edit, and re-run the same check to prove the fix. If no runnable check exists for this failure, attempt the closest one you can (e.g. run the affected module/test file directly) — after that attempt, or if you retry this edit, the edit will be allowed through.' + (synthesized ? `\n\n${synthesized}` : ''));
         return;
       }
       if (!this.reproGateBypassed) {
@@ -6009,6 +6975,39 @@ Continue from 'Next:', do not redo completed progress.`,
       }
     }
 
+    // S4 result cache: an identical read-only call already completed
+    // earlier in this run and nothing that could change its result has
+    // happened since (no mutation epoch bump, no history rewrite) — serve
+    // the stored result instead of re-executing and re-injecting it:
+    // verbatim when small, a short stub pointing at the copy already in
+    // context when large. Consulted BEFORE the ExecutionRegistry on
+    // purpose: the registry's 1500 ms replay re-injects the FULL output,
+    // which is exactly the token waste this cache exists to remove (the
+    // registry still owns in-flight duplicates, which a completed-result
+    // cache cannot serve). Kill-switch: MOCHI_RESULT_CACHE=0.
+    if (this.resultCacheEnabled) {
+      const cacheName = this.resultCacheName(toolName, args);
+      if (cacheName) {
+        const hit = this.resultCache.lookup(cacheName, args);
+        if (hit) {
+          const served = hit.kind === 'verbatim' ? hit.output : hit.text;
+          this.context.addMessage({ role: 'tool', tool_call_id: tc.id, name: tc.function.name, content: served });
+          this.events.emit({
+            type: 'tool:completed',
+            tool: tc.function.name,
+            result: { toolCallId: tc.id, name: tc.function.name, output: served, durationMs: 0 },
+            agentId: this.id,
+          });
+          this.events.emit({
+            type: 'agent:log',
+            agentId: this.id,
+            message: `[smartturns] result-cache ${hit.kind} hit: ${cacheName}${hit.kind === 'stub' ? ` (~${hit.savedChars} chars not re-injected)` : ' (verbatim replay, no re-execution)'}`,
+          });
+          return;
+        }
+      }
+    }
+
     // Execution Registry deduplication: if identical execution already finished within window, replay it
     const execRecord = this.executionRegistry.register({
       toolName,
@@ -6036,16 +7035,43 @@ Continue from 'Next:', do not redo completed progress.`,
           scrubAnsiFragments(maybeRedact(cached.output)),
           { toolName: tc.function.name },
         ).content;
+        // S4: this serve is where a speculatively-executed result ENTERS
+        // the context — backfill the run result cache with the processed
+        // output so a later identical call can be stubbed at the consult
+        // above. And when this call is a SIGNATURE duplicate (a different,
+        // earlier call whose identical output is already in the context),
+        // the registry's full replay is exactly the W2 waste: serve the
+        // cache's stub treatment instead. An explicit replay of THIS
+        // call's own executionId (its speculative completion) is not a
+        // repeat — the content enters the context here, in full.
+        let servedOutput = replayOutput;
+        if (this.resultCacheEnabled) {
+          const cacheName = this.resultCacheName(toolName, args);
+          if (cacheName) {
+            this.resultCache.store(cacheName, args, replayOutput);
+            if (execRecord.executionId !== tc.id) {
+              const hit = this.resultCache.lookup(cacheName, args);
+              if (hit?.kind === 'stub') {
+                servedOutput = hit.text;
+                this.events.emit({
+                  type: 'agent:log',
+                  agentId: this.id,
+                  message: `[smartturns] result-cache stub on registry replay: ${cacheName} (~${hit.savedChars} chars not re-injected)`,
+                });
+              }
+            }
+          }
+        }
         this.context.addMessage({
           role: 'tool',
           tool_call_id: tc.id,
           name: tc.function.name,
-          content: replayOutput,
+          content: servedOutput,
         });
         this.events.emit({
           type: 'tool:completed',
           tool: tc.function.name,
-          result: { toolCallId: tc.id, name: tc.function.name, output: replayOutput, durationMs: 0 },
+          result: { toolCallId: tc.id, name: tc.function.name, output: servedOutput, durationMs: 0 },
           agentId: this.id,
         });
       }
@@ -6361,6 +7387,13 @@ Continue from 'Next:', do not redo completed progress.`,
         this.autoPlanEscapePending = false;
       }
       this.executionRegistry.markCompleted(execRecord.executionId, { output: foldedOutput });
+      // S4: feed the run result cache (read-only calls only — the same
+      // identity the lookup consults; validity is enforced at lookup
+      // time via the mutation epoch + history generation stamps).
+      if (this.resultCacheEnabled) {
+        const cacheName = this.resultCacheName(toolName, args);
+        if (cacheName) this.resultCache.store(cacheName, args, foldedOutput);
+      }
       // MCH-28: a successful accept_plan call flips plan mode to "plan
       // submitted" — the loop's no-tool-call path then ends the run with the
       // submitted plan instead of regex-guessing prose shape.
@@ -6851,6 +7884,16 @@ Continue from 'Next:', do not redo completed progress.`,
     const criteriaFail = this.checkArtifactCriteria(task);
     if (criteriaFail) return { passed: false, status: 'FAIL', checks, summary: criteriaFail };
 
+    // Fast lane: targeted-only verification (see verifyGateFastLane). The
+    // branches ABOVE this point are shared with the standard profile and
+    // are NOT relaxed: read-only kinds, the zero-change BLOCK, greenfield
+    // handling, and the acceptance-criteria gate all already ran. What the
+    // lane skips is only the heavy tail below — full-repo suite/typecheck/
+    // lint/build, baseline masking, flake re-runs, and the mutation check.
+    if (this.fastLane && !this.fastLaneEscalated) {
+      return this.verifyGateFastLane(task, repo, pushedTaskCmd);
+    }
+
     if (checks.length === 0) {
       // P0.5 (VerifierEngine parity): files changed but NO runnable check
       // and no artifact criterion covers them. The engine returns BLOCKED
@@ -7086,6 +8129,75 @@ Continue from 'Next:', do not redo completed progress.`,
   }
 
   /**
+   * Fast-lane verification: the changed files' OWN checks, nothing else —
+   * the task's explicit verification command, the tests related to the
+   * changed files (planTargetedTests), and a per-file syntax check for
+   * changed script files. The evidence standard is the standard gate's:
+   * a mutation-kind change to pre-existing code that NO check covers is
+   * BLOCKED, exactly as in the full gate's checks.length===0 branch; a
+   * failing check is a FAIL with no baseline masking and no flake excuse
+   * (an excused flake in the lane is indistinguishable from a real failure
+   * the lane was too cheap to see — the failure feeds escalation instead).
+   */
+  private async verifyGateFastLane(
+    task: Task,
+    repo: ReturnType<typeof detectRepo>,
+    pushedTaskCmd: string | undefined,
+  ): Promise<LoopVerification> {
+    const checks: string[] = [];
+    if (pushedTaskCmd) checks.push(pushedTaskCmd);
+    if (repo.testCommand) {
+      let targeted = false;
+      try {
+        const plan = await planTargetedTests(this.cwd, repo, repo.testCommand);
+        if (plan.command && !checks.includes(plan.command)) { checks.push(plan.command); targeted = true; }
+      } catch { /* targeting is best-effort; the task command still covers */ }
+      // Composition fix (R1×S4 integration): when targeting finds no
+      // behavioral check, a syntax check alone does not "cover" a change —
+      // the deliberately-wrong-but-valid fix in S4's A3 fixture passed the
+      // lane on `node --check` alone while the full gate rejected it. Fall
+      // back to the repo test command so the lane's evidence standard is
+      // the standard gate's whenever targeting comes up empty; the lane
+      // keeps its savings exactly when targeting does find the checks.
+      if (!targeted && !checks.includes(repo.testCommand)) checks.push(repo.testCommand);
+    }
+    for (const f of new Set(this.context.state.filesModified)) {
+      const rel = f.startsWith(this.cwd) ? f.slice(this.cwd.length + 1) : f;
+      if (/\.(?:js|mjs|cjs)$/.test(rel)) checks.push(`node --check ${rel}`);
+      else if (/\.py$/.test(rel)) checks.push(`python3 -m py_compile ${rel}`);
+    }
+    if (checks.length === 0) {
+      // Mirror of the standard gate's checkless-change BLOCK: files changed
+      // but nothing runnable covers them. Pure creations keep the standard
+      // exemption (existence is their proportionate evidence).
+      const taskKind = this.taskKind ?? classifyTaskKind(task);
+      if (MUTATION_KINDS.has(taskKind) && !this.contentOnly
+        && (await this.gitShowsModifiedTrackedFile() || this.taskNamesPreExistingFile(task))) {
+        return {
+          passed: false, status: 'BLOCKED', checks,
+          summary: 'Verification blocked (fast lane): files were changed, but no targeted check covers them. Add a verification command or acceptance criteria for the changed files, or run the project tests so the change is actually checked.',
+        };
+      }
+      return { passed: true, status: 'PASS', checks, summary: 'No verification configured (fast lane).' };
+    }
+    const outcomes = await Promise.all(
+      checks.map(async (cmd) => ({ cmd, out: await this.runShell(cmd, 120) })),
+    );
+    for (const { cmd, out } of outcomes) {
+      const exitLine = out.match(/^exit_code: (\d+)/);
+      if ((exitLine && Number(exitLine[1]) === 0) || out.trim().endsWith('PASS')) continue;
+      const condensed = condenseOutput(out, { maxLines: 60, preserveContext: 3 });
+      return { passed: false, status: 'FAIL', checks, summary: `Check failed (fast lane): ${cmd}\n${condensed.condensed}` };
+    }
+    // Summary format matters beyond cosmetics: discipline's decisive-finish
+    // only skips the self-review round for summaries verifySummaryEvidenced
+    // recognises ('All checks passed: <real commands>'). A lane-specific
+    // phrasing silently cost every clean fast-lane run an extra review turn
+    // the standard profile never pays — the bench's turn counts caught it.
+    return { passed: true, status: 'PASS', checks, summary: `All checks passed: ${checks.join(', ')} [fast lane — targeted set]` };
+  }
+
+  /**
    * MCH-31 (Codex-style independent acceptance): commands passing proves the
    * suite is green; it does NOT prove the task's stated acceptance criteria
    * are met. Each criterion naming a concrete artifact (file existence /
@@ -7195,6 +8307,39 @@ Continue from 'Next:', do not redo completed progress.`,
    * THIS run flips live `fileChanged` too, and must not disarm the gate
    * for a later edit to an existing file. Kill-switch: MOCHI_REPRO_FIRST=0.
    */
+  /** Repro synthesis (observability/repro-synth.ts): when the
+   *  reproduce-first veto fires and the model has not supplied a repro,
+   *  attempt to synthesise a validated one from the failure material the
+   *  run already has (task title/description + the last tool error) and
+   *  return a message fragment handing it to the model. In-place mode
+   *  only: one confirmation run in the real tree, no shrinking, nothing
+   *  written. Best-effort by design — any failure returns null and the
+   *  gate behaves exactly as it did before synthesis existed.
+   *  Kill-switch: MOCHI_REPRO_SYNTH=0. */
+  private async trySynthesizeRepro(): Promise<string | null> {
+    if (this.reproSynthTried || !reproSynthEnabled()) return null;
+    this.reproSynthTried = true;
+    try {
+      const task = this.activeTask;
+      const material = [task?.title ?? '', task?.description ?? '', this.lastToolError ?? '']
+        .filter(Boolean).join('\n');
+      if (!material.trim()) return null;
+      const result = await synthesizeRepro({
+        repoRoot: this.workspace.dir,
+        text: material,
+        source: 'task-text',
+        testCommand: task?.verificationCommand,
+      }, { inPlace: true, timeoutMs: 30_000 });
+      if (result.outcome === 'validated') {
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: `[repro-synth] synthesised + validated a repro for this task: ${result.candidate.command}` });
+        const sig = result.validation.signature;
+        return `A minimal reproduction was synthesised and verified against the current tree — run it (shell) to observe the failure, then re-run it after your fix to prove the fix:\n  ${result.candidate.command}${sig ? `\nIt currently fails with: ${sig}` : ''}`;
+      }
+      this.events.emit({ type: 'agent:log', agentId: this.id, message: `[repro-synth] synthesis attempted first; outcome=${result.outcome} — model reproduces manually` });
+      return null;
+    } catch { return null; }
+  }
+
   private reproGateApplies(): boolean {
     if (process.env.MOCHI_REPRO_FIRST === '0') return false;
     if (this.planMode || this.contentOnly || this.reproFileChangedAtRunStart) return false;
@@ -8237,6 +9382,12 @@ Continue from 'Next:', do not redo completed progress.`,
       const { closeMcpConnections } = await import('../tools/mcp.js');
       closeMcpConnections(this.mcpConnections);
     } catch { /* module gone / nothing open */ }
+    // Long-task strategy: persist the final plan state on EVERY finish
+    // path, so a later resume (or a post-mortem) sees exactly which
+    // milestone boundary the run stopped at.
+    if (this.ltTracker) {
+      try { saveMilestoneState(this.workspace, this.ltTracker.state); } catch { /* best-effort */ }
+    }
     // Claude Code gates completion on the last tool's exit code; Codex re-runs
     // acceptance criteria independently. Mochi (MCH-26): a run that ENDS on a
     // failed tool call (failed git commit, failed verify command) cannot
@@ -8277,6 +9428,13 @@ Continue from 'Next:', do not redo completed progress.`,
       // not it loaded skills — the curator subtracts a skill's own loads to
       // get the matched no-skill comparison.
       if (verdict !== 'none') recordSkillKindOutcome(this.workspace.dir, kind, verdict === 'pass');
+      // S4 effort calibration: the same gate verdict, attributed to the
+      // (kind x base-tier) outcome table — pass/fail only (partial and
+      // blocked are not clean solve/fail evidence). This is the data the
+      // calibrated base tier in resolveReasoning() is allowed to move on.
+      if (verdict === 'pass' || verdict === 'fail') {
+        recordEffortOutcome(this.workspace.dir, kind, this.runBaseReasoningTier ?? resolveAutoReasoning(kind), verdict === 'pass');
+      }
       this.events.emit({
         type: 'skills:attributed',
         agentId: this.id,
@@ -8511,6 +9669,17 @@ Continue from 'Next:', do not redo completed progress.`,
     if (_errs.length) _runDigestParts.push(`errors=[${_errs.join('; ').slice(0, 300)}]`);
     const _runDigest = _runDigestParts.length ? `[run-digest] ${_runDigestParts.join(' | ')}`.slice(0, 800) : undefined;
     await this.maybeRecordHarnessIssue(task, success, summary, stopReason);
+    const cacheRatio = cacheHitRatio(this.cacheCalls);
+
+    // Fast lane: record the run's outcome exactly once (finishOnce is the
+    // single exit) so the stats store can price the classifier: completed
+    // in lane vs needed escalation vs failed either way.
+    if (this.fastLane && !this.fastLaneOutcomeRecorded) {
+      this.fastLaneOutcomeRecorded = true;
+      recordFastLaneOutcome(this.workspace, this.fastLaneEscalated
+        ? (success ? 'completed-after-escalation' : 'failed-after-escalation')
+        : (success ? 'completed-in-lane' : 'failed-in-lane'));
+    }
 
     return {
       success,
@@ -8521,11 +9690,23 @@ Continue from 'Next:', do not redo completed progress.`,
       tokensIn: this.tokensIn,
       tokensOut: this.tokensOut,
       tokensCached: this.tokensCached,
+      cacheHitRatio: cacheRatio.ratio,
+      cacheMeasured: cacheRatio.measuredCalls > 0,
+      prefixCache: this.context.prefixStats(),
       contextUsed: this.lastContextUsed,
       costUsd: this.costUsd,
       durationMs,
       stopReason,
       runDigest: _runDigest,
+      ...(this.fastLane
+        ? {
+          fastLane: {
+            entered: true,
+            escalated: this.fastLaneEscalated,
+            ...(this.fastLaneEscalationReason ? { escalationReason: this.fastLaneEscalationReason } : {}),
+          },
+        }
+        : {}),
     };
   }
 }

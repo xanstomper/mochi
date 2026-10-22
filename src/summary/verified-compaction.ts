@@ -52,7 +52,7 @@ export interface ProbeMessageLike {
   tool_calls?: Array<{ function: { name: string; arguments: string } }>;
 }
 
-export type ProbeFactKind = 'contract' | 'goal' | 'error' | 'decision' | 'path' | 'constraint' | 'fact';
+export type ProbeFactKind = 'contract' | 'goal' | 'error' | 'decision' | 'path' | 'constraint' | 'obligation' | 'fact';
 
 export interface ProbeFact {
   /** Deterministic id: hash of the fact text + source index. */
@@ -280,6 +280,12 @@ export interface ProbeStateLike {
   decisions?: readonly string[];
   errors?: readonly string[];
   filesModified?: readonly string[];
+  /** S4: the task's open obligations (contract checklist + acceptance
+   *  criteria). They live in a transcript message the cut can drop, and
+   *  the state block does not re-render them — so without a probe fact
+   *  they vanished at compaction and the model re-derived (or silently
+   *  dropped) what "done" meant. Probed like errors: must-survive. */
+  obligations?: readonly string[];
 }
 
 function stateFact(kind: ProbeFactKind, text: string): ProbeFact {
@@ -302,6 +308,7 @@ export function probeFactsFromState(state: ProbeStateLike): ProbeFact[] {
   // initialUserPrompt from ANY first user message ('msg 0' in a synthetic
   // history) — a stub like that is not a pinned contract worth probing.
   if (contract.length >= 24) facts.push(stateFact('contract', contract));
+  for (const o of state.obligations ?? []) if (o.trim()) facts.push(stateFact('obligation', o));
   for (const c of state.constraints ?? []) if (c.trim()) facts.push(stateFact('constraint', c));
   for (const d of state.decisions ?? []) if (d.trim()) facts.push(stateFact('decision', d));
   for (const e of state.errors ?? []) if (e.trim()) facts.push(stateFact('error', e));
@@ -373,6 +380,9 @@ const KIND_PRIORITY: Record<ProbeFactKind, number> = {
   contract: 0,
   goal: 1,
   error: 2,
+  // S4: open obligations rank with errors — losing one loses the task's
+  // definition of done, which is exactly what the probe exists to catch.
+  obligation: 2,
   decision: 3,
   constraint: 4,
   path: 5,
