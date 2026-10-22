@@ -7,6 +7,12 @@ export interface ModelConfig {
   baseUrl: string;
   apiKey?: string;
   model: string;
+  /** True when `model` was chosen EXPLICITLY by the user for this process
+   *  (--model flag, MOCHI_MODEL env, or the model-manager's setModel) rather
+   *  than inherited from config defaults. Cost-per-solve routing never
+   *  overrides an explicit choice: it may still MEASURE the run, but the
+   *  start model and every escalation target defer to the pin. */
+  modelPinned?: boolean;
   profiles?: Record<ModelProfile, string>;
   /** Backup providers tried in order when the primary errors before producing
    *  any output. Each entry is a full ModelConfig (provider/baseUrl/apiKey/
@@ -121,6 +127,32 @@ export interface SkillsConfig {
   probation?: boolean;
 }
 
+/** Cost-per-solve routing (observability/routing-table.ts): runs start on
+ *  the cheapest model with a MEASURED cost-per-solve for their task kind
+ *  and escalate up the measured ladder only on failure evidence. Defaults
+ *  ON; MOCHI_ROUTING=0 is the kill-switch. With no stored routing table
+ *  (fresh install) every decision is a no-op — the configured default and
+ *  the static tier ladder rule, exactly as before. */
+export interface RoutingConfig {
+  /** Master switch: false disables start routing and routing escalations. */
+  enabled?: boolean;
+  /** Minimum historical runs per (kind × model) cell before the cell may
+   *  steer routing. Below it the cell is INSUFFICIENT-DATA. Default 5. */
+  minSamples?: number;
+}
+
+/** Short-task fast lane (src/core/fastlane.ts): tasks the up-front evidence
+ *  proves are short/simple run under a lean execution profile — small tool
+ *  allowlist, no repo-map/prefetch/memory machinery up front, tight turn
+ *  budget, targeted-only verification — and escalate to the standard profile
+ *  mid-run the moment the run itself produces not-short evidence. The
+ *  verifier's evidence standard is NOT relaxed in the lane. Default on;
+ *  set `enabled: false` here — or env MOCHI_FASTLANE=0 — to disable. */
+export interface FastLaneConfig {
+  /** Master switch: false disables the fast lane for every task. */
+  enabled?: boolean;
+}
+
 export interface DisciplineConfig {
   /** Master switch: false disables every discipline mechanism. */
   enabled?: boolean;
@@ -130,6 +162,21 @@ export interface DisciplineConfig {
   decisiveFinish?: boolean;
   sameFailureSwitch?: boolean;
   adaptiveEffort?: boolean;
+}
+
+/** Long-task strategy (src/agent/milestones.ts): complex/long tasks are
+ *  decomposed into milestones with verifiable checks, per-milestone budget
+ *  slices, verified checkpoints at milestone boundaries, and evidence-gated
+ *  re-planning under budget pacing. Defaults ON for tasks the complexity
+ *  scorer calls 'complex' (and for hosts that supply a plan); set
+ *  `enabled: false` here — or env MOCHI_LONGTASK=0 — to disable the layer
+ *  wholesale, MOCHI_LONGTASK_PACING=0 / `pacing: false` to keep milestones
+ *  + checkpoints but disable the pacing responses (tighten/replan/escalate). */
+export interface LongTaskConfig {
+  /** Master switch: false disables the milestone strategy layer. */
+  enabled?: boolean;
+  /** Budget pacing responses (tighten → re-plan → escalate). Default on. */
+  pacing?: boolean;
 }
 
 export interface MochiConfig {
@@ -162,8 +209,14 @@ export interface MochiConfig {
   memory?: { injectionChars?: number };
   /** Reasoning-discipline mechanisms (see DisciplineConfig). All default on. */
   discipline?: DisciplineConfig;
+  /** Short-task fast lane (see FastLaneConfig). Default on. */
+  fastlane?: FastLaneConfig;
+  /** Long-task milestone strategy (see LongTaskConfig). */
+  longtask?: LongTaskConfig;
   /** Evidence-based skill lifecycle (see SkillsConfig). Probation default on. */
   skills?: SkillsConfig;
+  /** Cost-per-solve routing (see RoutingConfig). Default on, data-gated. */
+  routing?: RoutingConfig;
   /** Semantic code retrieval (Wave J, src/repo/semantic-index.ts). When an
    *  embedding model is configured here (or the configured provider is a
    *  known embedding-capable one), the .mochi/index semantic index embeds
@@ -426,7 +479,24 @@ export type MochiEvent =
   | { type: 'edit:reverted'; path: string; strategy: 'exact' | 'normalized' | 'relaxed' | 'anchored'; errors: string; agentId: string }
   | { type: 'edit:failed'; path: string; failureKind: 'not-found' | 'ambiguous' | 'no-change'; attempts: number; nearMisses: number; agentId: string }
   | { type: 'message:chunk'; content: string; agentId: string }
-  | { type: 'usage:updated'; agentId: string; inputTokens: number; outputTokens: number; cacheTokens: number; totalTokens: number; costUsd?: number; model?: string }
+  | { type: 'usage:updated'; agentId: string; inputTokens: number; outputTokens: number; cacheTokens: number; totalTokens: number; costUsd?: number; model?: string; cacheMeasured?: boolean }
+  /** Cost-per-solve routing: the run's start-model decision, emitted once
+   *  per run when a routing table exists or the model is user-pinned.
+   *  source 'routed' = the measured table chose `model`; 'already-optimal'
+   *  = the table's cheapest proven model IS the configured default;
+   *  'insufficient-data' = no proven cell, default kept; 'pinned' = the
+   *  user chose the model explicitly and routing deferred. */
+  | { type: 'routing:decision'; agentId: string; taskKind: string; model: string; source: 'routed' | 'already-optimal' | 'insufficient-data' | 'pinned'; fromModel?: string; costPerSolveUsd?: number; solveRate?: number; samples?: number }
+  /** Cost-per-solve routing: a mid-run escalation up the MEASURED ladder.
+   *  `trigger` is the evidence class that bought it — verifier failures, a
+   *  repeated same-failure, or a mid-run complexity promotion. Never fired
+   *  on a schedule or a hunch. The stats pass counts these per cell. */
+  | { type: 'routing:escalated'; agentId: string; taskKind: string; fromModel: string; toModel: string; trigger: 'verify_failures' | 'same_failure' | 'complexity_escalation'; costPerSolveUsd?: number; solveRate?: number }
+  /** Cost-per-solve routing: an escalation the evidence justified but the
+   *  budget engine forbade. The run continues on its current model; the
+   *  event is the note that says so, so the trajectory never implies the
+   *  stronger model was tried. */
+  | { type: 'routing:escalation-blocked'; agentId: string; taskKind: string; fromModel: string; toModel: string; trigger: 'verify_failures' | 'same_failure' | 'complexity_escalation'; reason: string }
   | { type: 'error'; error: string; agentId?: string }
   | { type: 'pulse'; state: AgentState }
   | { type: 'message'; role: 'user' | 'assistant' | 'system'; content: string; agentId?: string }

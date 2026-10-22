@@ -76,6 +76,8 @@ function envModelConfig(): Partial<MochiConfig['model']> {
     ...(baseUrl ? { baseUrl } : {}),
     ...(apiKey ? { apiKey } : {}),
     ...(model ? { model } : {}),
+    // MOCHI_MODEL is an explicit operator choice — a pin, like --model.
+    ...(model ? { modelPinned: true } : {}),
     ...(Object.keys(profiles).length ? { profiles: profiles as Record<ModelProfile, string> } : {}),
   };
 }
@@ -281,10 +283,13 @@ if (!cfg.model.failover || cfg.model.failover.length === 0) {
       console.error(`Unknown MOCHI_SAFETY "${process.env.MOCHI_SAFETY}" — must be safe|ask|auto|uncensored. Keeping "${cfg.safety.mode}".`);
     }
   }
-  if (process.env.MOCHI_SANDBOX === 'off' || process.env.MOCHI_SANDBOX === 'auto' || process.env.MOCHI_SANDBOX === 'bubblewrap') {
+  if (process.env.MOCHI_SANDBOX === 'off' || process.env.MOCHI_SANDBOX === 'auto' || process.env.MOCHI_SANDBOX === 'bubblewrap' || process.env.MOCHI_SANDBOX === 'unshare') {
     cfg.safety.sandbox = process.env.MOCHI_SANDBOX;
   } else if (process.env.MOCHI_SANDBOX !== undefined && !process.env.VITEST) {
-    console.error(`Unknown MOCHI_SANDBOX "${process.env.MOCHI_SANDBOX}" — must be off|auto|bubblewrap. Ignoring.`);
+    console.error(`Unknown MOCHI_SANDBOX "${process.env.MOCHI_SANDBOX}" — must be off|auto|bubblewrap|unshare. Ignoring.`);
+  }
+  if (process.env.MOCHI_SANDBOX_NETWORK !== undefined) {
+    cfg.safety.sandboxNetwork = /^(1|true|yes)$/i.test(process.env.MOCHI_SANDBOX_NETWORK.trim());
   }
   if (process.env.MOCHI_PERMISSION_READ) cfg.permissions.read = /^(1|true|yes)$/i.test(process.env.MOCHI_PERMISSION_READ.trim());
   if (process.env.MOCHI_PERMISSION_WRITE) cfg.permissions.write = /^(1|true|yes)$/i.test(process.env.MOCHI_PERMISSION_WRITE.trim());
@@ -474,8 +479,8 @@ export function validateConfig(config: MochiConfig): string[] {
   if (s.commandTimeoutSeconds < 5 || s.commandTimeoutSeconds > 600) {
     problems.push(`safety.commandTimeoutSeconds (${s.commandTimeoutSeconds}) is out of range 5–600`);
   }
-  if (s.sandbox !== undefined && s.sandbox !== 'off' && s.sandbox !== 'auto' && s.sandbox !== 'bubblewrap') {
-    problems.push(`safety.sandbox ("${s.sandbox}") is invalid — must be "off", "auto", or "bubblewrap"`);
+  if (s.sandbox !== undefined && s.sandbox !== 'off' && s.sandbox !== 'auto' && s.sandbox !== 'bubblewrap' && s.sandbox !== 'unshare') {
+    problems.push(`safety.sandbox ("${s.sandbox}") is invalid — must be "off", "auto", "bubblewrap", or "unshare"`);
   }
   if (s.maxConcurrentAgents < 1 || s.maxConcurrentAgents > 32) {
     problems.push(`safety.maxConcurrentAgents (${s.maxConcurrentAgents}) is out of range 1–32`);

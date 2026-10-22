@@ -2,7 +2,7 @@ import type { Tool } from './types.js';
 import { classifyCommand } from '../security/security.js';
 import { matchHardline } from '../security/hardline.js';
 import { markMutation } from './fs-signal.js';
-import { detectBubblewrap } from '../exec.js';
+import { probeSandboxCapabilities, resolveShellSandboxPolicy } from '../security/sandbox.js';
 
 /** B31 restructure decision table for the safe-mode risk gate. Returns:
  *  - 'block'         : refuse the command (no sandbox for an elevated-risk
@@ -66,7 +66,7 @@ export const shellTool: Tool = {
       { name: 'timeout', type: 'integer', description: 'Timeout in seconds', required: false },
       { name: 'description', type: 'string', description: 'Short description of what this command does', required: false },
       { name: 'background', type: 'boolean', description: 'Run in the background: returns a task id immediately; check with command "bg status <id>"', required: false },
-      { name: 'sandbox', type: 'boolean', description: 'Run inside a bubblewrap sandbox (read-only root, writable cwd/tmp/caches). Default follows safety.sandbox config.', required: false },
+      { name: 'sandbox', type: 'boolean', description: 'Run inside an OS sandbox (bubblewrap/unshare namespaces: read-only root, writable workspace/tmp/caches, credential dirs masked, network off unless safety.sandboxNetwork). Default follows the permission-tier policy (on for safe/ask/auto, off for uncensored) and the safety.sandbox config.', required: false },
     ],
     permission: 'shell',
     dangerous: true,
@@ -131,20 +131,21 @@ export const shellTool: Tool = {
     // B31 restructure: safe mode no longer blocks elevated-risk BACKGROUND
     // commands outright when an OS sandbox is available — long-lived
     // watchers/servers (the legitimate background workload) are often
-    // network-touching, and the bwrap sandbox contains the FILESYSTEM
-    // (read-only root, writable cwd/tmp), the axis safe mode's destructive
-    // classifications care about most. Note its limits: network stays open
-    // and the home tree is readable, so this is containment, not
-    // exfiltration-proofing. Sandboxed-with-log replaces the block; when no
-    // sandbox backend exists the block stands (fail closed), with the reason
-    // in the message.
+    // network-touching, and the OS sandbox contains the FILESYSTEM
+    // (read-only root, writable cwd/tmp, credential dirs masked), the axis
+    // safe mode's destructive classifications care about most. Note its
+    // limits: network stays open on this path and the non-credential home
+    // tree is readable, so this is containment, not exfiltration-proofing.
+    // Sandboxed-with-log replaces the block; when no OS sandbox backend
+    // exists the block stands (fail closed), with the reason in the message.
     const risk = classifyCommand(command);
     const isSafeMode = ctx.config.safety.mode === 'safe';
     const isBackground = args.background === true;
-    const bgAction = resolveBackgroundRiskAction(risk, isSafeMode, isBackground, detectBubblewrap() !== null);
+    const caps = probeSandboxCapabilities();
+    const bgAction = resolveBackgroundRiskAction(risk, isSafeMode, isBackground, caps.autoLevel === 'os');
     if (bgAction === 'block') {
       const reason = isSafeMode && isBackground && risk !== 'low'
-        ? 'no OS sandbox (bubblewrap) is available on this host'
+        ? 'no OS sandbox backend (bubblewrap/unshare) is available on this host'
         : 'safe mode';
       throw new Error(`Blocked by safety: command classified as ${risk} (${reason}). Command: ${command.slice(0, 200)}`);
     }
@@ -161,12 +162,14 @@ export const shellTool: Tool = {
       const t = startBackgroundTask(command, ctx.cwd, {
         description: typeof args.description === 'string' ? args.description : undefined,
         // B31 restructure: elevated-risk background commands in safe mode run
-        // INSIDE the OS sandbox ('bubblewrap' mode = fail closed: if bwrap
-        // vanished between the availability check and spawn, the task fails
-        // visibly instead of running unsandboxed). Network stays allowed —
-        // the sandbox contains the FILESYSTEM; safe mode's network commands
-        // (curl, npm test) remain legitimate background workloads.
-        sandbox: forceBgSandbox ? { mode: 'bubblewrap' } : undefined,
+        // INSIDE the OS sandbox, pinned to the probed backend (fail closed:
+        // if that backend vanished between the probe and the spawn, the
+        // task fails visibly instead of running unsandboxed). Network stays
+        // allowed — the sandbox contains the FILESYSTEM; safe mode's network
+        // commands (curl, npm test) remain legitimate background workloads.
+        sandbox: forceBgSandbox
+          ? { mode: caps.bubblewrap ? 'bubblewrap' : 'unshare', network: true }
+          : undefined,
       });
       // Known fence limitation: the background task mutates files LATER,
       // outside this synchronous bump's visibility. The bg-status polling
@@ -218,11 +221,24 @@ export const shellTool: Tool = {
     // abort handling) via exec.ts. The exit_code/stdout/stderr envelope below
     // is byte-identical to the old inline spawner.
     const { runShellString } = await import('../exec.js');
-    // Sandbox: per-call flag wins, else the safety.sandbox config. `true`
-    // means "sandbox if possible" (auto); omitting means config default.
-    const cfgSandbox = ctx.config.safety.sandbox ?? 'off';
-    const sandboxMode = args.sandbox === true ? 'auto' : args.sandbox === false ? 'off' : cfgSandbox;
-    let r: { stdout: string; stderr: string; code: number | null; timedOut: boolean; cancelled: boolean };
+    // Sandbox policy (security/sandbox.ts resolveShellSandboxPolicy):
+    // per-call flag > operator config (safety.sandbox) > permission-tier
+    // default. The tier default ENGAGES the sandbox ('auto') for
+    // safe/ask/auto — writes confined to the workspace, credential dirs
+    // masked, network OFF, secret env vars scrubbed — and leaves it off
+    // for uncensored unless the operator configured it. On hosts with no
+    // OS backend, 'auto' degrades to the labeled SOFT jail (scrub + cwd
+    // clamp), never to a silent direct run; the applied level is reported
+    // in the result footer so the model can see why e.g. a network call
+    // failed instead of retrying blindly.
+    const pol = resolveShellSandboxPolicy({
+      safetyMode: ctx.config.safety.mode,
+      configMode: args.sandbox === true ? 'auto' : args.sandbox === false ? 'off' : ctx.config.safety.sandbox,
+      configNetwork: ctx.config.safety.sandboxNetwork,
+      extraWritablePaths: ctx.config.safety.sandboxWritablePaths,
+      workspaceDir: ctx.workspace?.dir ?? targetCwd,
+    });
+    let r: { stdout: string; stderr: string; code: number | null; timedOut: boolean; cancelled: boolean; sandboxLevel?: 'os' | 'soft'; sandboxBackend?: string };
     try {
       r = await runShellString(command, {
         cwd: targetCwd,
@@ -230,7 +246,7 @@ export const shellTool: Tool = {
         timeoutMs,
         maxOutput: MAX_OUTPUT,
         signal: ctx.abortSignal,
-        sandbox: { mode: sandboxMode },
+        sandbox: { mode: pol.mode, network: pol.network, envScrub: pol.envScrub, writablePaths: pol.writablePaths, workspaceDir: pol.workspaceDir },
         onAudit: (info) => {
           if (risk !== 'low' && ctx.events) {
             ctx.events.emit({ type: 'agent:log', agentId: ctx.agentId, message: `[shell:${risk}] ${command.slice(0, 160)} (${info.durationMs}ms)` });
@@ -240,11 +256,20 @@ export const shellTool: Tool = {
     } catch (err) {
       throw err;
     }
-    const out = clipToolOutput([
+    let out = clipToolOutput([
       `exit_code: ${r.code ?? 1}`,
       `stdout:\n${r.stdout || '(empty)'}`,
       `stderr:\n${r.stderr || '(empty)'}`,
     ].join('\n'));
+    // Report the sandbox that actually ran (level + backend + network
+    // posture). 'soft' is spelled out as NOT OS confinement — a model (or
+    // operator) reading this output must never mistake the soft jail for
+    // namespace isolation.
+    if (r.sandboxLevel) {
+      out += r.sandboxLevel === 'os'
+        ? `\n[sandbox: ${r.sandboxBackend} (OS level), network ${pol.network ? 'on' : 'off'}, writes confined to workspace]`
+        : `\n[sandbox: SOFT jail only (env scrub + cwd clamp — NOT OS confinement), network ${pol.network ? 'on' : 'off'}]`;
+    }
     // Bump the mutation fence unconditionally: a shell command may write,
     // move, or delete arbitrary files outside the tool layer's knowledge.
     // Generation-keyed caches (search/inspect) must not serve stale results
