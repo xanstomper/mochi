@@ -364,3 +364,30 @@ it('cron jobs survive a daemon restart (durable schedule)', async () => {
     rmSync(d, { recursive: true, force: true });
   }
 }, 60_000);
+
+it('MCH-218: POST /api/steer delivers guidance to live agents (and reports 0 when none)', async () => {
+  const d = mkdtempSync(resolve(tmpdir(), 'mochi-daemon-steer-'));
+  execSync('git init -q && git config user.email d@d && git config user.name d && git commit -q --allow-empty -m init', { cwd: d });
+  const h = await startDaemonInProcess({ cwd: d, token: 'steertok' });
+  try {
+    const H = { 'content-type': 'application/json', authorization: 'Bearer steertok' };
+    // No live agents: ok:true, reached 0 — the caller learns nothing is running.
+    const none = await fetch(`http://127.0.0.1:${h.info.port}/api/steer`, { method: 'POST', headers: H, body: JSON.stringify({ text: 'hello' }) });
+    const noneBody = await none.json() as { ok?: boolean; reached?: number; hint?: string };
+    expect(none.status).toBe(200);
+    expect(noneBody.ok).toBe(true);
+    expect(noneBody.reached).toBe(0);
+    expect(noneBody.hint).toContain('no live agents');
+
+    // Missing text → 400.
+    const bad = await fetch(`http://127.0.0.1:${h.info.port}/api/steer`, { method: 'POST', headers: H, body: '{}' });
+    expect(bad.status).toBe(400);
+
+    // Bad token → 401.
+    const unauth = await fetch(`http://127.0.0.1:${h.info.port}/api/steer`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer wrong' }, body: '{"text":"x"}' });
+    expect(unauth.status).toBe(401);
+  } finally {
+    await h.close();
+    rmSync(d, { recursive: true, force: true });
+  }
+}, 60_000);

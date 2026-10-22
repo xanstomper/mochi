@@ -105,4 +105,38 @@ describe('background tasks', () => {
     const killRes = await bgTaskTool.execute({ action: 'kill', task_id: t.id }, {} as never);
     expect(killRes).toContain('terminated successfully');
   });
+
+  it('MCH-218: steers a RUNNING interactive task via stdin', async () => {
+    // `cat` echoes stdin back — the classic steerable process.
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-bg-'));
+    const t = startBackgroundTask('cat', dir, { description: 'echo server' });
+    await sleep(300); // let cat start
+    const { steerTask } = await import('./background-tasks.js');
+    expect(steerTask(t.id, 'steered-line-42')).toBe(true);
+    for (let i = 0; i < 30 && !t.output.includes('steered-line-42'); i++) await sleep(100);
+    expect(t.output).toContain('steered-line-42');
+    // Finished/unknown tasks refuse stdin.
+    const { killTask } = await import('./background-tasks.js');
+    killTask(t.id);
+    expect(steerTask(t.id, 'late')).toBe(false);
+    expect(steerTask('nope', 'x')).toBe(false);
+  }, 60_000);
+
+  it('MCH-218: bg_task stdin action writes to the task and errors cleanly', async () => {
+    const { bgTaskTool } = await import('../tools/bg-task.js');
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-bg-'));
+    // Line-buffered echo loop (tr/sed block-buffer on pipes and would never
+    // flush a 12-byte line — this is why the cat variant passes and this one
+    // needs an explicit read loop).
+    const t = startBackgroundTask('while IFS= read -r l; do printf \'%s\\n\' "$l" | tr a-z A-Z; done', dir, { description: 'upper server' });
+    await sleep(300);
+    const ok = await bgTaskTool.execute({ action: 'stdin', task_id: t.id, text: 'make-me-loud' }, {} as never);
+    expect(ok).toContain('Wrote to task');
+    for (let i = 0; i < 30 && !t.output.includes('MAKE-ME-LOUD'); i++) await sleep(100);
+    expect(t.output).toContain('MAKE-ME-LOUD');
+    const bad = await bgTaskTool.execute({ action: 'stdin', task_id: 'ghost', text: 'x' }, {} as never);
+    expect(bad).toContain('No background task found');
+    const noText = await bgTaskTool.execute({ action: 'stdin', task_id: t.id }, {} as never);
+    expect(noText).toContain('stdin requires');
+  }, 60_000);
 });

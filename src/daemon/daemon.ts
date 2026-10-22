@@ -722,6 +722,14 @@ async function handleRequest(
         send(500, { error: { message: (e as Error).message, type: 'server_error' } });
       }
       return;
+    } else if (path === '/api/steer') {
+      // MCH-218: cross-process steering — push guidance into a RUNNING goal
+      // from outside the daemon process (TUI, curl, CI). Same path the in-TUI
+      // steer button uses; lands at the agents' next loop iteration.
+      const text = String(body.text ?? '').trim();
+      if (!text) { send(400, { ok: false, error: 'text required' }); return; }
+      const reached = runtime.steer(text);
+      send(200, { ok: true, reached, hint: reached === 0 ? 'no live agents in this daemon' : `delivered to ${reached} running agent(s)` });
     } else if (path === '/api/review') {
       // Authenticated CI/tooling call: review a diff without spawning a CLI.
       // Empty/absent diff falls back to the working tree's `git diff HEAD`.

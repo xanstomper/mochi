@@ -225,6 +225,20 @@ export function getTask(id: string): BackgroundTask | undefined {
   return tasks.get(id);
 }
 
+/** MCH-218: steer a RUNNING background task — write a line to its stdin.
+ *  Interactive CLIs (fzf-style pickers, pagers, REPLs, mochi's own TUI smoke)
+ *  become controllable mid-run. Returns false when the task is unknown,
+ *  finished, or its process handle is gone (e.g. after owner-process death,
+ *  where the ledger records the orphan). */
+export function steerTask(id: string, text: string): boolean {
+  const t = tasks.get(id);
+  if (!t || t.status !== 'running') return false;
+  const child = processes.get(id);
+  if (!child?.stdin || child.stdin.destroyed) return false;
+  child.stdin.write(text.endsWith('\n') ? text : `${text}\n`);
+  return true;
+}
+
 export function listTasks(): BackgroundTask[] {
   return [...tasks.values()].sort((a, b) => b.startedAt - a.startedAt);
 }

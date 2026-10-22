@@ -1,11 +1,11 @@
 import type { Tool } from './types.js';
-import { listTasks, getTask, killTask, describeTask } from '../daemon/background-tasks.js';
+import { listTasks, getTask, killTask, steerTask, describeTask } from '../daemon/background-tasks.js';
 
 export const bgTaskTool: Tool = {
   def: {
     name: 'bg_task',
     description:
-      'Manage background tasks launched asynchronously (e.g. long builds, test runners, or watchers). Actions: "list" (show all recent tasks and statuses), "status" (inspect a specific task output and exit code), "kill" (terminate a running task).',
+      'Manage background tasks launched asynchronously (e.g. long builds, test runners, or watchers). Actions: "list" (show all recent tasks and statuses), "status" (inspect a specific task output and exit code), "kill" (terminate a running task), "stdin" (write a line of input to a RUNNING interactive task — answer a prompt, drive a REPL).',
     parameters: [
       {
         name: 'action',
@@ -16,7 +16,13 @@ export const bgTaskTool: Tool = {
       {
         name: 'task_id',
         type: 'string',
-        description: 'Task ID for "status" or "kill" actions',
+        description: 'Task ID for "status", "kill", or "stdin" actions',
+        required: false,
+      },
+      {
+        name: 'text',
+        type: 'string',
+        description: 'Line to write to the task\'s stdin (for the "stdin" action)',
         required: false,
       },
     ],
@@ -39,6 +45,18 @@ export const bgTaskTool: Tool = {
       const t = getTask(taskId);
       if (!t) return `No background task found with ID "${taskId}". Use action "list" to view active tasks.`;
       return describeTask(t, 3000);
+    }
+
+    if (action === 'stdin' || action === 'steer') {
+      const text = String(args.text ?? '');
+      if (!text) return 'stdin requires `text` — the line to write to the task\'s input.';
+      const ok = steerTask(taskId, text);
+      if (!ok) {
+        const t = getTask(taskId);
+        if (!t) return `No background task found with ID \"${taskId}\".`;
+        return `Task \"${taskId}\" is not running (status: ${t.status}) — cannot write to its input.`;
+      }
+      return `Wrote to task \"${taskId}\" stdin: ${JSON.stringify(text)}`;
     }
 
     if (action === 'kill' || action === 'cancel') {

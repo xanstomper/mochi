@@ -1490,6 +1490,17 @@ async function main() {
       console.log(`[bg:${t.id} status=${t.status} exit=${t.exitCode ?? 'running'}]\n${t.output || '(no output)'}`);
       return;
     }
+    if (sub === 'steer' || sub === 'stdin') {
+      // MCH-218: write a line of input to a RUNNING background task. Only
+      // possible in-process (the ledger has pids, not stdin pipes).
+      const id = positional[2];
+      const text = positional.slice(3).join(' ');
+      if (!id || !text) { console.log('Usage: mochi bg steer <task-id> <text>'); return; }
+      const { steerTask } = await import('./daemon/background-tasks.js');
+      const ok = steerTask(id, text);
+      console.log(ok ? `Wrote to task ${id} stdin.` : `Could not steer task ${id} (unknown, finished, or owned by another process — use bg_task stdin inside that run).`);
+      return;
+    }
     if (sub === 'kill' || sub === 'stop') {
       const id = positional[2];
       if (!id) { console.log('Usage: mochi bg kill <task-id>'); return; }
@@ -1497,7 +1508,7 @@ async function main() {
       console.log(ok ? `Killed background task ${id}.` : `Could not kill task ${id}.`);
       return;
     }
-    console.log('Usage: mochi bg [list | logs <id> | kill <id>]');
+    console.log('Usage: mochi bg [list | logs <id> | steer <id> <text> | kill <id>]');
     return;
   }
   if (first === 'discord') {

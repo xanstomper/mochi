@@ -1,5 +1,11 @@
 # Mochi Changelog
 
+#### Added (MCH-218 — steerable background plane, commit 7)
+
+- **Cross-process goal steering (`POST /api/steer`, MCH-218)**: the daemon can now push mid-run guidance into RUNNING goals from outside its process (TUI, curl, CI) — the same `runtime.steer` path the in-TUI steer button uses. Returns `reached` honestly: `0` means no live agents, not silent success.
+- **`bg_task` stdin action (MCH-218)**: background tasks become steerable mid-run — `bg_task {action:'stdin', task_id, text}` writes a line to the running process's input, so an agent can answer a prompt, drive a REPL, or feed an interactive CLI it started in the background without killing and relaunching it. Clean refusals for unknown/finished tasks; `mochi bg steer <id> <text>` mirrors it from the CLI (in-process only — the cross-process ledger carries pids, not stdin pipes).
+- **Verified**: tsc clean; background-tasks 10/10 incl. two new MCH-218 tests (cat echo + line-buffered `tr` loop — pipe block-buffering was the first failure's root cause); daemon suite green incl. new /api/steer test (200 reached:0, 400 no text, 401 bad token); full suite 2386/0 (329 files); builds green; smoke 0.27.0.
+
 #### Added (MCH-215 — in-task doctor via self_config, commit 6)
 
 - **`self_config` action `doctor` (MCH-215)**: the agent can now diagnose its own environment mid-task. Runs the exact same engine as `mochi doctor` (`doctorReport` + `formatDoctor`) and returns the full formatted health report — sqlite/codegraph, sessions, harness issues, daemon, toolchains, sandbox, browser stack, skill health, theme staleness — so a run that suspects its environment says so with data instead of telling the user to go run the CLI. Deliberately `probeProvider: false`: a hung endpoint must never stall the agent loop; the existing `probe` action is the explicit live-test path. Read-only. Verified: tsc clean, full suite 2384/0 (329 files), builds green, smoke 0.27.0; new test proves the doctor path returns a formatted report with an unreachable endpoint and no hang.
