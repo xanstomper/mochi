@@ -12,6 +12,7 @@ import type { ProviderConfig } from './openai.js';
 import { ProviderError, describeModelError, parseRetryAfter } from '../utils/http-error.js';
 import { classifyError, withRetries } from './rate-limit.js';
 import { openSSEStream } from './sse.js';
+import { estimateCostUsd } from '../pricing.js';
 
 function logBackoff(attempt: number, delayMs: number, err: unknown): void {
   const detail = err instanceof Error ? err.message.split('\n')[0] : String(err);
@@ -139,52 +140,23 @@ function mapAntigravityFinish(reason?: string): StreamChunk['finishReason'] {
   if (reason === 'MAX_TOKENS') return 'length';
   return 'stop';
 }
-export const ANTIGRAVITY_PRICING_TABLE: Record<string, { in: number; out: number; cache: number }> = {
-  // Gemini 3.8 / 3.7 / 3.6 Flash ($0.75 / $3.75 per 1M tokens, cache read $0.075)
-  'gemini-3.8-flash': { in: 0.75, out: 3.75, cache: 0.075 },
-  'gemini-3.7-flash': { in: 0.75, out: 3.75, cache: 0.075 },
-  // Gemini 3 Flash ($0.50 / $3.00 per 1M tokens, cache read $0.05)
-  'gemini-3-flash': { in: 0.50, out: 3.00, cache: 0.05 },
-  // Gemini 3.5 Flash ($1.50 / $9.00 per 1M tokens, cache read $0.15)
-  'gemini-3.5-flash': { in: 1.50, out: 9.00, cache: 0.15 },
-  'gemini-3.5-flash-lite': { in: 0.30, out: 2.50, cache: 0.03 },
-  'gemini-3.1-flash-lite': { in: 0.25, out: 1.50, cache: 0.025 },
-  // Gemini 2.5 Flash ($0.30 / $2.50 per 1M tokens, cache read $0.03)
-  'gemini-2.5-flash': { in: 0.30, out: 2.50, cache: 0.03 },
-  'gemini-2.5-flash-lite': { in: 0.10, out: 0.40, cache: 0.01 },
-  // Claude Sonnet 4.6 / 4.5 ($3.00 / $15.00 per 1M tokens, cache read $0.30)
-  'claude-sonnet-4-6': { in: 3.00, out: 15.00, cache: 0.30 },
-  'claude-sonnet-4-5': { in: 3.00, out: 15.00, cache: 0.30 },
-  // Claude Opus 4.6 / 4.5 ($5.00 / $25.00 per 1M tokens, cache read $0.50)
-  'claude-opus-4-6': { in: 5.00, out: 25.00, cache: 0.50 },
-  'claude-opus-4-5': { in: 5.00, out: 25.00, cache: 0.50 },
-  // Free / preview tiers ($0)
-  'gpt-oss-120b': { in: 0, out: 0, cache: 0 },
-  'gemini-4-argon-disabled': { in: 0, out: 0, cache: 0 },
-  'tab_flash_lite_preview': { in: 0, out: 0, cache: 0 },
-  'tab_jump_flash_lite_preview': { in: 0, out: 0, cache: 0 },
-};
-
-export function computeAntigravityCost(model: string, inTokens: number, outTokens: number, cachedTokens = 0): number {
-  const m = model.toLowerCase();
-  const direct = ANTIGRAVITY_PRICING_TABLE[m];
-  let rates = direct;
-  if (!rates) {
-    if (m.includes('opus')) rates = ANTIGRAVITY_PRICING_TABLE['claude-opus-4-6'];
-    else if (m.includes('sonnet') || m.includes('claude')) rates = ANTIGRAVITY_PRICING_TABLE['claude-sonnet-4-6'];
-    else if (m.includes('3.8') || m.includes('3.7') || m.includes('3.6')) rates = ANTIGRAVITY_PRICING_TABLE['gemini-3.8-flash'];
-    else if (m.includes('3.5')) rates = ANTIGRAVITY_PRICING_TABLE['gemini-3.5-flash'];
-    else if (m.includes('flash')) rates = ANTIGRAVITY_PRICING_TABLE['gemini-3-flash'];
-    else rates = ANTIGRAVITY_PRICING_TABLE['gemini-3.8-flash'];
-  }
-
-  const inRate = rates.in / 1_000_000;
-  const outRate = rates.out / 1_000_000;
-  const cacheRate = rates.cache / 1_000_000;
-
-  const billableIn = Math.max(0, inTokens - cachedTokens);
-  const cost = billableIn * inRate + cachedTokens * cacheRate + outTokens * outRate;
-  return Math.round(cost * 10_000_000) / 10_000_000;
+/** Cost of one Antigravity call, priced through the Phase C table of
+ *  record (pricing.ts) — this provider used to carry a shadow price table
+ *  whose fallback priced ANY unrecognized model at gemini-3.8-flash rates
+ *  and emitted the guess as a measured costUsd (audit L-03). Per the
+ *  pricing doctrine, an unpriced model (the Gemini 3.x ids are deliberately
+ *  untabled — host-dependent) yields null: no costUsd is emitted, and
+ *  BudgetEngine treats the call as unmeasured instead of recording
+ *  fabricated dollars. Antigravity's promptTokenCount INCLUDES cached
+ *  tokens (Google usage convention), matching pricing.ts's default
+ *  inputIncludesCache handling. */
+export function computeAntigravityCost(model: string, inTokens: number, outTokens: number, cachedTokens = 0): number | null {
+  const est = estimateCostUsd(model, {
+    inputTokens: inTokens,
+    outputTokens: outTokens,
+    cacheReadTokens: cachedTokens,
+  });
+  return est ? est.costUsd : null;
 }
 
 function extractAntigravity(data: AntigravityResponsePayload, defaultModel = 'gemini-3.8-flash'): ModelResponse {
@@ -221,7 +193,9 @@ function extractAntigravity(data: AntigravityResponsePayload, defaultModel = 'ge
       completionTokens: cTok,
       totalTokens: tTok,
       cachedTokens: caTok,
-      costUsd,
+      // Omitted (not $0, not a guess) when pricing.ts has no rate for the
+      // model — an unknown cost must stay unknown (audit L-03).
+      ...(costUsd !== null ? { costUsd } : {}),
     },
   };
 }
@@ -594,13 +568,16 @@ export function createAntigravityProvider(config: ProviderConfig) {
     let callSeq = 0;
     let finish: StreamChunk['finishReason'] | undefined;
 
-    const usageNow = (): NonNullable<StreamChunk['usage']> => ({
-      promptTokens,
-      completionTokens,
-      totalTokens: promptTokens + completionTokens,
-      cachedTokens: cachedTokens > 0 ? cachedTokens : undefined,
-      costUsd: computeAntigravityCost(model, promptTokens, completionTokens, cachedTokens),
-    });
+    const usageNow = (): NonNullable<StreamChunk['usage']> => {
+      const costUsd = computeAntigravityCost(model, promptTokens, completionTokens, cachedTokens);
+      return {
+        promptTokens,
+        completionTokens,
+        totalTokens: promptTokens + completionTokens,
+        cachedTokens: cachedTokens > 0 ? cachedTokens : undefined,
+        ...(costUsd !== null ? { costUsd } : {}),
+      };
+    };
     const primaryUrl = `${endpoints[0]}/v1internal:streamGenerateContent?alt=sse`;
 
     const frames = openSSEStream(

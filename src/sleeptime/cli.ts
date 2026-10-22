@@ -12,7 +12,11 @@
 // DEFAULT_SLEEPTIME_CAP_USD. Exit codes: 0 = night completed (cap stops and
 // duplicates are normal outcomes, reported in the summary), 1 = a step
 // failed, 3 = bad arguments / orchestrator error.
-import { runSleeptime, DEFAULT_SLEEPTIME_CAP_USD, type SleeptimeReport } from './orchestrator.js';
+import {
+  runSleeptime, DEFAULT_SLEEPTIME_CAP_USD,
+  createSkillRepairPort, createCurriculumPort,
+  type SleeptimeReport,
+} from './orchestrator.js';
 
 export interface SleeptimeCliArgs {
   positional: string[];
@@ -72,6 +76,11 @@ export async function handleSleeptimeCommand({ positional, flags, cwd }: Sleepti
       projectDir: cwd,
       spendCapUsd: resolveCapUsd(flags),
       dryRun: !!flags['dry-run'],
+      // Production wiring (audit L-01): the REAL D8 repair adapter and D10
+      // curriculum adapter, passed explicitly. The orchestrator's defaults
+      // are the same adapters — passing them here keeps the production
+      // call site self-evidently wired (and testably so).
+      ports: { repair: createSkillRepairPort(), curriculum: createCurriculumPort() },
       ...(typeof flags.night === 'string' ? { nightKey: flags.night } : {}),
     });
     printSleeptimeReport(report, !!flags.json);

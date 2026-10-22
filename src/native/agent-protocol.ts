@@ -158,8 +158,14 @@ export async function rustRuntimeVersion(): Promise<string | null> {
 }
 
 /** Ask Rust to plan the compaction cut. Returns null on any failure so the
- *  caller falls back to the TS implementation. */
+ *  caller falls back to the TS implementation. Like nativeTokensCount, the
+ *  planner sizes messages by serialized JSON and has no image model —
+ *  callers gate image-bearing histories to the TS walk (audit L-04). */
 export async function nativePlanCompaction(messages: PlanRequestMessage[], keep = 6): Promise<PlanResponse | null> {
+  // Availability first: serializing a large history only to discover there
+  // is no runtime to send it to is a per-call full-history stringify for a
+  // guaranteed null (the common case on no-native installs).
+  if (!isRustRuntimeAvailable()) return null;
   const payload = JSON.stringify({ op: 'plan', keep, messages });
   if (payload.length > 4_000_000) return null; // absurd transcripts: stay in TS
   const line = await writeLine(payload);
@@ -176,12 +182,20 @@ export async function nativePlanCompaction(messages: PlanRequestMessage[], keep 
 /** Ask Rust to batch-count tokens over the message history. Entries are the
  *  ChatMessage objects themselves: the runtime extracts each element object
  *  and counts over its serialized JSON — the same JSON.stringify(m) text the
- *  TS estimateTokens() walk sums, so parity holds. (Pre-stringified strings
+ *  TS estimateTokens() walk sums, so parity holds FOR TEXT. Image parts are
+ *  the exception (audit L-04): the Rust counter has no image model, so a
+ *  data-URI payload is counted as base64 text (~700× the real vision cost).
+ *  Callers must not use this for histories containing image parts —
+ *  context.ts's estimateTokensAsync() gates on exactly that and takes the
+ *  TS walk (IMAGE_PART_TOKENS per part) instead. (Pre-stringified strings
  *  are NOT usable here: the runtime's array scanner only extracts object
  *  elements and silently skipped strings, returning 0 for the whole batch.)
  *  Returns null on any failure so the caller falls back to the TS
  *  implementation. */
 export async function nativeTokensCount(messages: readonly object[]): Promise<number | null> {
+  // See nativePlanCompaction: never pay the full-history stringify when no
+  // runtime exists to receive it (estimateTokensAsync calls this per turn).
+  if (!isRustRuntimeAvailable()) return null;
   const payload = JSON.stringify({ op: 'tokens', messages });
   if (payload.length > 4_000_000) return null;
   const line = await writeLine(payload);
@@ -209,6 +223,7 @@ export interface AssembledStream {
 }
 
 export async function nativeAssembleStream(chunks: Record<string, unknown>[]): Promise<AssembledStream | null> {
+  if (!isRustRuntimeAvailable()) return null;
   const payload = JSON.stringify({ op: 'accum', chunks });
   if (payload.length > 4_000_000) return null;
   const line = await writeLine(payload);
