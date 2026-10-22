@@ -1,5 +1,9 @@
 # Mochi Changelog
 
+#### Added (MCH-215 — in-task doctor via self_config, commit 6)
+
+- **`self_config` action `doctor` (MCH-215)**: the agent can now diagnose its own environment mid-task. Runs the exact same engine as `mochi doctor` (`doctorReport` + `formatDoctor`) and returns the full formatted health report — sqlite/codegraph, sessions, harness issues, daemon, toolchains, sandbox, browser stack, skill health, theme staleness — so a run that suspects its environment says so with data instead of telling the user to go run the CLI. Deliberately `probeProvider: false`: a hung endpoint must never stall the agent loop; the existing `probe` action is the explicit live-test path. Read-only. Verified: tsc clean, full suite 2384/0 (329 files), builds green, smoke 0.27.0; new test proves the doctor path returns a formatted report with an unreachable endpoint and no hang.
+
 #### Added (MCH-216/217 — dataset-driven practice harness, commit 5)
 
 - **`mochi practice` CLI verb (MCH-216)**: run dataset-shaped practice tasks through the live agent, each in a fresh throwaway `/tmp` workspace with a machine-checkable verify command. Scoring is independent of agent self-report — bash verify inside the workspace decides pass/fail — and failures feed the existing lesson/skill flywheel (`practice:<task-id>` lessons), so practice failures get mined into skills exactly like real-task failures. Ships 6 offline seed tasks distilled from verified dataset shapes: SWE bug-fix (off-by-one, async race), tool-argument schema precision, algorithmic two-sum with O(n) timing check, obfuscated-string reverse-engineering, and exact-answer math. `mochi practice datasets` lists the verified catalog.

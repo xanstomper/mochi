@@ -34,7 +34,7 @@ export const selfConfigTool: Tool = {
       {
         name: 'action',
         type: 'string',
-        description: "'show' (current config) | 'probe' (live-test a baseUrl+key) | 'set' (persist + switch model/provider/apiKey)",
+        description: "'show' (current config) | 'probe' (live-test a baseUrl+key) | 'set' (persist + switch model/provider/apiKey) | 'doctor' (full workspace health report)",
         required: true,
       },
       { name: 'provider', type: 'string', description: 'Provider name (for probe/set)', required: false },
@@ -137,6 +137,26 @@ export const selfConfigTool: Tool = {
       ].join('\n');
     }
 
-    return `Unknown action '${action}'. Use show | probe | set.`;
+    if (action === 'doctor') {
+      // MCH-215: in-task health report — same engine as `mochi doctor`, so the
+      // agent can diagnose its own environment (sqlite, browser, skills, daemon)
+      // mid-run instead of telling the user to go run the CLI.
+      const m = (ctx.config.model ?? {}) as { provider?: string; baseUrl?: string; model?: string; apiKey?: string };
+      const { doctorReport, formatDoctor } = await import('../doctor.js');
+      const report = await doctorReport({
+        provider: m.provider ?? 'openai',
+        baseUrl: m.baseUrl ?? '',
+        model: m.model ?? '',
+        apiKey: m.apiKey,
+        workspaceDir: ctx.cwd,
+        // Never probe the endpoint from inside a task: a hung endpoint would
+        // stall the agent loop. Reachability shows n/a; self_config probe is
+        // the explicit live-test path.
+        probeProvider: false,
+      });
+      return formatDoctor(report);
+    }
+
+    return `Unknown action '${action}'. Use show | probe | set | doctor.`;
   },
 };

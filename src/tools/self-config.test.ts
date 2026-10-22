@@ -46,4 +46,16 @@ describe('self_config tool (MCH-213/214)', () => {
     const out = await selfConfigTool.execute({ action: 'probe' }, ctx({ model: {} }));
     expect(out).toContain('probe requires baseUrl');
   });
+
+  it('doctor returns the formatted health report without probing the endpoint', async () => {
+    const out = await selfConfigTool.execute(
+      { action: 'doctor' },
+      ctx({ model: { provider: 'openai', baseUrl: 'https://definitely-not-a-real-endpoint.invalid/v1', model: 'gpt-x' } }),
+    );
+    expect(out).toContain('Mochi doctor v');
+    expect(out).toContain('api key');
+    // probeProvider:false — an unreachable endpoint must not fail the report
+    expect(out).toContain('n/a (use --probe)');
+    expect(out).toContain('Problems');
+  });
 });
