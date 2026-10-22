@@ -17,7 +17,7 @@ import { EventBus } from '../events.js';
 import { Workspace } from '../workspace.js';
 import { createTask } from '../goals/task.js';
 import { startFakeOpenAI } from '../testutil/fake-openai.js';
-import { journalFilePath } from './run-journal.js';
+import { journalFilePath, readJournalEntries } from './run-journal.js';
 import type { MochiConfig } from '../types.js';
 import type { Tool } from '../tools/types.js';
 
@@ -99,7 +99,15 @@ describe('Agent loop + durable journal resume', () => {
       expect(counter.calls).toBe(2);
       expect(counter.labels).toEqual(['a', 'b']);
       expect(first.result.success).toBe(true);
-      expect(first.stats?.recordedSteps).toBe(2);
+      // Recorded: 2 tool steps + 3 model turns (Wave H1 — every completed
+      // model turn is journaled with its request fingerprint).
+      expect(first.stats?.recordedSteps).toBe(5);
+      const firstEntries = readJournalEntries(resolve(dir, '.mochi'), task.id)
+        .filter((e) => e.kind === 'step');
+      const firstTurns = firstEntries.filter((e) => e.kind === 'step' && e.stepKind === 'model_turn');
+      expect(firstTurns.length).toBe(3);
+      expect(firstTurns.every((e) => e.kind === 'step' && typeof e.fingerprint === 'string' && e.fingerprint.length === 64)).toBe(true);
+      expect(firstEntries.filter((e) => e.kind === 'step' && e.stepKind === 'tool_call').length).toBe(2);
       expect(existsSync(journalFilePath(resolve(dir, '.mochi'), task.id))).toBe(true);
 
       // ── Resume: new Agent + context, same task, regenerated call ids ──
@@ -109,7 +117,12 @@ describe('Agent loop + durable journal resume', () => {
       // The journaled steps replayed — the tool was NOT re-executed...
       expect(counter.calls).toBe(2);
       expect(counter.labels).toEqual(['a', 'b']);
-      expect(second.stats?.replayedSteps).toBe(2);
+      // Replayed: 2 tool steps + 3 model turns (the resumed run's
+      // requests reproduced the journaled fingerprints exactly, so the
+      // recorded responses were served and the appended script responses
+      // were never consumed).
+      expect(second.stats?.replayedSteps).toBe(5);
+      expect(second.stats?.replayedModelTurns).toBe(3);
       expect(second.stats?.recordedSteps).toBe(0);
       // ...and the resumed run still completes successfully.
       expect(second.result.success).toBe(true);

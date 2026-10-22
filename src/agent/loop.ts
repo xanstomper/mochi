@@ -1,5 +1,5 @@
 import { performance } from 'node:perf_hooks';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 /** Pure read-only shell detection for the parallel batch (exported for
  *  tests). A command may ride the CONCURRENT read-only group only when it
@@ -23,7 +23,7 @@ export function isPureReadOnlyShellCommand(cmd: string): boolean {
 }
 
 import {sortableId} from '../util.js';
-import type { Attempt, ChatMessage, MochiConfig, ModelProfile, Task, ToolDefinition, ToolCall, ToolResult, MochiEvent } from '../types.js';
+import type { Attempt, ChatMessage, ContentPart, MochiConfig, ModelProfile, Task, ToolDefinition, ToolCall, ToolResult, MochiEvent } from '../types.js';
 import { contentText } from '../types.js';
 import type { EventBus } from '../events.js';
 import type { Workspace } from '../workspace.js';
@@ -44,8 +44,11 @@ import { detectRepo, languageHint } from '../repo/repo.js';
 import { classifyTaskKind, resolveAutoReasoning, isTrivialWriteTask, isSimpleScriptTask, isReviewTask, scoreTaskComplexity, shouldEscalateComplexity } from '../core/taskkind.js';
 import { trimToLeanTier, trimToReadTier, ALL_TOOLS_MAP, LEAN_TOOL_NAMES, toolsNamedInText } from '../tools/index.js';
 import { applyMeasuredExposure, loadToolUsageLedger, toolExposureMode, toolSchemaBudgetChars, toolsImplicatedBySignals, toolsSchemaChars } from '../tools/tool-exposure.js';
+import { trimForgedProbationTools } from '../tools/tool-forge.js';
 import { classifyTaskTier, nextEscalationTier, type TaskTier } from '../model/model-router.js';
-import { modelContextBudget } from '../model/model-manager.js';
+import { modelContextBudget, modelSupportsVision } from '../model/model-manager.js';
+import { takeLastComputerScreenshot } from '../tools/computer.js';
+import { buildScreenshotImage, SCREENSHOT_INLINE_MAX_BYTES } from '../computer/screenshot-image.js';
 import { learnedWindowBudget, recordContextRejection } from '../model/window-memory.js';
 import { matchesBaseline, type FlakyTestRef, type VerificationBaseline, type VerificationStatus } from '../verification.js';
 import { diagnoseFile, renderDiagnostics } from '../observability/diagnostics.js';
@@ -56,7 +59,7 @@ import { PermissionManager } from '../security/permission.js';
 import type { PermissionPolicy } from '../security/permission.js';
 import { describeApproval, normalizePolicy } from '../security/approval.js';
 import { matchHardline } from '../security/hardline.js';
-import { classifyCommand } from '../security/security.js';
+import { classifyCommand, redact } from '../security/security.js';
 import { snapshotTree, rollbackTracked, resolveVerifyCommand, type PlanVerifySnapshot } from './plan-verify.js';
 import type { ApprovalHandler } from '../security/approval.js';
 import { AgentProfileService } from '../agents/profile.js';
@@ -78,6 +81,7 @@ import {
   summarizeWorktreeDiff,
   captureReviewDiff,
   type ChildRunRecord,
+  type ChildSteerEvent,
 } from '../teams/subagent-runtime.js';
 import { BudgetEngine } from '../budget.js';
 import {
@@ -123,7 +127,7 @@ import { statSync, existsSync, readFileSync } from 'node:fs';
 import { stat, readFile } from 'node:fs/promises';
 import { condenseOutput } from '../core/output-condenser.js';
 import { autoTestCommand, isWeakVerification, cwdForScope, withCwd } from '../core/testdetect.js';
-import { planTargetedTests } from '../core/test-select.js';
+import { planVerificationTests } from '../core/test-selection.js';
 import { runMutationCheck } from '../core/mutation.js';
 import {
   analyzeFailure, exitCodeOfEnvelope, flakeCommandKey, formatFlakyHits,
@@ -149,7 +153,7 @@ import { compactSession, compactToPrompt } from '../summary/compact.js';
 import { buildDigestInput } from '../summary/digest-input.js';
 import { buildSummaryLineage, renderSummaryLineage } from '../summary/verified-compaction.js';
 import { ExecutionRegistry } from '../core/execution-registry.js';
-import { RunJournal, isJournalableTool } from './run-journal.js';
+import { RunJournal, isJournalableTool, modelTurnFingerprint } from './run-journal.js';
 import { evaluateTestDensity } from '../core/test-density.js';
 
 export function stripThinkTags(text: string): string {
@@ -426,6 +430,12 @@ export interface AgentOptions {
   journal?: RunJournal;
   /** Disable step journaling for this agent (default: enabled). */
   journalEnabled?: boolean;
+  /** Record + replay MODEL turns in the run journal (default: enabled).
+   *  When false — or when env MOCHI_JOURNAL_MODEL_TURNS=0 — model turns
+   *  are neither recorded nor served on resume; tool-step journaling is
+   *  unaffected. The provider is then re-called (and re-billed) for
+   *  every turn of a resumed run, exactly as before this feature. */
+  journalModelTurns?: boolean;
 }
 
 export type AgentStopReason =
@@ -545,7 +555,24 @@ interface PreparedChild {
   worktree?: import('../teams/subagent-runtime.js').ChildWorktreeInfo;
   toolCalls: () => number;
   stopCounting: () => void;
+  /** B21: hand a mid-run steer to the running child (queued into its
+   *  steer queue, injected at its next turn boundary). Returns false when
+   *  the child's run already finished — the caller must then surface the
+   *  steer as NOT delivered, never drop it silently. The `event` object is
+   *  shared with the child's run record: the child stamps its deliveredAt
+   *  when the steer actually lands in its context. */
+  steerChild: (text: string, event: ChildSteerEvent) => boolean;
   completion: Promise<{ result?: AgentResult; error?: string }>;
+}
+
+/** One queued mid-run steer line. `user` entries come from Agent.steer()
+ *  (TUI / goals / runtime); `parent` entries arrive via a parent agent's
+ *  steerChildRun (B21) and carry their provenance event — the same object
+ *  the child's run record holds, so delivery can be stamped onto it. */
+interface SteerQueueEntry {
+  text: string;
+  source: 'user' | 'parent';
+  event?: ChildSteerEvent;
 }
 
 /** Live bookkeeping for one background child owned by this agent. */
@@ -553,6 +580,11 @@ interface LiveChildRun {
   record: ChildRunRecord;
   spec: ChildRunSpec;
   prepared?: PreparedChild;
+  /** B21: steers issued while the child was queued or still launching —
+   *  handed to the child in issue order the moment it is prepared. The
+   *  raw text lives ONLY here in memory (and then in the child's own
+   *  queue); the persisted record keeps hash + redacted preview. */
+  pendingSteers: Array<{ text: string; event: ChildSteerEvent }>;
   /** Settles when the run is fully finalized (record persisted). */
   promise: Promise<void>;
   settle: () => void;
@@ -718,6 +750,16 @@ export class Agent {
   private journalDisabled = false;
   private journalReplayed = 0;
   private journalRecorded = 0;
+  /** Model-turn journaling opt-out (option journalModelTurns / env
+   *  MOCHI_JOURNAL_MODEL_TURNS=0). Tool-step journaling ignores this. */
+  private journalModelTurnsDisabled = false;
+  /** True when this run opened a journal holding claimable model turns:
+   *  resume-time prose injections (checkpoint / journal note) are then
+   *  SKIPPED, because any extra context message would change the first
+   *  request's fingerprint and silently disable the exact replay they
+   *  exist alongside. The journaled transcript supersedes the prose. */
+  private modelReplayArmed = false;
+  private journalModelReplayed = 0;
   /** MCH-64: tool_call_ids already spec-executed mid-stream this response, so
    *  the post-stream execution path skips them (results already in context). */
   private midStreamExecutedIds = new Set<string>();
@@ -725,8 +767,17 @@ export class Agent {
   /** MCH-78: current failing-signature cluster (sig + consecutive count). */
   private failureClusterSig: string | null = null;
   private failureClusterCount = 0;
-  /** MCH-74: mid-run steer queue — user guidance injected at next iteration. */
-  private steerQueue: string[] = [];
+  /** MCH-74: mid-run steer queue — guidance injected at next iteration.
+   *  Entries are source-tagged (B21): 'user' lines from steer(), 'parent'
+   *  lines from a parent agent's steerChildRun carrying provenance. */
+  private steerQueue: SteerQueueEntry[] = [];
+  /** B21: true while a run() is in flight — the window in which parent
+   *  steers can be accepted. Set at run() start, cleared at finish(). */
+  private runActive = false;
+  /** B21: parent steers actually DELIVERED into this run's context (the
+   *  provenance events, shared objects with the child's run record).
+   *  Reset per run; stamped onto the skills:attributed event at finish. */
+  private deliveredParentSteers: ChildSteerEvent[] = [];
   private cycleNudges = 0;
   private lastSig = '';
   private sigStreak = 0;
@@ -1046,6 +1097,7 @@ export class Agent {
     this.journalOverride = opts.journal;
     this.journalRunId = opts.runId;
     this.journalDisabled = opts.journalEnabled === false;
+    this.journalModelTurnsDisabled = opts.journalModelTurns === false || process.env.MOCHI_JOURNAL_MODEL_TURNS === '0';
     this.verifyBaseline = opts.verifyBaseline;
     // A shared run-wide cache is preferred so parallel agents that read the same
     // source file don't each re-read it from disk; the cache is keyed on
@@ -1084,6 +1136,96 @@ export class Agent {
   /** Durable journal stats for the current/last run (C6; tests + hosts). */
   getJournalStats(): import('./run-journal.js').JournalStats | undefined {
     return this.journal?.stats();
+  }
+
+  /** Fingerprint of the model request the main loop is about to send.
+   *  The temperature literal MUST match the streamChat call in
+   *  gatherStream (0.2) — it is part of the request as sent. Provider
+   *  identity is config.model.provider/model, the same canonical
+   *  identity the budget, usage events and traces use (RawProvider
+   *  exposes no finer identity). */
+  private modelTurnFingerprintFor(messages: import('../types.js').ChatMessage[], reasoningEffort: string | undefined): string {
+    return modelTurnFingerprint({
+      provider: this.config.model.provider ?? '',
+      model: this.config.model.model,
+      messages,
+      tools: this.toolDefs,
+      temperature: 0.2,
+      reasoningEffort: reasoningEffort ?? null,
+    });
+  }
+
+  /** Model-turn replay: if a previous session of this run journaled a
+   *  response to EXACTLY this request (same fingerprint, next in the
+   *  journaled sequence), return that response instead of calling the
+   *  provider. Any mismatch/rail ends replay inside the journal and this
+   *  returns undefined — the caller then calls the provider live.
+   *  Never throws: a journal fault must not block the real call. */
+  private journalClaimModelTurn(
+    messages: import('../types.js').ChatMessage[],
+    reasoningEffort: string | undefined,
+  ): { response: import('../types.js').ModelResponse; seq: number } | undefined {
+    if (!this.journal || this.journalModelTurnsDisabled) return undefined;
+    try {
+      const claimed = this.journal.claimModelTurn(this.modelTurnFingerprintFor(messages, reasoningEffort));
+      if (!claimed) return undefined;
+      const p = claimed.payload as Partial<import('../types.js').ModelResponse>;
+      if (typeof p !== 'object' || p === null || (p.content !== undefined && typeof p.content !== 'string')
+        || (p.toolCalls !== undefined && !Array.isArray(p.toolCalls))) {
+        // Parsed, but not a response shape this loop can consume.
+        this.journal.endModelReplay();
+        return undefined;
+      }
+      return {
+        seq: claimed.entry.seq,
+        response: {
+          content: p.content,
+          ...(p.reasoningContent !== undefined ? { reasoningContent: p.reasoningContent } : {}),
+          toolCalls: p.toolCalls,
+          finishReason: p.finishReason,
+          usage: p.usage,
+          ...(p.looped ? { looped: true } : {}),
+        },
+      };
+    } catch { return undefined; }
+  }
+
+  /** Journal one LIVE-obtained model turn (response payload + usage +
+   *  the fingerprint of the request that produced it), so a later
+   *  resume can replay it. Never call this for a replayed turn: a replay
+   *  re-recorded would duplicate the chain entry and shift every later
+   *  position, breaking multi-resume fidelity. Never throws. */
+  private journalRecordModelTurn(
+    messages: import('../types.js').ChatMessage[],
+    reasoningEffort: string | undefined,
+    response: import('../types.js').ModelResponse,
+    durationMs: number,
+  ): void {
+    if (!this.journal || this.journalModelTurnsDisabled) return;
+    try {
+      const payload = JSON.stringify({
+        content: response.content,
+        ...(response.reasoningContent !== undefined ? { reasoningContent: response.reasoningContent } : {}),
+        toolCalls: response.toolCalls,
+        finishReason: response.finishReason,
+        usage: response.usage,
+        looped: response.looped === true,
+      });
+      this.journal.recordModelTurn({
+        stepId: `turn-${this.journalRecorded + 1}`,
+        output: payload,
+        fingerprint: this.modelTurnFingerprintFor(messages, reasoningEffort),
+        durationMs: Math.round(durationMs),
+        usage: response.usage
+          ? {
+              inputTokens: response.usage.promptTokens,
+              outputTokens: response.usage.completionTokens,
+              ...(response.usage.costUsd !== undefined ? { costUsd: response.usage.costUsd } : {}),
+            }
+          : undefined,
+      });
+      this.journalRecorded++;
+    } catch { /* journaling must never affect the run */ }
   }
 
   /**
@@ -1330,6 +1472,11 @@ export class Agent {
   async run(task: Task): Promise<AgentResult> {
     this.startTime = performance.now();
     this.activeTask = task;
+    // B21: the steer-acceptance window opens with the run; delivered-steer
+    // provenance is per-run evidence (a reused instance must not credit a
+    // previous run's steers to this one).
+    this.runActive = true;
+    this.deliveredParentSteers = [];
     // B2: each run() gets exactly one finish(). A previous run's guard entry
     // must not swallow this run's teardown (auto-resume reuses the instance).
     this.finishPromise = null;
@@ -1470,6 +1617,21 @@ export class Agent {
         this.context.addMessage({ role: 'system', content: mapText });
       }
     } catch { /* repo-map must never affect task start */ }
+    // Wave J: semantic retrieval — hybrid vector+lexical hits from the
+    // persistent .mochi/index, re-ranked by the same task conditioning as
+    // the repo map above. AUGMENTS the map packet (concept matches the
+    // lexical map cannot see), under its own hard char budget; best-effort
+    // and time-boxed exactly like its neighbours. On a cold index it kicks
+    // off a background build and contributes nothing this run.
+    try {
+      const { semanticContextText } = await import('../repo/semantic-index.js');
+      const semText = await semanticContextText(this.workspace.dir, `${task.title}\n${task.description ?? ''}`, {
+        config: this.config,
+      });
+      if (semText) {
+        this.context.addMessage({ role: 'system', content: semText });
+      }
+    } catch { /* semantic retrieval must never affect task start */ }
     // MCH-50: prefetch — fused structural+temporal+runtime prediction of the
     // files this task will likely read next.
     try {
@@ -1508,26 +1670,18 @@ export class Agent {
       });
     }
 
-    // Phase 7 (VNext): resume with the last durable checkpoint if one exists
-    // for THIS specific goal (e.g. on resume or post-compaction restart).
-    // Fresh sessions and unrelated goals do not load old checkpoints.
-    try {
-      const activeGoal = this.context.state.goal;
-      const durable = this.workspace.loadCheckpoint(activeGoal);
-      if (durable && durable.checkpoint.trim() && durable.goalId && activeGoal && durable.goalId === activeGoal) {
-        this.context.addMessage({
-          role: 'system',
-          content: `RESUMED SESSION CHECKPOINT (from active goal, saved ${new Date(durable.savedAt).toISOString()}):
-${durable.checkpoint}
-Continue from 'Next:', do not redo completed progress.`,
-        });
-      }
-    } catch { /* best-effort */ }
-
     // Durable run journal (C6): keyed by the task's stable identity, so a
     // new process resuming the same task loads the prior session's
     // completed steps as claimable — runMoolCall replays them instead of
     // re-executing/re-billing. Journal failures never affect the run.
+    // Opened BEFORE the checkpoint injection below: when the journal
+    // holds claimable model turns, exact model-turn replay supersedes
+    // both prose injections (checkpoint + journal note) — either message
+    // would alter the first request's fingerprint and silently disable
+    // the replay, and the replayed transcript carries strictly more of
+    // the run's real history than the prose summary does.
+    this.modelReplayArmed = false;
+    this.journalModelReplayed = 0;
     try {
       if (this.journalDisabled) {
         this.journal = undefined;
@@ -1539,16 +1693,37 @@ Continue from 'Next:', do not redo completed progress.`,
         const priorSteps = this.journal.completedSteps()
           .filter((s) => s.sessionId !== this.journal!.sessionId);
         this.journal.beginRun({ taskId: task.id, title: task.title });
+        this.modelReplayArmed = !this.journalModelTurnsDisabled && this.journal.hasClaimableModelTurns();
         if (priorSteps.length > 0) {
           const names = priorSteps.slice(0, 12).map((s) => s.toolName).join(', ');
-          this.events.emit({ type: 'agent:log', agentId: this.id, message: `[journal] resuming run ${task.id}: ${priorSteps.length} completed step(s) journaled — matching calls will replay, not re-execute` });
-          this.context.addMessage({
-            role: 'system',
-            content: `RUN JOURNAL RESUME: a previous session of this task completed ${priorSteps.length} step(s) (${names}${priorSteps.length > 12 ? ', …' : ''}). Those steps are journaled durably: calling the same tool with the same arguments replays the recorded result WITHOUT re-executing — do not redo their side effects (files already written, commands already run). Continue from the first step that has no journal entry.`,
-          });
+          this.events.emit({ type: 'agent:log', agentId: this.id, message: `[journal] resuming run ${task.id}: ${priorSteps.length} completed step(s) journaled — matching calls will replay, not re-execute${this.modelReplayArmed ? '; model-turn replay armed (recorded responses will be served for exact-matching requests)' : ''}` });
+          if (!this.modelReplayArmed) {
+            this.context.addMessage({
+              role: 'system',
+              content: `RUN JOURNAL RESUME: a previous session of this task completed ${priorSteps.length} step(s) (${names}${priorSteps.length > 12 ? ', …' : ''}). Those steps are journaled durably: calling the same tool with the same arguments replays the recorded result WITHOUT re-executing — do not redo their side effects (files already written, commands already run). Continue from the first step that has no journal entry.`,
+            });
+          }
         }
       }
     } catch { this.journal = undefined; }
+
+    // Phase 7 (VNext): resume with the last durable checkpoint if one exists
+    // for THIS specific goal (e.g. on resume or post-compaction restart).
+    // Fresh sessions and unrelated goals do not load old checkpoints.
+    // Skipped when model-turn replay is armed (see the journal block):
+    // the checkpoint prose would poison the first replayed request.
+    try {
+      const activeGoal = this.context.state.goal;
+      const durable = this.workspace.loadCheckpoint(activeGoal);
+      if (!this.modelReplayArmed && durable && durable.checkpoint.trim() && durable.goalId && activeGoal && durable.goalId === activeGoal) {
+        this.context.addMessage({
+          role: 'system',
+          content: `RESUMED SESSION CHECKPOINT (from active goal, saved ${new Date(durable.savedAt).toISOString()}):
+${durable.checkpoint}
+Continue from 'Next:', do not redo completed progress.`,
+        });
+      }
+    } catch { /* best-effort */ }
 
     let taskKind = this.taskKind = classifyTaskKind(task);
     this.task = task;
@@ -1675,6 +1850,27 @@ Continue from 'Next:', do not redo completed progress.`,
             this.injectDeferredToolsNote('read');
       }
     } // end complexity-gate else
+    // Tool Forge (Wave O): probationary forged tools are advertised only
+    // when the exposure signals predict relevance for THIS task (task text
+    // naming the tool / its source sequence, domain signals, or the usage
+    // ledger's history for this task kind). Earned (active) forged tools
+    // always stay. Runs after every tier above so no tier can re-advertise
+    // what the prediction deferred; executeTool remains reachable via the
+    // registry fallback exactly like other deferred tools.
+    {
+      const forgeRemoved = trimForgedProbationTools(
+        this.tools,
+        this.workspace.dir || this.cwd,
+        `${task.title} ${task.description ?? ''}`,
+        loadToolUsageLedger(this.workspace),
+        taskKind,
+      );
+      if (forgeRemoved.length) {
+        const removed = new Set(forgeRemoved);
+        this.toolDefs = this.toolDefs.filter((d) => !removed.has(d.name));
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: `[forge] probationary forged tools not relevant to this task, deferred: ${forgeRemoved.join(', ')}` });
+      }
+    }
     const repo = detectRepo(this.cwd);
     // Harness-v2 perf (FREEZE FIX 2026-08-22): warm codegraph grammars and the
     // Chameleon scaffold strictly in the BACKGROUND - fire-and-forget, never
@@ -2214,6 +2410,24 @@ Continue from 'Next:', do not redo completed progress.`,
           }
           activeReasoning = adjusted;
         }
+        // Model-turn replay (run journal): if a previous session of this
+        // run already obtained a response to EXACTLY this request (same
+        // fingerprint — same messages, tools, model, params), serve the
+        // recorded response instead of calling the provider again. The
+        // recorded usage flows through the normal accounting below, so
+        // the turn is billed exactly once across both sessions. A
+        // mismatch ends replay inside the journal (claimModelTurn) and
+        // this falls through to the live stream. The replayed prose is
+        // delivered as a single chunk, as if freshly streamed.
+        const replayedTurn = this.journalClaimModelTurn(messages, activeReasoning);
+        if (replayedTurn) {
+          this.journalModelReplayed++;
+          this.events.emit({ type: 'agent:log', agentId: this.id, message: `[journal] replayed model turn (journal seq ${replayedTurn.seq}) — provider not called, recorded response served` });
+          if (replayedTurn.response.content) {
+            this.events.emit({ type: 'message:chunk', content: replayedTurn.response.content, agentId: this.id });
+          }
+          return replayedTurn.response;
+        }
         sm.enter('stream-guard');
         // MCH-39 (strength/UX): headless runs look FROZEN during a long silent
         // model turn (kimi thinks 60-90s before the first token). A heartbeat
@@ -2473,13 +2687,20 @@ Continue from 'Next:', do not redo completed progress.`,
             content = thinkText;
           }
         }
-        return {
+        const assembled: import('../types.js').ModelResponse = {
           content,
           toolCalls: tool_calls.length ? tool_calls : undefined,
           finishReason: chunks[chunks.length - 1]?.finishReason,
           usage: chunks[chunks.length - 1]?.usage,
           looped,
         };
+        // Journal the completed LIVE turn (response payload + usage +
+        // request fingerprint) so a resume can replay it instead of
+        // re-calling/re-billing the provider. Only live responses reach
+        // this line — the replay path returns above — so a replayed
+        // turn is never re-recorded.
+        this.journalRecordModelTurn(messages, activeReasoning, assembled, Date.now() - turnStartedAt);
+        return assembled;
       };
 
       // Hard per-response stall guard: the stream guards above only fire when
@@ -4400,27 +4621,73 @@ Continue from 'Next:', do not redo completed progress.`,
    *  iteration as a user-role note the model must acknowledge. */
   steer(text: string): void {
     const t = text.trim();
-    if (t) this.steerQueue.push(t);
+    if (t) this.steerQueue.push({ text: t, source: 'user' });
+  }
+
+  /** B21: accept a mid-run steer from a PARENT agent (steerChildRun).
+   *  Same queue, same turn-boundary delivery as a user steer — but the
+   *  entry carries its provenance event, and acceptance is refused once
+   *  the run has finished so the parent can fail loudly instead of the
+   *  steer dying silently in a queue nobody drains. A steer is guidance
+   *  only: it never touches this agent's tool allowlist or permission
+   *  posture (both are fixed at construction). */
+  acceptParentSteer(text: string, event: ChildSteerEvent): boolean {
+    const t = text.trim();
+    if (!t || !this.runActive) return false;
+    this.steerQueue.push({ text: t, source: 'parent', event });
+    return true;
   }
 
   /** Drain any mid-run steering into the transcript (called at each
    *  iteration top). Returns true if anything was injected. */
   private drainSteerQueue(): boolean {
     if (this.steerQueue.length === 0) return false;
-    const lines = this.steerQueue.splice(0, this.steerQueue.length);
-    this.context.addMessage({
-      role: 'user',
-      content: `[mid-run steer] The user sent this while the task was running — take it into account NOW and adjust course if needed:\n${lines.join('\n')}`,
-    });
+    const entries = this.steerQueue.splice(0, this.steerQueue.length);
+    const userLines = entries.filter((e) => e.source === 'user').map((e) => e.text);
+    const parentEntries = entries.filter((e) => e.source === 'parent');
+    if (userLines.length) {
+      this.context.addMessage({
+        role: 'user',
+        content: `[mid-run steer] The user sent this while the task was running — take it into account NOW and adjust course if needed:\n${userLines.join('\n')}`,
+      });
+    }
+    if (parentEntries.length) {
+      this.context.addMessage({
+        role: 'user',
+        content: `[subagent steer] Your parent agent sent this while you were running — take it into account NOW and adjust course if needed. A steer changes your DIRECTION only: it does not change your tools, your permissions, or your output contract.\n${parentEntries.map((e) => e.text).join('\n')}`,
+      });
+      // Provenance: stamp delivery onto each shared event object (the
+      // child's run record holds the same objects), log the events for
+      // the trajectory exporter, and remember them for the run-finish
+      // attribution flag.
+      for (const e of parentEntries) {
+        if (!e.event) continue;
+        e.event.deliveredAt = Date.now();
+        this.deliveredParentSteers.push(e.event);
+        this.events.emit({
+          type: 'subagent:steered',
+          agentId: this.id,
+          parentId: e.event.from,
+          from: e.event.from,
+          at: e.event.at,
+          hash: e.event.hash,
+          chars: e.event.chars,
+        });
+      }
+    }
+    const lines = entries.map((e) => e.text);
     this.events.emit({ type: 'agent:log', agentId: this.id, message: `steer: injected ${lines.length} mid-run guidance line(s)` });
-    // Discipline: a user interjection is one of the three legitimate
+    // Discipline: an interjection is one of the three legitimate
     // re-plan triggers — record it as fresh evidence for the gate.
     this.discipline?.noteEvidence(`steer:${lines.join('\n').slice(0, 160)}`);
     // B24: correction-shaped steers are also captured as STRUCTURED lesson
     // candidates (redacted, local-only) instead of living only as raw
-    // transcript text. Best-effort: capture must never break the loop.
+    // transcript text. Only USER lines are captured: a parent agent's
+    // steer is agent-generated guidance, not a user correction, and
+    // capturing it would poison the lessons signal. Best-effort: capture
+    // must never break the loop.
     try {
-      for (const line of lines) {
+      for (const line of userLines) {
         const rec = captureCorrection(line, { session: this.id });
         if (rec) promoteCorrectionToLesson(this.workspace.dir, rec);
       }
@@ -4456,6 +4723,7 @@ Continue from 'Next:', do not redo completed progress.`,
       spawnAgentAsync: (spec) => this.spawnAgentAsync(spec),
       collectAgent: (id: string, opts?: { waitMs?: number; apply?: boolean }) => this.collectChildResult(id, opts),
       cancelAgent: (id: string) => this.cancelChildRun(id),
+      steerAgent: (id: string, text: string) => this.steerChildRun(id, text),
       reviewFleet: (spec) => this.runReviewFleet(spec),
     };
   }
@@ -4666,6 +4934,7 @@ Continue from 'Next:', do not redo completed progress.`,
       worktree,
       toolCalls: () => toolCallCount,
       stopCounting,
+      steerChild: (text: string, event: ChildSteerEvent) => child.acceptParentSteer(text, event),
       completion,
     };
   }
@@ -4793,7 +5062,7 @@ Continue from 'Next:', do not redo completed progress.`,
     };
     let settle!: () => void;
     const promise = new Promise<void>((res) => { settle = res; });
-    const live: LiveChildRun = { record, spec: { ...spec, runId: id }, promise, settle };
+    const live: LiveChildRun = { record, spec: { ...spec, runId: id }, promise, settle, pendingSteers: [] };
     this.childRuns.set(id, live);
     this.childQueue.push(live);
     this.childStore().save(record);
@@ -4829,6 +5098,21 @@ Continue from 'Next:', do not redo completed progress.`,
       try {
         const prepared = await this.startChildRun(live.spec);
         live.prepared = prepared;
+        // B21: hand over any steers issued while this child was queued or
+        // launching, in issue order. startChildRun returns with the
+        // child's run() parked before its first turn, so a steer handed
+        // over here still lands ahead of the first drain — the child sees
+        // it as guidance from the start, never as a lost message.
+        if (live.pendingSteers.length) {
+          const pending = live.pendingSteers.splice(0, live.pendingSteers.length);
+          for (const p of pending) {
+            if (!prepared.steerChild(p.text, p.event)) {
+              p.event.undelivered = true;
+              this.childStore().save(rec);
+              this.childInbox.push(`${rec.id} — a steer from ${p.event.from} could not be delivered (the run ended before it started).`);
+            }
+          }
+        }
         // Cancel landed while the child was still being constructed:
         // honour it now that there is something to abort.
         if (rec.status === 'cancelled') prepared.abort.abort('Cancelled by parent agent');
@@ -4920,6 +5204,23 @@ Continue from 'Next:', do not redo completed progress.`,
         this.childInbox.push(`${rec.id} (${rec.preset ?? rec.role}) FAILED: ${rec.error.slice(0, 160)}`);
       }
     } catch { /* finalize must never break the parent */ } finally {
+      // B21: reconcile steer provenance before the record goes durable.
+      // A steer whose shared event was never stamped deliveredAt by the
+      // child did not land — mark it undelivered (never silently dropped)
+      // and, unless the run was cancelled anyway, warn via the inbox.
+      if (rec.steers?.length) {
+        let lost = 0;
+        for (const s of rec.steers) {
+          if (s.deliveredAt === undefined && !s.undelivered) {
+            s.undelivered = true;
+            lost++;
+          }
+        }
+        rec.steered = rec.steers.some((s) => s.deliveredAt !== undefined);
+        if (lost > 0 && rec.status !== 'cancelled') {
+          this.childInbox.push(`${rec.id} — ${lost} steer(s) arrived too late and were NOT delivered (the run had already finished).`);
+        }
+      }
       rec.finishedAt = Date.now();
       this.childStore().save(rec);
       live.settle();
@@ -5002,6 +5303,12 @@ Continue from 'Next:', do not redo completed progress.`,
       if (rec.status === 'queued') {
         this.childQueue = this.childQueue.filter((l) => l !== live);
         rec.status = 'cancelled';
+        // B21: steers queued for a child that will now never start are
+        // marked undelivered on the record — never silently dropped.
+        for (const s of rec.steers ?? []) {
+          if (s.deliveredAt === undefined) s.undelivered = true;
+        }
+        live.pendingSteers.length = 0;
         rec.finishedAt = Date.now();
         this.childStore().save(rec);
         live.settle();
@@ -5027,6 +5334,71 @@ Continue from 'Next:', do not redo completed progress.`,
       return `Subagent ${id} belonged to a process that is gone; marked cancelled${rec.worktree ? ' and its worktree discarded' : ''}.`;
     }
     return formatChildDigest(rec);
+  }
+
+  /** B21: steer a background child MID-RUN — redirect what it is doing
+   *  without killing it and losing its context. The steer rides the
+   *  child's own steer channel (the MCH-74 pattern, extended from the
+   *  main loop) and is injected at its next turn boundary with framing
+   *  that names it as parent steering. Steering changes DIRECTION only:
+   *  the child's role allowlist and permission posture are fixed at
+   *  construction — a steer that asks for a forbidden tool is just a
+   *  message, and the allowlist still refuses the call. Provenance: every
+   *  steer is logged on the child's run record (who / when / sha256 /
+   *  redacted preview — raw text is never persisted); the child stamps
+   *  delivery when the steer lands, and a steer that cannot land is
+   *  reported as NOT delivered, never silently dropped. Steering a
+   *  queued child queues the steer for its first turn. */
+  async steerChildRun(id: string, text: string, opts?: { from?: string }): Promise<string> {
+    const t = text.trim();
+    if (!t) {
+      return `steer_agent needs a non-empty message — there is nothing to steer subagent ${id} with. (No steer recorded.)`;
+    }
+    const event: ChildSteerEvent = {
+      at: Date.now(),
+      from: opts?.from ?? this.id,
+      hash: createHash('sha256').update(t, 'utf8').digest('hex'),
+      chars: t.length,
+      preview: redact(t).slice(0, 160),
+    };
+    const live = this.childRuns.get(id);
+    if (live) {
+      const rec = live.record;
+      if (rec.status === 'queued') {
+        (rec.steers ??= []).push(event);
+        live.pendingSteers.push({ text: t, event });
+        this.childStore().save(rec);
+        return `Steer queued for subagent ${id} — it has not started yet, so the steer will be part of its context from its first turn. Delivery is stamped on its run record when it starts.`;
+      }
+      if (rec.status === 'running') {
+        (rec.steers ??= []).push(event);
+        const prepared = live.prepared;
+        if (!prepared) {
+          // Still launching (startChildRun in flight): the launch path
+          // hands pending steers over the moment the child exists.
+          live.pendingSteers.push({ text: t, event });
+          this.childStore().save(rec);
+          return `Steer queued for subagent ${id} — its run is starting; the steer will be handed over before its first turn.`;
+        }
+        if (prepared.steerChild(t, event)) {
+          this.childStore().save(rec);
+          return `Steer sent to subagent ${id} — it lands in the child's context at its next turn boundary, and delivery is stamped on its run record (.mochi/state/subagents/${id}.json). A steer redirects the child; it does not change its tools or permissions.`;
+        }
+        // The child finished between the status check and the handoff.
+        event.undelivered = true;
+        this.childStore().save(rec);
+        return `Subagent ${id} finished before the steer could be delivered — the steer was NOT delivered. Collect its result; if the work still needs redirecting, spawn a new subagent with the corrected instructions.`;
+      }
+      return `Subagent ${id} already ${rec.status} — a steer cannot be delivered to a finished run (steer NOT delivered). Collect its result; if the work still needs redirecting, spawn a new subagent with the corrected instructions.`;
+    }
+    const rec = this.childStore().load(id);
+    if (!rec) {
+      return `No subagent run with id "${id}": not live under this agent and no persisted record in .mochi/state/subagents/. Check the id from the spawn result. (Steer NOT delivered.)`;
+    }
+    if (rec.status === 'running' || rec.status === 'queued') {
+      return `Subagent ${id} belonged to a process that is gone (record left at "${rec.status}") — there is no live child to steer. (Steer NOT delivered.)`;
+    }
+    return `Subagent ${id} already ${rec.status} — a steer cannot be delivered to a finished run (steer NOT delivered). Spawn a new subagent with the corrected instructions if the work still needs redirecting.`;
   }
 
   /** Squash-merge a finished worktree child's branch into this tree.
@@ -6010,7 +6382,34 @@ Continue from 'Next:', do not redo completed progress.`,
       // injector on the next iteration. Cap entries at 50 to bound memory.
       this.trackToolResultHash(toolName, foldedOutput);
     }
-    this.context.addMessage({ role: 'tool', tool_call_id: tc.id, content: foldedOutput, name: tc.function.name });
+    // Wave H3: surface computer screenshots to the model as an inline image.
+    // The computer tool's text result stays untouched (path included — traces
+    // and humans use it); for vision-capable models the just-captured frame
+    // rides along as an image part in the tool message, capped/downscaled by
+    // buildScreenshotImage. Text-only models never get the part (their
+    // endpoints may reject image content outright) and providers whose wire
+    // format cannot carry it drop it in their serializer — both degrade to
+    // the pre-H3 path-only result. The journal/trace above keep the string.
+    let toolContent: string | ContentPart[] = foldedOutput;
+    if (toolName === 'computer') {
+      const shot = takeLastComputerScreenshot(this.workspace.stateDir);
+      if (shot && !err && foldedOutput.includes(shot.path)
+        && modelSupportsVision(this.config.model.model, this.config.model.provider)) {
+        const built = buildScreenshotImage(shot.png);
+        if (built) {
+          const note = built.downscaled
+            ? `\n[screenshot inlined at ${built.width}x${built.height}, downscaled from ${built.origWidth}x${built.origHeight} — image coordinates map to display pixels at x${(built.origWidth / built.width).toFixed(2)}]`
+            : '\n[screenshot inlined below]';
+          toolContent = [
+            { type: 'text', text: foldedOutput + note },
+            { type: 'image_url', image_url: { url: built.dataUri } },
+          ];
+        } else {
+          toolContent = `${foldedOutput}\n[screenshot not inlined: the frame exceeds the ${SCREENSHOT_INLINE_MAX_BYTES}-byte inline cap even after downscaling — read the file at the path above to view it]`;
+        }
+      }
+    }
+    this.context.addMessage({ role: 'tool', tool_call_id: tc.id, content: toolContent, name: tc.function.name });
     this.events.emit({ type: 'tool:completed', tool: tc.function.name, result, agentId: this.id });
     await this.hooks.runAfter('after_tool', { tool: toolName, agent: this.id });
     if (MUTATING_TOOLS.has(toolName)) {
@@ -6536,14 +6935,15 @@ Continue from 'Next:', do not redo completed progress.`,
       `${task.title} ${task.description} ${(task.acceptanceCriteria ?? []).join(' ')}`,
     );
 
-    // Fast-fail with the tests related to the changed files before paying for
-    // the full suite. A targeted failure is breakage in the code the agent just
-    // touched, so surface it now and skip the slow checks this iteration; on a
-    // targeted pass we still run the authoritative full set below (a narrow
-    // pass never stands in for the real gate).
+    // Fast-fail with the blast-radius subset for the changed files before
+    // paying for the full suite. A targeted failure is breakage in the code
+    // the agent just touched, so surface it now and skip the slow checks this
+    // iteration; on a targeted pass we still run the authoritative full set
+    // below (a narrow pass never stands in for the real gate — the subset is
+    // a PARTIAL result, labeled as such in the summary).
     if (repo.testCommand && checks.includes(repo.testCommand)) {
       try {
-        const plan = await planTargetedTests(this.cwd, repo, repo.testCommand);
+        const plan = await planVerificationTests(this.cwd, repo, repo.testCommand, { cadence: false });
         if (plan.command) {
           const out = await this.runShell(plan.command, 180);
           const exitLine = out.match(/^exit_code: (\d+)/);
@@ -6556,7 +6956,7 @@ Continue from 'Next:', do not redo completed progress.`,
             const flake = await resolveFlakyFailure(plan.command, out);
             if (flake.kind === 'fail') {
               const condensed = condenseOutput(flake.output, { maxLines: 60, preserveContext: 3 });
-              return { passed: false, status: 'FAIL', checks: [plan.command], summary: `Check failed: ${plan.command} (targeted: ${plan.reason})\n${condensed.condensed}${flake.note ? `\n${flake.note}` : ''}` };
+              return { passed: false, status: 'FAIL', checks: [plan.command], summary: `Check failed: ${plan.command} (PARTIAL targeted pre-check: ${plan.reason})\n${condensed.condensed}${flake.note ? `\n${flake.note}` : ''}` };
             }
           }
         }
@@ -7819,6 +8219,10 @@ Continue from 'Next:', do not redo completed progress.`,
   private finishPromise: Promise<AgentResult> | null = null;
 
   private finish(task: Task, success: boolean, summary: string, stopReason: AgentStopReason = success ? 'completed' : 'aborted'): Promise<AgentResult> {
+    // B21: the run is over — parent steers can no longer be accepted, so a
+    // late steer fails loudly at the parent instead of queueing into a
+    // context that will never drain again.
+    this.runActive = false;
     if (this.finishPromise) return this.finishPromise;
     const p = this.finishOnce(task, success, summary, stopReason);
     // Clear on rejection so an outer retry can attempt a finish again; while
@@ -7879,6 +8283,10 @@ Continue from 'Next:', do not redo completed progress.`,
         skills: loadedSkills.map((id) => ({ id, verdict })),
         verifyStatus: this.lastVerifyStatus ?? 'NONE',
         taskKind: kind,
+        // B21: a run whose course was corrected mid-flight by a parent
+        // steer is marked, so skill evidence never credits an unsteered
+        // success with what the steer caused (lifted by buildTrajectory).
+        steered: this.deliveredParentSteers.length > 0,
       });
       clearSkillsLoadedThisRun();
     } catch { /* skill outcome attribution must never affect task completion */ }

@@ -56,6 +56,15 @@
 //   * Version skew never guesses: a step line written by a newer journal
 //     format (v > JOURNAL_FORMAT_VERSION) makes the file non-claimable
 //     (audit-visible, never served).
+//   * Model turns replay as a strict sequence (claimModelTurn): each
+//     completed turn is journaled with a fingerprint of the exact request
+//     that produced it (modelTurnFingerprint — provider, model, full
+//     message list as sent, tool schemas offered, output-affecting
+//     params). A resume is served the recorded response only while its
+//     requests reproduce the journaled fingerprints in order; the first
+//     mismatch — or any rail above tripping — ends model-turn replay for
+//     the session and the run continues live. Tool-step replay is
+//     unaffected and keeps the semantics above.
 //
 // The journal never throws into the agent: file errors degrade to
 // in-memory-only operation (steps still tracked for the process lifetime,
@@ -113,6 +122,12 @@ export interface JournalStepEntry {
   argsHash: string;
   /** Normalized args (redacted), kept for audit/debugging (bounded). */
   args?: Record<string, unknown>;
+  /** Model turns only: fingerprint of the canonical model REQUEST that
+   *  produced this entry's response (see modelTurnFingerprint). Model-turn
+   *  replay is sequence-strict — the recorded response is served only
+   *  when a resumed run's next request reproduces this fingerprint
+   *  exactly, in the original order. */
+  fingerprint?: string;
   status: 'completed' | 'failed';
   /** The output the step produced (what the model saw, for tool steps). */
   output?: string;
@@ -164,6 +179,9 @@ export interface JournalStats {
   recordedSteps: number;
   /** Completed steps served from the journal instead of re-executing. */
   replayedSteps: number;
+  /** Model turns served from the journal instead of calling the provider
+   *  (a subset of replayedSteps). Present only when > 0. */
+  replayedModelTurns?: number;
   /** Completed steps currently claimable by signature/id. */
   claimableSteps: number;
   /** Summed usage over ALL step entries (loaded + recorded). Replayed
@@ -286,6 +304,70 @@ export function isJournalableTool(toolName: string): boolean {
   return !NON_JOURNALED_TOOLS.has(toolName);
 }
 
+/** The canonical request material a model-turn fingerprint covers. A
+ *  provider's response is a function of exactly: which backend/model is
+ *  asked, the full message list as sent (the system prompt rides inside
+ *  it as the first message in this codebase), the tool schemas offered,
+ *  and the sampling parameters that can change the output. Transport-only
+ *  concerns (streaming, timeouts, abort signals) cannot change WHAT a
+ *  completed response says, so they are deliberately excluded. */
+export interface ModelTurnFingerprintInput {
+  /** Provider identity as the caller knows it (config.model.provider). */
+  provider: string;
+  /** Model id as sent (config.model.model). */
+  model: string;
+  /** The full message list exactly as sent to the provider. */
+  messages: ReadonlyArray<{
+    role: string;
+    content?: unknown;
+    tool_calls?: unknown;
+    tool_call_id?: string;
+    name?: string;
+  }>;
+  /** Tool schemas offered with the request (name/description/parameters —
+   *  the parts a provider actually serializes). */
+  tools: ReadonlyArray<{
+    name: string;
+    description?: string;
+    parameters?: unknown;
+  }>;
+  temperature?: number | null;
+  reasoningEffort?: string | null;
+  maxTokens?: number | null;
+}
+
+/** Fingerprint of one model request: SHA-256 over the stable-stringified
+ *  canonical request (see ModelTurnFingerprintInput). Two requests with
+ *  the same fingerprint are interchangeable to the provider; any
+ *  output-affecting difference — a message edited, a tool schema added,
+ *  a different sampling parameter — yields a different fingerprint, and
+ *  model-turn replay serves NOTHING on a mismatch. */
+export function modelTurnFingerprint(input: ModelTurnFingerprintInput): string {
+  const material = {
+    v: 1,
+    provider: input.provider,
+    model: input.model,
+    messages: input.messages.map((m) => ({
+      role: m.role,
+      content: m.content ?? null,
+      tool_calls: m.tool_calls ?? null,
+      tool_call_id: m.tool_call_id ?? null,
+      name: m.name ?? null,
+    })),
+    tools: input.tools.map((t) => ({
+      name: t.name,
+      description: t.description ?? null,
+      parameters: t.parameters ?? null,
+    })),
+    params: {
+      temperature: input.temperature ?? null,
+      reasoningEffort: input.reasoningEffort ?? null,
+      maxTokens: input.maxTokens ?? null,
+    },
+  };
+  return sha256(stableStringify(material));
+}
+
 export interface RunJournalOptions {
   /** Base dir the `journals/` folder lives under (workspace.dir, i.e. the
    *  `.mochi` dir, in the agent loop; any dir in tests). */
@@ -321,6 +403,22 @@ export class RunJournal {
   private loadedSteps = 0;
   private recordedSteps = 0;
   private replayedSteps = 0;
+  /** Model-turn replay chain: completed, fully-stored model_turn entries
+   *  from prior sessions, in original order. Built at load; the chain
+   *  STOPS at the first model turn that failed or whose output was
+   *  truncated (audit-only) — turns after a gap can never be served,
+   *  because the resumed run's request sequence has no way to prove it
+   *  reproduces the state that produced them. */
+  private modelChain: JournalStepEntry[] = [];
+  /** True once a failed/truncated model turn has ended chain building. */
+  private modelChainSealed = false;
+  /** Position of the next claimable model turn in modelChain. */
+  private modelTurnCursor = 0;
+  /** Latched forever once model-turn replay ends for this session (first
+   *  fingerprint mismatch, divergence, unparseable payload, or chain
+   *  exhaustion): there is no resume-the-replay, the run continues live. */
+  private modelReplayEnded = false;
+  private replayedModelTurns = 0;
   private started = false;
   private finishedOutcome: string | undefined;
   /** Every file state the journal itself has recorded, per path — the
@@ -393,6 +491,19 @@ export class RunJournal {
       this.steps.push(entry);
       this.loadedSteps++;
       this.indexEntryState(entry);
+      // Model-turn replay chain (see the field comment): prior sessions'
+      // model turns in order; the first failed/truncated one ends it.
+      if (entry.stepKind === 'model_turn') {
+        if (!this.modelChainSealed && entry.status === 'completed' && !entry.outputTruncated) {
+          this.modelChain.push(entry);
+        } else {
+          // Seal the chain: this turn (and every model turn after it)
+          // stays audit-only. Entries already pushed keep their
+          // positions; claims stop at the gap because the chain simply
+          // has no entry for that turn.
+          this.modelChainSealed = true;
+        }
+      }
       // Output-truncated entries are audit-only: the stored text is not
       // the full result, so serving it would fabricate an outcome.
       if (entry.status === 'completed' && !entry.outputTruncated) {
@@ -407,6 +518,9 @@ export class RunJournal {
     if (this.versionSkew) {
       this.claimableById.clear();
       this.claimableBySig.clear();
+      // A newer format's model turns are just as unknowable: no chain.
+      this.modelChain = [];
+      this.modelReplayEnded = true;
     }
   }
 
@@ -557,6 +671,9 @@ export class RunJournal {
     durationMs?: number;
     stepKind?: JournalStepKind;
     usage?: JournalStepUsage;
+    /** Model turns: fingerprint of the request that produced the output
+     *  (see modelTurnFingerprint). Stored verbatim; claims compare it. */
+    fingerprint?: string;
   }): JournalStepEntry {
     const argsHash = hashArgs(input.args);
     let args: Record<string, unknown> | undefined;
@@ -592,6 +709,7 @@ export class RunJournal {
       toolName: input.toolName,
       argsHash,
       ...(args !== undefined ? { args } : {}),
+      ...(input.fingerprint !== undefined ? { fingerprint: input.fingerprint } : {}),
       status: input.error ? 'failed' : 'completed',
       ...(output !== undefined ? { output } : {}),
       ...(summary !== undefined ? { summary } : {}),
@@ -641,15 +759,19 @@ export class RunJournal {
     });
   }
 
-  /** Record a completed model turn (the response text + its billed
-   *  usage). Journaled so a resume can account the turn as already-spent
-   *  and, where a host replays turns, serve the recorded response. */
+  /** Record a completed model turn (the response payload + its billed
+   *  usage). The `output` is the serialized response a replay serves; the
+   *  `fingerprint` identifies the request that produced it. A resume
+   *  whose next request reproduces the fingerprint exactly is served the
+   *  recorded response via claimModelTurn instead of re-calling (and
+   *  re-billing) the provider. */
   recordModelTurn(input: {
     stepId: string;
     args?: Record<string, unknown>;
     output: string;
     usage?: JournalStepUsage;
     durationMs?: number;
+    fingerprint?: string;
   }): JournalStepEntry {
     return this.recordStep({
       stepId: input.stepId,
@@ -659,6 +781,7 @@ export class RunJournal {
       output: input.output,
       usage: input.usage,
       durationMs: input.durationMs,
+      fingerprint: input.fingerprint,
     });
   }
 
@@ -741,6 +864,83 @@ export class RunJournal {
     return this.claimBySignature(input.toolName, input.args);
   }
 
+  // ── Model-turn replay ──────────────────────────────────────────────
+  //
+  // Model turns replay as a STRICT SEQUENCE, unlike tool steps: a tool
+  // step is an independent fact ("this call already ran with these
+  // args"), but a model response is only meaningful as the answer to the
+  // exact conversation state that produced it. Claims therefore consume
+  // the loaded chain in order — the Nth claim of a session is checked
+  // against the Nth journaled turn — and the FIRST failure of any kind
+  // (fingerprint mismatch, chain exhaustion, divergence, unparseable
+  // payload) ends model-turn replay permanently for the session. The
+  // run then continues live; nothing is ever served approximately.
+
+  /** True when a prior session journaled at least one model turn this
+   *  session has not yet claimed or invalidated. Hosts use this to know
+   *  model-turn replay is armed BEFORE the first model call (e.g. to
+   *  keep resume-time context injections from poisoning turn 1). */
+  hasClaimableModelTurns(): boolean {
+    return !this.modelReplayEnded && !this.divergedReason && this.modelTurnCursor < this.modelChain.length;
+  }
+
+  /** Permanently end model-turn replay for this session (the caller hit
+   *  a rail the journal cannot see itself, e.g. a payload whose shape
+   *  the loop cannot accept). Tool-step replay is unaffected. */
+  endModelReplay(): void {
+    this.modelReplayEnded = true;
+  }
+
+  /** Claim the next journaled model turn for a request fingerprint.
+   *  Returns the entry and its parsed response payload ONLY on exact
+   *  fingerprint equality with the next unclaimed chain entry; any other
+   *  outcome returns undefined and latches replay off for the session. */
+  claimModelTurn(fingerprint: string): { entry: JournalStepEntry; payload: unknown } | undefined {
+    if (this.modelReplayEnded) return undefined;
+    if (this.divergedReason) {
+      this.modelReplayEnded = true;
+      return undefined;
+    }
+    const entry = this.modelChain[this.modelTurnCursor];
+    if (!entry) {
+      // Chain exhausted (or sealed at a gap): the live run has reached
+      // the frontier of the journaled prefix. Replay is over, cleanly.
+      this.modelReplayEnded = true;
+      return undefined;
+    }
+    if (!entry.fingerprint || entry.fingerprint !== fingerprint) {
+      // The resumed run's next request is NOT the request this response
+      // answered — serving it would fabricate a continuation. End here:
+      // later turns were answers to a state built on THIS response, so
+      // none of them may be served either.
+      this.modelReplayEnded = true;
+      return undefined;
+    }
+    const problem = this.divergenceFor(entry);
+    if (problem) {
+      this.failDivergence(problem);
+      this.modelReplayEnded = true;
+      return undefined;
+    }
+    let payload: unknown;
+    try {
+      payload = JSON.parse(entry.output ?? 'null');
+    } catch {
+      // The stored response cannot be reconstructed (redaction edge,
+      // torn write that still parsed as JSON, …). Never serve a guess.
+      this.modelReplayEnded = true;
+      return undefined;
+    }
+    if (payload === null || typeof payload !== 'object') {
+      this.modelReplayEnded = true;
+      return undefined;
+    }
+    this.modelTurnCursor++;
+    this.replayedSteps++;
+    this.replayedModelTurns++;
+    return { entry, payload };
+  }
+
   /** Non-claiming inspection: was this stepId completed in ANY session
    *  (including this one)? Used by tests/diagnostics, not the replay path. */
   getCompleted(stepId: string): JournalStepEntry | undefined {
@@ -791,6 +991,7 @@ export class RunJournal {
       replayedSteps: this.replayedSteps,
       claimableSteps: claimable,
       usage,
+      ...(this.replayedModelTurns > 0 ? { replayedModelTurns: this.replayedModelTurns } : {}),
       ...(this.divergedReason ? { diverged: true, divergenceReason: this.divergedReason } : {}),
       ...(this.capped ? { capped: true } : {}),
       ...(this.versionSkew ? { versionSkew: true } : {}),
@@ -813,6 +1014,11 @@ export class RunJournal {
     this.capped = false;
     this.versionSkew = false;
     this.corruptLines = 0;
+    this.modelChain = [];
+    this.modelChainSealed = false;
+    this.modelTurnCursor = 0;
+    this.modelReplayEnded = false;
+    this.replayedModelTurns = 0;
   }
 
   // ── Step execution with replay ─────────────────────────────────────────
