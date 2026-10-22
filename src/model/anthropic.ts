@@ -81,13 +81,38 @@ export function createAnthropicProvider(config: ProviderConfig) {
           content: [{ type: 'text', text: `[tool output: ${m.name || 'tool'}] ${contentText(m)}` }],
         };
       }
+      // Wave H3: image parts in a tool result (computer screenshots) ride
+      // INSIDE the tool_result as a block array — Anthropic's native
+      // multimodal tool-result shape. Text-only results keep the exact
+      // pre-H3 string form.
+      const { text, images } = splitContent(m.content);
+      if (images.length === 0) {
+        return {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: m.tool_call_id,
+              content: text,
+            },
+          ],
+        };
+      }
+      const blocks: Array<{ type: string; text?: string; source?: unknown }> = [{ type: 'text', text }];
+      for (const img of images) {
+        if ('data' in img) {
+          blocks.push({ type: 'image', source: { type: 'base64', media_type: img.mime, data: img.data } });
+        } else {
+          blocks.push({ type: 'image', source: { type: 'url', url: img.url } });
+        }
+      }
       return {
         role: 'user',
         content: [
           {
             type: 'tool_result',
             tool_use_id: m.tool_call_id,
-            content: contentText(m),
+            content: blocks,
           },
         ],
       };

@@ -69,6 +69,27 @@ function saveScreenshot(ctx: ToolContext, png: Buffer): string {
   return path;
 }
 
+/** Wave H3 side-channel: the most recent capture per workspace state dir.
+ *  Tool results are plain strings, so the PNG bytes travel out-of-band: the
+ *  agent loop takes (reads + clears) the entry right after a computer call
+ *  and, for vision-capable models, attaches the frame to the tool message as
+ *  an inline image part next to the path text. Take-once semantics mean a
+ *  frame is attached at most once and can never go stale across calls. */
+export interface LastComputerScreenshot {
+  path: string;
+  png: Buffer;
+  width: number;
+  height: number;
+}
+
+const lastScreenshots = new Map<string, LastComputerScreenshot>();
+
+export function takeLastComputerScreenshot(stateDir: string): LastComputerScreenshot | null {
+  const shot = lastScreenshots.get(stateDir);
+  if (shot) lastScreenshots.delete(stateDir);
+  return shot ?? null;
+}
+
 async function captureAndReport(
   ctx: ToolContext,
   backend: DisplayBackend,
@@ -79,6 +100,7 @@ async function captureAndReport(
   const rgba = await backend.captureRgba();
   const png = encodePngRgba(info.width, info.height, rgba);
   const path = saveScreenshot(ctx, png);
+  lastScreenshots.set(ctx.workspace.stateDir, { path, png, width: info.width, height: info.height });
   const pointer = await backend.pointer();
   return (
     `[computer ${action}] ok — ${detail} on ${info.label} (${info.width}x${info.height}), ` +

@@ -374,7 +374,15 @@ export function createAntigravityProvider(config: ProviderConfig) {
             response: { output: contentText(m) },
           },
         };
-        rawContents.push({ role: 'user', parts: [part] });
+        // Wave H3: image parts in a tool result (computer screenshots) ride
+        // in the same user turn as inlineData parts next to the
+        // functionResponse, mirroring the Gemini mapping. Data URIs only.
+        const toolParts: unknown[] = [part];
+        const { images: toolImages } = splitContent(m.content);
+        for (const img of toolImages) {
+          if ('data' in img) toolParts.push({ inlineData: { mimeType: img.mime, data: img.data } });
+        }
+        rawContents.push({ role: 'user', parts: toolParts });
       } else if (m.role === 'user') {
         const { text: gtext, images: gimages } = splitContent(m.content);
         const inline = gimages.filter((g): g is { mime: string; data: string } => 'data' in g);

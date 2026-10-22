@@ -62,6 +62,38 @@ export function modelContextBudget(model: string, provider?: string): number {
   return 128_000;
 }
 
+/** Whether the model can accept image content parts (Wave H3). Name-based like
+ *  modelContextBudget above, but CONSERVATIVE in the opposite direction: an
+ *  unrecognized model is assumed text-only, because handing an image part to a
+ *  text-only endpoint can hard-fail the whole request, while withholding one
+ *  just degrades to the pre-H3 behavior (the model reads the image file
+ *  itself). Used by the agent loop to decide whether a computer-tool
+ *  screenshot is inlined into the tool result next to its file path. */
+export function modelSupportsVision(model: string, provider?: string): boolean {
+  const m = (model || '').toLowerCase();
+  const p = (provider || '').toLowerCase();
+  // Providers whose registered catalogs are vision-only model families.
+  if (p.includes('anthropic') || p.includes('gemini') || p === 'google') return true;
+  if (m.includes('claude') || m.includes('gemini')) return true;
+  // OpenAI vision lines (gpt-4o / 4.1 / 5, o4; o3 yes, o3-mini is text-only).
+  if (
+    m.includes('gpt-4o') || m.includes('gpt-4.1') || m.includes('gpt-5') ||
+    m.includes('gpt-4-vision') || m.includes('gpt-4-turbo') ||
+    m.includes('o4') || (m.includes('o3') && !m.includes('o3-mini'))
+  ) return true;
+  // Explicit vision families from other vendors.
+  if (
+    (m.includes('qwen') && m.includes('vl')) ||
+    m.includes('llava') || m.includes('pixtral') ||
+    m.includes('llama-3.2-vision') || m.includes('llama-4') ||
+    m.includes('glm-4v') || m.includes('cogvlm') ||
+    m.includes('nova-pro') || m.includes('nova-lite') || m.includes('nova-2') ||
+    m.includes('grok-4') || m.includes('grok-2-vision') || m.includes('grok-vision') ||
+    m.includes('kimi-vl') || (m.includes('moonshot') && m.includes('vision'))
+  ) return true;
+  return false;
+}
+
 export function setProvider(config: MochiConfig, selection: ProviderSelection): MochiConfig {
   const cfg = { ...config };
   // Tolerate a missing/empty config file (fresh install): loadConfigFile()
