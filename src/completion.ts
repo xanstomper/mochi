@@ -50,6 +50,15 @@ export const COMPLETION_COMMANDS: CompletionCommand[] = [
   },
   { name: 'session', description: 'Session history (list|search)' },
   { name: 'trace', description: 'Replay a run trace (--export-trajectory: export a trajectory JSONL for distillation/SFT)' },
+  {
+    name: 'gate', description: 'Frozen regression gate (hash-pinned task set, independent analyser)',
+    subcommands: [
+      { name: 'run', description: 'Run the frozen set against the recorded baseline' },
+      { name: 'baseline', description: 'Record a new gate baseline (explicit only)' },
+      { name: 'freeze', description: 'Re-freeze the task set manifest (invalidates old baselines)' },
+      { name: 'check', description: 'Verify the frozen set hashes and blocklist non-overlap' },
+    ],
+  },
   { name: 'apply', description: 'Apply a unified diff atomically (all-or-nothing)' },
   { name: 'checkpoint', description: 'Named snapshots' },
   { name: 'rollback', description: 'Restore a checkpoint' },
@@ -142,6 +151,7 @@ export const COMPLETION_COMMANDS: CompletionCommand[] = [
   },
   { name: 'chameleon', description: 'Removed standalone — engine runs auto + via --enhance' },
   { name: 'self-train', description: 'Self-review loop (--schedule for nightly learning)', aliases: ['selftrain', 'train'] },
+  { name: 'sleeptime', description: 'Nightly consolidation pipeline (--cap <usd>, --dry-run)' },
   { name: 'speculate', description: 'Speculative execution' },
   { name: 'usage', description: 'Token usage and cost' },
   { name: 'feedback', description: 'Rate mochi good/bad (feeds self-correction)' },
