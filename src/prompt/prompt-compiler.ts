@@ -41,6 +41,24 @@ export type ComplexityLevel =
 
 export type CompilerReasoningLevel = 'max' | 'high' | 'medium' | 'low' | 'off' | 'auto';
 
+/**
+ * Reasoning-protocol kind: the compiler's classifications mapped onto the
+ * task-kind system in src/core/taskkind.ts (fix / implement / refactor /
+ * test / research / plan / document). The compiled spec's failure-recovery,
+ * anti-loop, and verification sections are selected by this kind — a debug
+ * task gets a reproduce-first protocol, a refactor gets characterization-
+ * first, and so on — instead of one constant boilerplate for every task.
+ */
+export type ReasoningProtocolKind =
+  | 'fix'
+  | 'implement'
+  | 'refactor'
+  | 'test'
+  | 'research'
+  | 'plan'
+  | 'document'
+  | 'general';
+
 export interface Assumption {
   id: string;
   assumption: string;
@@ -88,9 +106,16 @@ export interface CompiledPromptSpecification {
     callPolicy: string;
   };
   reasoningStrategy: string;
+  /** Which per-kind reasoning protocol (see ReasoningProtocolKind) shaped
+   *  failureRecovery / antiLoopRules / verificationPlanner for this spec. */
+  protocolKind: ReasoningProtocolKind;
   verificationPlanner: {
     strategies: string[];
     primaryCommand?: string;
+    /** Per-kind evidence checklist: the concrete artifacts that prove the
+     *  task is done (repro before/after, characterization baseline, cited
+     *  sources, …), beyond merely running the primary command. */
+    evidenceChecklist: string[];
   };
   failureRecovery: string[];
   antiLoopRules: string[];
@@ -136,22 +161,16 @@ export class MochiPromptCompiler {
 
     const phases = this.generatePhasesForTier(cleanPrompt, classifications, complexity, reasoning, options);
     const toolStrategy = this.buildToolStrategy(classifications, complexity, reasoning);
-    const verificationPlanner = this.buildVerificationPlanner(options);
+    const protocolKind = this.resolveProtocolKind(classifications, cleanPrompt);
+    const verificationPlanner = this.buildVerificationPlanner(protocolKind, options);
     const acceptanceCriteria = this.buildAcceptanceCriteria(cleanPrompt, classifications, complexity);
 
-    const failureRecovery = [
-      'Bounded Retries: Max 2 attempts per failing operation before altering strategy',
-      'Rollback Safety: Revert workspace to clean snapshot if candidate modification fails',
-      'Anti-Loop Escalation: If a tool or command fails consecutively, pause and reassess root cause',
-      'Degrade Gracefully: If optional feature encounters blockers, isolate core functionality first',
-    ];
-
-    const antiLoopRules = [
-      'Idempotency Guard: Never issue identical file edits or bash commands repeatedly',
-      'Zero Blind Retries: Inspect test failure logs before modifying code',
-      'No Recursive Subtasks: Subagents must operate with strictly bounded depth',
-      'Single Execution Authority: All actions route through unified lock and event bus',
-    ];
+    // Per-kind reasoning protocol, NOT constant boilerplate: the recovery
+    // steps and anti-loop rules that make a model reason well differ by
+    // task shape (reproduce-first for fixes, characterize-first for
+    // refactors, triangulate for research). See buildFailureRecovery.
+    const failureRecovery = this.buildFailureRecovery(protocolKind);
+    const antiLoopRules = this.buildAntiLoopRules(protocolKind);
 
     let compiledMarkdownPrompt = '';
     switch (reasoning) {
@@ -160,7 +179,7 @@ export class MochiPromptCompiler {
         compiledMarkdownPrompt = this.renderLowTierPrompt(cleanPrompt, options?.testCommand || 'npm test');
         break;
       case 'medium':
-        compiledMarkdownPrompt = this.renderMediumTierPrompt(cleanPrompt, constraints, options?.testCommand || 'npm test');
+        compiledMarkdownPrompt = this.renderMediumTierPrompt(cleanPrompt, constraints, options?.testCommand || 'npm test', failureRecovery, verificationPlanner.evidenceChecklist);
         break;
       case 'high':
         compiledMarkdownPrompt = this.renderHighTierPrompt({
@@ -177,6 +196,7 @@ export class MochiPromptCompiler {
           phases,
           toolStrategy,
           reasoningStrategy: 'Structured Action Plan: Audit → Implementation → Verification → Summary',
+          protocolKind,
           verificationPlanner,
           failureRecovery,
           antiLoopRules,
@@ -201,6 +221,7 @@ export class MochiPromptCompiler {
           phases,
           toolStrategy,
           reasoningStrategy: 'Structured Step-Wise Reasoning: Goal → Observations → Options → Decision → Verification',
+          protocolKind,
           verificationPlanner,
           failureRecovery,
           antiLoopRules,
@@ -224,6 +245,7 @@ export class MochiPromptCompiler {
       phases,
       toolStrategy,
       reasoningStrategy: reasoning === 'max' ? 'Exhaustive Invariant Decomposition' : 'Targeted Action Execution',
+      protocolKind,
       verificationPlanner,
       failureRecovery,
       antiLoopRules,
@@ -257,6 +279,12 @@ export class MochiPromptCompiler {
     if (p.includes('harness') || p.includes('agent') || p.includes('loop') || p.includes('pipeline') || p.includes('architecture')) {
       cats.add('ARCHITECTURE');
       cats.add('SYSTEM_DESIGN');
+    }
+    if (p.includes('research') || p.includes('investigate') || p.includes('explore') || p.includes('compare') || p.includes('how does') || p.includes('why does') || p.includes('why is')) {
+      cats.add('RESEARCH');
+    }
+    if (p.includes('document') || p.includes('readme')) {
+      cats.add('DOCUMENTATION');
     }
     if (p.includes('add') || p.includes('create') || p.includes('build') || p.includes('implement') || p.includes('feature') || p.includes('make')) {
       cats.add('FEATURE_DEVELOPMENT');
@@ -613,11 +641,226 @@ export class MochiPromptCompiler {
     };
   }
 
-  private buildVerificationPlanner(context?: { testCommand?: string }) {
+  /**
+   * Map the compiler's classifications onto the task-kind system used by
+   * src/core/taskkind.ts, so the reasoning protocol matches the kind of
+   * thinking the task needs. Priority mirrors taskkind's classifier: an
+   * actionable fix beats test work, which beats a refactor, which beats
+   * feature implementation; read-only kinds (plan / research) win only
+   * when no execution category is present.
+   */
+  private resolveProtocolKind(classifications: TaskCategory[], prompt: string): ReasoningProtocolKind {
+    const has = (c: TaskCategory) => classifications.includes(c);
+    if (has('DEBUGGING') || has('TROUBLESHOOTING')) return 'fix';
+    if (has('TESTING')) return 'test';
+    if (has('REFACTORING') || has('MIGRATION')) return 'refactor';
+    if (has('DOCUMENTATION') || has('WRITING') || has('CONTENT_CREATION') || has('EDUCATION')) return 'document';
+    if (
+      has('FEATURE_DEVELOPMENT') || has('CODING') || has('UI_DEVELOPMENT') || has('APP_DEVELOPMENT') ||
+      has('WEB_DEVELOPMENT') || has('SYSTEM_DESIGN') || has('ARCHITECTURE') || has('AUTOMATION') ||
+      has('DEVOPS') || has('SECURITY') || has('OPTIMIZATION') || has('CONFIGURATION') ||
+      has('IMAGE_CREATION') || has('VIDEO')
+    ) return 'implement';
+    if (has('PLANNING')) return 'plan';
+    if (has('RESEARCH') || has('DATA_ANALYSIS')) return 'research';
+    // Only generic classifications: a question-shaped prompt is research
+    // (taskkind routes it the same way), anything else keeps the generic
+    // protocol.
+    const p = prompt.trim().toLowerCase();
+    if (/^(how|what|why|which|who|when)\b/.test(p) || /\?\s*$/.test(p)) return 'research';
+    return 'general';
+  }
+
+  /**
+   * The working protocol for a task kind, carried in `failureRecovery`:
+   * what to do when the work pushes back. These are task-shaped reasoning
+   * procedures (hypothesis → repro → smallest change for fixes;
+   * characterize → small verified steps for refactors), not generic retry
+   * advice. Kept tight on purpose — this text is paid for on every run at
+   * the tiers that render it.
+   */
+  private buildFailureRecovery(kind: ReasoningProtocolKind): string[] {
+    switch (kind) {
+      case 'fix':
+        return [
+          'Hypothesis first: state one falsifiable hypothesis ("X causes Y because Z") before any edit',
+          'Reproduce first: run the smallest concrete repro (test or command) and record its exact failing output — no repro, no edit',
+          'Smallest change: make the one minimal change that tests the hypothesis, not a bundle of guesses',
+          'Re-run the repro: confirm the recorded failure is gone before running broader checks',
+          'Two failed hypotheses = stop: re-survey callers, data flow, and recent diffs instead of patching a third guess',
+          'Regression lock: add a test that fails without the fix and passes with it',
+        ];
+      case 'implement':
+        return [
+          'Decompose first: split the work into verifiable sub-steps and define the acceptance evidence for each step BEFORE coding it',
+          'Pattern-match the repo: follow the closest existing feature\'s structure, naming, and error handling — a new abstraction needs explicit justification',
+          'Build in verified increments: produce each sub-step\'s evidence (targeted test, typecheck, real invocation) before starting the next',
+          'When blocked, shrink the step: isolate the failing sub-step with a minimal example instead of rewriting the whole feature',
+          'Prefer existing utilities and dependencies; adding a dependency is a decision to state explicitly, not a default',
+        ];
+      case 'refactor':
+        return [
+          'Characterize first: run the existing tests — or add characterization tests pinning current behavior, quirks included — and record the green baseline BEFORE changing structure',
+          'No behavior change without a failing characterization: if a step would alter observable behavior, that is a fix — stop and treat it as one',
+          'Small verified steps: one structural move at a time (rename, extract, inline), re-running the characterization tests after each step',
+          'A red step gets reverted and retaken smaller — never push through a failing suite hoping it heals later',
+          'Preserve public contracts: signatures, exports, and serialized formats stay stable unless the task explicitly changes them',
+        ];
+      case 'test':
+        return [
+          'Red before green: a new test must be observed failing for the intended reason before the code passes it — a test never seen red proves nothing',
+          'Test behavior, not implementation: one observable behavior per test, covering the boundary and the failure path, not only the happy path',
+          'Use the project\'s existing test runner, fixtures, and style — never invent a new harness',
+          'Flaky is a bug: if a test is intermittent, fix the nondeterminism (time, randomness, ordering, shared state) instead of retrying it green',
+        ];
+      case 'research':
+        return [
+          'Triangulate: base every material claim on at least two independent sources (definition + callers, docs + implementation, test + code)',
+          'Verify on disk, not from memory: cite concrete paths and symbols inspected in this session for each finding',
+          'Say what would change the answer: name the evidence that would overturn the current conclusion — then go look for it',
+          'Separate fact from inference: label claims observed (with citation) vs inferred (with the reasoning), and report source conflicts instead of averaging them',
+        ];
+      case 'plan':
+        return [
+          'Plan only: steps, files to touch, risks, and per-step verification — no edits',
+          'Ground every step in a concrete path or symbol that was actually inspected, not guessed',
+          'Sequence by dependency and risk: the riskiest assumption gets tested earliest',
+          'Each step names its acceptance evidence so later execution can be checked mechanically',
+        ];
+      case 'document':
+        return [
+          'Match the house style: read a neighboring doc first and follow its structure and voice',
+          'Cover the WHY before the HOW, and keep every example concrete and runnable as written',
+          'Verify claims against the code: documented flags, defaults, and behaviors are checked in this session, not remembered',
+        ];
+      case 'general':
+      default:
+        return [
+          'Bounded retries: max 2 attempts per failing operation before altering strategy',
+          'Inspect the actual failure output before modifying anything — zero blind retries',
+          'Rollback safety: revert to the last verified state if a candidate change fails verification',
+          'Degrade gracefully: if an optional part is blocked, isolate it and complete the core first',
+        ];
+    }
+  }
+
+  /** Anti-loop rules per kind: the specific way THIS kind of task tends to
+   *  spin, and the rule that breaks the spin. */
+  private buildAntiLoopRules(kind: ReasoningProtocolKind): string[] {
+    switch (kind) {
+      case 'fix':
+        return [
+          'Never repeat an identical edit or command after it failed — change the hypothesis, not the retry count',
+          'One hypothesis per iteration: do not stack speculative fixes and then guess which one worked',
+          'If the repro\'s failure shape changes, record the new output — a moving failure means the model of the bug is wrong',
+        ];
+      case 'implement':
+        return [
+          'Never re-run the same command expecting a different result — read its output and change exactly one thing',
+          'Do not rewrite a whole file to fix a local problem; targeted edits keep verified progress intact',
+          'No placeholder or TODO implementations: each sub-step lands working, with its evidence, or not at all',
+        ];
+      case 'refactor':
+        return [
+          'Never batch multiple structural moves into one unverified edit',
+          'Do not "improve" behavior while refactoring — behavior deltas are separate, separately tested changes',
+          'If the same test fails after two different steps, stop and re-check the baseline — the characterization itself may be wrong',
+        ];
+      case 'test':
+        return [
+          'Never weaken an assertion, widen a tolerance, or delete a case to make a test pass',
+          'Never re-run a failing test unchanged expecting a pass; change the code, the test, or the hypothesis',
+          'Chase one failing behavior at a time — fix the first failure before its cascade',
+        ];
+      case 'research':
+        return [
+          'Read-only discipline: do not mutate files to "test" a research question unless a change was asked for',
+          'Stop when the question is answered with cited evidence — more reading is not more rigor',
+          'Never report a hypothetical bug or issue as a finding; findings require verified evidence',
+        ];
+      case 'plan':
+        return [
+          'Do not drift from plan into implementation — producing the plan is the deliverable',
+          'Do not re-plan from scratch after each observation; refine the affected steps only',
+        ];
+      case 'document':
+        return [
+          'Do not restate the same content in new words across sections; each section adds information',
+          'Do not document behavior you have not verified against the code in this session',
+        ];
+      case 'general':
+      default:
+        return [
+          'Idempotency guard: never issue identical file edits or shell commands repeatedly',
+          'Zero blind retries: inspect failure output before the next attempt',
+          'No recursive subtasks: subagents operate at strictly bounded depth',
+        ];
+    }
+  }
+
+  private buildVerificationPlanner(kind: ReasoningProtocolKind, context?: { testCommand?: string }) {
     const cmd = context?.testCommand || 'npm test';
+    const strategiesByKind: Record<ReasoningProtocolKind, string[]> = {
+      fix: ['REPRO_BEFORE_AFTER', 'TARGETED_TEST', 'FULL_SUITE', 'REGRESSION_TEST', 'DIFF_SELF_REVIEW'],
+      implement: ['PER_STEP_EVIDENCE', 'TARGETED_TEST', 'FULL_SUITE', 'REAL_INVOCATION', 'DIFF_SELF_REVIEW'],
+      refactor: ['CHARACTERIZATION_BASELINE', 'PER_STEP_RETEST', 'FULL_SUITE', 'DIFF_BEHAVIOR_REVIEW'],
+      test: ['RED_GREEN_EVIDENCE', 'EXISTING_RUNNER', 'FULL_SUITE'],
+      research: ['SOURCE_TRIANGULATION', 'CITATION_CHECK', 'DISCONFIRMATION_CHECK'],
+      plan: ['GROUNDED_STEPS', 'PER_STEP_EVIDENCE_DEFINED', 'RISK_ORDERING'],
+      document: ['STYLE_MATCH', 'CLAIM_VERIFICATION', 'RUNNABLE_EXAMPLES'],
+      general: ['TYPECHECK', 'UNIT_TEST', 'IN_TURN_AST_VALIDATION', 'INTEGRATION_CHECK'],
+    };
+    const evidenceByKind: Record<ReasoningProtocolKind, string[]> = {
+      fix: [
+        'Repro output BEFORE the fix: the concrete command and its failing output, recorded before editing',
+        'Repro output AFTER the fix: the same command, now passing',
+        'Regression test that fails without the fix and passes with it',
+        `Targeted tests for the touched module pass, then the full suite via \`${cmd}\` shows no regressions vs baseline`,
+        'Diff self-review: the change is minimal and matches the stated hypothesis',
+      ],
+      implement: [
+        'Acceptance evidence for each sub-step, defined before coding and produced as the step lands',
+        `Targeted tests / typecheck for the new code, then the full suite via \`${cmd}\` with 0 regressions`,
+        'A real invocation of the new behavior (command, endpoint, or UI path) — not unit tests alone',
+        'Diff self-review against the existing repo patterns the implementation claims to follow',
+      ],
+      refactor: [
+        'Characterization baseline recorded BEFORE the first structural change (test results, including quirks pinned)',
+        'The same characterization tests green after EVERY step, not only at the end',
+        `Full suite via \`${cmd}\` matches the baseline exactly — same passes, same pre-existing failures`,
+        'Diff review: no observable behavior, public signature, or serialized format changed',
+      ],
+      test: [
+        'Each new test observed RED (failing for the intended reason) before it passes (GREEN)',
+        `Full suite via \`${cmd}\` on the project\'s existing runner: new tests pass, no existing test weakened, skipped, or deleted`,
+        'Boundary and failure-path cases present for each behavior under test',
+      ],
+      research: [
+        'Every material claim cites a concrete path/symbol inspected in this session',
+        'At least two independent sources agree on each load-bearing claim (triangulation)',
+        'A stated "what would change this answer" — and the result of actually looking for it',
+        'Facts and inferences labeled separately; unresolved source conflicts reported, not smoothed over',
+      ],
+      plan: [
+        'Every step names concrete files/symbols that were inspected, not guessed',
+        'Every step carries its own acceptance evidence for later execution',
+        'Risks and the single riskiest assumption are explicit, with its test scheduled first',
+      ],
+      document: [
+        'A neighboring doc was read for style and structure before writing',
+        'Every documented flag, default, and behavior verified against the code in this session',
+        'All examples concrete and runnable exactly as written',
+      ],
+      general: [
+        `Primary verification command \`${cmd}\` exits 0`,
+        'Targeted checks for the changed area pass',
+        'Diff self-review completed before claiming done',
+      ],
+    };
     return {
-      strategies: ['TYPECHECK', 'UNIT_TEST', 'IN_TURN_AST_VALIDATION', 'INTEGRATION_CHECK'],
+      strategies: strategiesByKind[kind],
       primaryCommand: cmd,
+      evidenceChecklist: evidenceByKind[kind],
     };
   }
 
@@ -656,8 +899,8 @@ export class MochiPromptCompiler {
     ].join('\n');
   }
 
-  private renderMediumTierPrompt(prompt: string, constraints: string[], testCmd: string): string {
-    return [
+  private renderMediumTierPrompt(prompt: string, constraints: string[], testCmd: string, failureRecovery: string[] = [], evidenceChecklist: string[] = []): string {
+    const lines = [
       `# TASK SPECIFICATION: ${prompt.toUpperCase()}`,
       `> **Reasoning Tier**: \`MEDIUM (STREAMLINED INVARIANT CONTRACT)\` | **Verify**: \`${testCmd}\``,
       '',
@@ -672,7 +915,16 @@ export class MochiPromptCompiler {
       `2. **Apply Targeted Edits**: Use \`edit\` or \`patch\` with in-turn AST validation.`,
       `3. **Verify Execution**: Run \`${testCmd}\` and assert 0 test failures.`,
       `4. **Emit Summary**: Provide structured overview of files modified and verification outcome.`,
-    ].join('\n');
+    ];
+    // Condensed per-kind protocol: the first steps of the kind's protocol
+    // plus its top evidence item. The full protocol renders at high/max;
+    // medium stays streamlined (and low renders none at all).
+    if (failureRecovery.length) {
+      lines.push('', `## Reasoning Protocol`);
+      for (const step of failureRecovery.slice(0, 3)) lines.push(`- ${step}`);
+      if (evidenceChecklist.length) lines.push(`- **Evidence required**: ${evidenceChecklist[0]}`);
+    }
+    return lines.join('\n');
   }
 
   private renderHighTierPrompt(spec: CompiledPromptSpecification): string {
@@ -700,6 +952,13 @@ export class MochiPromptCompiler {
       lines.push(`**Exit Criteria:** ${phase.exitCriteria.join('; ')}`);
       lines.push('');
     }
+
+    lines.push(`## 4. Reasoning Protocol (${spec.protocolKind})`);
+    for (const step of spec.failureRecovery) lines.push(`- ${step}`);
+    lines.push('');
+    lines.push(`**Evidence required before claiming done:**`);
+    for (const e of spec.verificationPlanner.evidenceChecklist) lines.push(`- [ ] ${e}`);
+    lines.push('');
 
     return lines.join('\n');
   }
@@ -866,6 +1125,11 @@ export class MochiPromptCompiler {
     lines.push('');
     lines.push(`**Active Strategies**: ${spec.verificationPlanner.strategies.join(', ')}`);
     lines.push(`**Primary Command**: \`${testCmd}\``);
+    if (spec.verificationPlanner.evidenceChecklist.length) {
+      lines.push('');
+      lines.push('**Evidence Checklist** — the concrete artifacts that prove "done" for this task kind:');
+      for (const e of spec.verificationPlanner.evidenceChecklist) lines.push(`- [ ] ${e}`);
+    }
     lines.push('');
 
     // §25 — FAILURE RECOVERY

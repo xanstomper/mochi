@@ -36,6 +36,7 @@ import { PROVIDERS } from '../model/providers.js';
 import { isMode, modeInstruction } from '../modes.js';
 
 import { executeTool, buildTools, TOOL_ALIASES, normalizeToolArgs, trimHeavyTools, CHAT_TOOL_NAMES } from '../tools/index.js';
+import { parsePatch } from '../tools/patch.js';
 import { refreshAuthoredTools, RESERVED_TOOL_NAMES } from '../tools/tool-factory.js';
 import { isFetchMutationRequest } from '../tools/fetch-methods.js';
 import type { ToolContext, ReadCache } from '../tools/types.js';
@@ -52,6 +53,7 @@ import type { PromptUserFn } from '../tools/user-prompt.js';
 import { PermissionManager } from '../security/permission.js';
 import type { PermissionPolicy } from '../security/permission.js';
 import { describeApproval, normalizePolicy } from '../security/approval.js';
+import { matchHardline } from '../security/hardline.js';
 import { classifyCommand } from '../security/security.js';
 import { snapshotTree, rollbackTracked, resolveVerifyCommand, type PlanVerifySnapshot } from './plan-verify.js';
 import type { ApprovalHandler } from '../security/approval.js';
@@ -353,11 +355,19 @@ export interface AgentOptions {
    *  deterministic defaults instead. */
   promptUser?: PromptUserFn;
   /** Interactive approval resolver (TUI allow/deny menu). Unset headless —
-   *  the gate then preserves historical behavior (allow) and only audits. */
+   *  the gate then DENIES any call the policy does not auto-allow
+   *  (deny-by-default), unless unattendedAllow is explicitly set. */
   approvalHandler?: ApprovalHandler;
   /** Permission tier ('yolo' | 'workspace-safe' | 'strict'). Undefined =
-   *  strict; headless runs without a handler still allow (audit-only). */
+   *  strict. */
   permPolicy?: string;
+  /** Explicit host opt-in for unattended runs (daemon/cron/SDK hosts that
+   *  cannot prompt): when true, calls the policy does not auto-allow are
+   *  allowed + audited even with no approval handler. NEVER default:
+   *  unset/false means headless and subagent runs deny non-auto-approved
+   *  calls. Also settable via env MOCHI_UNATTENDED_ALLOW=1. YOLO policy
+   *  auto-allows everything and does not need this flag. */
+  unattendedAllow?: boolean;
   /** Session "allow always" memory, shared across runs by the host
    *  (GoalEngine). Defaults to a private set (single-run memory). */
   approvedAlways?: Set<string>;
@@ -404,6 +414,26 @@ export function isManualCheckPass(command: string, output: string): boolean {
   if (/(^|[;|&]\s*|\s&&\s*)(npm|npx|yarn|pnpm|bun)\s+(test|run\s+(test|check|typecheck|lint|build))\b/.test(cmd)) return true;
   if (/\b(vitest|jest|pytest|tsc|eslint|tslint|ruff|clippy|cargo\s+test|go\s+test|node\s+--test)\b/.test(cmd)) return true;
   return false;
+}
+
+/**
+ * Speculative-preflight enable policy. Pure (unit-tested) so the loop wiring
+ * stays a one-liner. Precedence: env kill-switch (`MOCHI_SPECULATIVE_PREFLIGHT=0`)
+ * > explicit config (`preflight: false` off, `preflight: true` on for any
+ * kind — the historical opt-in) > default: ON only for structurally complex
+ * tasks at medium-or-higher reasoning. Simple/standard tasks stay lean.
+ */
+export function specPreflightDefault(input: {
+  configured?: boolean;
+  env?: string;
+  complexity?: 'simple' | 'standard' | 'complex';
+  reasoning?: 'off' | 'low' | 'medium' | 'high' | 'max';
+}): boolean {
+  if (input.env === '0') return false;
+  if (input.configured === false) return false;
+  if (input.configured === true) return true;
+  if (input.complexity !== 'complex') return false;
+  return input.reasoning === 'medium' || input.reasoning === 'high' || input.reasoning === 'max';
 }
 
 export interface AgentResult {
@@ -461,6 +491,8 @@ export class Agent {
   private promptUser?: PromptUserFn;
   private approvalHandler?: ApprovalHandler;
   private permPolicy?: string;
+  /** Explicit unattended opt-in (see AgentOptions.unattendedAllow). */
+  private unattendedAllow: boolean;
   /** Session "allow always" memory: exact (tool, args) keys approved this run.
    *  Host-shared (GoalEngine) across runs; private single-run set by default. */
   private approvedAlways: Set<string>;
@@ -766,6 +798,24 @@ export class Agent {
    *  (bounded at 1 so the guard can never itself loop). */
   private proseRunwayNudges = 0;
   private specPreflighted = false;
+  /** Reproduce-first gate (fix/debug kinds): set once a shell/verify/bg_task
+   *  call has actually EXECUTED this run — a failing repro is the point, so
+   *  execution counts regardless of the call's success. */
+  private reproAttempted = false;
+  /** Reproduce-first gate: the one strong veto has been spent. A further
+   *  mutation without a repro is allowed (hard-blocking forever traps tasks
+   *  with no runnable entrypoint) but recorded via reproGateBypassed. */
+  private reproVetoFired = false;
+  /** Reproduce-first gate: the model mutated after the veto without ever
+   *  reproducing — telemetry only (agent:log + this flag), never a block. */
+  private reproGateBypassed = false;
+  /** Reproduce-first gate: `fileChanged` as it stood when run() started.
+   *  The gate's already-changed-files exemption is about resume / warm
+   *  start (a previous run did the changing), so it must read this
+   *  snapshot — reading live `fileChanged` would let an exempt new-file
+   *  creation EARLY IN THIS RUN disarm the gate for a later edit to an
+   *  existing file, which is exactly the mutation the gate exists for. */
+  private reproFileChangedAtRunStart = false;
   private skillNudged = false;
   /** Master prompt compiler: runs once per task (guarded) so the compiled
    *  blueprint is injected exactly once at the active reasoning tier. */
@@ -797,6 +847,7 @@ export class Agent {
     this.promptUser = opts.promptUser;
     this.approvalHandler = opts.approvalHandler;
     this.permPolicy = opts.permPolicy;
+    this.unattendedAllow = opts.unattendedAllow ?? process.env.MOCHI_UNATTENDED_ALLOW === '1';
     this.approvedAlways = opts.approvedAlways ?? new Set<string>();
     this.verifyBaseline = opts.verifyBaseline;
     // A shared run-wide cache is preferred so parallel agents that read the same
@@ -1036,6 +1087,12 @@ export class Agent {
     this.consecutiveVerifyFailures = 0;
     this.escalatedThisTask = false;
     this.complexityEscalated = false;
+    // Reproduce-first gate state is per-run: a reused instance (auto-resume)
+    // must not inherit "already reproduced / already vetoed" from a prior run.
+    this.reproAttempted = false;
+    this.reproVetoFired = false;
+    this.reproGateBypassed = false;
+    this.reproFileChangedAtRunStart = this.fileChanged;
     // Complexity must be computed here — BEFORE resolveReasoning (line ~799)
     // and the tool-advertising gate — so both hard-task levers (max reasoning
     // + full toolset) see a `complex` task. Conservative: only strong
@@ -1440,14 +1497,16 @@ Continue from 'Next:', do not redo completed progress.`,
       }
     }
 
-    // Speculative reasoning preflight (opt-in via model.speculative.preflight).
-    // For hard non-chat tasks, run the existing SpeculativeEngine once and
-    // inject its chosen approach + pitfall notes as a system hint that biases
-    // the main reasoning path — DeepSeek/Cline-style "think a cheap model ahead,
-    // then commit the fast model to a better plan" before it fires tools.
+    // Speculative reasoning preflight (default ON for complex tasks at
+    // medium+ reasoning; explicit config / env can force or kill it — see
+    // specPreflightEnabled). For hard non-chat tasks, run the existing
+    // SpeculativeEngine once and inject its chosen approach + pitfall notes
+    // as a system hint that biases the main reasoning path —
+    // DeepSeek/Cline-style "think a cheap model ahead, then commit the fast
+    // model to a better plan" before it fires tools.
     // Bounded: runs at most once (guarded by speculativePreflighted), only if
     // budget allows, and swallows any failure so it never blocks the task.
-    if (!this.planMode && taskKind !== 'chat' && this.specPreflightEnabled() && !this.specPreflighted) {
+    if (!this.planMode && taskKind !== 'chat' && this.specPreflightEnabled(task) && !this.specPreflighted) {
       // MCH-43: predictive file pre-fetch — warm the read cache with files the
       // co-change graph predicts we'll need next, before the model asks. Cheap
       // (one git log) and best-effort: any failure is invisible to the task.
@@ -3921,6 +3980,14 @@ Continue from 'Next:', do not redo completed progress.`,
       readCache: this.readCache,
       subagentDepth: this.subagentDepth + 1,
       extraTools: this.extraTools,
+      // Permission posture is INHERITED, never silently reset: the child
+      // gets the parent's policy tier, its session allow-always memory, and
+      // its explicit unattended opt-in — but NOT the approval handler
+      // (subagents never prompt; with no handler their non-auto-approved
+      // calls are denied by the gate unless inherited posture allows them).
+      permPolicy: this.permPolicy,
+      approvedAlways: this.approvedAlways,
+      unattendedAllow: this.unattendedAllow,
     });
     const task: Task = {
       id: `sub-${Math.random().toString(36).slice(2, 10)}`,
@@ -4169,11 +4236,55 @@ Continue from 'Next:', do not redo completed progress.`,
       this.toolDefs = [...this.tools.values()].map((t) => t.def);
       this.events.emit({ type: 'agent:log', agentId: this.id, message: `[chat-escape] ${this.chatMutationVetoes} chat-lane mutation vetoes but the model insists — task reclassified to implement so the deliverable can proceed.` });
     }
+    // REPRODUCE-FIRST GATE (fix/debug kinds): the kind hint has always TOLD
+    // the model to reproduce before editing, but nothing enforced it — a
+    // model that edits immediately and passes the suite sails through, and
+    // symptom-patches ship. The FIRST mutating call on a fix task is vetoed
+    // once, before the approval gate (no point asking a human to approve a
+    // call the harness will refuse), with a directive to observe the failure
+    // first via shell/verify/bg_task. Exactly ONE veto: if the model comes
+    // back and mutates again without reproducing, the call proceeds and the
+    // bypass is recorded — some fixes have no runnable entrypoint yet, and a
+    // permanent block would trap those runs (same philosophy as the
+    // chat-lane escape above). Read/search/glob never reach this gate.
+    // NEW-FILE EXEMPTION: the gate guards changes to EXISTING behavior. A
+    // mutation whose every determinable target does not exist yet is
+    // creating a brand-new artifact (a greeting file, a repro script, a
+    // fresh test file) — there is no pre-existing failure in that file to
+    // observe, and vetoing it broke create-then-fix runs whose first step
+    // is the creation itself. Such calls skip the gate entirely: the one
+    // veto is NOT spent and no bypass is recorded, so a later edit to an
+    // existing file still hits the gate. Calls whose target cannot be
+    // determined from the args (replace_symbol) keep the gate.
+    if (MUTATING_TOOLS.has(toolName) && !this.reproAttempted && this.reproGateApplies()
+      && this.reproMutationTargetState(toolName, tc.function.arguments ?? '') !== 'absent') {
+      if (!this.reproVetoFired) {
+        this.reproVetoFired = true;
+        this.vetoLog.push({ tool: tc.function.name, reason: 'reproduce-first gate: first mutation vetoed pending a repro attempt' });
+        if (this.vetoLog.length > 20) this.vetoLog.shift();
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: '[repro-first] vetoed first mutating call on a fix task — no reproduction attempted yet' });
+        this.vetoToolCall(tc, 'REPRODUCE FIRST: this is a fix/debug task and you have not yet observed the failure. Before editing any code, reproduce it: run the failing test/command or a minimal repro script (shell or verify tool) and look at the actual failure output. Then edit, and re-run the same check to prove the fix. If no runnable check exists for this failure, attempt the closest one you can (e.g. run the affected module/test file directly) — after that attempt, or if you retry this edit, the edit will be allowed through.');
+        return;
+      }
+      if (!this.reproGateBypassed) {
+        this.reproGateBypassed = true;
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: '[repro-first] model mutated without reproducing after the veto — allowed through, bypass recorded' });
+      }
+    }
     // APPROVAL GATE (the tiers in security/permission.ts finally enforced):
     // anything the policy does not auto-allow needs a human decision when a
     // UI handler is attached (TUI menu: allow once / always / deny), and is
-    // audit-logged either way. Headless runs (no handler) and subagents
-    // (depth > 0, never prompt) preserve historical behavior: allow + audit.
+    // audit-logged either way. With NO handler (headless CLI, daemon, ACP,
+    // SDK) — and for subagents, which never prompt — the gate is
+    // DENY-BY-DEFAULT for approval-requiring calls (destructive/network
+    // shell, outside-workspace writes, remote mutations): only the
+    // headless-safe floor may proceed (what the workspace-safe tier
+    // auto-allows: read-only tools, in-workspace edits, low-risk shell).
+    // An explicit host opt-in (unattendedAllow /
+    // MOCHI_UNATTENDED_ALLOW=1, or the yolo tier) restores allow + audit
+    // beyond the floor for unattended runs, but it is never the default.
+    // Shell commands on the hardline floor are denied under EVERY policy,
+    // yolo included.
     // Plan-mode mutating calls never reach here (batch veto above).
     {
       const policy = normalizePolicy(this.permPolicy);
@@ -4183,6 +4294,16 @@ Continue from 'Next:', do not redo completed progress.`,
       const parsedArgs = this.parseArgs(tc.function.arguments);
       const auto = this.permMgr.mgr.autoAllow({ tool: toolName, args: parsedArgs, cwd: this.cwd, workspaceDir: this.workspace.dir });
       const auditBase = { ts: new Date().toISOString(), tool: toolName, args: parsedArgs, policy } as const;
+      const hardline = toolName === 'shell' ? matchHardline(typeof parsedArgs.command === 'string' ? parsedArgs.command : '') : null;
+      if (hardline) {
+        // Hardline floor: refused even under yolo / allow-always / an
+        // interactive allow — no standing consent covers catastrophic
+        // commands. (The shell tool and exec.ts enforce the same floor for
+        // calls that never reach this gate, e.g. speculative execution.)
+        this.permMgr.mgr.audit({ ...auditBase, decision: 'deny' });
+        this.vetoToolCall(tc, `Refused by the hardline safety floor (${hardline}): this command is catastrophic and is denied under every permission policy, including yolo. Do not retry it or rephrase it to evade the floor; find a non-destructive way to achieve the goal.`);
+        return;
+      }
       if (auto || policy === 'yolo') {
         this.permMgr.mgr.audit({ ...auditBase, decision: 'allow' });
       } else {
@@ -4190,9 +4311,54 @@ Continue from 'Next:', do not redo completed progress.`,
         if (this.approvedAlways.has(alwaysKey)) {
           this.permMgr.mgr.audit({ ...auditBase, decision: 'allow' });
         } else if (this.subagentDepth > 0 || !this.approvalHandler) {
-          // No one to ask (headless host or child agent): allow, loudly
-          // audited — identical to pre-gate behavior, never a hang.
-          this.permMgr.mgr.audit({ ...auditBase, decision: 'allow' });
+          // No one to ask (headless host or child agent). Deny by default
+          // for approval-requiring calls — destructive/network shell,
+          // writes outside the workspace, remote mutations — the
+          // fail-closed behavior approval.ts always documented. The
+          // headless floor: calls the workspace-safe tier would auto-allow
+          // (read-only tools, in-workspace edits, low-risk shell) are
+          // "safe without a handler" and proceed under any policy, so an
+          // unattended coding run can still do ordinary workspace work.
+          // Beyond the floor, only an explicit unattended opt-in from the
+          // host (unattendedAllow / MOCHI_UNATTENDED_ALLOW=1) allows.
+          const permReq = { tool: toolName, args: parsedArgs, cwd: this.cwd, workspaceDir: this.workspace.dir };
+          let headlessSafe = this.permMgr.mgr.autoAllowAs('workspace-safe', permReq)
+            // File-mutation tools: TARGET containment is the scope fence's
+            // job — it runs below in every mode and vetoes sibling-project,
+            // out-of-workspace, and out-of-fileScope targets with its own
+            // streak protocol. Denying them here too would pre-empt the
+            // fence's richer veto and break its bookkeeping, without
+            // changing the outcome (the write never lands either way).
+            || MUTATING_TOOLS.has(toolName)
+            // Host-registered tools: extraTools (SDK registerTool) and
+            // MCP-namespaced tools (`server__tool`) exist only because the
+            // operator configured them — registration is standing consent.
+            || (this.extraTools?.has(toolName) ?? false)
+            || toolName.includes('__');
+          if (!headlessSafe && this.planMode) {
+            // Plan-mode exemptions the batch gate above already vetted:
+            // operator-allowlisted network reads (planModeNetworkReads)
+            // and low-risk verify commands under snapshot/rollback
+            // containment (agent/plan-verify.ts). Re-denying them here
+            // would silently override the operator's plan-mode config.
+            if (toolName === 'fetch') {
+              const hosts = (this.config.safety?.planModeNetworkReads ?? []).map((h) => h.toLowerCase());
+              try {
+                headlessSafe = hosts.includes(new URL(String(parsedArgs.url ?? '')).hostname.toLowerCase());
+              } catch { headlessSafe = false; }
+            } else if (toolName === 'verify') {
+              const resolved = resolveVerifyCommand(parsedArgs, this.cwd);
+              headlessSafe = resolved !== null && classifyCommand(resolved) === 'low';
+            }
+          }
+          if (this.unattendedAllow || headlessSafe) {
+            this.permMgr.mgr.audit({ ...auditBase, decision: 'allow' });
+          } else {
+            this.permMgr.mgr.audit({ ...auditBase, decision: 'deny' });
+            const { summary } = describeApproval(toolName, parsedArgs);
+            this.vetoToolCall(tc, `Denied by default: ${summary} requires approval, but this run has no interactive approver (headless or subagent) and it is outside the headless-safe tier (read-only tools, in-workspace edits, low-risk shell). Proceed WITHOUT it using headless-safe tools, or ask the user to run interactively, switch policy, or explicitly enable unattended approvals (MOCHI_UNATTENDED_ALLOW=1). Do not just retry the same call.`);
+            return;
+          }
         } else {
           const { summary, risk } = describeApproval(toolName, parsedArgs);
           let decision: 'allow-once' | 'allow-always' | 'deny' = 'deny';
@@ -4597,6 +4763,14 @@ Continue from 'Next:', do not redo completed progress.`,
     };
     this.events.emit({ type: 'tool:called', tool: tc.function.name, args, agentId: this.id, tool_call_id: tc.id });
     const { output, error, durationMs } = await executeTool(tc.function.name, args, ctx, this.tools);
+    // Reproduce-first gate: a shell/verify/bg_task call that EXECUTED counts
+    // as a reproduction attempt — success or failure (a failing run IS the
+    // reproduction). Set here, past every veto path, so only calls that
+    // actually ran count. bg_task merely queues work, so it counts only when
+    // the queueing itself succeeded.
+    if (!this.reproAttempted && (toolName === 'shell' || toolName === 'verify' || (toolName === 'bg_task' && !error))) {
+      this.reproAttempted = true;
+    }
     // MCH-91: `load_tools` mutated the live toolset — re-advertise defs so the
     // newly loaded tools appear in the next packet.
     if (!error && toolName === 'load_tools') {
@@ -5135,15 +5309,126 @@ Continue from 'Next:', do not redo completed progress.`,
   }
 
   /**
-   * Speculative reasoning preflight. Opt-in gate: only active when
-   * model.speculative.preflight is true AND the primary provider is configured
-   * with a 'reasoning' profile we can borrow (the SpeculativeEngine builds its
-   * own provider from this.config.model). We bind the engine to a fresh budget
-   * that borrows the shared run budget's limits so a runaway preflight can't
-   * silently overspend the task's model-call allocation.
+   * Reproduce-first gate: does this mutating call touch something that
+   * ALREADY EXISTS on disk? Creating a brand-new file is building an
+   * artifact (very often the repro/regression script itself), not patching
+   * existing behavior, so it must not trip the gate, spend its one veto,
+   * or be recorded as a bypass. Returns:
+   *  - 'exists': at least one determinable target exists → gate applies.
+   *  - 'absent': targets were determined and NONE exist → skip the gate.
+   *  - 'unknown': the target(s) cannot be determined from the args (e.g.
+   *    replace_symbol, whose file is resolved from the codegraph at
+   *    execution time) → keep the gate (pre-exemption behavior).
    */
-  private specPreflightEnabled(): boolean {
-    return !!this.config.model?.speculative?.preflight;
+  private reproMutationTargetState(toolName: string, rawArgs: string): 'exists' | 'absent' | 'unknown' {
+    const args = normalizeToolArgs(toolName, this.parseArgs(rawArgs));
+    const candidates: string[] = [];
+    const push = (v: unknown): void => { if (typeof v === 'string' && v.trim()) candidates.push(v); };
+    switch (toolName) {
+      case 'patch': {
+        // Multi-target: the gate fires only if at least one section
+        // targets an existing file; a patch that only adds new files is
+        // pure creation. An unparseable patch is 'unknown' (gate fires).
+        const text = typeof args.patch === 'string' ? args.patch : '';
+        if (!text) return 'unknown';
+        let sections: Array<{ path: string }>;
+        try { sections = parsePatch(text); } catch { return 'unknown'; }
+        if (!sections.length) return 'unknown';
+        for (const s of sections) push(s.path);
+        break;
+      }
+      case 'move_file':
+      case 'copy_file':
+        push(args.source);
+        push(args.destination);
+        break;
+      case 'search_replace_multi':
+      case 'rename_symbol':
+        // `path` is an optional SCOPE (a file or a directory). Without it
+        // the tool sweeps the whole workspace — the individual targets are
+        // undeterminable here and the workspace itself exists, so the gate
+        // keeps its current behavior.
+        if (typeof args.path !== 'string' || !args.path.trim()) return 'unknown';
+        push(args.path);
+        break;
+      case 'replace_symbol':
+        // No path arg at all: the file is resolved from the codegraph by
+        // symbol name at execution time — undeterminable at gate time.
+        return 'unknown';
+      default:
+        // write / edit / delete / regex_replace / notebook /
+        // create_directory / mkdir: a single `path` arg (aliases were
+        // normalized into `path` by normalizeToolArgs).
+        push(args.path);
+        break;
+    }
+    if (!candidates.length) return 'unknown';
+    for (const c of candidates) {
+      try { if (existsSync(this.resolveTargetPath(c))) return 'exists'; } catch { /* unreadable -> treat as absent */ }
+    }
+    return 'absent';
+  }
+
+  /**
+   * Reproduce-first gate eligibility for the CURRENT run. Enforced only where
+   * "edit first, understand later" is the observed failure mode: fix/debug
+   * kinds on an existing codebase. Never fires for chat (mutations already
+   * vetoed there), plan mode (mutations already vetoed there), greenfield /
+   * content-only creation (nothing exists to reproduce yet), or runs whose
+   * instance already changed files BEFORE this run started (resume / warm
+   * start — the repro, if any, happened in the earlier session). The
+   * run-start snapshot is deliberate: an exempt new-file creation during
+   * THIS run flips live `fileChanged` too, and must not disarm the gate
+   * for a later edit to an existing file. Kill-switch: MOCHI_REPRO_FIRST=0.
+   */
+  private reproGateApplies(): boolean {
+    if (process.env.MOCHI_REPRO_FIRST === '0') return false;
+    if (this.planMode || this.contentOnly || this.reproFileChangedAtRunStart) return false;
+    const kind = this.taskKind;
+    if (kind !== 'fix') return false;
+    const task = this.activeTask;
+    if (!task) return false;
+    // The classifier's 'fix' lane also catches pure-logic one-shot script
+    // fixes ("fix sum.js, run node run.js") — those ARE create-and-run tasks
+    // whose "repro" is the run after the edit, so the gate would only tax
+    // them. Same exemption the reasoning tiers already grant this shape.
+    if (isSimpleScriptTask(task)) return false;
+    // NOTE: no isGreenfieldTask exemption here, deliberately. That heuristic
+    // (creation-verb + greenfield-noun) misfires on genuine fix tasks —
+    // "diagnose the existing CODE" + "the repro SCRIPT fails" trips both
+    // halves — and a task the classifier put in the fix lane is by
+    // definition about existing behavior. Greenfield creation tasks
+    // classify as implement/content kinds, never fix, and content-only
+    // deliverables are exempted above.
+    return true;
+  }
+
+  /**
+   * Speculative reasoning preflight gate. The SpeculativeEngine builds its
+   * own provider from this.config.model (bound to a 'reasoning' profile we
+   * can borrow), and we bind the engine to a fresh budget that borrows the
+   * shared run budget's limits so a runaway preflight can't silently
+   * overspend the task's model-call allocation.
+   *
+   * DEFAULT (changed 2026-10): preflight used to be strictly opt-in
+   * (config.model.speculative.preflight === true), which meant Mochi's best
+   * reasoning feature never ran in practice. It now defaults ON for
+   * structurally COMPLEX tasks at medium+ reasoning — the tasks where a
+   * cheap multi-candidate pass pays for itself — while simple/standard
+   * tasks keep the lean path (the cost concern that made it opt-in).
+   * Explicit config wins both ways: `preflight: true` forces it on for any
+   * non-chat kind (the historical behavior), `preflight: false` disables it
+   * outright. MOCHI_SPECULATIVE_PREFLIGHT=0 is a hard env kill-switch.
+   * Exported as a pure function (specPreflightDefault) so the policy is
+   * unit-testable without orchestrating the whole loop.
+   */
+  private specPreflightEnabled(task?: Task): boolean {
+    return specPreflightDefault({
+      configured: this.config.model?.speculative?.preflight,
+      env: process.env.MOCHI_SPECULATIVE_PREFLIGHT,
+      complexity: this.taskComplexity,
+      reasoning: task ? this.resolveReasoning(task) : undefined,
+    });
   }
 
   private async maybeSpeculativePreflight(task: Task): Promise<void> {

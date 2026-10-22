@@ -16,10 +16,13 @@ export interface ModelConfig {
   /** Speculative reasoning preflight (DeepSeek/Cline-style "think before
    *  acting"). When enabled, hard non-chat tasks run the SpeculativeEngine
    *  once before the main model call and inject its chosen approach + pitfall
-   *  notes as a system hint that biases the main reasoning path. Opt-in so the
-   *  default loop stays lean for simple turns. */
+   *  notes as a system hint that biases the main reasoning path. DEFAULT:
+   *  enabled for structurally complex tasks at medium+ reasoning when unset;
+   *  set `preflight: false` to disable outright, `true` to force it on for
+   *  any non-chat task. MOCHI_SPECULATIVE_PREFLIGHT=0 also disables it. */
   speculative?: {
-    /** Run the preflight on the first iteration of implementation/verify tasks. */
+    /** Run the preflight on the first iteration of implementation/verify tasks.
+     *  Unset = default policy (complex tasks, medium+ reasoning). */
     preflight?: boolean;
     /** On the first verification failure of a hard task, inject a structured
      *  self-critique + repair directive alongside the existing autopsy/lessons
