@@ -1,123 +1,104 @@
 ---
 name: mochi-automation-surface
-description: Use mochi's native browser, computer, device, email, docs, canvas, and schedule tools against real targets — when to choose the live Celeste bridge over headless, how to probe the NDJSON browser daemon with `--once`, when to fall back to adb/xdotool, and the verification pattern for each. Use when the task says "drive the user's browser", "open this app", "send this email", "type into this Doc", or any automation that needs the user's logged-in state.
+description: Use mochi's real automation surface — the headless browser tool with its persistent profile, the web fetch/search/crawl read tools, background tasks, daemon cron schedules, and the opt-in computer tool for desktop (X11) control. Use when the task says "open this page", "click/type into this site", "check what the page shows", "run this in the background", or "schedule this". There is no device/email/docs tool, no live-browser bridge, and no browser CLI subcommand — do not invent them.
 ---
 
-# Mochi's automation surface (browser, computer, device, email, docs, canvas, schedule)
+# Mochi's automation surface (browser, fetch, background, cron, computer)
 
-Mochi ships real, working automation tools — but choosing the right backend and
-knowing the failure mode of each is what separates a working flow from a
-10-token retry spiral. This skill is the mochi-specific map on top of the
-generic `browser-automation` skill.
+Mochi's automation is deliberately small: one real browser tool, three
+read/fetch tools, a background-task tool, the daemon's cron, and one
+opt-in desktop tool. This skill is the mochi-specific map — what each
+piece actually does, its failure modes, and how to verify effects.
 
-## 1. Tool selection matrix
+## 1. Tool selection
 
-| Task shape | Tool | Backend | Why |
-|---|---|---|---|
-| Read a page (HTML/text/links/inputs/console) | `browser` | `auto` or `headless` | headless is fine — cookies not needed |
-| Click / type / fill / select on a page you're logged into | `browser` | `live` (Celeste) | only `live` can see the user's cookies |
-| Drive the user's visible Brave tab interactively | `browser` | `live` | explicit ops: navigation + getURLs |
-| Screenshot what's on the desktop right now | `computer` | native | gnome-screenshot fallback inside the tool |
-| Tap a button on a phone | `device` | adb | desktop tools can't reach a phone |
-| Move a desktop window to the front | `device` | xdotool/wmctrl | cheaper than `computer` click |
-| Edit a real Google Doc the user owns | `docs` | keystroke-driven on the live browser | docs are keyboard-driven — use the live backend |
-| Send an email from the user's Gmail | `email` | `mochi browser login` first, then send | persistent profile is required |
-| Render a visual plan | `canvas` | local HTML + excalidraw | no live browser needed |
-| Schedule a recurring job | `schedule` or `cron` | HTTP daemon or local | pick one — don't both |
-| Run a shell command on the host | `shell` | exec policy gate | reuse, never `device.shell` |
+| Task shape | Tool | Why |
+|---|---|---|
+| Read a static page / docs / article | `fetch` | cheapest; no browser process at all |
+| Search the web, then read results | `web_search`, then `fetch` | search first, fetch the one page that matters |
+| Crawl a documentation site (same host) | `web_crawl` | bulk read without browser overhead |
+| Dynamic/JS page: read rendered text, links, inputs | `browser` (`navigate`, `text`, `links`, `inputs`) | headless Chromium renders the page first |
+| Click / type / fill / select / press / hover / scroll | `browser` | the only tool that can act on a page |
+| Run JS in the page, probe DOM state | `browser` (`eval`) | returns the JSON-serialized result |
+| Visual check of a page | `browser` (`screenshot`) | supporting evidence — pair with a DOM probe |
+| Act on the desktop itself (native apps, OS dialogs) | `computer` (`click`, `type`, `key`, `screenshot`) | X11 pointer/keyboard injection; opt-in only — see the note below the table |
+| Long-running shell work | `bg_task` tool, inspect via `mochi bg list` / `mochi bg logs <id>` | survives the turn; kill via `mochi bg kill <id>` |
+| Recurring scheduled prompt | daemon cron: `mochi daemon cron add "<prompt>" --schedule "every 30m"` | requires the daemon running; list/remove via the same route |
 
-Default to `auto` for `browser` unless you specifically need the user's
-cookies — `auto` uses live for read-shaped commands and headless as a
-fallback. Never silently retarget a click/typing between browsers.
+Desktop control exists as exactly one tool: `computer` (Linux/X11 —
+screenshots, pointer, keyboard). It is **off by default** under its own
+permission tier, stricter than shell: it only runs after an explicit
+opt-in (`permissions.computer=true` in config, or `MOCHI_COMPUTER=1` for
+the session), it is never auto-approved, and headless runs deny it. If it
+returns a permission denial, report that — do not hunt for another route
+to the desktop. Every `computer` action ends with a fresh screenshot
+saved under the workspace state dir; check it before the next action.
 
-## 2. Probe the browser daemon BEFORE driving it
+There are no `device`, `email`, `docs`, or `canvas` tools and no phone
+control (no adb). If a task needs the user's phone, say so — don't reach
+for a tool that doesn't exist.
 
-The browser daemon is NDJSON over stdin/stdout, not HTTP. Probing it the wrong
-way hangs forever (the docs warn about this):
+## 2. How the browser tool actually works
 
-```bash
-echo '{"cmd":"browser.status","args":{}}' | node scripts/browser-daemon.mjs --once
-```
+- The `browser` tool shells out to `scripts/browser-driver.mjs` (plain
+  node) once per call and parses the single JSON object it prints. There is
+  no browser daemon, no port, and nothing to "probe" before calling — just
+  call the tool.
+- The driver loads the **globally installed** Playwright (resolved from
+  `npm root -g`, or `$MOCHI_BROWSER_NODE_MODULES`). If Playwright isn't
+  installed, calls fail with a `[browser exit …]` driver error — report
+  that instead of retrying.
+- It is **headless Chromium** (the driver supports `--headed`, but the tool
+  doesn't expose it). There is no "live" backend attached to the user's own
+  browser and no access to the user's existing browser session.
+- **State persists across calls**: the driver launches a persistent context
+  on a profile dir — default `~/.cache/mochi/browser-profile`, override
+  with the `profile` arg or `$MOCHI_BROWSER_PROFILE`. Cookies/localStorage/
+  logins done *in this browser* survive between calls, so multi-step flows
+  (log in → navigate → act) work. There is no `mochi browser login`
+  command; a login is just a `browser` flow you drive with
+  navigate/type/click.
+- Actions: `navigate|get`, `click`, `type`, `fill`, `press` (key),
+  `scroll` (selector or pixels), `waitfor`, `select`, `hover`, `text`,
+  `links`, `html`, `inputs`, `eval`, `screenshot`, `snap`. Prefix `url:` to
+  open a page and act in one call.
+- Each call is bounded (45s default tool timeout; navigation 30s). A hung
+  page surfaces as a timeout/driver error, not a silent hang.
 
-Returns within ~200ms the engines, profile, and live-bridge state. Use this
-to confirm `live` is ready before issuing a `browser` tool call that depends
-on it. `mochi browser status` is the human-readable wrapper.
+## 3. Verification pattern
 
-The health check is fast and free — never skip it on first task entry.
+After any browser action:
 
-## 3. Live vs headless decision tree
-
-```
-Need cookies / logged-in state?
-  ├─ NO  → headless (cheaper, isolated, parallelizable)
-  └─ YES → is Celeste daemon reachable at :9126?
-              ├─ NO  → refuse the task; tell the user to start Celeste
-              └─ YES → use live backend; one in-flight tab at a time
-```
-
-A live selector miss is a finding, not a reason to fall back to headless —
-re-check the selector, wait for the right state, retry. Silent retargeting to
-a different browser is a hard refusal in `auto`.
-
-## 4. Computer / device hygiene
-
-- Screenshot first, click second — coordinates are a guess without it.
-- For desktop xdotool: `device` with action `focus` is cheaper than
-  `computer` with click — choose the cheaper tool.
-- Android adb: `input` is faster than `tap`+`swipe`+`text` for multi-step
-  sequences. Batch where possible.
-- iOS simulators: `simctl` only — the `device` tool maps the verb cleanly.
-
-## 5. Email / docs: verify signed-in state first
-
-`mochi browser login https://accounts.google.com` opens a real headed browser
-**once** and writes the persistent profile. Until that profile exists, both
-`email` and `docs` will return an actionable sign-in error rather than
-failing silently. Always check `mochi browser status` → "persistent profile:
-exists" before promising to send a doc or email.
-
-## 6. Schedule — pick one
-
-`mochi cron add …` writes to `.mochi/cron.json` locally; `mochi daemon cron
-add …` writes via HTTP. Concurrent writes to both can lose jobs. Pick the
-one that matches how the daemon was started and stick to it.
-
-`timeoutMs` is real — a hung job gets an abort signal, not a stale lock.
-`paused` is sticky; `mochi cron resume <id>` to re-enable.
-
-## 7. Verification pattern (the part mochi infers correctly)
-
-After any automation:
-
-1. Assert the side effect, not the action — confirm the email landed in
-   Sent, the Doc has the new paragraph, the phone app is foreground. A
-   screenshot proves action; an API/DOM probe proves effect.
-2. Run `mochi browser status` after `live` ops to confirm no orphan tabs.
-3. Run `mochi bg list` after scheduling anything to confirm the job exists.
+1. Assert the **effect**, not the action — re-read state with `text`,
+   `inputs`, or an `eval` DOM probe (e.g. the submitted item is in the
+   list, the URL changed, the toast text is present). A screenshot is
+   supporting evidence, never the only proof.
+2. Read the result's **console errors**: the driver collects page console
+   errors/pageerrors and the tool surfaces them in the result even when
+   the action "succeeded". A click that produced a page error didn't work.
+3. For background work, confirm with `mochi bg list`; for cron, list jobs
+   via `mochi daemon cron list` — don't promise a schedule exists until
+   it's listed.
 
 ## Pitfalls
 
-- Probing the browser daemon with curl against the wrong port (NDJSON, not
-  HTTP) hangs and eventually deadlocks the PTY. Use the `--once` flag.
-- Using `computer` to move a desktop window when `device focus` would do —
-  `computer` allocates a screen-capture session that you then keep warm.
-- Sending email without `mochi browser login` first — the action fails
-  silently with a useless error. Probe before promising.
-- `mochi cron add` and `mochi daemon cron add` racing each other on the
-  same job name — the JSON file gets clobbered.
-- `device` with `xdotool` while Wayland is active — Wayland has no global
-  keystroke channel; `device` will silently no-op or fail. Check
-  `echo $XDG_SESSION_TYPE` first if the user mentions Wayland.
-- Live ops that block on a selector waiting for a human input (a captcha,
-  a 2FA prompt) — the daemon will time out after 30s and detach the
-  debugger. Don't promise "I filled it" until the post-condition is
-  asserted.
+- Selector misses on dynamic pages: `waitfor` the element (or the state
+  you need) before clicking instead of retrying the click blindly.
+- Login walls, captchas, and 2FA: the browser is headless and unattended —
+  it cannot receive a human's 2FA prompt. If a flow needs one, stop and
+  tell the user; don't claim the form was submitted.
+- Assuming the user's cookies: the persistent profile is mochi's own,
+  starting empty. Being logged in on the user's daily browser means
+  nothing here.
+- Using `browser` where `fetch` or `shell`+curl suffices — a browser call
+  costs a Chromium launch; plain reads don't need it.
+- Cron confusion: cron jobs live in the daemon (`mochi daemon cron …`,
+  daemon must be running). Editing files under `.mochi/` by hand does not
+  create a job.
 
 ## When NOT to use this skill
 
-- Writing **tests** with Playwright — use `browser-automation` instead;
-  this skill is for ad-hoc live automation, not assertion flows.
-- Browser-only scraping where headless suffices and you're not logged in —
-  skip Celeste entirely, use `browser` with `backend: "headless"`.
-- Tasks that don't need automation at all — don't reach for `browser` when
-  `curl` or `shell` will do it faster.
+- Writing Playwright **tests** — use the `browser-automation` skill; this
+  one is for ad-hoc automation with mochi's built-in tools.
+- Pure API work — if the service has an API or CLI, drive that from
+  `shell` instead of automating its web UI.

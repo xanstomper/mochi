@@ -28,11 +28,6 @@ const ROLE_HINTS: [RegExp, AgentRole][] = [
   [/backend|endpoint|rest api|restful|graphql|grpc|server|route|handler/i, 'backend'],
 ];
 
-export type TeamPlan = {
-  goal: Goal;
-  tasks: Task[];
-  rolesUsed: AgentRole[];
-};
 
 /** Assign a specialist role to each task, rotating through fallbacks when no
  *  hint matches, and guarantee at least one reviewer-shaped task at the end. */

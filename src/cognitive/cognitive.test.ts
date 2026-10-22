@@ -57,19 +57,19 @@ describe('ANCHOR (Operational Persistence)', () => {
   });
 });
 
-describe('Lazy Chameleon (In-Harness Baked MoE Engine)', () => {
+describe('Chameleon deterministic scaffold', () => {
   // NOTE: primeScaffold warms codegraph grammars over process.cwd() (the whole
   // repo here). Under full-suite load that warmup can exceed the 120s global
   // timeout even though the assertions are instant — generous budget pins the
   // behavior, not the stopwatch.
-  it('synthesizes dense real datasets in 0ms without API calls', async () => {
+  it('builds the deterministic task scaffold without API calls', async () => {
     // Use an empty scratch cwd: priming warms the codegraph over process.cwd(),
     // and over a large repo that is a 50s+ crawl (unrelated to the synthesis
     // under test, which is local and deterministic).
     const context = await primeScaffold('Implement an atomic token bucket rate limiter', '/tmp/empty-scaffold');
-    expect(context).toContain('LAZY CHAMELEON DENSE SYNTHETIC DATASET');
+    expect(context).toContain('TASK SCAFFOLD');
     expect(context).toContain('System Invariants');
-    expect(context).toContain('Cellular Execution DAG');
+    expect(context).toContain('Execution DAG');
     expect(context).toContain('SISPIS');
   }, 240_000);
 
@@ -82,6 +82,6 @@ describe('Lazy Chameleon (In-Harness Baked MoE Engine)', () => {
     const res = await engine.enhance({ task: 'Build a binary heap', mode: 'flash' });
     expect(res.mode).toBe('flash');
     expect(res.tokensUsed).toBe(0);
-    expect(res.context).toContain('LAZY CHAMELEON DENSE SYNTHETIC DATASET');
+    expect(res.context).toContain('TASK SCAFFOLD');
   });
 });

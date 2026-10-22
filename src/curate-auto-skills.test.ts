@@ -41,8 +41,10 @@ describe('curateAutoSkills', () => {
     expect(existsSync(join(autoDir, 'stale.md'))).toBe(false);
   });
 
-  it('usagePath points at skill-meta.json (no schema collision with skills.ts)', () => {
-    expect(usagePath(ws)).not.toContain('skill-usage.json');
-    expect(usagePath(ws).endsWith('skill-meta.json')).toBe(true);
+  it('usagePath points at the unified skill-usage.json registry', () => {
+    // One canonical store: the curator lifecycle and the skills.ts outcome
+    // stats share skill-usage.json (the old skill-meta.json is migrated).
+    expect(usagePath(ws).endsWith('skill-usage.json')).toBe(true);
+    expect(usagePath(ws)).not.toContain('skill-meta.json');
   });
 });

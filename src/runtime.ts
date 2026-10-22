@@ -229,7 +229,7 @@ export class Runtime {
       low: 'Fast & agile: minimal reasoning overhead, speedy tool executions.',
       medium: 'Balanced: thoughtful analysis, careful edits, reliable verification.',
       high: 'Deep cognitive analysis: edge cases, AST blast radius checking, multi-step verification.',
-      max: 'Maximum reasoning compute: exhaustive decomposition, Chameleon MoE synthesis, full invariant verification.',
+      max: 'Maximum reasoning compute: exhaustive decomposition, multi-pass self-critique, full invariant verification.',
       off: 'Disabled reasoning overhead.',
       auto: 'Model-default reasoning effort.',
     };

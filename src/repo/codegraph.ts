@@ -404,7 +404,8 @@ function tsIndexFile(file: string, rel: string, database: SqliteDb): void {
           if (kind === 'class' || kind === 'interface') {
             // relations consumers (typeHierarchy / blast radius) query
             // src=<this type>, dst=<super-type>, kind='extends', so follow
-            // indexFile's convention: src=name, dst=heritage, file=rel.
+            // indexFile's convention: src=name, dst=heritage, file=<the same
+            // absolute `file` value the symbols insert above uses>.
             for (const h of tsHeritageNames(node)) {
               try { relIns.run(name, h, 'extends', file); } catch { /* duplicate / bad row: skip */ }
             }

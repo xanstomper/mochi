@@ -242,10 +242,6 @@ export async function notifyJobResult(job: CronJob, summary: string): Promise<vo
   if (!ok) console.warn(`[cron] notify failed for job ${job.id} -> ${target.slice(0, 60)}`);
 }
 
-/** Returns the notify target (for the CLI to surface). */
-export function jobNotify(job: CronJob): string | null {
-  return job.notify ?? null;
-}
 
 export function removeJob(dir: string, id: string): boolean {
   saveJobs(dir, loadJobs(dir).filter((j) => j.id !== id));

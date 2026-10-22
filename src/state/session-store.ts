@@ -15,9 +15,10 @@
 // driver). Conversation continuity is never optional.
 import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { openDb, hasSqlite as driverAvailable, type SqliteDb, type Stmt } from '../sqlite.js';
 import { mochiStateDir } from '../core/mochi-dir.js';
+import { redact } from '../security/security.js';
 
 export interface SessionMessage {
   role: string;
@@ -192,6 +193,9 @@ export class SessionStore {
   /** Create a session; returns its id (or the existing id for a goal-id that
    *  already has one — makes `resume` idempotent). */
   begin(obj: { id?: string; goalId?: string; role?: string; objective?: string; parentId?: string | null }): string {
+    // Objectives are persisted AND FTS-indexed alongside every message —
+    // redact on write, same posture as transcript content and traces.
+    if (obj.objective) obj = { ...obj, objective: redact(obj.objective) };
     if (this.fb) {
       const st = this.fb;
       const byId = obj.id ? st.sessions.find((s) => s.id === obj.id) : undefined;
@@ -243,8 +247,14 @@ export class SessionStore {
   /** Append one transcript message to a session. */
   append(sessionId: string, role: string, content: string): void {
     if (!this.available || !content) return;
+    // Redact BEFORE persisting: traces have always been redacted on write,
+    // but transcripts were stored raw — the same run's secrets landed here
+    // unscrubbed (SQLite FTS + JSON fallback alike; this one point covers
+    // both). Reads stay backward-compatible: already-stored rows are
+    // returned as-is, only new writes are scrubbed.
+    const scrubbed = redact(content);
     // Bound a single message so a giant tool dump doesn't bloat the index.
-    const text = content.length > MAX_FB_MESSAGE_CHARS ? content.slice(0, MAX_FB_MESSAGE_CHARS) + `\n…(${content.length - MAX_FB_MESSAGE_CHARS} more chars)` : content;
+    const text = scrubbed.length > MAX_FB_MESSAGE_CHARS ? scrubbed.slice(0, MAX_FB_MESSAGE_CHARS) + `\n…(${scrubbed.length - MAX_FB_MESSAGE_CHARS} more chars)` : scrubbed;
     if (this.fb) {
       const st = this.fb;
       let s = st.sessions.find((x) => x.id === sessionId);
@@ -360,12 +370,13 @@ export class SessionStore {
 
   rename(id: string, objective: string): void {
     if (!this.available) return;
+    const scrubbed = redact(objective);
     if (this.fb) {
       const s = this.fb.sessions.find((x) => x.id === id);
-      if (s) { s.objective = objective; s.updatedAt = Date.now(); fbSave(this.fb); }
+      if (s) { s.objective = scrubbed; s.updatedAt = Date.now(); fbSave(this.fb); }
       return;
     }
-    this.db.prepare('UPDATE sessions SET objective=?, updated_at=? WHERE id=?').run(objective, Date.now(), id);
+    this.db.prepare('UPDATE sessions SET objective=?, updated_at=? WHERE id=?').run(scrubbed, Date.now(), id);
   }
 
   /** Recent session summaries for ambient agent context injection. */
@@ -415,12 +426,3 @@ export class SessionStore {
   }
 }
 
-
-/** Hash a goal objective into a stable session filename/id aid.
- *  SHA-256 (was sha1 — audit VULN_WEAK_CRYPTO_HASH): the id only needs to be
- *  stable + collision-free across sessions, and a 12-hex-char digest of a
- *  model-supplied objective is exactly the kind of surface where weak-hash
- *  scanners should stay silent. */
-export function sessionKey(objective: string): string {
-  return createHash('sha256').update(objective).digest('hex').slice(0, 12);
-}

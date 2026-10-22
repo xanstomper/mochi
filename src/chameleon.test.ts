@@ -53,7 +53,7 @@ describe('ChameleonEngine (internal, agent-own provider)', () => {
     const r = await engine.enhance({ task: 'quick', mode: 'flash' });
     expect(r.mode).toBe('flash');
     expect(r.tokensUsed).toBe(0);
-    expect(r.context).toContain('LAZY CHAMELEON DENSE SYNTHETIC DATASET');
+    expect(r.context).toContain('TASK SCAFFOLD');
   });
 
   it('maps mode to a real strategy tier (flash vs deep)', async () => {

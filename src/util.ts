@@ -132,6 +132,12 @@ export function getFilenameTruncated(path: string | undefined, maxLength = 20): 
   return filename.slice(0, available) + '…' + ext;
 }
 
+/** Escape a string for literal use inside a RegExp. (Single canonical copy —
+ *  the find-references and rename-symbol tools each carried their own.) */
+export function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /** Truncate long text in the middle so both ends survive (OpenFable
  *  truncateMiddle). Best for CLI/dashboard lines where the head (what
  *  happened) and tail (where) matter more than the middle. */

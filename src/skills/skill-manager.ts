@@ -6,15 +6,18 @@
 //   - The agent authors SKILL.md files (YAML frontmatter + markdown body).
 //   - Agent-created skills live in the writable, per-project
 //     `.mochi/skills/<category?>/<name>/SKILL.md` tree (shadowing bundled ones).
-//   - A usage registry (`<project>/.mochi/skill-usage.json`) marks which skills
-//     are agent-created and tracks patch counts / last used, so a background
-//     curator can maintain ONLY those and never touch bundled/user skills.
+//   - THE usage registry (`<project>/.mochi/skill-usage.json`, owned by
+//     skills.ts) marks which skills are agent-created and tracks patch
+//     counts / last used alongside the loads/wins outcome stats, so a
+//     background curator can maintain ONLY agent-created skills and never
+//     touch bundled/user skills. (It used to be a separate skill-meta.json
+//     that disagreed with the stats file; skills.ts migrates it on load.)
 //   - Never auto-deletes: delete() archives into `.mochi/skills/.archive/`.
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, renameSync, rmSync } from 'node:fs';
 import { dirname, join, basename } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { lintSkillDoc } from './skill-lint.js';
-import { parseFrontmatter as parseSkillFrontmatter } from './skills.js';
+import { parseFrontmatter as parseSkillFrontmatter, loadSkillUsage, saveSkillUsage, skillUsagePath, resolveSkillsSettings, type SkillUsage, type SkillLifecycleState, type SkillVerifiedOutcome } from './skills.js';
 import { mochiStateDir } from '../core/mochi-dir.js';
 import type { Tool } from '../tools/types.js';
 
@@ -25,11 +28,17 @@ export function skillsRoot(projectDir: string): string {
 export function archiveRoot(projectDir: string): string {
   return join(mochiStateDir(projectDir), 'skills', '.archive');
 }
+/** The unified skill registry file (canonical store lives in skills.ts;
+ *  this stays as the curator-facing path helper). */
 export function usagePath(projectDir: string): string {
-  return join(mochiStateDir(projectDir), 'skill-meta.json');
+  return skillUsagePath(projectDir);
 }
 
 // ─── Usage registry (mirrors Hermes' tools/skill_usage.py) ───────────────
+// Lifecycle view over the unified registry in skills.ts: loadUsage
+// materializes every recorded skill with lifecycle defaults filled in, and
+// saveUsage writes records back WITHOUT dropping the loads/wins outcome
+// stats the selection boost reads (they round-trip on the record).
 
 export interface UsageRecord {
   name: string;
@@ -38,6 +47,32 @@ export interface UsageRecord {
   createdAt: number;
   lastUsedAt: number;
   category?: string;
+  /** Outcome stats from the unified registry (round-tripped by saveUsage). */
+  loads?: number;
+  wins?: number;
+  /** Evidence-lifecycle state + signals (round-tripped like loads/wins;
+   *  written by the birth stamp, recordSkillOutcome, and the curator). */
+  state?: SkillLifecycleState;
+  stateAt?: number;
+  probationSince?: number;
+  verifiedPasses?: number;
+  verifiedFails?: number;
+  verifiedPartials?: number;
+  recentOutcomes?: SkillVerifiedOutcome[];
+  passesInState?: number;
+  demotionStrikes?: number;
+  helpful?: number;
+  harmful?: number;
+  kindLoads?: Record<string, number>;
+  kindPasses?: Record<string, number>;
+  lastVerdict?: SkillVerifiedOutcome;
+  lastVerdictAt?: number;
+  lastDemotionReason?: string;
+  /** Automatic-repair bookkeeping (D8; round-tripped like the lifecycle
+   *  fields above; written by skill-repair.ts). */
+  repairAttempts?: number;
+  lastRepairAt?: number;
+  lastRepairReason?: string;
 }
 
 export interface UsageDB {
@@ -49,17 +84,74 @@ export interface MarkOpts {
 }
 
 export function loadUsage(projectDir: string): UsageDB {
-  try {
-    const raw = readFileSync(usagePath(projectDir), 'utf8');
-    return { byName: JSON.parse(raw) as Record<string, UsageRecord> } as UsageDB;
-  } catch {
-    return { byName: {} };
+  const byName: Record<string, UsageRecord> = {};
+  for (const [name, u] of loadSkillUsage(projectDir)) {
+    byName[name] = {
+      name,
+      agentCreated: u.agentCreated ?? false,
+      patches: u.patches ?? 0,
+      createdAt: u.createdAt ?? u.lastUsedAt ?? 0,
+      lastUsedAt: u.lastUsedAt ?? 0,
+      ...(u.category ? { category: u.category } : {}),
+      loads: u.loads,
+      wins: u.wins,
+      ...(u.state ? { state: u.state } : {}),
+      ...(u.stateAt !== undefined ? { stateAt: u.stateAt } : {}),
+      ...(u.probationSince !== undefined ? { probationSince: u.probationSince } : {}),
+      ...(u.verifiedPasses !== undefined ? { verifiedPasses: u.verifiedPasses } : {}),
+      ...(u.verifiedFails !== undefined ? { verifiedFails: u.verifiedFails } : {}),
+      ...(u.verifiedPartials !== undefined ? { verifiedPartials: u.verifiedPartials } : {}),
+      ...(u.recentOutcomes ? { recentOutcomes: u.recentOutcomes } : {}),
+      ...(u.passesInState !== undefined ? { passesInState: u.passesInState } : {}),
+      ...(u.demotionStrikes !== undefined ? { demotionStrikes: u.demotionStrikes } : {}),
+      ...(u.helpful !== undefined ? { helpful: u.helpful } : {}),
+      ...(u.harmful !== undefined ? { harmful: u.harmful } : {}),
+      ...(u.kindLoads ? { kindLoads: u.kindLoads } : {}),
+      ...(u.kindPasses ? { kindPasses: u.kindPasses } : {}),
+      ...(u.lastVerdict ? { lastVerdict: u.lastVerdict } : {}),
+      ...(u.lastVerdictAt !== undefined ? { lastVerdictAt: u.lastVerdictAt } : {}),
+      ...(u.lastDemotionReason ? { lastDemotionReason: u.lastDemotionReason } : {}),
+      ...(u.repairAttempts !== undefined ? { repairAttempts: u.repairAttempts } : {}),
+      ...(u.lastRepairAt !== undefined ? { lastRepairAt: u.lastRepairAt } : {}),
+      ...(u.lastRepairReason ? { lastRepairReason: u.lastRepairReason } : {}),
+    };
   }
+  return { byName };
 }
 
 export function saveUsage(projectDir: string, db: UsageDB): void {
-  mkdirSync(join(projectDir, '.mochi'), { recursive: true });
-  writeFileSync(usagePath(projectDir), JSON.stringify(db.byName, null, 2), 'utf8');
+  const usage = new Map<string, SkillUsage>();
+  for (const [name, rec] of Object.entries(db.byName)) {
+    usage.set(name, {
+      loads: rec.loads ?? 0,
+      wins: rec.wins ?? 0,
+      agentCreated: rec.agentCreated,
+      patches: rec.patches,
+      createdAt: rec.createdAt,
+      lastUsedAt: rec.lastUsedAt,
+      ...(rec.category ? { category: rec.category } : {}),
+      ...(rec.state ? { state: rec.state } : {}),
+      ...(rec.stateAt !== undefined ? { stateAt: rec.stateAt } : {}),
+      ...(rec.probationSince !== undefined ? { probationSince: rec.probationSince } : {}),
+      ...(rec.verifiedPasses !== undefined ? { verifiedPasses: rec.verifiedPasses } : {}),
+      ...(rec.verifiedFails !== undefined ? { verifiedFails: rec.verifiedFails } : {}),
+      ...(rec.verifiedPartials !== undefined ? { verifiedPartials: rec.verifiedPartials } : {}),
+      ...(rec.recentOutcomes ? { recentOutcomes: rec.recentOutcomes } : {}),
+      ...(rec.passesInState !== undefined ? { passesInState: rec.passesInState } : {}),
+      ...(rec.demotionStrikes !== undefined ? { demotionStrikes: rec.demotionStrikes } : {}),
+      ...(rec.helpful !== undefined ? { helpful: rec.helpful } : {}),
+      ...(rec.harmful !== undefined ? { harmful: rec.harmful } : {}),
+      ...(rec.kindLoads ? { kindLoads: rec.kindLoads } : {}),
+      ...(rec.kindPasses ? { kindPasses: rec.kindPasses } : {}),
+      ...(rec.lastVerdict ? { lastVerdict: rec.lastVerdict } : {}),
+      ...(rec.lastVerdictAt !== undefined ? { lastVerdictAt: rec.lastVerdictAt } : {}),
+      ...(rec.lastDemotionReason ? { lastDemotionReason: rec.lastDemotionReason } : {}),
+      ...(rec.repairAttempts !== undefined ? { repairAttempts: rec.repairAttempts } : {}),
+      ...(rec.lastRepairAt !== undefined ? { lastRepairAt: rec.lastRepairAt } : {}),
+      ...(rec.lastRepairReason ? { lastRepairReason: rec.lastRepairReason } : {}),
+    });
+  }
+  saveSkillUsage(projectDir, usage);
 }
 
 /** Record a skill as seen/used; optionally mark it as agent-authored. */
@@ -132,6 +224,12 @@ export interface CreateInput {
   description: string;
   body: string;
   category?: string;
+  /** Birth state for the evidence lifecycle (only consulted when probation
+   *  enforcement is on). Default 'probation': model-authored skills must
+   *  earn activation with verifier-passed runs. 'active' is reserved for
+   *  paths that already carry an outcome gate of their own (lesson
+   *  promotion: ≥3 retrievals + ≥1 recorded fix before the skill exists). */
+  lifecycle?: 'probation' | 'active';
 }
 export interface SkillQuality {
   score: number;
@@ -180,6 +278,40 @@ export interface WriteResult {
   error?: string;
   archived?: boolean;
   quality?: SkillQuality;
+  /** Lifecycle state stamped at birth (only when probation enforcement
+   *  is on; undefined = legacy behavior, no stamp). */
+  state?: SkillLifecycleState;
+}
+
+/** Birth stamp for the evidence-based lifecycle. Marks the record
+ *  agent-created (the curator maintains authored skills) and places the
+ *  skill in its birth state. A material rewrite of an ACTIVE or DEMOTED
+ *  skill re-enters probation — the new body has no evidence behind it;
+ *  an edit during probation keeps the original clock and counters
+ *  (refinement mid-probation is expected, not a reset). Returns the
+ *  resulting state, or undefined when the stamp could not be written. */
+export function stampSkillBirth(projectDir: string, name: string, bornAs: 'probation' | 'active'): SkillLifecycleState | undefined {
+  try {
+    const all = loadSkillUsage(projectDir);
+    const cur = all.get(name) ?? { loads: 0, wins: 0 };
+    const now = Date.now();
+    cur.agentCreated = true;
+    if (!cur.createdAt) cur.createdAt = now;
+    if (bornAs === 'probation') {
+      if (cur.state !== 'probation') {
+        cur.state = 'probation';
+        cur.stateAt = now;
+        cur.probationSince = now;
+        cur.passesInState = 0;
+      }
+    } else if (!cur.state) {
+      cur.state = 'active';
+      cur.stateAt = now;
+    }
+    all.set(name, cur);
+    saveSkillUsage(projectDir, all);
+    return cur.state;
+  } catch { return undefined; }
 }
 
 function atomicWrite(path: string, content: string): void {
@@ -225,7 +357,15 @@ export function writeSkill(projectDir: string, input: CreateInput): WriteResult 
     const target = join(root, 'SKILL.md');
     atomicWrite(target, renderSkill({ name, description: input.description, category: input.category, body: input.body }));
     markUsed(projectDir, name, { category: input.category });
-    return { ok: true, path: target, quality };
+    // Evidence lifecycle: the rubric above is only a lint gate — an authored
+    // skill is born on PROBATION and is promoted by verifier-passed runs
+    // (curator), never by its structural score. Enforcement off (config /
+    // MOCHI_SKILLS_PROBATION=0) skips the stamp entirely: legacy behavior.
+    let state: SkillLifecycleState | undefined;
+    if (resolveSkillsSettings().probationEnabled) {
+      state = stampSkillBirth(projectDir, name, input.lifecycle ?? 'probation');
+    }
+    return { ok: true, path: target, quality, ...(state ? { state } : {}) };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
@@ -375,6 +515,9 @@ export const skillManageTool: Tool = {
         category: category === 'global' || category === 'user' ? undefined : category,
       });
       if (!r.ok) return JSON.stringify(r);
+      if (r.state === 'probation') {
+        return `Created skill '${name}' at ${r.path} — on PROBATION: it is advertised only when a task matches it strongly, and the curator promotes it to fully active after 3 runs that load it end in a verifier PASS (with its verification snippet, if any, passing). Its quality score (${r.quality?.score ?? 0}/100) is a format gate only and does not activate it. The user can read it with 'mochi skills ${name}'.`;
+      }
       return `Created skill '${name}' at ${r.path}. It is advertised to every future session in this scope; the user can read it with 'mochi skills ${name}'.`;
     }
     if (action === 'edit') {
@@ -393,7 +536,9 @@ export const skillManageTool: Tool = {
       });
       if (!r.ok) return JSON.stringify(r);
       bumpPatch(projectDir, name);
-      return `Updated skill '${name}' (quality ${r.quality?.score ?? 0}/100).`;
+      return r.state === 'probation'
+        ? `Updated skill '${name}' (quality ${r.quality?.score ?? 0}/100). The rewrite re-enters PROBATION until verifier-passed runs re-earn activation.`
+        : `Updated skill '${name}' (quality ${r.quality?.score ?? 0}/100).`;
     }
     if (action === 'patch') {
       if (args.old_string === undefined) return JSON.stringify({ ok: false, error: 'old_string is required for patch' });

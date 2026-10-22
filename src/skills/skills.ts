@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { mochiStateDir } from '../core/mochi-dir.js';
 import { fileURLToPath } from 'node:url';
@@ -326,41 +326,364 @@ export function searchSkills(
 }
 
 
-// ---- MCH-40 (skills v2): usage stats + staleness + conflict detection ------
+// ---- Unified skill usage registry ------------------------------------------
+// ONE store for everything the harness knows about a skill's use: outcome
+// stats (loads/wins — read by the selection boost in context.ts / the TUI)
+// AND lifecycle metadata (agentCreated/patches/createdAt/lastUsedAt/category
+// — read by the skill curator in skill-manager.ts). These used to live in
+// two files (skill-usage.json here, skill-meta.json in skill-manager.ts)
+// written by disjoint call sites, so they disagreed: a skill loaded daily
+// via the skill tool never refreshed the curator's lastUsedAt clock and
+// could be archived as "unused". skill-usage.json is canonical; a legacy
+// skill-meta.json is merged in (and removed) on first load.
 
-/** Where per-project skill usage stats live. JSON: { [skillName]: { loads, wins } } */
+/** Where the unified per-project skill usage registry lives. */
 export function skillUsagePath(projectDir: string): string {
   return join(mochiStateDir(projectDir), 'skill-usage.json');
 }
 
-export interface SkillUsage { loads: number; wins: number }
+/** Legacy second registry (skill-manager's old file), migrated on load. */
+function legacySkillMetaPath(projectDir: string): string {
+  return join(mochiStateDir(projectDir), 'skill-meta.json');
+}
 
-/** Read usage stats; missing/corrupt file -> empty map (never break a run). */
+/** Lifecycle states for the evidence-based skill lifecycle. A record with
+ *  NO state predates the lifecycle (bundled / hand-written / legacy) and is
+ *  treated as active and outside lifecycle management. */
+export type SkillLifecycleState = 'probation' | 'active' | 'demoted';
+
+/** A run's final verifier-gate verdict, in trajectory vocabulary. 'none'
+ *  means the gate never produced a verdict for the run (chat/research kinds,
+ *  or verification not reached) — such runs are loads, not evidence. */
+export type SkillRunVerdict = 'pass' | 'fail' | 'partial' | 'blocked' | 'none';
+
+/** Verified outcomes that count as lifecycle evidence (window entries). */
+export type SkillVerifiedOutcome = 'pass' | 'fail' | 'partial';
+
+export interface SkillUsage {
+  loads: number;
+  wins: number;
+  agentCreated?: boolean;
+  patches?: number;
+  createdAt?: number;
+  lastUsedAt?: number;
+  category?: string;
+  // ── Evidence lifecycle (B1) — all optional; absent = legacy record ──
+  /** Current lifecycle state (agent-authored skills only). */
+  state?: SkillLifecycleState;
+  /** When the current state was entered (ms epoch). */
+  stateAt?: number;
+  /** When the CURRENT probation spell began (reset on re-entry). */
+  probationSince?: number;
+  /** Cumulative loaded runs whose final gate verdict was PASS. */
+  verifiedPasses?: number;
+  /** Cumulative loaded runs whose final gate verdict was FAIL or BLOCKED. */
+  verifiedFails?: number;
+  /** Cumulative loaded runs whose final gate verdict was PARTIAL. */
+  verifiedPartials?: number;
+  /** Rolling window of the last 10 verified outcomes, oldest first. */
+  recentOutcomes?: SkillVerifiedOutcome[];
+  /** Verified PASS runs since entering the current state (promotion bar). */
+  passesInState?: number;
+  /** Demotions not yet cleared by a re-promotion. */
+  demotionStrikes?: number;
+  /** ACE-style counters: a load followed by gate PASS / FAIL|PARTIAL|BLOCKED. */
+  helpful?: number;
+  harmful?: number;
+  /** Verified loaded runs per task kind (baseline subtraction input). */
+  kindLoads?: Record<string, number>;
+  /** Of those, the runs ending in gate PASS, per task kind. */
+  kindPasses?: Record<string, number>;
+  /** Most recent verified verdict + when, for audit/reporting. */
+  lastVerdict?: SkillVerifiedOutcome;
+  lastVerdictAt?: number;
+  /** Evidence string recorded at the most recent demotion. */
+  lastDemotionReason?: string;
+  // ── Automatic repair (D8) — written only by skill-repair.ts ──
+  /** Completed repair attempts (patched + re-probationed). Capped at
+   *  MAX_SKILL_REPAIR_ATTEMPTS in skill-repair.ts; a skill at the cap
+   *  stays demoted until a human intervenes. */
+  repairAttempts?: number;
+  /** When the most recent repair attempt finished (ms epoch). */
+  lastRepairAt?: number;
+  /** Outcome of the most recent repair attempt: the patch summary on
+   *  success, or the refusal/failure reason (incl. exhaustion). */
+  lastRepairReason?: string;
+}
+
+/** Tolerant per-entry parse: an entry is kept when it carries outcome stats
+ *  (numeric loads+wins) or any lifecycle field; anything else is malformed
+ *  and dropped (the pre-unification loader dropped non-numeric loads/wins). */
+function parseUsageRecord(v: unknown): SkillUsage | null {
+  if (!v || typeof v !== 'object') return null;
+  const r = v as Record<string, unknown>;
+  const hasStats = typeof r.loads === 'number' && typeof r.wins === 'number';
+  const hasMeta = typeof r.agentCreated === 'boolean' || typeof r.patches === 'number'
+    || typeof r.createdAt === 'number' || typeof r.lastUsedAt === 'number'
+    || typeof r.state === 'string';
+  if (!hasStats && !hasMeta) return null;
+  const out: SkillUsage = {
+    loads: typeof r.loads === 'number' ? r.loads : 0,
+    wins: typeof r.wins === 'number' ? r.wins : 0,
+  };
+  if (typeof r.agentCreated === 'boolean') out.agentCreated = r.agentCreated;
+  if (typeof r.patches === 'number') out.patches = r.patches;
+  if (typeof r.createdAt === 'number') out.createdAt = r.createdAt;
+  if (typeof r.lastUsedAt === 'number') out.lastUsedAt = r.lastUsedAt;
+  if (typeof r.category === 'string') out.category = r.category;
+  // Evidence-lifecycle fields: copied only when well-typed, so a hand-edited
+  // or partially corrupt registry degrades to legacy behavior per-field
+  // instead of poisoning the whole record.
+  if (r.state === 'probation' || r.state === 'active' || r.state === 'demoted') out.state = r.state;
+  if (typeof r.stateAt === 'number') out.stateAt = r.stateAt;
+  if (typeof r.probationSince === 'number') out.probationSince = r.probationSince;
+  if (typeof r.verifiedPasses === 'number') out.verifiedPasses = r.verifiedPasses;
+  if (typeof r.verifiedFails === 'number') out.verifiedFails = r.verifiedFails;
+  if (typeof r.verifiedPartials === 'number') out.verifiedPartials = r.verifiedPartials;
+  if (Array.isArray(r.recentOutcomes)) {
+    const win = r.recentOutcomes.filter((o): o is SkillVerifiedOutcome => o === 'pass' || o === 'fail' || o === 'partial');
+    if (win.length) out.recentOutcomes = win.slice(-10);
+  }
+  if (typeof r.passesInState === 'number') out.passesInState = r.passesInState;
+  if (typeof r.demotionStrikes === 'number') out.demotionStrikes = r.demotionStrikes;
+  if (typeof r.helpful === 'number') out.helpful = r.helpful;
+  if (typeof r.harmful === 'number') out.harmful = r.harmful;
+  const numRec = (v: unknown): Record<string, number> | undefined => {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+    const rec: Record<string, number> = {};
+    for (const [k, n] of Object.entries(v as Record<string, unknown>)) if (typeof n === 'number') rec[k] = n;
+    return Object.keys(rec).length ? rec : undefined;
+  };
+  const kl = numRec(r.kindLoads); if (kl) out.kindLoads = kl;
+  const kp = numRec(r.kindPasses); if (kp) out.kindPasses = kp;
+  if (r.lastVerdict === 'pass' || r.lastVerdict === 'fail' || r.lastVerdict === 'partial') out.lastVerdict = r.lastVerdict;
+  if (typeof r.lastVerdictAt === 'number') out.lastVerdictAt = r.lastVerdictAt;
+  if (typeof r.lastDemotionReason === 'string') out.lastDemotionReason = r.lastDemotionReason;
+  if (typeof r.repairAttempts === 'number') out.repairAttempts = r.repairAttempts;
+  if (typeof r.lastRepairAt === 'number') out.lastRepairAt = r.lastRepairAt;
+  if (typeof r.lastRepairReason === 'string') out.lastRepairReason = r.lastRepairReason;
+  return out;
+}
+
+/** Read the unified registry; missing/corrupt file -> empty map (never
+ *  break a run). Merges a legacy skill-meta.json when one is present. */
 export function loadSkillUsage(projectDir: string): Map<string, SkillUsage> {
   const out = new Map<string, SkillUsage>();
   try {
     const p = skillUsagePath(projectDir);
-    if (!existsSync(p)) return out;
-    const parsed = JSON.parse(readFileSync(p, 'utf8')) as Record<string, SkillUsage>;
-    for (const [k, v] of Object.entries(parsed)) {
-      if (v && typeof v.loads === 'number' && typeof v.wins === 'number') out.set(k, v);
+    if (existsSync(p)) {
+      const parsed = JSON.parse(readFileSync(p, 'utf8')) as Record<string, unknown>;
+      for (const [k, v] of Object.entries(parsed)) {
+        const rec = parseUsageRecord(v);
+        if (rec) out.set(k, rec);
+      }
     }
   } catch { /* corrupt stats are non-fatal */ }
+  migrateLegacySkillMeta(projectDir, out);
   return out;
 }
 
-/** Record one skill load; `won` marks the run ending successfully after use. */
+/** One-time migration: fold legacy skill-meta.json records into the
+ *  canonical registry (canonical fields win; legacy fills gaps), persist
+ *  the merge, and remove the legacy file so the stores can't diverge again. */
+function migrateLegacySkillMeta(projectDir: string, into: Map<string, SkillUsage>): void {
+  try {
+    const legacy = legacySkillMetaPath(projectDir);
+    if (!existsSync(legacy)) return;
+    const parsed = JSON.parse(readFileSync(legacy, 'utf8')) as Record<string, unknown>;
+    for (const [k, v] of Object.entries(parsed)) {
+      const rec = parseUsageRecord(v);
+      if (!rec) continue;
+      const cur = into.get(k);
+      if (!cur) { into.set(k, rec); continue; }
+      if (cur.agentCreated === undefined && rec.agentCreated !== undefined) cur.agentCreated = rec.agentCreated;
+      if (cur.patches === undefined && rec.patches !== undefined) cur.patches = rec.patches;
+      if (cur.createdAt === undefined && rec.createdAt !== undefined) cur.createdAt = rec.createdAt;
+      if (cur.lastUsedAt === undefined && rec.lastUsedAt !== undefined) cur.lastUsedAt = rec.lastUsedAt;
+      if (cur.category === undefined && rec.category !== undefined) cur.category = rec.category;
+    }
+    saveSkillUsage(projectDir, into);
+    try { rmSync(legacy, { force: true }); } catch { /* the in-memory merge still applied */ }
+  } catch { /* legacy migration is best-effort */ }
+}
+
+/** Persist the unified registry (best-effort; stats never break a run). */
+export function saveSkillUsage(projectDir: string, usage: Map<string, SkillUsage>): void {
+  try {
+    mkdirSync(mochiStateDir(projectDir), { recursive: true });
+    const obj: Record<string, SkillUsage> = {};
+    for (const [k, v] of usage) obj[k] = v;
+    writeFileSync(skillUsagePath(projectDir), JSON.stringify(obj, null, 2));
+  } catch { /* stats are best-effort */ }
+}
+
+/** Record one skill load; `won` marks the run ending successfully after use.
+ *  Also stamps lastUsedAt: the curator's staleness clock reads this same
+ *  registry, so a load here is what keeps a used skill from being archived
+ *  as stale. */
 export function recordSkillUsage(projectDir: string, name: string, won?: boolean): void {
   try {
-    const p = skillUsagePath(projectDir);
-    const all: Record<string, SkillUsage> = existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : {};
-    const cur = all[name] ?? { loads: 0, wins: 0 };
+    const all = loadSkillUsage(projectDir);
+    const now = Date.now();
+    const cur = all.get(name) ?? { loads: 0, wins: 0 };
     cur.loads += 1;
     if (won === true) cur.wins += 1;
-    all[name] = cur;
-    mkdirSync(mochiStateDir(projectDir), { recursive: true });
-    writeFileSync(p, JSON.stringify(all, null, 2));
+    if (!cur.createdAt) cur.createdAt = now;
+    cur.lastUsedAt = now;
+    all.set(name, cur);
+    saveSkillUsage(projectDir, all);
   } catch { /* stats are best-effort */ }
+}
+
+// ─── Evidence-based skill lifecycle: settings + outcome recording (B1) ────
+// Promotion currency is the verifier gate, never self-report: the loop's
+// finish path records each loaded skill's run verdict here, and the curator
+// (skill-curator.ts) turns the accumulated evidence into state transitions.
+
+/** Minimum raw relevance (tokenOverlap base score) for a skill in each
+ *  lifecycle state to be ADVERTISED for a task. The normal floor is
+ *  MIN_SKILL_SCORE in context.ts (0.25); probationers must match strongly,
+ *  demoted skills very strongly. Explicit `skill` loads by name bypass this —
+ *  advertising is what's gated, not access. */
+export const PROBATION_ADVERTISE_FLOOR = 0.5;
+export const DEMOTED_ADVERTISE_FLOOR = 0.6;
+/** Verified gate-PASS runs (in the current state) required for promotion. */
+export const PROMOTION_MIN_PASSES = 3;
+/** A probation spell older than this without promotion is flagged stale. */
+export const PROBATION_EXPIRY_MS = 14 * 24 * 3600_000;
+/** Verified-outcome window the demotion rule reads. */
+export const DEMOTION_WINDOW = 10;
+/** Window pass-rate must trail the matched baseline by more than this. */
+export const DEMOTION_MARGIN = 0.15;
+/** Minimum matched-baseline runs before the baseline comparison is trusted. */
+export const DEMOTION_MIN_BASELINE_RUNS = 10;
+
+export interface SkillsSettings {
+  /** Probation enforcement: birth stamps, advertising gates, lifecycle
+   *  transitions in the curator. Off = legacy behavior throughout. */
+  probationEnabled: boolean;
+}
+
+/** Resolve lifecycle settings: env MOCHI_SKILLS_PROBATION beats config,
+ *  which beats the default (ON). Read at call time so tests and long-running
+ *  processes can flip it without a restart. */
+export function resolveSkillsSettings(config?: { skills?: { probation?: boolean } }): SkillsSettings {
+  const env = process.env.MOCHI_SKILLS_PROBATION;
+  if (env !== undefined && env.trim() !== '') {
+    return { probationEnabled: !/^(0|false|no)$/i.test(env.trim()) };
+  }
+  return { probationEnabled: config?.skills?.probation !== false };
+}
+
+/** Advertisement gates from registry state: skill name → minimum RAW
+ *  relevance score it must clear to be advertised for a task. Probation
+ *  skills need a strong match, demoted skills a very strong one. Empty
+ *  when enforcement is off (legacy behavior: no gates at all). */
+export function advertiseGateFloors(usage: Map<string, SkillUsage>, settings: SkillsSettings): Map<string, number> {
+  const gates = new Map<string, number>();
+  if (!settings.probationEnabled) return gates;
+  for (const [name, rec] of usage) {
+    if (rec.state === 'probation') gates.set(name, PROBATION_ADVERTISE_FLOOR);
+    else if (rec.state === 'demoted') gates.set(name, DEMOTED_ADVERTISE_FLOOR);
+  }
+  return gates;
+}
+
+/** Record the verified outcome of one run that loaded `name`. This is the
+ *  ONLY writer of the evidence fields; state transitions are the curator's
+ *  job, never the recorder's. A 'none' verdict carries no evidence and is
+ *  ignored (the run's load/win were already recorded by recordSkillUsage).
+ *  BLOCKED folds into the fail bucket: the gate refused to certify the run,
+ *  which is failure evidence for any skill that participated in it. */
+export function recordSkillOutcome(projectDir: string, name: string, verdict: SkillRunVerdict, kind?: string): void {
+  if (verdict === 'none') return;
+  try {
+    const all = loadSkillUsage(projectDir);
+    const cur = all.get(name) ?? { loads: 0, wins: 0 };
+    const now = Date.now();
+    const outcome: SkillVerifiedOutcome = verdict === 'pass' ? 'pass' : verdict === 'partial' ? 'partial' : 'fail';
+    if (outcome === 'pass') {
+      cur.verifiedPasses = (cur.verifiedPasses ?? 0) + 1;
+      cur.helpful = (cur.helpful ?? 0) + 1;
+      if (cur.state === 'probation' || cur.state === 'demoted') cur.passesInState = (cur.passesInState ?? 0) + 1;
+    } else if (outcome === 'partial') {
+      cur.verifiedPartials = (cur.verifiedPartials ?? 0) + 1;
+      cur.harmful = (cur.harmful ?? 0) + 1;
+    } else {
+      cur.verifiedFails = (cur.verifiedFails ?? 0) + 1;
+      cur.harmful = (cur.harmful ?? 0) + 1;
+    }
+    const win = [...(cur.recentOutcomes ?? []), outcome];
+    cur.recentOutcomes = win.slice(-DEMOTION_WINDOW);
+    if (kind) {
+      cur.kindLoads = { ...(cur.kindLoads ?? {}), [kind]: (cur.kindLoads?.[kind] ?? 0) + 1 };
+      if (outcome === 'pass') cur.kindPasses = { ...(cur.kindPasses ?? {}), [kind]: (cur.kindPasses?.[kind] ?? 0) + 1 };
+    }
+    cur.lastVerdict = outcome;
+    cur.lastVerdictAt = now;
+    if (!cur.createdAt) cur.createdAt = now;
+    cur.lastUsedAt = now;
+    all.set(name, cur);
+    saveSkillUsage(projectDir, all);
+  } catch { /* evidence recording is best-effort, like all skill stats */ }
+}
+
+// ─── Per-kind run baseline (the "no-skill" comparison arm) ────────────────
+// Demotion compares a skill's window pass-rate against runs of the same task
+// kinds that did NOT load it. Two small aggregates make that computable:
+// global per-kind verified totals here, and the skill's own per-kind counts
+// on its registry record (subtracted back out at comparison time).
+
+export interface SkillKindStat { runs: number; passes: number }
+
+export function skillKindStatsPath(projectDir: string): string {
+  return join(mochiStateDir(projectDir), 'skill-kind-stats.json');
+}
+
+export function loadSkillKindStats(projectDir: string): Record<string, SkillKindStat> {
+  try {
+    const p = skillKindStatsPath(projectDir);
+    if (!existsSync(p)) return {};
+    const parsed = JSON.parse(readFileSync(p, 'utf8')) as Record<string, unknown>;
+    const out: Record<string, SkillKindStat> = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      const r = v as { runs?: unknown; passes?: unknown } | null;
+      if (r && typeof r.runs === 'number' && typeof r.passes === 'number') out[k] = { runs: r.runs, passes: r.passes };
+    }
+    return out;
+  } catch { return {}; }
+}
+
+/** Record one VERIFIED run of `kind` (any run, skill or not) into the
+ *  baseline totals. Called once per run by the loop's finish path. */
+export function recordSkillKindOutcome(projectDir: string, kind: string, passed: boolean): void {
+  if (!kind) return;
+  try {
+    const stats = loadSkillKindStats(projectDir);
+    const cur = stats[kind] ?? { runs: 0, passes: 0 };
+    cur.runs += 1;
+    if (passed) cur.passes += 1;
+    stats[kind] = cur;
+    mkdirSync(mochiStateDir(projectDir), { recursive: true });
+    writeFileSync(skillKindStatsPath(projectDir), JSON.stringify(stats, null, 2));
+  } catch { /* baseline stats are best-effort */ }
+}
+
+/** Matched no-skill baseline for a skill: per-kind verified totals MINUS the
+ *  skill's own per-kind verified loads, weighted by where the skill was
+ *  actually loaded. Returns rate=null when no baseline data exists. */
+export function skillKindBaseline(rec: SkillUsage, kindStats: Record<string, SkillKindStat>): { rate: number | null; runs: number } {
+  let runs = 0;
+  let passes = 0;
+  for (const [kind, loads] of Object.entries(rec.kindLoads ?? {})) {
+    const total = kindStats[kind];
+    if (!total) continue;
+    const baseRuns = Math.max(0, total.runs - loads);
+    const basePasses = Math.max(0, Math.min(baseRuns, total.passes - (rec.kindPasses?.[kind] ?? 0)));
+    runs += baseRuns;
+    passes += basePasses;
+  }
+  return { rate: runs > 0 ? passes / runs : null, runs };
 }
 
 /** Build the boost map for selectRelevantSkills: wins count as successes. */
@@ -441,8 +764,6 @@ export function readSkillBody(skill: Skill, projectDir: string): string {
   }
 }
 
-// type helper preserved for tool context handoff
-export type SkillContext = { skill: Skill; body: string };
 
 /** Path to the repo-bundled skills catalog (shipped with the package). Skills
  *  here are always discoverable unless a project/user skill shadows the name.

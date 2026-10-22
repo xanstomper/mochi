@@ -356,18 +356,6 @@ export async function kiloAmbientToken(deps: AmbientDeps = {}): Promise<AmbientT
   return undefined;
 }
 
-/** Try every known ambient source; first hit wins. */
-export async function anyAmbientToken(deps: AmbientDeps = {}): Promise<AmbientToken | undefined> {
-  return (await codexAmbientToken(deps))
-    ?? (await antigravityAmbientToken(deps))
-    ?? tokenjuiceAmbientToken(deps)
-    ?? (await kiloAmbientToken(deps))
-    ?? (await githubAmbientToken(deps))
-    ?? huggingfaceAmbientToken(deps)
-    ?? geminiAmbientToken(deps)
-    ?? claudeAmbientToken(deps)
-    ?? (await gcloudAmbientToken(deps));
-}
 
 /** GitHub Models: `gh auth token` (GitHub CLI OAuth user session). */
 export async function githubAmbientToken(deps: AmbientDeps = {}): Promise<AmbientToken | undefined> {

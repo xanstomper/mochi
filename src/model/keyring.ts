@@ -138,11 +138,6 @@ export function keyringMode(): number | null {
 }
 
 // ---------- Multi-account support ----------
-export interface AccountSelector {
-  readonly accounts: string[];
-  readonly active: string;
-}
-
 export function accountsFor(providerId: string): string[] {
   const ring = loadKeyring();
   const e = ring[providerId];

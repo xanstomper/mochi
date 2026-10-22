@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { resolve, relative, join, extname } from 'node:path';
 import type { Tool } from './types.js';
+import { escapeRegExp } from '../util.js';
 import { atomicWriteFileSync } from '../core/atomic-fs.js';
 
 // Extensions the AST renamer can parse as real syntax (rename touches only
@@ -149,7 +150,3 @@ export const renameSymbolTool: Tool = {
     return `Renamed "${oldName}" -> "${newName}" across ${mutatedFiles.length} file(s) (${totalReplacements} total occurrence(s)):\n${fileSummary}${modeNote}`;
   },
 };
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}

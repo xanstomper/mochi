@@ -3263,7 +3263,7 @@ if (line === '/branch' || line.startsWith('/branch ')) {
       { level: 'low', label: 'Low', desc: 'Fast & agile: minimal reasoning overhead, speedy tool executions.' },
       { level: 'medium', label: 'Medium', desc: 'Balanced: thoughtful analysis, careful edits, reliable verification.' },
       { level: 'high', label: 'High', desc: 'Deep cognitive analysis: edge cases, AST blast radius checking, multi-step verification.' },
-      { level: 'max', label: 'Max', desc: 'Maximum reasoning compute: exhaustive decomposition, Chameleon MoE synthesis, full invariant verification.' },
+      { level: 'max', label: 'Max', desc: 'Maximum reasoning compute: exhaustive decomposition, multi-pass self-critique, full invariant verification.' },
     ];
     const items = options.map((opt) => {
       const active = opt.level === cur;
@@ -4705,7 +4705,9 @@ if (line === '/branch' || line.startsWith('/branch ')) {
         target.outTokens = event.outputTokens;
         target.cacheTokens = event.cacheTokens;
         target.totalTokens = event.totalTokens;
-        if (event.costUsd !== undefined) target.totalCost = event.costUsd;
+        // usage:updated costUsd is the PER-CALL delta; the status bar shows
+        // the run's running total, so accumulate (state resets per run).
+        if (event.costUsd !== undefined) target.totalCost += event.costUsd;
       }
       scheduleRender();
       return;
@@ -4741,7 +4743,9 @@ if (line === '/branch' || line.startsWith('/branch ')) {
       state.cacheTokens = Number(event.type === 'usage:updated' ? event.cacheTokens : 0);
       state.totalTokens = Number(event.type === 'usage:updated' ? event.totalTokens : 0);
       if (event.type === 'usage:updated' && event.costUsd !== undefined) {
-        state.totalCost = Number(event.type === 'usage:updated' ? (event.costUsd ?? 0) : 0);
+        // Per-call delta (see the background-tab branch): accumulate into
+        // the running total the status bar displays.
+        state.totalCost += Number(event.type === 'usage:updated' ? (event.costUsd ?? 0) : 0);
       }
       scheduleRender();
     }

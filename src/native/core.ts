@@ -528,9 +528,11 @@ export function nativeSkeletonizeSource(source: string, ext = 'ts'): string | nu
 
 /**
  * Fast in-process Rust secret-pattern redaction. Mirrors the patterns in
- * `src/security.ts` byte-for-byte (sk-, sk-ant-, AIza, gh*, AKIA, JWT,
+ * `src/security/security.ts` (sk-, sk-ant-, AIza, gh*, AKIA, JWT,
  * Bearer, PRIVATE KEY, xox*, glpat-) and replaces every match with
- * `[secret-redacted]`.
+ * `[secret-redacted]`. The mirror is maintained by hand and may lag the
+ * TS list; redact() in security.ts composes (native first, TS pass always
+ * runs), so lag costs speed, never coverage.
  *
  * Returns the redacted string, or `null` when the native core is unavailable
  * (caller should fall back to the in-process TS implementation).

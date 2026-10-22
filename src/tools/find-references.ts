@@ -1,4 +1,5 @@
 import type { Tool } from './types.js';
+import { escapeRegExp } from '../util.js';
 import { execFile } from 'node:child_process';
 import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { promisify } from 'node:util';
@@ -191,7 +192,3 @@ export const findDefinitionsTool: Tool = {
     return `# Definitions for "${symbol}" (regex fallback — verify each is a real declaration)\n\n` + lines.map((l) => `  ${l}`).join('\n');
   },
 };
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
