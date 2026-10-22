@@ -1,0 +1,270 @@
+{
+  "passed": 17,
+  "total": 24,
+  "results": [
+    {
+      "id": "exact-basic",
+      "title": "Clean exact match",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "exact(legacy)",
+      "nearMissInMessage": false,
+      "message": "Edited a.ts"
+    },
+    {
+      "id": "exact-dollar-patterns",
+      "title": "newText containing $$ / $& replacement patterns stays verbatim",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "exact(legacy)",
+      "nearMissInMessage": false,
+      "message": "Edited a.ts"
+    },
+    {
+      "id": "whitespace-indent-drift",
+      "title": "Model re-indented the block",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "fuzzy(legacy)",
+      "nearMissInMessage": false,
+      "message": "Edited a.ts (fuzzy match: whitespace/quote differences were tolerated)"
+    },
+    {
+      "id": "tabs-vs-spaces",
+      "title": "File uses tabs, model sent spaces",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "fuzzy(legacy)",
+      "nearMissInMessage": false,
+      "message": "Edited a.ts (fuzzy match: whitespace/quote differences were tolerated)"
+    },
+    {
+      "id": "trailing-whitespace",
+      "title": "File lines carry trailing spaces",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "fuzzy(legacy)",
+      "nearMissInMessage": false,
+      "message": "Edited a.ts (fuzzy match: whitespace/quote differences were tolerated)"
+    },
+    {
+      "id": "quote-style-drift",
+      "title": "Single vs double quotes across a block",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "fuzzy(legacy)",
+      "nearMissInMessage": false,
+      "message": "Edited a.ts (fuzzy match: whitespace/quote differences were tolerated)"
+    },
+    {
+      "id": "semicolon-drift",
+      "title": "Model omitted trailing semicolons",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "fuzzy(legacy)",
+      "nearMissInMessage": false,
+      "message": "Edited a.ts (fuzzy match: whitespace/quote differences were tolerated)"
+    },
+    {
+      "id": "stale-lines-in-block",
+      "title": "Two middle lines rewritten since the model read the file; anchors intact",
+      "expect": "applied",
+      "outcome": "refused",
+      "fileChanged": false,
+      "pass": false,
+      "strategyHint": "fuzzy(legacy)",
+      "nearMissInMessage": false,
+      "message": "oldText not found in checkout.ts (exact and fuzzy match failed)"
+    },
+    {
+      "id": "inserted-line-drift",
+      "title": "A log line was inserted inside the block since the model read it",
+      "expect": "applied",
+      "outcome": "refused",
+      "fileChanged": false,
+      "pass": false,
+      "strategyHint": "fuzzy(legacy)",
+      "nearMissInMessage": false,
+      "message": "oldText not found in checkout.ts (exact and fuzzy match failed)"
+    },
+    {
+      "id": "deleted-line-drift",
+      "title": "The model remembers a line the file no longer has",
+      "expect": "applied",
+      "outcome": "refused",
+      "fileChanged": false,
+      "pass": false,
+      "strategyHint": "fuzzy(legacy)",
+      "nearMissInMessage": false,
+      "message": "oldText not found in checkout.ts (exact and fuzzy match failed)"
+    },
+    {
+      "id": "duplicated-snippet-refuse",
+      "title": "oldText occurs twice verbatim — must refuse, never guess",
+      "expect": "refused",
+      "outcome": "refused",
+      "fileChanged": false,
+      "pass": true,
+      "strategyHint": null,
+      "nearMissInMessage": true,
+      "message": "oldText matches 2 locations in a.ts (at lines 1, 2); include more surrounding context so it is unique"
+    },
+    {
+      "id": "duplicated-block-exact-wins",
+      "title": "One copy matches exactly, the other only after normalization — exact site wins",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "exact(legacy)",
+      "nearMissInMessage": false,
+      "message": "Edited a.ts"
+    },
+    {
+      "id": "similar-wrong-site-refuse",
+      "title": "Two similar functions; sent block is a garbled mix of both — must refuse",
+      "expect": "refused",
+      "outcome": "refused",
+      "fileChanged": false,
+      "pass": true,
+      "strategyHint": "fuzzy(legacy)",
+      "nearMissInMessage": false,
+      "message": "oldText not found in pricing.ts (exact and fuzzy match failed)"
+    },
+    {
+      "id": "crlf-file",
+      "title": "CRLF file, LF oldText",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "fuzzy(legacy)",
+      "nearMissInMessage": false,
+      "message": "Edited a.ts (fuzzy match: whitespace/quote differences were tolerated)"
+    },
+    {
+      "id": "unicode-content",
+      "title": "Unicode identifiers/emoji with whitespace drift",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "fuzzy(legacy)",
+      "nearMissInMessage": false,
+      "message": "Edited a.ts (fuzzy match: whitespace/quote differences were tolerated)"
+    },
+    {
+      "id": "gutter-copy",
+      "title": "oldText pasted from read output with line-number gutters",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "exact(legacy)",
+      "nearMissInMessage": false,
+      "message": "Edited main.py"
+    },
+    {
+      "id": "syntax-break-revert",
+      "title": "Edit drops a closing brace — broken code must not stay on disk",
+      "expect": "reverted",
+      "outcome": "written-broken",
+      "fileChanged": true,
+      "pass": false,
+      "strategyHint": null,
+      "nearMissInMessage": true,
+      "message": "Edited a.ts\n⚠️ [AST Syntax Alert]: Line 1: Unclosed opening bracket '{' at line 1"
+    },
+    {
+      "id": "syntax-break-preexisting",
+      "title": "File already broken elsewhere; clean unrelated edit must still apply",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "exact(legacy)",
+      "nearMissInMessage": true,
+      "message": "Edited a.ts\n⚠️ [AST Syntax Alert]: Line 1: Unclosed opening bracket '(' at line 1"
+    },
+    {
+      "id": "json-valid-edit",
+      "title": "Valid JSON edit applies",
+      "expect": "applied",
+      "outcome": "applied",
+      "fileChanged": true,
+      "pass": true,
+      "strategyHint": "exact(legacy)",
+      "nearMissInMessage": false,
+      "message": "Edited cfg.json"
+    },
+    {
+      "id": "json-break-revert",
+      "title": "Edit that corrupts JSON must not stay on disk",
+      "expect": "reverted",
+      "outcome": "written-broken",
+      "fileChanged": true,
+      "pass": false,
+      "strategyHint": null,
+      "nearMissInMessage": true,
+      "message": "Edited cfg.json\n⚠️ [AST Syntax Alert]: JSON Syntax Error at line 4: Expected ',' or '}' after property value in JSON at position 36 (line 4 column 1)"
+    },
+    {
+      "id": "python-indent-break-revert",
+      "title": "Edit that breaks Python indentation must not stay on disk",
+      "expect": "reverted",
+      "outcome": "written-broken",
+      "fileChanged": true,
+      "pass": false,
+      "strategyHint": null,
+      "nearMissInMessage": true,
+      "message": "Edited main.py\n⚠️ [AST Syntax Alert]: Line 1: IndentationError: unexpected indent"
+    },
+    {
+      "id": "not-found-honest",
+      "title": "oldText simply absent — must refuse",
+      "expect": "refused",
+      "outcome": "refused",
+      "fileChanged": false,
+      "pass": true,
+      "strategyHint": "fuzzy(legacy)",
+      "nearMissInMessage": false,
+      "message": "oldText not found in a.ts (exact and fuzzy match failed)"
+    },
+    {
+      "id": "no-change-edit",
+      "title": "oldText === newText — must refuse as a no-op",
+      "expect": "refused",
+      "outcome": "refused",
+      "fileChanged": false,
+      "pass": true,
+      "strategyHint": null,
+      "nearMissInMessage": false,
+      "message": "oldText was found but replacement did not change a.ts"
+    },
+    {
+      "id": "big-file-beyond-tolerant-bound",
+      "title": "3000-line file, 40-line block, one drifted line (tolerant stage work-bound)",
+      "expect": "applied",
+      "outcome": "refused",
+      "fileChanged": false,
+      "pass": false,
+      "strategyHint": "fuzzy(legacy)",
+      "nearMissInMessage": false,
+      "message": "oldText not found in big.ts (exact and fuzzy match failed)"
+    }
+  ]
+}

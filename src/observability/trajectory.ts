@@ -84,6 +84,19 @@ export interface TrajectorySkillUse {
   verdict: TrajectoryVerdict;
 }
 
+/** B21: one mid-run steer DELIVERED into this run's context, lifted from
+ *  the run's `subagent:steered` trace entries. Provenance only — who
+ *  steered, when, and the steer's sha256/length; the raw steer text is
+ *  never in the trace, so it is never in the export. A run carrying
+ *  steerEvents (or `steered: true`) must not be weighted as unsteered
+ *  evidence by skill attribution or induction. */
+export interface TrajectorySteerEvent {
+  from: string;
+  at: number;
+  hash: string;
+  chars: number;
+}
+
 /** The run's final verifier-gate result, lifted from the skills:attributed
  *  trace entry the loop emits at finish. `status` is the gate's structured
  *  vocabulary (PASS/FAIL/PARTIAL/BLOCKED, or 'NONE' when the gate never
@@ -133,6 +146,14 @@ export interface TrajectoryRecord {
    *  before attribution existed, indistinguishable from it (verification is
    *  null in that case, which is the tell). */
   skills: TrajectorySkillUse[];
+  /** B21: true when a parent steer was delivered into this run mid-flight
+   *  (from the run's `subagent:steered` entries and/or the attribution
+   *  entry's flag). Optional for v1 compatibility; absent/false = the
+   *  run was never steered. A steered success is not the same evidence
+   *  as an unsteered one — consumers must be able to tell them apart. */
+  steered?: boolean;
+  /** B21: the delivered steers' provenance, in delivery order. */
+  steerEvents?: TrajectorySteerEvent[];
   /** The run's final gate verification, or null when the trace carries no
    *  attribution entry (legacy traces). Present-but-'NONE' means the run
    *  finished without the gate producing a verdict. */
@@ -144,6 +165,69 @@ export interface TrajectoryRecord {
   /** Labels derived ONLY from evidence in the trace (stopReason, repeated
    *  calls, tool failures) — empty when the run shows none of them. */
   failureTaxonomy: TrajectoryFailure[];
+  /** Edit-application rollup lifted from the run's edit:applied /
+   *  edit:failed / edit:reverted trace entries. Absent when the run made
+   *  no edit calls (or predates edit telemetry) — never zero-filled, so
+   *  "no edits" stays distinguishable from "edits, all exact". */
+  editStats?: TrajectoryEditStats;
+}
+
+/** Per-run edit reliability: how the edit tool's strategy ladder performed.
+ *  This is the number that turns "edits feel flaky" into a measurable rate
+ *  (applied-by-strategy mix, failure kinds, integrity reverts). */
+export interface TrajectoryEditStats {
+  applied: number;
+  byStrategy: { exact: number; normalized: number; relaxed: number; anchored: number };
+  failed: number;
+  notFound: number;
+  ambiguous: number;
+  noChange: number;
+  reverted: number;
+}
+
+/** Lift edit:* trace entries into a record-level rollup. Returns undefined
+ *  when the trace carries no edit telemetry at all. */
+function buildEditStats(entries: TraceEntry[]): TrajectoryEditStats | undefined {
+  let stats: TrajectoryEditStats | undefined;
+  const ensure = (): TrajectoryEditStats => (stats ??= {
+    applied: 0,
+    byStrategy: { exact: 0, normalized: 0, relaxed: 0, anchored: 0 },
+    failed: 0, notFound: 0, ambiguous: 0, noChange: 0, reverted: 0,
+  });
+  for (const e of entries) {
+    if (e.kind === 'edit:applied') {
+      const s = ensure();
+      s.applied++;
+      const strat = typeof e.strategy === 'string' ? e.strategy : '';
+      if (strat === 'exact' || strat === 'normalized' || strat === 'relaxed' || strat === 'anchored') s.byStrategy[strat]++;
+    } else if (e.kind === 'edit:failed') {
+      const s = ensure();
+      s.failed++;
+      if (e.failureKind === 'not-found') s.notFound++;
+      else if (e.failureKind === 'ambiguous') s.ambiguous++;
+      else if (e.failureKind === 'no-change') s.noChange++;
+    } else if (e.kind === 'edit:reverted') {
+      ensure().reverted++;
+    }
+  }
+  return stats;
+}
+
+/** Validate/carry an editStats block from a stored record (reader path). */
+function readEditStats(raw: unknown): TrajectoryEditStats | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0);
+  const bs = (r.byStrategy && typeof r.byStrategy === 'object' ? r.byStrategy : {}) as Record<string, unknown>;
+  return {
+    applied: num(r.applied),
+    byStrategy: { exact: num(bs.exact), normalized: num(bs.normalized), relaxed: num(bs.relaxed), anchored: num(bs.anchored) },
+    failed: num(r.failed),
+    notFound: num(r.notFound),
+    ambiguous: num(r.ambiguous),
+    noChange: num(r.noChange),
+    reverted: num(r.reverted),
+  };
 }
 
 const OUTPUT_SNIPPET_MAX = 500;
@@ -262,7 +346,7 @@ function gateStatusToVerdict(status: string): TrajectoryVerdict {
  *  finishes share the event bus, and a child's attribution must never
  *  overwrite the parent run's join. When the owner is unknown (no
  *  task:started), the last attribution entry wins. */
-function buildSkillAttribution(entries: TraceEntry[]): { skills: TrajectorySkillUse[]; verification: TrajectoryVerification | null; taskKind?: string } {
+function buildSkillAttribution(entries: TraceEntry[]): { skills: TrajectorySkillUse[]; verification: TrajectoryVerification | null; taskKind?: string; steered?: boolean } {
   const ownerEntry = entries.find((e) => e.kind === 'task:started');
   const owner = typeof ownerEntry?.agentId === 'string' ? ownerEntry.agentId : undefined;
   let chosen: TraceEntry | undefined;
@@ -273,6 +357,7 @@ function buildSkillAttribution(entries: TraceEntry[]): { skills: TrajectorySkill
   }
   if (!chosen) return { skills: [], verification: null };
   const taskKind = typeof chosen.taskKind === 'string' && chosen.taskKind ? chosen.taskKind : undefined;
+  const steered = chosen.steered === true ? true : undefined;
   const status = typeof chosen.verifyStatus === 'string' && chosen.verifyStatus ? chosen.verifyStatus : 'NONE';
   const skills: TrajectorySkillUse[] = [];
   if (Array.isArray(chosen.skills)) {
@@ -287,7 +372,28 @@ function buildSkillAttribution(entries: TraceEntry[]): { skills: TrajectorySkill
     }
   }
   const verdict = skills.length > 0 ? skills[0].verdict : gateStatusToVerdict(status);
-  return { skills, verification: { status, verdict }, ...(taskKind ? { taskKind } : {}) };
+  return { skills, verification: { status, verdict }, ...(taskKind ? { taskKind } : {}), ...(steered ? { steered } : {}) };
+}
+
+/** B21: lift the run's delivered-steer provenance from its
+ *  `subagent:steered` trace entries, owner-matched exactly like the
+ *  skill attribution (a parent run's trace shares the bus with its
+ *  children; a child's steers must never be credited to the parent run). */
+function buildSteerEvents(entries: TraceEntry[]): TrajectorySteerEvent[] {
+  const ownerEntry = entries.find((e) => e.kind === 'task:started');
+  const owner = typeof ownerEntry?.agentId === 'string' ? ownerEntry.agentId : undefined;
+  const out: TrajectorySteerEvent[] = [];
+  for (const e of entries) {
+    if (e.kind !== 'subagent:steered') continue;
+    if (owner && typeof e.agentId === 'string' && e.agentId !== owner) continue;
+    out.push({
+      from: typeof e.from === 'string' && e.from ? e.from : 'unknown',
+      at: typeof e.at === 'number' && Number.isFinite(e.at) ? e.at : (typeof e.t === 'number' ? e.t : 0),
+      hash: typeof e.hash === 'string' ? e.hash : '',
+      chars: typeof e.chars === 'number' && Number.isFinite(e.chars) ? e.chars : 0,
+    });
+  }
+  return out;
 }
 
 /** Gate statuses that mean the run was VERIFIED solved (mirrors
@@ -400,6 +506,10 @@ export function buildTrajectory(entries: TraceEntry[], meta: { runId: string; wo
   }
 
   const attribution = buildSkillAttribution(entries);
+  // B21: delivered-steer provenance — from the steered entries and/or
+  // the attribution flag, so the record can never pass as unsteered.
+  const steerEvents = buildSteerEvents(entries);
+  const steered = steerEvents.length > 0 || attribution.steered === true;
   // C5: when the trace recorded tokens but $0/no provider cost, surface the
   // price-table estimate alongside (never instead of) the recorded cost.
   const usage = aggregateUsage(entries);
@@ -428,10 +538,13 @@ export function buildTrajectory(entries: TraceEntry[], meta: { runId: string; wo
     task,
     steps,
     skills: attribution.skills,
+    ...(steered ? { steered: true as const } : {}),
+    ...(steerEvents.length ? { steerEvents } : {}),
     verification: attribution.verification,
     outcome,
     usage,
     failureTaxonomy: buildFailureTaxonomy(entries, steps, outcome),
+    ...(buildEditStats(entries) ? { editStats: buildEditStats(entries) } : {}),
   };
 }
 
@@ -541,6 +654,22 @@ export function upgradeTrajectoryRecord(raw: unknown): TrajectoryRecord | null {
     if (typeof t.title === 'string' && t.title) task.title = t.title;
     if (typeof t.prompt === 'string' && t.prompt) task.prompt = t.prompt;
   }
+  // B21: steer provenance survives the reader round-trip (validated like
+  // every other field — a corrupt export can drop it, never invent it).
+  const steerEvents: TrajectorySteerEvent[] = [];
+  if (Array.isArray(r.steerEvents)) {
+    for (const s of r.steerEvents) {
+      if (!s || typeof s !== 'object') continue;
+      const sr = s as Record<string, unknown>;
+      steerEvents.push({
+        from: typeof sr.from === 'string' && sr.from ? sr.from : 'unknown',
+        at: typeof sr.at === 'number' && Number.isFinite(sr.at) ? sr.at : 0,
+        hash: typeof sr.hash === 'string' ? sr.hash : '',
+        chars: typeof sr.chars === 'number' && Number.isFinite(sr.chars) ? sr.chars : 0,
+      });
+    }
+  }
+  const steered = r.steered === true || steerEvents.length > 0;
   return {
     schemaVersion: r.schemaVersion === 2 ? 2 : 1,
     runId: r.runId,
@@ -556,10 +685,13 @@ export function upgradeTrajectoryRecord(raw: unknown): TrajectoryRecord | null {
     task,
     steps,
     skills,
+    ...(steered ? { steered: true as const } : {}),
+    ...(steerEvents.length ? { steerEvents } : {}),
     verification,
     outcome,
     usage,
     failureTaxonomy,
+    ...(readEditStats(r.editStats) ? { editStats: readEditStats(r.editStats) } : {}),
   };
 }
 

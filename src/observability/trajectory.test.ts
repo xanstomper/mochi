@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import type { TraceEntry } from './trace.js';
-import { buildTrajectory, exportTrajectory } from './trajectory.js';
+import { buildTrajectory, exportTrajectory, upgradeTrajectoryRecord } from './trajectory.js';
 
 describe('buildTrajectory', () => {
   it('pairs tool calls with completions/failures into ordered steps and extracts task + outcome', () => {
@@ -153,5 +153,34 @@ describe('exportTrajectory', () => {
     expect(exportTrajectory(dir, 'nope')).toBeNull();
     expect(existsSync(resolve(dir, 'exports', 'trajectory-nope.jsonl'))).toBe(false);
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('lifts edit telemetry into editStats, absent when the run made no edits', () => {
+    const rec = buildTrajectory([
+      { t: 1, kind: 'task:started', task: { title: 'Edit things' } },
+      { t: 2, kind: 'edit:applied', path: 'a.ts', strategy: 'exact', attempts: 1, integrity: 'passed' },
+      { t: 3, kind: 'edit:applied', path: 'b.ts', strategy: 'anchored', attempts: 4, integrity: 'passed' },
+      { t: 4, kind: 'edit:applied', path: 'c.ts', strategy: 'exact', attempts: 1, integrity: 'pre-existing-errors' },
+      { t: 5, kind: 'edit:failed', path: 'd.ts', failureKind: 'not-found', attempts: 4, nearMisses: 2 },
+      { t: 6, kind: 'edit:failed', path: 'e.ts', failureKind: 'ambiguous', attempts: 2, nearMisses: 0 },
+      { t: 7, kind: 'edit:reverted', path: 'f.ts', strategy: 'exact', errors: 'Unclosed bracket' },
+      { t: 8, kind: 'task:completed', stopReason: 'completed' },
+    ], { runId: 'run-edits' });
+    expect(rec.editStats).toEqual({
+      applied: 3,
+      byStrategy: { exact: 2, normalized: 0, relaxed: 0, anchored: 1 },
+      failed: 2,
+      notFound: 1,
+      ambiguous: 1,
+      noChange: 0,
+      reverted: 1,
+    });
+
+    const noEdits = buildTrajectory([{ t: 1, kind: 'agent:log', message: 'hi' }], { runId: 'run-noedits' });
+    expect(noEdits.editStats).toBeUndefined();
+
+    // Reader path: a stored record's editStats survive the upgrade round-trip.
+    const upgraded = upgradeTrajectoryRecord(JSON.parse(JSON.stringify(rec)));
+    expect(upgraded?.editStats).toEqual(rec.editStats);
   });
 });

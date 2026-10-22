@@ -281,14 +281,18 @@ export function validateBalancedStructure(content: string, language: string): AS
 }
 
 /**
- * Validates Python syntax using Python 3's built-in AST compiler via stdin.
- * Catches syntax errors, indentation errors, and unclosed blocks with exact line numbers.
+ * Validates Python syntax using Python 3's compiler via stdin.
+ * Uses compile() rather than ast.parse: parse alone accepts whole error
+ * classes the compiler rejects ('return' outside a function, 'break'
+ * outside a loop, duplicate argument names) — exactly the breaks an
+ * automated edit can introduce. Catches syntax errors, indentation
+ * errors, and unclosed blocks with exact line numbers.
  */
 export function validatePythonSyntax(content: string): ASTDiagnosticResult {
   try {
     execFileSync(
       'python3',
-      ['-c', 'import sys, ast; ast.parse(sys.stdin.read())'],
+      ['-c', 'import sys; compile(sys.stdin.read(), "<edit>", "exec")'],
       {
         input: content,
         encoding: 'utf8',
