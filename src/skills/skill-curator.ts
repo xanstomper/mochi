@@ -24,6 +24,7 @@ import {
 } from './skills.js';
 import { mochiStateDir } from '../core/mochi-dir.js';
 import { loadLessons } from '../lessons.js';
+import { evaluateForgedToolLifecycle, type ForgedLifecycleResult } from '../tools/tool-forge.js';
 import { lintSkillDoc, formatSkillLint } from './skill-lint.js';
 import { maybeRedact } from '../security/security.js';
 
@@ -176,6 +177,10 @@ export interface CuratorOutput {
   /** Per-skill quality signals computed this pass (evidence for the above). */
   signals: SkillSignals[];
   reportPath: string;
+  /** Tool Forge lifecycle outcome of this pass (Wave O): forged tools are
+   *  promoted/trimmed by the same evidence discipline as skills. Absent
+   *  when the evaluation could not run. */
+  forgedTools?: ForgedLifecycleResult;
 }
 
 /** Token-overlap similarity between two skill bodies (keywords ≥5 chars,
@@ -540,6 +545,13 @@ export function runCurator(projectDir: string, cfg: CuratorConfig): CuratorOutpu
     lifecycle = evaluateSkillLifecycle(projectDir);
   } catch { /* lifecycle is best-effort; age-based curation still proceeds */ }
   const signalsByName = new Map(lifecycle.signals.map((s) => [s.name, s]));
+  // Tool Forge lifecycle (Wave O): forged tools earn promotion or get
+  // trimmed on the same evidence standard as skills. Best-effort — a
+  // forge failure never blocks skill curation.
+  let forgedTools: ForgedLifecycleResult | undefined;
+  try {
+    forgedTools = evaluateForgedToolLifecycle(projectDir);
+  } catch { /* best-effort */ }
   // Pinned skills are a user directive: never age-archived. (The dedup
   // pass below already honored pins; the archive pass now does too.)
   const pinned = new Set(loadCuratorState(projectDir).pinned ?? []);
@@ -592,6 +604,9 @@ export function runCurator(projectDir: string, cfg: CuratorConfig): CuratorOutpu
     lifecycle.probationStale.length ? `Probation expired without promotion (flagged, NOT auto-activated): ${lifecycle.probationStale.join(', ')}.` : '',
     consolidated.length ? `Consolidated: ${consolidated.map((c) => `${c.merged} → ${c.kept}`).join(', ')}.` : '',
     promoted.length ? `Promoted: ${promoted.join(', ')}.` : '',
+    ...(forgedTools?.promoted.length ? [`Forged tools promoted (evidence gate): ${forgedTools.promoted.join(', ')}.`] : []),
+    ...(forgedTools?.trimmed.map((t) => `Forged tool trimmed: ${t.name} — ${t.reason}.`) ?? []),
+    ...(forgedTools?.probationStale.length ? [`Forged tools stale on probation (flagged, NOT auto-activated): ${forgedTools.probationStale.join(', ')}.`] : []),
     ``,
     'Quality signals (evidence base for lifecycle decisions):',
     ...(corr !== null ? [`Retrieval→success correlation: r = ${corr.toFixed(2)} (per-skill loads vs fix-rate across the registry; positive means retrieval favours winners).`] : []),
@@ -617,6 +632,7 @@ export function runCurator(projectDir: string, cfg: CuratorConfig): CuratorOutpu
     archiveProtected,
     signals: lifecycle.signals,
     reportPath,
+    ...(forgedTools ? { forgedTools } : {}),
   };
 }
 
