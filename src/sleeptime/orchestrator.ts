@@ -20,7 +20,10 @@
 //                   gate RUN needs a task runner + baseline discipline, so it
 //                   stays injectable via GatePort; the default port is the
 //                   integrity check runGate itself performs first.
-//   4. curriculum — failure-curriculum practice tasks (D10, also building in
+//   4. health     — proactive repo health scan (Wave O3): read-only checks
+//                   (tests on HEAD, deps, TODOs, dead code, hotspots) whose
+//                   ranked digest rides in this report. Model-free, $0.
+//   5. curriculum — failure-curriculum practice tasks (D10, also building in
 //                   parallel). Default port plans nothing and says so;
 //                   inject a CurriculumPort when D10 lands.
 //
@@ -56,6 +59,7 @@ import { loadSkillUsage } from '../skills/skills.js';
 import { stampSkillBirth } from '../skills/skill-manager.js';
 import { defaultCuratorConfig, runCurator } from '../skills/skill-curator.js';
 import { loadFrozenSet } from '../evals/regression-gate.js';
+import { createHealthScanStep } from '../health/health-step.js';
 
 export class SleeptimeError extends Error {
   constructor(message: string) {
@@ -547,6 +551,7 @@ export function defaultSleeptimeSteps(opts: SleeptimeOptions = {}): SleeptimeSte
     createRepairStep(opts.ports?.repair),
     createCuratorStep(),
     createGateStep(opts.ports?.gate),
+    createHealthScanStep(),
     createCurriculumStep(opts.ports?.curriculum, opts.maxCurriculumTasks ?? 3),
   ];
 }

@@ -4,9 +4,9 @@
 //   mochi sleeptime [--cap <usd>] [--dry-run] [--json] [--night YYYY-MM-DD]
 //
 // Runs the D11 orchestrator (src/sleeptime/orchestrator.ts) over the current
-// workspace: skill repair → curator → frozen-gate integrity → curriculum,
-// under a HARD spend cap, idempotent per night, with the structured morning
-// report written to .mochi/reports/sleeptime-<night>.{md,json}.
+// workspace: skill repair → curator → frozen-gate integrity → repo health
+// scan → curriculum, under a HARD spend cap, idempotent per night, with the
+// structured morning report written to .mochi/reports/sleeptime-<night>.{md,json}.
 //
 // The cap resolves as: --cap flag → MOCHI_SLEEPTIME_CAP_USD env →
 // DEFAULT_SLEEPTIME_CAP_USD. Exit codes: 0 = night completed (cap stops and

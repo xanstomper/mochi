@@ -152,6 +152,13 @@ export const COMPLETION_COMMANDS: CompletionCommand[] = [
   { name: 'chameleon', description: 'Removed standalone — engine runs auto + via --enhance' },
   { name: 'self-train', description: 'Self-review loop (--schedule for nightly learning)', aliases: ['selftrain', 'train'] },
   { name: 'sleeptime', description: 'Nightly consolidation pipeline (--cap <usd>, --dry-run)' },
+  {
+    name: 'tools', description: 'Tool Forge: self-synthesised tools (audit, disable, forge runs)',
+    subcommands: [
+      { name: 'forged', description: 'Audit view of forged tools (state + provenance); disable/evaluate/run' },
+    ],
+  },
+  { name: 'health', description: 'Proactive repo health scan (--force, --offline)' },
   { name: 'speculate', description: 'Speculative execution' },
   { name: 'usage', description: 'Token usage and cost' },
   { name: 'feedback', description: 'Rate mochi good/bad (feeds self-correction)' },

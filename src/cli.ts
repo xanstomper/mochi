@@ -111,7 +111,9 @@ Usage:
   mochi inspect "<query>"
   mochi trace [<goalId>]             # replay the run trace for a goal
   mochi gate run|baseline|freeze|check  # frozen regression gate (bench/frozen/)
-  mochi sleeptime [--cap <usd>] [--dry-run]  # nightly consolidation pipeline (repair+curator+gate+curriculum, hard spend cap)
+  mochi sleeptime [--cap <usd>] [--dry-run]  # nightly consolidation pipeline (repair+curator+gate+health+curriculum, hard spend cap)
+  mochi tools forged [disable <name>|evaluate|run]  # Tool Forge audit view: self-synthesised tools, provenance + state
+  mochi health [--force] [--offline]  # proactive repo health scan (tests/deps/TODOs/dead code/hotspots digest)
   mochi session list                 # list past sessions
   mochi session search "<text>"       # full-text search past transcripts
   mochi speculate "<question>"
@@ -2586,6 +2588,18 @@ async function main() {
   if (first === 'sleeptime') {
     const { handleSleeptimeCommand } = await import('./sleeptime/cli.js');
     await handleSleeptimeCommand({ positional, flags, cwd });
+    return;
+  }
+
+  if (first === 'health') {
+    const { handleHealthCommand } = await import('./health/cli.js');
+    await handleHealthCommand({ positional, flags, cwd });
+    return;
+  }
+
+  if (first === 'tools') {
+    const { handleToolsCommand } = await import('./tools/forge-cli.js');
+    await handleToolsCommand({ positional, flags, cwd });
     return;
   }
 
