@@ -1,0 +1,5 @@
+Inspect src/teams/roles.ts in this workdir — the agent-role registry (a record of role profiles) as it stood in this codebase snapshot. Answer three factual questions about it and write the answers to answer.txt in the workdir root, exactly one per line, in exactly this format:
+ROLES=<the number of role entries in the registry>
+CODER_TOOLS=<the number of tools listed in the tools array of the 'coder' role>
+REASONING_MODEL_ROLES=<the number of roles whose defaultModel is 'reasoning'>
+Count carefully, entry by entry and element by element — the tools arrays are long and easy to undercount, and similar role names (tester vs qa_engineer, security vs redteam) are distinct entries. Do not guess from role names you may know from elsewhere — the registry in THIS workdir is the only source.

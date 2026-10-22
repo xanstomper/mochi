@@ -1,8 +1,8 @@
 {
   "frozenAt": "2026-10-22",
   "kind": "mochi-frozen-gate-set",
-  "note": "Seed set v1: this repo's own harness-arena tasks (bench/arena.mjs, MCH-90) re-expressed as declarative frozen payloads. Grown in v2 (2026-10-22) with 12 history-derived tasks from pre-runway git commits (each entry names its source commit; starting states derive from the commit's parent tree). These are NOT SWE-bench or Terminal-Bench instances and must never be described as such. See README.md for provenance and the growth plan toward ~24 golden tasks.",
-  "setHash": "b483201beffb6356bb882a9724c6477019130150a1a0ee6ff9ade293fe3723c6",
+  "note": "Seed set v1: this repo's own harness-arena tasks (bench/arena.mjs, MCH-90) re-expressed as declarative frozen payloads. Grown in v2 (2026-10-22) with 12 history-derived tasks from pre-runway git commits (each entry names its source commit; starting states derive from the commit's parent tree). These are NOT SWE-bench or Terminal-Bench instances and must never be described as such. Grown in v3 (2026-10-22) with 6 more history-derived tasks from the same pre-runway history (24 total: fix 8 / feature 6 / refactor 6 / research 4), reaching the ~24-task target; the gate's statistical-power tripwire stops printing at >=20 tasks — see README.md for what the wider set does and does not buy. See README.md for provenance.",
+  "setHash": "a3dfde4060c4c3b4de560060797b2cabe273aae52dcf77011251e7ff9c3361db",
   "tasks": [
     {
       "category": "feature",
@@ -200,7 +200,73 @@
       "solutionDir": "tasks/hist-research-exec-defaults/solution",
       "source": "golden",
       "verifier": "tasks/hist-research-exec-defaults/verify.mjs"
+    },
+    {
+      "category": "feature",
+      "filesDir": "tasks/hist-feat-arg-aware-readonly/files",
+      "hash": "eb846a11ef0bdebf0c66c4d3c26bb817f109ee53e08c40f35613e1c6c9126628",
+      "id": "hist-feat-arg-aware-readonly",
+      "prompt": "tasks/hist-feat-arg-aware-readonly/prompt.txt",
+      "provenance": "git commit e9eec54 (feat(core): arg-aware read-only classification — GET fetch rejoins the parallel read batch); starting state = the classification core of src/core/capability-registry.ts + src/core/tool-dispatcher.ts at e9eec54^, reduced to capability construction + batch partitioning with execution injected, types stripped + CommonJS exports; files/fetch-methods.js is isFetchMutationRequest ported verbatim (types stripped) from src/tools/fetch-methods.ts at e9eec54^; verifier ports the commit's src/core/arg-aware-readonly.test.ts cases (predicate coercion, POST-starts-last ordering)",
+      "solutionDir": "tasks/hist-feat-arg-aware-readonly/solution",
+      "source": "golden",
+      "verifier": "tasks/hist-feat-arg-aware-readonly/verify.mjs"
+    },
+    {
+      "category": "feature",
+      "filesDir": "tasks/hist-feat-plan-network-reads/files",
+      "hash": "bf27b211408b7b9983d372f756079cdfe54adaa479b709ae438f0f81f85c0636",
+      "id": "hist-feat-plan-network-reads",
+      "prompt": "tasks/hist-feat-plan-network-reads/prompt.txt",
+      "provenance": "git commits 0792f0f (feat(agent): plan-mode network-read allowlist — declared dev hosts only, exact-host match) with semantics pinned by 61ad39e and 850fab4; starting state = the plan-mode batch veto of src/agent/loop.ts at 0792f0f^, reduced to a pure batch decision (run/vetoed/veto-counted) with reminder + tool_result mechanics omitted and TOOL_ALIASES excerpted to the tools exercised; files/fetch-methods.js ported verbatim (types stripped) from src/tools/fetch-methods.ts; verifier ports the commits' cases incl. suffix/superstring/subdomain fail-closed pins",
+      "solutionDir": "tasks/hist-feat-plan-network-reads/solution",
+      "source": "golden",
+      "verifier": "tasks/hist-feat-plan-network-reads/verify.mjs"
+    },
+    {
+      "category": "fix",
+      "filesDir": "tasks/hist-fix-diff-reroot-absolute/files",
+      "hash": "b578985f93dfe5e8f227b8f55254f9f27a0f309570a19adb531f1e1017368f13",
+      "id": "hist-fix-diff-reroot-absolute",
+      "prompt": "tasks/hist-fix-diff-reroot-absolute/prompt.txt",
+      "provenance": "git commit b484d84 (fix(apply): re-root in-root absolute diff paths instead of rejecting; follow-up to the B14 hardening b1d288b); starting state = src/apply.ts at b484d84^, types stripped + CommonJS exports, with the repo's atomicWriteFileSync replaced by writeFileSync (single-file rename atomicity is not what this fixture freezes; cross-file rollback is kept); verifier ports the commit's three red-to-green tests (in-root re-root, 'Path escapes workspace root' message, end-to-end apply) plus prefix-sibling and no-root pins",
+      "solutionDir": "tasks/hist-fix-diff-reroot-absolute/solution",
+      "source": "golden",
+      "verifier": "tasks/hist-fix-diff-reroot-absolute/verify.mjs"
+    },
+    {
+      "category": "refactor",
+      "filesDir": "tasks/hist-refactor-message-token-cache/files",
+      "hash": "bb9f1c4466dbd730399d2b321fe3d919b11f559a2dde851647e4a95c9134bef4",
+      "id": "hist-refactor-message-token-cache",
+      "prompt": "tasks/hist-refactor-message-token-cache/prompt.txt",
+      "provenance": "git commit c4f9c56 (perf(context): per-message token cache — O(1) history sizing instead of O(n) re-tokenization per turn); starting state = estimateTokens + shrinkOldToolOutputs from src/context.ts at c4f9c56^ reduced to plain-array functions (the shrink's archive side effect omitted); approxTokens ported as its deterministic JS fallback (native Rust counter unavailable in the fixture) with an invocation counter instrumenting it; solution ports the commit's WeakMap cache + invalidateMessageTokens incl. its invalidation call inside shrinkOldToolOutputs; verifier checks identical estimates + tokenize-once counts + invalidate-exactly-one semantics by deterministic counting, never timing",
+      "solutionDir": "tasks/hist-refactor-message-token-cache/solution",
+      "source": "golden",
+      "verifier": "tasks/hist-refactor-message-token-cache/verify.mjs"
+    },
+    {
+      "category": "refactor",
+      "filesDir": "tasks/hist-refactor-shared-block-scalar/files",
+      "hash": "4e361561e9d748001043a247d2753234d983165b54e1d32ef3860028d26d8e40",
+      "id": "hist-refactor-shared-block-scalar",
+      "prompt": "tasks/hist-refactor-shared-block-scalar/prompt.txt",
+      "provenance": "git commit c3de878 (refactor(skills): shared yaml block-scalar parser (fixes manager dropping block descriptions)); starting state = BOTH frontmatter parsers at c3de878^ — src/skills/skills.ts parseFrontmatter (loader; block scalars inline) and src/skills/skill-manager.ts parseFrontmatter (manager; no block handling) — types stripped + CommonJS exports; solution extracts the commit's new src/skills/frontmatter.ts helpers (BLOCK_SCALAR_RE, foldBlockLines, readBlockScalar) and routes both parsers through them; verifier ports the commit's skill-manager.test.ts block-scalar cases plus a two-parser agreement battery",
+      "solutionDir": "tasks/hist-refactor-shared-block-scalar/solution",
+      "source": "golden",
+      "verifier": "tasks/hist-refactor-shared-block-scalar/verify.mjs"
+    },
+    {
+      "category": "research",
+      "filesDir": "tasks/hist-research-roles-registry/files",
+      "hash": "6dab5c495b1b19de7c0d401cd1704fb017ee7cbbf459f893c7a9bfd1f087d1d0",
+      "id": "hist-research-roles-registry",
+      "prompt": "tasks/hist-research-roles-registry/prompt.txt",
+      "provenance": "research fixture: src/teams/roles.ts verbatim from git commit 953ae4f; ground truth computed from the file itself three ways (top-level record keys; role: '<id>' lines; per-field element counts): 20 role entries, the coder profile lists 53 tools, 8 roles carry defaultModel 'reasoning'",
+      "solutionDir": "tasks/hist-research-roles-registry/solution",
+      "source": "golden",
+      "verifier": "tasks/hist-research-roles-registry/verify.mjs"
     }
   ],
-  "version": 2
+  "version": 3
 }

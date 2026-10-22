@@ -21,7 +21,13 @@
       "hist-refactor-spec-exec-parse-gate",
       "hist-refactor-result-hash-lanes",
       "hist-research-provider-registry",
-      "hist-research-exec-defaults"
+      "hist-research-exec-defaults",
+      "hist-feat-arg-aware-readonly",
+      "hist-feat-plan-network-reads",
+      "hist-fix-diff-reroot-absolute",
+      "hist-refactor-message-token-cache",
+      "hist-refactor-shared-block-scalar",
+      "hist-research-roles-registry"
     ],
     "base_commits": [],
     "repo_commit_pairs": []

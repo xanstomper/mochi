@@ -71,25 +71,48 @@ eval-set content is used, and nothing is derived from the 2026-10-22
 runway's own commits. The set is now **18 tasks — fix 7, feature 4,
 refactor 4, research 3**.
 
-**Growth plan:** continue toward ~24 hand-kept "golden" tasks drawn from
-real past runs (roughly one per F-class of the §4.2 taxonomy), each with
-provenance naming the run/trajectory it came from, then bump `version`,
-re-freeze, and re-baseline. Until then, read the power note below.
+**v3 growth (2026-10-22):** 6 more tasks from the same pre-runway history
+(same discipline: source commit named per entry, parent-tree starting
+states, verifiers porting the commits' own tests): two features
+(arg-aware read-only classification, plan-mode network reads), one fix
+(absolute diff-path re-rooting), two refactors (shared block-scalar
+parser, per-message token cache), and one research task (the teams role
+registry at `953ae4f`). The set is now **24 tasks — fix 8, feature 6,
+refactor 6, research 4** (set hash
+`a3dfde4060c4c3b4de560060797b2cabe273aae52dcf77011251e7ff9c3361db`).
+
+**Growth plan:** the ~24-task target is reached. Further growth should
+come from real past runs (roughly one per F-class of the §4.2 taxonomy),
+each with provenance naming the run/trajectory it came from, then bump
+`version`, re-freeze, and re-baseline. Read the power note below before
+citing any run.
 
 ## Statistical power — what this set can and cannot claim
 
-18 tasks × k=3 is still a **tripwire-leaning set, not a powered
-experiment**. The paired bootstrap CI at this n remains wide, so:
+24 tasks × k=3 clears the ≥20-task bar, so the gate's printed tripwire
+warning no longer fires — but read the measured widths before treating
+that as "powered". Using the gate's own exported `bootstrapDeltaCI`
+(2000 iters, default seed) on **synthetic** paired scenarios at k=3
+(constructions calibrated to reproduce the v2 table exactly):
+
+| scenario | n=6 CI width | n=18 CI width | n=24 CI width |
+|---|---|---|---|
+| one task fully regresses (Δ −16.7pp → −5.6pp → −4.2pp) | 50.0pp | 16.7pp | 12.5pp |
+| mixed ±1-trial noise, Δ = 0 | 44.4pp | 25.9pp | 22.2pp |
+| uniform genuine gain Δ = +16.7pp | 22.2pp | 14.8pp | 13.9pp |
+
+So at 24 tasks the noise-regime CI is ≈ ±11pp: narrower, honest
+progress, still far from promotion-grade for small gains. Accordingly:
 
 - the gate *reliably catches* catastrophic regressions: category wipeouts,
   mass breakage, F7/F12 spikes, test-deletion-style diff risks;
-- the §5.3 improvement path is nearly unreachable for genuine small
+- the §5.3 improvement path remains hard to reach for genuine small
   gains, so BLOCKED at this set size means "no evidence of improvement",
-  not "evidence of harm" — every report prints its CI width and this
-  warning until the set reaches ~20 tasks;
+  not "evidence of harm";
 - no promotion-grade claim ("change X improved Mochi") may cite a gate
-  run on this seed set. Claims need the grown golden set, k=3, and the
-  frozen scaffold (one harness config for all compared runs).
+  run on this seed set alone. Claims need k=3, the frozen scaffold (one
+  harness config for all compared runs), and effects large against the
+  widths above — or a larger set / larger k.
 
 ## Contamination discipline (both directions)
 

@@ -1,0 +1,9 @@
+classify.js builds capability descriptors for tools (toolToCapability) and dispatches batches of tool calls (dispatchBatch): calls classified read-only run in one concurrent phase, everything else runs sequentially afterwards. Classification today is a single static, arg-blind flag (READ_ONLY_TOOLS). 'fetch' is deliberately absent from that set — its method argument selects POST/PUT/PATCH/DELETE, which mutate remote state, and mutating requests must not ride the concurrent batch — but the arg-blind flag therefore also serializes every plain GET/HEAD fetch behind mutating siblings, losing the read parallelism the batch exists to provide.
+
+Make classification arg-aware:
+1. A capability may carry an optional isReadOnlyForArgs(args) predicate. When present it WINS over the static flag: true means this specific call is read-only, false means mutating. It must fail closed.
+2. toolToCapability supplies the predicate for 'fetch' only: a fetch call is read-only exactly when it is not a mutation request per isFetchMutationRequest from fetch-methods.js (GET/HEAD, absent method, and any non-mutating method are reads; POST/PUT/PATCH/DELETE — including a method given as an array like ['POST'], which the wire coerces with String() — are mutations).
+3. 'verify' deliberately gets NO predicate: a command classifier is too coarse to soundly admit shell commands by argument (builds and test runs classify as low-risk yet write artifacts and execute arbitrary project scripts). Its static flag alone keeps deciding.
+4. dispatchBatch classifies each call through the predicate when one exists; a call whose arguments are missing or not an object fails closed (sequential). Unknown tools stay non-read-only.
+
+Static flags must not change: fetch's static isReadOnly stays false, and no other tool gains or loses static membership.

@@ -1,0 +1,7 @@
+diff-apply.js applies unified diffs atomically: parseUnifiedDiff splits a diff into per-file operations, applyDiffAtomically validates and applies all of them or none. A past hardening made the parser reject ALL absolute paths outright (they bypassed the `..` containment check and could be written outside the workspace verbatim). That holds the invariant but breaks a legitimate intent: external tooling — filters, formatters, agents operating via SDK on explicit roots — legitimately emits diffs whose ---/+++ paths are absolute, and those previously applied.
+
+Hold both intent and invariant:
+1. parseUnifiedDiff takes an optional root parameter. When a header path is absolute AND a root is given: resolve it against the root; if it resolves INSIDE the root, re-root it to the workspace-relative path and keep the operation; if it resolves outside the root — including a sibling that merely shares a string prefix with the root, and the root directory itself — reject the diff with an error whose message is 'Path escapes workspace root: <path>'.
+2. Without a root, absolute paths are still rejected outright (parse-only callers keep the conservative posture).
+3. applyDiffAtomically passes its root to the parser, so the end-to-end apply path gets re-rooting.
+4. Nothing else changes: relative paths behave exactly as before (including the `..` rejection and header/timestamp handling), /dev/null create/delete detection still works with absolute counterparts, and the write-boundary containment backstop in applyDiffAtomically stays in place.
