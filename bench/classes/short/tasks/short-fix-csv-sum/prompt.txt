@@ -1,0 +1,8 @@
+sumcsv.js exports sumColumn(csvText, columnName): it sums the numeric values
+of one column of CSV text. The first row is a header row. Blank lines are
+ignored, and an empty cell counts as 0. An unknown column name throws.
+
+Bug report: sumColumn returns NaN for perfectly ordinary CSV input - the
+caller passes data straight from a file, trailing newline and all.
+
+Fix sumcsv.js so it honours the contract above.

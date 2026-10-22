@@ -1,0 +1,141 @@
+{
+  "kind": "mochi-frozen-gate-set",
+  "version": 1,
+  "frozenAt": "2026-10-22",
+  "note": "Task-class scorecard fixture set (class: short). This is the frozen-set on-disk format reused as the bench-wide fixture contract - it is NOT the regression gate set (that is bench/frozen). Consumed by `mochi bench classes`.",
+  "setHash": "00d7f67fc616585a9c9affea9411e4ac7d08e083b7f074033d2318d08da0e2b7",
+  "tasks": [
+    {
+      "id": "short-feature-format-bytes",
+      "source": "classes-fixture",
+      "provenance": "Original fixture authored for the task-class scorecard (bench/classes) on 2026-10-22. Written from scratch for Mochi; not derived from the frozen gate set or any public eval (disjointness is machine-checked by the scorecard).",
+      "category": "feature",
+      "prompt": "tasks/short-feature-format-bytes/prompt.txt",
+      "verifier": "tasks/short-feature-format-bytes/verify.mjs",
+      "hash": "065e29aad0588fefed321b995612cae5f496aac62a54a013858fad12ae058a08",
+      "filesDir": "tasks/short-feature-format-bytes/files",
+      "solutionDir": "tasks/short-feature-format-bytes/solution"
+    },
+    {
+      "id": "short-fix-clamp",
+      "source": "classes-fixture",
+      "provenance": "Original fixture authored for the task-class scorecard (bench/classes) on 2026-10-22. Written from scratch for Mochi; not derived from the frozen gate set or any public eval (disjointness is machine-checked by the scorecard).",
+      "category": "fix",
+      "prompt": "tasks/short-fix-clamp/prompt.txt",
+      "verifier": "tasks/short-fix-clamp/verify.mjs",
+      "hash": "69fb57081df20ab1cb81796a7b5d7b097c940bfb4c35f2a84b6c04b14d0e8a43",
+      "filesDir": "tasks/short-fix-clamp/files",
+      "solutionDir": "tasks/short-fix-clamp/solution"
+    },
+    {
+      "id": "short-fix-csv-sum",
+      "source": "classes-fixture",
+      "provenance": "Original fixture authored for the task-class scorecard (bench/classes) on 2026-10-22. Written from scratch for Mochi; not derived from the frozen gate set or any public eval (disjointness is machine-checked by the scorecard).",
+      "category": "fix",
+      "prompt": "tasks/short-fix-csv-sum/prompt.txt",
+      "verifier": "tasks/short-fix-csv-sum/verify.mjs",
+      "hash": "fe95fce3950661a7f2f0d70d9658c33b4ae236b7ca868fde416d50631e5e5158",
+      "filesDir": "tasks/short-fix-csv-sum/files",
+      "solutionDir": "tasks/short-fix-csv-sum/solution"
+    },
+    {
+      "id": "short-fix-debounce",
+      "source": "classes-fixture",
+      "provenance": "Original fixture authored for the task-class scorecard (bench/classes) on 2026-10-22. Written from scratch for Mochi; not derived from the frozen gate set or any public eval (disjointness is machine-checked by the scorecard).",
+      "category": "fix",
+      "prompt": "tasks/short-fix-debounce/prompt.txt",
+      "verifier": "tasks/short-fix-debounce/verify.mjs",
+      "hash": "797803b9a43a73604d5a523779707fc63f8a99104c294d7f172ec544e4d75d16",
+      "filesDir": "tasks/short-fix-debounce/files",
+      "solutionDir": "tasks/short-fix-debounce/solution"
+    },
+    {
+      "id": "short-fix-groupby",
+      "source": "classes-fixture",
+      "provenance": "Original fixture authored for the task-class scorecard (bench/classes) on 2026-10-22. Written from scratch for Mochi; not derived from the frozen gate set or any public eval (disjointness is machine-checked by the scorecard).",
+      "category": "fix",
+      "prompt": "tasks/short-fix-groupby/prompt.txt",
+      "verifier": "tasks/short-fix-groupby/verify.mjs",
+      "hash": "de299fd33427ffc098d6a36625d138f00809678d0028b07ed5993f76a5c1c9f7",
+      "filesDir": "tasks/short-fix-groupby/files",
+      "solutionDir": "tasks/short-fix-groupby/solution"
+    },
+    {
+      "id": "short-fix-palindrome",
+      "source": "classes-fixture",
+      "provenance": "Original fixture authored for the task-class scorecard (bench/classes) on 2026-10-22. Written from scratch for Mochi; not derived from the frozen gate set or any public eval (disjointness is machine-checked by the scorecard).",
+      "category": "fix",
+      "prompt": "tasks/short-fix-palindrome/prompt.txt",
+      "verifier": "tasks/short-fix-palindrome/verify.mjs",
+      "hash": "e8b62c93fddca957713e723ceb1cdb49071120c689beef18305049f6ec443067",
+      "filesDir": "tasks/short-fix-palindrome/files",
+      "solutionDir": "tasks/short-fix-palindrome/solution"
+    },
+    {
+      "id": "short-fix-querystring",
+      "source": "classes-fixture",
+      "provenance": "Original fixture authored for the task-class scorecard (bench/classes) on 2026-10-22. Written from scratch for Mochi; not derived from the frozen gate set or any public eval (disjointness is machine-checked by the scorecard).",
+      "category": "fix",
+      "prompt": "tasks/short-fix-querystring/prompt.txt",
+      "verifier": "tasks/short-fix-querystring/verify.mjs",
+      "hash": "7bd4d611d1b455cf064bdd1e9dc4fa4e7a3dec57166b8ec671378ff54e7271a4",
+      "filesDir": "tasks/short-fix-querystring/files",
+      "solutionDir": "tasks/short-fix-querystring/solution"
+    },
+    {
+      "id": "short-fix-retry",
+      "source": "classes-fixture",
+      "provenance": "Original fixture authored for the task-class scorecard (bench/classes) on 2026-10-22. Written from scratch for Mochi; not derived from the frozen gate set or any public eval (disjointness is machine-checked by the scorecard).",
+      "category": "fix",
+      "prompt": "tasks/short-fix-retry/prompt.txt",
+      "verifier": "tasks/short-fix-retry/verify.mjs",
+      "hash": "4a0bf64d7b87cd2a352c39a4f92e9642ca228afa9dd4d9f60eac6dd15e07a4dc",
+      "filesDir": "tasks/short-fix-retry/files",
+      "solutionDir": "tasks/short-fix-retry/solution"
+    },
+    {
+      "id": "short-fix-stack",
+      "source": "classes-fixture",
+      "provenance": "Original fixture authored for the task-class scorecard (bench/classes) on 2026-10-22. Written from scratch for Mochi; not derived from the frozen gate set or any public eval (disjointness is machine-checked by the scorecard).",
+      "category": "fix",
+      "prompt": "tasks/short-fix-stack/prompt.txt",
+      "verifier": "tasks/short-fix-stack/verify.mjs",
+      "hash": "9229fdacbce2f017c28b45f0f57bcf53ad102823d90d404a94b57574d3077cc9",
+      "filesDir": "tasks/short-fix-stack/files",
+      "solutionDir": "tasks/short-fix-stack/solution"
+    },
+    {
+      "id": "short-question-entrypoint",
+      "source": "classes-fixture",
+      "provenance": "Original fixture authored for the task-class scorecard (bench/classes) on 2026-10-22. Written from scratch for Mochi; not derived from the frozen gate set or any public eval (disjointness is machine-checked by the scorecard).",
+      "category": "question",
+      "prompt": "tasks/short-question-entrypoint/prompt.txt",
+      "verifier": "tasks/short-question-entrypoint/verify.mjs",
+      "hash": "f3183aeffe52452e192a9614864deab330b83ee6a483056838f21d0050f4df82",
+      "filesDir": "tasks/short-question-entrypoint/files",
+      "solutionDir": "tasks/short-question-entrypoint/solution"
+    },
+    {
+      "id": "short-script-dedupe",
+      "source": "classes-fixture",
+      "provenance": "Original fixture authored for the task-class scorecard (bench/classes) on 2026-10-22. Written from scratch for Mochi; not derived from the frozen gate set or any public eval (disjointness is machine-checked by the scorecard).",
+      "category": "script",
+      "prompt": "tasks/short-script-dedupe/prompt.txt",
+      "verifier": "tasks/short-script-dedupe/verify.mjs",
+      "hash": "1a1a78c60cda789f300b63ad66f57fde5284acf598b9a33797bd7f43f96e9173",
+      "filesDir": "tasks/short-script-dedupe/files",
+      "solutionDir": "tasks/short-script-dedupe/solution"
+    },
+    {
+      "id": "short-script-wordfreq",
+      "source": "classes-fixture",
+      "provenance": "Original fixture authored for the task-class scorecard (bench/classes) on 2026-10-22. Written from scratch for Mochi; not derived from the frozen gate set or any public eval (disjointness is machine-checked by the scorecard).",
+      "category": "script",
+      "prompt": "tasks/short-script-wordfreq/prompt.txt",
+      "verifier": "tasks/short-script-wordfreq/verify.mjs",
+      "hash": "b1de6ba6adb48959d048820d218692aec9e19bf462e6843211bb605a03a63732",
+      "filesDir": "tasks/short-script-wordfreq/files",
+      "solutionDir": "tasks/short-script-wordfreq/solution"
+    }
+  ]
+}

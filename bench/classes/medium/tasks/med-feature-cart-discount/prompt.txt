@@ -1,0 +1,16 @@
+A tiny shop lives in shop/: money.js (cent helpers), cart.js (the cart) and
+checkout.js (receipt rendering). Add percentage discounts, end to end:
+
+  - cart.applyDiscount(pct) records a discount percent. Valid range is
+    0..100 inclusive; anything outside throws a RangeError.
+  - The discount amount is computed on the subtotal, rounded half-up to the
+    nearest cent: discountCents = round(subtotalCents * pct / 100), e.g. a
+    999-cent subtotal at 10% gives a 100-cent discount.
+  - cart.totalCents() returns subtotal - discount (just the subtotal when
+    no discount is active). A discount is "active" when pct > 0.
+  - The checkout receipt gains, only when a discount is active, a line
+        DISCOUNT (10%): -$1.00
+    (percent rendered as given, amount via money.format) directly above the
+    TOTAL line, and TOTAL shows the discounted total.
+
+Keep the existing receipt item lines and money formatting unchanged.

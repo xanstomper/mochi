@@ -1,0 +1,14 @@
+A toy bank lives in bank/: accounts.js (balances), fees.js (the transfer
+fee) and ledger.js (transfers). The product contract:
+
+  transfer(from, to, amountCents) moves amountCents from sender to
+  receiver and charges the SENDER a fee on top (fees.feeFor): the sender
+  loses amount + fee, the receiver gains exactly amount, and the fee is
+  burned (it leaves the system). A transfer the sender cannot cover
+  (balance < amount + fee) throws and changes no balances.
+
+Bug report: money is being created from nothing. After transfers, the sum
+of all account balances is HIGHER than it should be - audits keep finding
+extra cents that no deposit explains.
+
+Find the fault and fix it so value is conserved (modulo the burned fees).

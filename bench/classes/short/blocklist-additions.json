@@ -1,0 +1,23 @@
+{
+  "kind": "mochi-frozen-gate-blocklist-additions",
+  "note": "Ids of the frozen regression-gate set. Training/curriculum ingestion must drop these exactly like eval instances (see bench/frozen/README.md). Merge into eval_blocklist.json extra_blocked.instance_ids, or check alongside it.",
+  "generatedAt": "2026-10-22",
+  "extra_blocked": {
+    "instance_ids": [
+      "short-feature-format-bytes",
+      "short-fix-clamp",
+      "short-fix-csv-sum",
+      "short-fix-debounce",
+      "short-fix-groupby",
+      "short-fix-palindrome",
+      "short-fix-querystring",
+      "short-fix-retry",
+      "short-fix-stack",
+      "short-question-entrypoint",
+      "short-script-dedupe",
+      "short-script-wordfreq"
+    ],
+    "base_commits": [],
+    "repo_commit_pairs": []
+  }
+}

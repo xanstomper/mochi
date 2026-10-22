@@ -1,0 +1,9 @@
+wordfreq.js is a command-line tool: `node wordfreq.js <file>` prints one
+"word count" line per distinct word in the file. Words are case-insensitive
+sequences of letters and digits; anything else is a separator. Output must
+be sorted by count DESCENDING, breaking ties by word ASCENDING.
+
+Bug report: the counts are right but the ordering is wrong - the output
+comes out alphabetical regardless of frequency.
+
+Fix wordfreq.js. Try it on the bundled sample.txt.

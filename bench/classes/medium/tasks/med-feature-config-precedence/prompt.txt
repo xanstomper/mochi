@@ -1,0 +1,18 @@
+A config loader lives in config/: defaults.js (the known keys and their
+defaults), env.js (helpers for reading APP_-prefixed environment values)
+and load.js, whose loadConfig({ env, file }) currently returns the
+defaults and ignores everything else. Implement the real precedence:
+
+  environment  >  config file  >  defaults
+
+Rules:
+  - Only keys present in defaults.js are configurable; unknown keys in the
+    file or environment are ignored (not copied into the result).
+  - The environment variable for a key is APP_ + the key in upper case
+    (APP_PORT for port). env is a plain object like process.env.
+  - Values are coerced to the type of the corresponding default: numbers
+    via Number(), booleans accept exactly 'true' or 'false'. A value that
+    cannot be coerced (e.g. APP_WORKERS=abc, APP_DEBUG=yes) throws an
+    Error whose message names the offending key.
+  - `file` is an already-parsed object, or null when there is no file.
+    File values are already typed and are used as-is.

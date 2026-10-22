@@ -1,0 +1,12 @@
+A session subsystem lives in session/: config.js (the TTL), store.js (the
+session store) and middleware.js (the auth check). The design contract is
+ABSOLUTE expiry: a session dies TTL_MS after it is created, no matter how
+active the user is. store.touch(id) exists to track activity (lastSeenAt)
+for auditing - it must never extend a session's life.
+
+Bug report: sessions stay valid forever as long as the user keeps making
+requests. Only users who go quiet ever get logged out. The middleware's
+expiry check has been reviewed and is correct.
+
+Find the fault and fix it so absolute expiry holds while touch() still
+records last-seen activity.

@@ -1,0 +1,11 @@
+dedupe.js is a command-line tool: `node dedupe.js <file>` prints the file's
+lines with duplicates removed, PRESERVING the order in which each distinct
+line first appears. Lines are compared exactly, except a trailing carriage
+return is ignored (CRLF-safe). A single trailing newline at end of file
+does not create an extra empty line; a genuinely blank line in the middle
+of the file is a line like any other (kept once).
+
+Bug report: the output comes out in alphabetical order instead of file
+order, so pipelines that depend on ordering break.
+
+Fix dedupe.js. Try it on the bundled input.txt.

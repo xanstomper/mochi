@@ -1,0 +1,97 @@
+{
+  "kind": "mochi-frozen-gate-set",
+  "version": 1,
+  "frozenAt": "2026-10-22",
+  "note": "Task-class scorecard fixture set (class: medium). This is the frozen-set on-disk format reused as the bench-wide fixture contract - it is NOT the regression gate set (that is bench/frozen). Consumed by `mochi bench classes`.",
+  "setHash": "91f659017345ff97a70a019fdca3623d13a8ca28c76653d006275e23cc2a141a",
+  "tasks": [
+    {
+      "id": "med-feature-cart-discount",
+      "source": "classes-fixture",
+      "provenance": "Original fixture authored for the task-class scorecard (bench/classes) on 2026-10-22. Written from scratch for Mochi; not derived from the frozen gate set or any public eval (disjointness is machine-checked by the scorecard).",
+      "category": "feature",
+      "prompt": "tasks/med-feature-cart-discount/prompt.txt",
+      "verifier": "tasks/med-feature-cart-discount/verify.mjs",
+      "hash": "2fea895235f9257c655103219e84e7acf608a539e48a489a07dceea824aa331c",
+      "filesDir": "tasks/med-feature-cart-discount/files",
+      "solutionDir": "tasks/med-feature-cart-discount/solution"
+    },
+    {
+      "id": "med-feature-config-precedence",
+      "source": "classes-fixture",
+      "provenance": "Original fixture authored for the task-class scorecard (bench/classes) on 2026-10-22. Written from scratch for Mochi; not derived from the frozen gate set or any public eval (disjointness is machine-checked by the scorecard).",
+      "category": "feature",
+      "prompt": "tasks/med-feature-config-precedence/prompt.txt",
+      "verifier": "tasks/med-feature-config-precedence/verify.mjs",
+      "hash": "71316c05c500de648dd7d518cf2554e1ed36c293803717508ebe06e95462a0ff",
+      "filesDir": "tasks/med-feature-config-precedence/files",
+      "solutionDir": "tasks/med-feature-config-precedence/solution"
+    },
+    {
+      "id": "med-feature-csv-export",
+      "source": "classes-fixture",
+      "provenance": "Original fixture authored for the task-class scorecard (bench/classes) on 2026-10-22. Written from scratch for Mochi; not derived from the frozen gate set or any public eval (disjointness is machine-checked by the scorecard).",
+      "category": "feature",
+      "prompt": "tasks/med-feature-csv-export/prompt.txt",
+      "verifier": "tasks/med-feature-csv-export/verify.mjs",
+      "hash": "4f69cc0b2a80785618f09e8acdaeda43f3309c74a3c2778838d512ed91f36e51",
+      "filesDir": "tasks/med-feature-csv-export/files",
+      "solutionDir": "tasks/med-feature-csv-export/solution"
+    },
+    {
+      "id": "med-feature-rate-limit",
+      "source": "classes-fixture",
+      "provenance": "Original fixture authored for the task-class scorecard (bench/classes) on 2026-10-22. Written from scratch for Mochi; not derived from the frozen gate set or any public eval (disjointness is machine-checked by the scorecard).",
+      "category": "feature",
+      "prompt": "tasks/med-feature-rate-limit/prompt.txt",
+      "verifier": "tasks/med-feature-rate-limit/verify.mjs",
+      "hash": "d12e46b73dc80e368d1377b4989fdf2291dbe3229e67935c988368f35ebac3e4",
+      "filesDir": "tasks/med-feature-rate-limit/files",
+      "solutionDir": "tasks/med-feature-rate-limit/solution"
+    },
+    {
+      "id": "med-fix-ledger",
+      "source": "classes-fixture",
+      "provenance": "Original fixture authored for the task-class scorecard (bench/classes) on 2026-10-22. Written from scratch for Mochi; not derived from the frozen gate set or any public eval (disjointness is machine-checked by the scorecard).",
+      "category": "fix",
+      "prompt": "tasks/med-fix-ledger/prompt.txt",
+      "verifier": "tasks/med-fix-ledger/verify.mjs",
+      "hash": "ab78f7888b291f2b8dfac8078abdfd5838525bf6ddc573dd39ba3a1deec25bea",
+      "filesDir": "tasks/med-fix-ledger/files",
+      "solutionDir": "tasks/med-fix-ledger/solution"
+    },
+    {
+      "id": "med-fix-pagination",
+      "source": "classes-fixture",
+      "provenance": "Original fixture authored for the task-class scorecard (bench/classes) on 2026-10-22. Written from scratch for Mochi; not derived from the frozen gate set or any public eval (disjointness is machine-checked by the scorecard).",
+      "category": "fix",
+      "prompt": "tasks/med-fix-pagination/prompt.txt",
+      "verifier": "tasks/med-fix-pagination/verify.mjs",
+      "hash": "553adf1487bce90760b969e19b27bd07758abe9664e825e666c16a9856ae598f",
+      "filesDir": "tasks/med-fix-pagination/files",
+      "solutionDir": "tasks/med-fix-pagination/solution"
+    },
+    {
+      "id": "med-fix-session-expiry",
+      "source": "classes-fixture",
+      "provenance": "Original fixture authored for the task-class scorecard (bench/classes) on 2026-10-22. Written from scratch for Mochi; not derived from the frozen gate set or any public eval (disjointness is machine-checked by the scorecard).",
+      "category": "fix",
+      "prompt": "tasks/med-fix-session-expiry/prompt.txt",
+      "verifier": "tasks/med-fix-session-expiry/verify.mjs",
+      "hash": "9d1181a1f01a14b48ba5786c7366612a683a2a7a6ac2dd6d6933b4c76cb820f8",
+      "filesDir": "tasks/med-fix-session-expiry/files",
+      "solutionDir": "tasks/med-fix-session-expiry/solution"
+    },
+    {
+      "id": "med-refactor-emitter",
+      "source": "classes-fixture",
+      "provenance": "Original fixture authored for the task-class scorecard (bench/classes) on 2026-10-22. Written from scratch for Mochi; not derived from the frozen gate set or any public eval (disjointness is machine-checked by the scorecard).",
+      "category": "refactor",
+      "prompt": "tasks/med-refactor-emitter/prompt.txt",
+      "verifier": "tasks/med-refactor-emitter/verify.mjs",
+      "hash": "b943350a6969395de3da8609aa099d28ace46f1563bf3dae17da69f20ed9cc83",
+      "filesDir": "tasks/med-refactor-emitter/files",
+      "solutionDir": "tasks/med-refactor-emitter/solution"
+    }
+  ]
+}

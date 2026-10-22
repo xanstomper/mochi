@@ -1,0 +1,11 @@
+format.js exports formatBytes(n), currently an unimplemented stub. Implement
+it to this exact spec:
+
+  - n < 1024  ->  "N B" with N the integer byte count (e.g. 0 -> "0 B",
+    512 -> "512 B", 1023 -> "1023 B")
+  - otherwise ->  the largest 1024-based unit among KiB, MiB, GiB, TiB whose
+    value is >= 1, rendered with ONE decimal place, dropping a trailing
+    ".0" (e.g. 1024 -> "1 KiB", 1536 -> "1.5 KiB", 2048 -> "2 KiB",
+    1048576 -> "1 MiB", 2621440 -> "2.5 MiB")
+
+Edit format.js only; keep the existing export shape.

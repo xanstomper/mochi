@@ -1,0 +1,8 @@
+stack.js exports a Stack class (push, pop, peek, size, isEmpty).
+
+Bug report: reading the top of the stack with peek() corrupts the stack -
+after a peek, an element is missing, as if it had been popped.
+
+Fix stack.js so peek observes without mutating, and the rest of the class
+contract holds (pop on an empty stack returns undefined, size tracks the
+number of stored elements).
