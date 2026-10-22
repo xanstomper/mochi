@@ -1,5 +1,10 @@
 # Mochi Changelog
 
+#### Added (MCH-218b — cross-process bg steering via stdin FIFOs, commit 8)
+
+- **Every background task now has a stdin FIFO (MCH-218b)**: `<cwd>/.mochi/bg-<id>.stdin` is a named pipe wired through a reopen-loop `cat` relay into the child's stdin, so steering works from ANY process for the whole life of the task — not just the first writer. `steerTask` keeps the direct-handle fast path and falls back to FIFO append; new `steerPersistedTask(id, cwd, text)` resolves from the on-disk ledger exactly like `killPersistedTask`; `mochi bg steer <id> <text>` now steers across processes. FIFOs are unlinked + relays SIGKILLed on exit/kill/timeout/error; mkfifo-absent degrades to direct-handle-only.
+- **Verified**: tsc clean; background-tasks 11/11 incl. new cross-process proof (external `sh -c 'echo >> fifo'` steering a live task, two sequential writers proving relay reopen, ledger-path steer); full suite **2387/0** (329 files; one prior run had the known load-flaky 40s stall-guard test fail — passes in isolation and on rerun); builds green; smoke 0.27.0.
+
 #### Added (MCH-218 — steerable background plane, commit 7)
 
 - **Cross-process goal steering (`POST /api/steer`, MCH-218)**: the daemon can now push mid-run guidance into RUNNING goals from outside its process (TUI, curl, CI) — the same `runtime.steer` path the in-TUI steer button uses. Returns `reached` honestly: `0` means no live agents, not silent success.

@@ -139,4 +139,26 @@ describe('background tasks', () => {
     const noText = await bgTaskTool.execute({ action: 'stdin', task_id: t.id }, {} as never);
     expect(noText).toContain('stdin requires');
   }, 60_000);
+
+  it('MCH-218: cross-process steering via the stdin FIFO (external process appends)', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-bg-'));
+    const t = startBackgroundTask('while IFS= read -r l; do echo "GOT:$l"; done', dir, { description: 'fifo echo' });
+    await sleep(300);
+    expect(t.fifoPath).toBeTruthy();
+    // A COMPLETELY EXTERNAL process (no handle, no registry entry) steers
+    // the running task by appending to the FIFO — the relay feeds the child.
+    execFileSync('sh', ['-c', `echo external-steer-99 >> "${t.fifoPath}"`]);
+    for (let i = 0; i < 30 && !t.output.includes('GOT:external-steer-99'); i++) await sleep(100);
+    expect(t.output).toContain('GOT:external-steer-99');
+    // TWO writers, sequentially — proves the relay reopens after EOF.
+    execFileSync('sh', ['-c', `echo second-writer >> "${t.fifoPath}"`]);
+    for (let i = 0; i < 30 && !t.output.includes('GOT:second-writer'); i++) await sleep(100);
+    expect(t.output).toContain('GOT:second-writer');
+    // steerPersistedTask resolves from the ledger for an unknown-to-this-map id.
+    const { steerPersistedTask } = await import('./background-tasks.js');
+    expect(steerPersistedTask(t.id, dir, 'via-ledger')).toBe(true);
+    for (let i = 0; i < 30 && !t.output.includes('GOT:via-ledger'); i++) await sleep(100);
+    expect(t.output).toContain('GOT:via-ledger');
+  }, 60_000);
 });

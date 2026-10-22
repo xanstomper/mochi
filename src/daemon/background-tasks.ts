@@ -14,7 +14,8 @@
 // the on-disk ledger (with owner-pid liveness checks for stale 'running').
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, unlinkSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { atomicWriteFileSync } from '../core/atomic-fs.js';
 import { maybeSandbox, type SandboxOptions } from '../exec.js';
@@ -30,6 +31,9 @@ export interface BackgroundTask {
   output: string;
   /** Child pid — lets a DIFFERENT process (`mochi bg kill`) signal the task. */
   pid?: number;
+  /** MCH-218: path of the task's stdin FIFO when cross-process steering is
+   *  available (mkfifo present). Writers append to this to feed the child. */
+  fifoPath?: string;
 }
 
 const tasks = new Map<string, BackgroundTask>();
@@ -37,6 +41,9 @@ const tasks = new Map<string, BackgroundTask>();
  *  it was started in (B22). */
 const taskDirs = new Map<string, string>();
 const processes = new Map<string, import('node:child_process').ChildProcess>();
+/** MCH-218: per-task FIFO relay process (reads the stdin FIFO, writes the
+ *  child's stdin). Killed + unlinked when the task exits or is killed. */
+const relays = new Map<string, import('node:child_process').ChildProcess>();
 const MAX_COMPLETED = 20;
 /** Output cap per task IN THE LEDGER (in-memory buffer stays at 200KB). */
 const PERSIST_OUTPUT_CAP = 100_000;
@@ -142,6 +149,38 @@ export function startBackgroundTask(
   task.pid = child.pid;
   processes.set(id, child);
   taskDirs.set(id, cwd);
+  // MCH-218: per-task stdin FIFO — the child reads its input from a named
+  // pipe on disk, so ANY process (a later `mochi bg steer`, another agent,
+  // the daemon) can steer a RUNNING task by appending to the FIFO. The
+  // direct-handle path (steerTask with a live `processes` entry) stays the
+  // fast path; the FIFO is the cross-process fallback.
+  const fifoPath = resolve(cwd, '.mochi', `bg-${id}.stdin`);
+  try {
+    mkdirSync(resolve(cwd, '.mochi'), { recursive: true });
+    unlinkSync(fifoPath);
+  } catch { /* fresh fifo path */ }
+  try {
+    execFileSync('mkfifo', [fifoPath]);
+    // Relay loop: `cat` blocks opening the FIFO until a writer appears, relays
+    // that writer's bytes into the child's stdin, hits EOF when the writer
+    // closes, and REOPENS — so the FIFO accepts steering lines for the whole
+    // life of the task, not just the first writer.
+    const relay = spawn('sh', ['-c', `while :; do cat "${fifoPath}" || break; done`], { cwd, detached: false, stdio: ['ignore', 'pipe', 'ignore'] });
+    relays.set(id, relay);
+    relay.stdout?.on('data', (d: Buffer) => {
+      if (child.stdin && !child.stdin.destroyed) child.stdin.write(d);
+    });
+    const cleanupFifo = () => {
+      try { relay.kill('SIGKILL'); } catch { /* gone */ }
+      try { unlinkSync(fifoPath); } catch { /* gone */ }
+    };
+    child.on('exit', cleanupFifo);
+    child.on('error', cleanupFifo);
+    task.fifoPath = fifoPath;
+  } catch {
+    // mkfifo unavailable — cross-process steering disabled for this task;
+    // the direct-handle path still works.
+  }
   let buffer = '';
   const cap = 200_000;
   let lastFlushAt = 0;
@@ -171,11 +210,19 @@ export function startBackgroundTask(
     task.status = 'timeout';
     task.endedAt = Date.now();
     task.output = buffer;
+    const r = relays.get(id);
+    if (r) { try { r.kill('SIGKILL'); } catch { /* gone */ } }
+    relays.delete(id);
+    try { unlinkSync(fifoPath); } catch { /* gone */ }
     persist();
   }, timeout);
   child.on('exit', (code) => {
     clearTimeout(timer);
     processes.delete(id);
+    const r = relays.get(id);
+    if (r) { try { r.kill('SIGKILL'); } catch { /* gone */ } }
+    relays.delete(id);
+    try { unlinkSync(fifoPath); } catch { /* gone */ }
     if (task.status === 'running') {
       task.status = code === 0 ? 'completed' : 'failed';
       task.exitCode = code;
@@ -188,6 +235,10 @@ export function startBackgroundTask(
   child.on('error', () => {
     clearTimeout(timer);
     processes.delete(id);
+    const r = relays.get(id);
+    if (r) { try { r.kill('SIGKILL'); } catch { /* gone */ } }
+    relays.delete(id);
+    try { unlinkSync(fifoPath); } catch { /* gone */ }
     task.status = 'failed';
     task.endedAt = Date.now();
     task.output = buffer + '\n(spawn error)';
@@ -212,6 +263,10 @@ export function killTask(id: string): boolean {
       /* process already exited */
     }
   }
+  const relay = relays.get(id);
+  if (relay) { try { relay.kill('SIGKILL'); } catch { /* gone */ } }
+  relays.delete(id);
+  if (t.fifoPath) { try { unlinkSync(t.fifoPath); } catch { /* gone */ } }
   processes.delete(id);
   t.status = 'failed';
   t.endedAt = Date.now();
@@ -233,10 +288,25 @@ export function getTask(id: string): BackgroundTask | undefined {
 export function steerTask(id: string, text: string): boolean {
   const t = tasks.get(id);
   if (!t || t.status !== 'running') return false;
+  const line = text.endsWith('\n') ? text : `${text}\n`;
+  // Fast path: live child handle in this process.
   const child = processes.get(id);
-  if (!child?.stdin || child.stdin.destroyed) return false;
-  child.stdin.write(text.endsWith('\n') ? text : `${text}\n`);
-  return true;
+  if (child?.stdin && !child.stdin.destroyed) {
+    child.stdin.write(line);
+    return true;
+  }
+  // Cross-process fallback (MCH-218): append to the task's stdin FIFO —
+  // works from ANY process (later `mochi bg steer`, another agent, the
+  // daemon) as long as the FIFO file still exists.
+  if (t.fifoPath && existsSync(t.fifoPath)) {
+    try {
+      appendFileSync(t.fifoPath, line);
+      return true;
+    } catch {
+      return false; // no reader (relay dead) — honest false
+    }
+  }
+  return false;
 }
 
 export function listTasks(): BackgroundTask[] {
@@ -308,6 +378,24 @@ export function killPersistedTask(id: string, cwd: string): boolean {
   t.output = (t.output ? `${t.output}\n` : '') + '(task killed)';
   writeLedger(cwd, list);
   return true;
+}
+
+/** MCH-218: steer a task recorded in the ledger from a DIFFERENT process.
+ *  Appends the line to the task's stdin FIFO (the relay feeds the child).
+ *  Returns false when the task is unknown/not-running, has no FIFO (started
+ *  before MCH-218 or mkfifo missing), or the relay is gone. */
+export function steerPersistedTask(id: string, cwd: string, text: string): boolean {
+  const list = readLedger(cwd);
+  const t = list.find((x) => x.id === id);
+  if (!t || t.status !== 'running') return false;
+  if (processes.has(id)) return steerTask(id, text); // this process owns it
+  if (!t.fifoPath || !existsSync(t.fifoPath)) return false;
+  try {
+    appendFileSync(t.fifoPath, text.endsWith('\n') ? text : `${text}\n`);
+    return true;
+  } catch {
+    return false; // relay dead / no reader — honest false
+  }
 }
 
 /** Human/agent-readable snapshot for tool results. */

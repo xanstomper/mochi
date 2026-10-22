@@ -1491,14 +1491,15 @@ async function main() {
       return;
     }
     if (sub === 'steer' || sub === 'stdin') {
-      // MCH-218: write a line of input to a RUNNING background task. Only
-      // possible in-process (the ledger has pids, not stdin pipes).
+      // MCH-218: write a line of input to a RUNNING background task — works
+      // cross-process via the task's stdin FIFO (falls back to the direct
+      // handle when this process owns the task).
       const id = positional[2];
       const text = positional.slice(3).join(' ');
       if (!id || !text) { console.log('Usage: mochi bg steer <task-id> <text>'); return; }
-      const { steerTask } = await import('./daemon/background-tasks.js');
-      const ok = steerTask(id, text);
-      console.log(ok ? `Wrote to task ${id} stdin.` : `Could not steer task ${id} (unknown, finished, or owned by another process — use bg_task stdin inside that run).`);
+      const { steerPersistedTask } = await import('./daemon/background-tasks.js');
+      const ok = steerPersistedTask(id, cwd, text);
+      console.log(ok ? `Wrote to task ${id} stdin.` : `Could not steer task ${id} (unknown, finished, no stdin FIFO, or relay gone).`);
       return;
     }
     if (sub === 'kill' || sub === 'stop') {
