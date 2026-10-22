@@ -1336,6 +1336,18 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
     const dropped = this.messages.slice(0, cutIndex);
     this.messages = this.messages.slice(cutIndex);
 
+    // MCH-219 (lineage compression): a PRIOR compaction's ledger is a dropped
+    // system message. Losing it silently orphans earlier sessions' memory —
+    // the new checkpoint would know nothing before the last window. Carry the
+    // old ledger body forward and prepend it, so N compactions compress into
+    // one lineage instead of N disconnected summaries.
+    const priorLedgers: string[] = [];
+    for (const m of dropped) {
+      if (m.role === 'system' && typeof m.content === 'string' && m.content.startsWith('Earlier in this session (compacted):')) {
+        const body = m.content.slice('Earlier in this session (compacted):'.length).trim();
+        if (body && !priorLedgers.includes(body)) priorLedgers.push(body);
+      }
+    }
 
     const facts: string[] = [];
     for (const m of dropped) {
@@ -1375,7 +1387,11 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
     // cheap), so repo context survives compaction instead of being forbidden.
     if (this.filesEdited.size) fileOps.push(`Files already edited in this session: ${[...this.filesEdited].slice(-30).join(', ')}`);
     if (this.filesRead.size) fileOps.push(`Files previously read (their contents were compacted away; re-read the ones relevant to the current step): ${[...this.filesRead].slice(-30).join(', ')}`);
-    const body = [checkpoint?.trim(), ledger, fileOps.join('\n'), facts.length ? 'Session facts:\n' + facts.join('\n') : ''].filter(Boolean).join('\n');
+    // MCH-219: older lineages lead, newest checkpoint last — the model reads
+    // the session's full arc oldest→newest. Cap: the two most recent ledgers
+    // (an unbounded chain would grow linearly with compaction count).
+    const lineage = priorLedgers.slice(-2).join('\n---\n(earlier compaction)\n---\n');
+    const body = [lineage, checkpoint?.trim(), ledger, fileOps.join('\n'), facts.length ? 'Session facts:\n' + facts.join('\n') : ''].filter(Boolean).join('\n');
     if (body.trim()) this.messages.unshift({ role: 'system', content: `Earlier in this session (compacted):\n${body}` });
   }
 }

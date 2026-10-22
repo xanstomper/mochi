@@ -1,5 +1,10 @@
 # Mochi Changelog
 
+#### Added (MCH-219 — compaction lineage compression, commit 9)
+
+- **Prior compaction ledgers survive the next compaction (MCH-219)**: before this, running compact() a second time silently orphaned the first ledger — the "Earlier in this session (compacted):" system message was just another dropped message, so model memory only reached back to the most recent compaction. compact() now carries prior ledger bodies forward into the new ledger (oldest→newest so the model reads the session's full arc), capped at the 2 most recent lineages so chains stay bounded. New test file src/context-lineage.test.ts pins: carry-forward across two compactions, and the ≤1 "(earlier compaction)" separator cap over a 4-generation chain (the state ledger's Decisions list stays cumulative by design).
+- **Verified**: tsc clean; context-lineage 2/2; full suite **2390/0** (330 files); builds green; smoke 0.27.0.
+
 #### Added (MCH-218b — cross-process bg steering via stdin FIFOs, commit 8)
 
 - **Every background task now has a stdin FIFO (MCH-218b)**: `<cwd>/.mochi/bg-<id>.stdin` is a named pipe wired through a reopen-loop `cat` relay into the child's stdin, so steering works from ANY process for the whole life of the task — not just the first writer. `steerTask` keeps the direct-handle fast path and falls back to FIFO append; new `steerPersistedTask(id, cwd, text)` resolves from the on-disk ledger exactly like `killPersistedTask`; `mochi bg steer <id> <text>` now steers across processes. FIFOs are unlinked + relays SIGKILLed on exit/kill/timeout/error; mkfifo-absent degrades to direct-handle-only.
