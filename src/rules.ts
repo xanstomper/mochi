@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 
 export interface ProjectRule {
@@ -103,6 +103,62 @@ export function loadRules(projectRoot: string): ProjectRule[] {
   }
 
   return rules;
+}
+
+const RULES_SCAN_DIRS = ['.mochi/rules', '.cursor/rules', '.claude/rules'];
+const RULES_SINGLE_FILES = ['.cursorrules', '.github/copilot-instructions.md'];
+
+function statFp(path: string): string {
+  try {
+    const st = statSync(path);
+    return `${st.size}:${st.mtimeMs}`;
+  } catch {
+    return '';
+  }
+}
+
+/** Fingerprint of everything loadRules() would read: per-directory entry
+ *  names + size:mtime per file. Any rule add/edit/delete changes it. */
+export function rulesFingerprint(projectRoot: string): string {
+  const parts: string[] = [];
+  for (const rel of RULES_SCAN_DIRS) {
+    const dir = resolve(projectRoot, rel);
+    let entries: string[] = [];
+    try {
+      entries = readdirSync(dir)
+        .filter((f) => f.endsWith('.md') || f.endsWith('.mdc'))
+        .sort();
+    } catch {
+      entries = [];
+    }
+    parts.push(`${rel}[${entries.map((f) => `${f}@${statFp(join(dir, f))}`).join(',')}]`);
+  }
+  for (const rel of RULES_SINGLE_FILES) {
+    parts.push(`${rel}@${statFp(resolve(projectRoot, rel))}`);
+  }
+  return parts.join('|');
+}
+
+const rulesCache = new Map<string, { fp: string; rules: ProjectRule[] }>();
+
+/** loadRules() behind a fingerprint cache. Prompt assembly calls this on
+ *  EVERY turn (twice: the stable prompt's rule selection and the volatile
+ *  prompt's glob-rule selection), and the uncached version re-scanned three
+ *  directories and re-read + re-parsed every rule file per call. The
+ *  fingerprint check costs the same readdir listing plus stats — no file
+ *  bodies are read and nothing is parsed on a hit. */
+export function loadRulesCached(projectRoot: string): ProjectRule[] {
+  const fp = rulesFingerprint(projectRoot);
+  const hit = rulesCache.get(projectRoot);
+  if (hit && hit.fp === fp) return hit.rules;
+  const rules = loadRules(projectRoot);
+  rulesCache.set(projectRoot, { fp, rules });
+  return rules;
+}
+
+/** Test hook: drop all cached rule sets. */
+export function clearRulesCache(): void {
+  rulesCache.clear();
 }
 
 /** Filter rules relevant to active file paths or prompt text */

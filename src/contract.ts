@@ -6,7 +6,7 @@
  * the user can append / prune them at runtime via /memory edit commands.
  */
 
-import { existsSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, writeFileSync, appendFileSync } from 'node:fs';
 import { resolve, basename } from 'node:path';
 import { scanPromptInjection } from './skills/skill-lint.js';
 
@@ -28,11 +28,39 @@ export function loadRules(cwd: string): string {
   try { return readFileSync(p, 'utf8'); } catch { return ''; }
 }
 
+const contractSectionCache = new Map<string, { fp: string; section: string }>();
+
+function rulesFileFingerprint(cwd: string): string {
+  const p = findRulesFile(cwd);
+  if (!p) return '';
+  try {
+    const st = statSync(p);
+    return `${p}:${st.size}:${st.mtimeMs}`;
+  } catch {
+    return p;
+  }
+}
+
 /** Inject the rules into the system prompt. When rules are present the
  *  agent is BOUND by them on every task, not just when it happens to
  *  notice. Section header is the contract preamble; users learn what
- *  their rules are doing by reading the dump via /memory. */
+ *  their rules are doing by reading the dump via /memory.
+ *
+ *  Memoized per cwd behind the rules file's size:mtime fingerprint:
+ *  prompt assembly calls this every turn, and the uncached version
+ *  re-read the file and re-ran the injection scan per call. A runtime
+ *  rule edit (appendRule) changes size or mtime and is picked
+ *  up on the next turn. */
 export function contractSection(cwd: string): string {
+  const fp = rulesFileFingerprint(cwd);
+  const hit = contractSectionCache.get(cwd);
+  if (hit && hit.fp === fp) return hit.section;
+  const section = buildContractSection(cwd);
+  contractSectionCache.set(cwd, { fp, section });
+  return section;
+}
+
+function buildContractSection(cwd: string): string {
   const rules = loadRules(cwd).trim();
   if (!rules) return '';
   const source = basename(findRulesFile(cwd) ?? 'MOCHI.md');
@@ -60,12 +88,6 @@ export function appendRule(cwd: string, rule: string): { file: string; bytes: nu
   return { file: p, bytes: rule.length + 3 };
 }
 
-/** Replace the entire rules file with a new body. */
-export function writeRules(cwd: string, body: string): { file: string; bytes: number } {
-  const p = resolve(cwd, 'MOCHI.md');
-  writeFileSync(p, body);
-  return { file: p, bytes: body.length };
-}
 
 /** Extract a list of bullet lines (the most common rule form). */
 export function listRules(cwd: string): string[] {
