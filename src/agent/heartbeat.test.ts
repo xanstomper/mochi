@@ -72,8 +72,15 @@ describe('progress heartbeat end-to-end', () => {
     writeFileSync(resolve(dir, 'a.ts'), 'export const a = 1;');
     writeFileSync(resolve(dir, 'b.ts'), 'export const b = 2;');
     // Alternate reads of two files: evades the exact-repeat guard (signatures
-    // differ every turn) and the oscillation guard (read-only exempt) — ONLY
-    // the progress heartbeat can stop this run.
+    // differ every turn) and the oscillation guard (read-only exempt).
+    // Historically ONLY the progress heartbeat could stop this run (at ~24
+    // turns); the reasoning-discipline progress forcing (agent/discipline.ts)
+    // now stops it sooner — re-reading already-read files is deliberation,
+    // and deliberation is force-finished at 3 turns. The contract this test
+    // pins is unchanged in substance: an honest stuck_no_progress finish,
+    // well before maxIterations, with no fake success. The heartbeat still
+    // owns the shapes progress forcing cannot see (varied actions that
+    // cover new ground yet never converge).
     const scripted = Array.from({ length: 38 }, (_, k) => ({
       content: k % 2 === 0 ? 'Checking a.' : 'Checking b.',
       toolCalls: [{
@@ -96,11 +103,13 @@ describe('progress heartbeat end-to-end', () => {
       const result = await agent.run(task);
       expect(result.success).toBe(false);
       expect(result.stopReason).toBe('stuck_no_progress');
-      expect(result.summary).toContain('Stuck');
-      // Heartbeats at 8 (progress: 2 files), 16 (stalled: nudge), 24 (stop) —
-      // far short of the 40-iteration budget.
-      expect(fake.requests.length).toBeLessThan(32);
-      expect(fake.requests.length).toBeGreaterThan(10);
+      expect(result.summary).toContain('deliberating');
+      // Progress forcing: 2 progress reads (a, b), then deliberation turns
+      // (commit directive, then the forced decisive finish) — a handful of
+      // requests, far short of both the old heartbeat stop (~24) and the
+      // 40-iteration budget.
+      expect(fake.requests.length).toBeLessThanOrEqual(8);
+      expect(fake.requests.length).toBeGreaterThan(3);
     } finally {
       await fake.close();
       rmSync(dir, { recursive: true, force: true });
