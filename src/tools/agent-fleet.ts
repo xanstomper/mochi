@@ -52,6 +52,29 @@ export const cancelAgentTool: Tool = {
   },
 };
 
+export const steerAgentTool: Tool = {
+  def: {
+    name: 'steer_agent',
+    description:
+      'Steer a RUNNING background subagent (from subagent with background=true) mid-run: your message is injected into its context at its next turn boundary so it changes course WITHOUT being killed and restarted (its context and progress survive). Use when you see a child heading the wrong way — e.g. "stop exploring auth, the bug is in billing". A steer changes direction only: it cannot widen the child\'s role tools or permissions, and a finished/cancelled child cannot be steered (you get an explicit failure, never a silent drop). Every steer is provenance-logged on the child\'s run record, and steered runs are marked in attribution.',
+    parameters: [
+      { name: 'id', type: 'string', description: 'The subagent handle id returned when the background child was started', required: true },
+      { name: 'message', type: 'string', description: 'The steering instruction to inject into the child\'s context', required: true },
+    ],
+    permission: 'network',
+  },
+  async execute(args, ctx) {
+    const id = String(args.id ?? '').trim();
+    if (!id) throw new Error('steer_agent requires the subagent id returned at spawn time.');
+    const message = String(args.message ?? '').trim();
+    if (!message) throw new Error('steer_agent requires a non-empty message to steer with.');
+    if (!ctx.steerAgent) {
+      return 'steer_agent is not available in this context (no agent runtime injected).';
+    }
+    return ctx.steerAgent(id, message);
+  },
+};
+
 export const reviewFleetTool: Tool = {
   def: {
     name: 'review_fleet',

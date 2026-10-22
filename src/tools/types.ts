@@ -47,6 +47,12 @@ export interface ToolContext {
   /** Cancel a running/queued background child (aborts it and discards its
    *  unapplied worktree, if any). */
   cancelAgent?: (id: string) => Promise<string>;
+  /** B21: steer a running/queued background child mid-run — the message
+   *  is injected into the child's context at its next turn boundary.
+   *  Direction only: it cannot widen the child's role allowlist or
+   *  permission posture. The steer is provenance-logged on the child's
+   *  run record; undeliverable steers fail explicitly. */
+  steerAgent?: (id: string, text: string) => Promise<string>;
   /** Fan out N pr-reviewer children over the same diff with different
    *  lenses and return one aggregated report (deduped findings, merged
    *  verdict). `target`: 'working' (default) or a git ref/range. */

@@ -41,6 +41,32 @@ export interface ChildWorktreeInfo {
   baseSha: string;
 }
 
+/** Provenance for ONE mid-run steer delivered (or attempted) against a
+ *  child run (B21). The steer's raw text is NEVER persisted — only its
+ *  sha256, its length, and a REDACTED preview (the run journal's rule:
+ *  persisted guidance passes through security.redact()). `deliveredAt` is
+ *  stamped by the child itself at the turn boundary where the steer was
+ *  actually injected into its context; an event with neither deliveredAt
+ *  nor `undelivered` is still in flight. Finalize reconciles: a steer that
+ *  never landed gets `undelivered: true` — a steer is never silently
+ *  dropped, it is delivered or loudly marked. */
+export interface ChildSteerEvent {
+  /** When the steer was issued (unix ms). */
+  at: number;
+  /** Who issued it: the steering agent's id, or 'user' for a human. */
+  from: string;
+  /** sha256 hex of the exact steer text. */
+  hash: string;
+  /** Length of the steer text in characters. */
+  chars: number;
+  /** Redacted preview of the steer text (<= 160 chars). */
+  preview: string;
+  /** When the child injected the steer into its context (unix ms). */
+  deliveredAt?: number;
+  /** True when the run ended before the steer could be delivered. */
+  undelivered?: boolean;
+}
+
 /** Persisted child-run state: `.mochi/state/subagents/<id>.json`. Written at
  *  spawn, on start, and at completion, so a RESTARTED parent process can
  *  still collect a finished child's result from disk. */
@@ -63,6 +89,14 @@ export interface ChildRunRecord {
   diffSummary?: string;
   /** True once the parent applied (squash-merged) the worktree branch. */
   applied?: boolean;
+  /** B21: true once at least one mid-run steer was DELIVERED into this
+   *  child's context. Attribution must weight a steered run's outcome
+   *  differently from an unsteered one — the success is partly the
+   *  steer's, so the flag rides the record (and the trajectory export). */
+  steered?: boolean;
+  /** B21: every steer issued against this run, in issue order, with
+   *  delivery provenance (see ChildSteerEvent). */
+  steers?: ChildSteerEvent[];
 }
 
 /** System-prompt contract injected for structured (async/fleet) children:
@@ -262,6 +296,17 @@ export function aggregateReviews(
   };
 }
 
+/** One-line steer provenance for digests: how many steers were issued,
+ *  how many actually landed, and who sent them. Empty when unsteered. */
+export function formatSteerLine(record: ChildRunRecord): string {
+  const steers = record.steers ?? [];
+  if (!steers.length) return '';
+  const delivered = steers.filter((s) => s.deliveredAt !== undefined).length;
+  const lost = steers.filter((s) => s.undelivered).length;
+  const froms = [...new Set(steers.map((s) => s.from))].join(', ');
+  return `Steered: ${delivered}/${steers.length} steer(s) delivered (from ${froms})${lost ? ` · ${lost} NOT delivered` : ''} — this run's outcome was partly directed mid-run; weight attribution accordingly.`;
+}
+
 /** Compact digest of one child run for the parent's context. The full
  *  transcript lives in the child's own session/trace records; this is the
  *  fold-back summary the parent model actually reads. */
@@ -272,7 +317,8 @@ export function formatChildDigest(record: ChildRunRecord): string {
   }
   if (record.status === 'running') {
     const secs = record.startedAt ? Math.max(0, Math.round((Date.now() - record.startedAt) / 1000)) : 0;
-    return `${who} — still RUNNING (${secs}s elapsed). Keep working; collect later with collect_agent {id: "${record.id}"}.`;
+    const steerLine = formatSteerLine(record);
+    return `${who} — still RUNNING (${secs}s elapsed). Keep working; collect later with collect_agent {id: "${record.id}"}.${steerLine ? `\n${steerLine}` : ''}`;
   }
   if (record.status === 'cancelled') {
     return `${who} — CANCELLED${record.error ? `: ${record.error}` : ''}.`;
@@ -286,6 +332,8 @@ export function formatChildDigest(record: ChildRunRecord): string {
     `${who} — ${r.status.toUpperCase()} in ${secs}s · ${r.usage.tokens.toLocaleString()} tokens · ${r.usage.toolCalls} tool calls`,
     `Summary: ${r.summary}`,
   ];
+  const steerLine = formatSteerLine(record);
+  if (steerLine) lines.push(steerLine);
   if (r.verdict) lines.push(`Verdict: ${r.verdict}`);
   if (r.findings.length) {
     lines.push(`Findings (${r.findings.length}):`);
