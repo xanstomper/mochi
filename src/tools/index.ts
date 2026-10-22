@@ -19,6 +19,7 @@ import { chameleonTool } from './chameleon.js';
 import { todoTool } from './todo.js';
 import { skillTool } from './skill.js';
 import { subagentTool } from './subagent.js';
+import { collectAgentTool, cancelAgentTool, reviewFleetTool } from './agent-fleet.js';
 import { sessionCollabTool } from './session-collab.js';
 import { patchTool } from './patch.js';
 import { fetchTool } from './fetch.js';
@@ -27,6 +28,7 @@ import { treeTool } from './tree.js';
 import { regexReplaceTool } from './regex-replace.js';
 import { deepwikiTool } from './deepwiki.js';
 import { clipboardTool } from './clipboard.js';
+import { computerTool } from './computer.js';
 import { sqlCodebaseTool } from '../repo/codebase-sql.js';
 import { performance } from 'node:perf_hooks';
 import { searchReplaceMultiTool } from './search-replace-multi.js';
@@ -38,6 +40,7 @@ import { webCrawlTool } from './web-crawl.js';
 import { getDiagnosticsTool } from './diagnostics-tool.js';
 import { mkdirTool, moveFileTool, copyFileTool } from './file-ops.js';
 import { gitBlameTool, gitHistoryTool } from './git-blame.js';
+import { gitBisectTool } from './git-bisect.js';
 import { systemInfoTool } from './system-info.js';
 import { findReferencesTool, findDefinitionsTool } from './find-references.js';
 import { dbInspectTool } from './db-inspect.js';
@@ -61,6 +64,7 @@ import { astSliceTool } from './ast-slice.js';
 import { compilePromptTool } from './compile-prompt.js';
 import { toolFactoryTool, RESERVED_TOOL_NAMES, loadAuthoredTools } from './tool-factory.js';
 import { browserTool } from './browser.js';
+import { recordToolExposureUsage } from './tool-exposure.js';
 
 import { timerTool } from './timer.js';
 import { envTool } from './env.js';
@@ -79,11 +83,11 @@ import { notebookTool } from './notebook.js';
 export const ALL_TOOLS: Tool[] = [
   readTool, writeTool, editTool, deleteTool, shellTool, searchTool, globTool, outlineTool, astSliceTool,
   compilePromptTool,
-  gitTool, inspectTool, memoryTool, sessionRecallTool, recallOutputTool, todoTool, skillTool, subagentTool, sessionCollabTool, patchTool,
+  gitTool, inspectTool, memoryTool, sessionRecallTool, recallOutputTool, todoTool, skillTool, subagentTool, collectAgentTool, cancelAgentTool, reviewFleetTool, sessionCollabTool, patchTool,
   bgTaskTool, fetchTool, diffTool, treeTool, regexReplaceTool, deepwikiTool, clipboardTool, sqlCodebaseTool,
   searchReplaceMultiTool, analyzeCodeTool, verifyTool, perfTool,
   webSearchTool, getDiagnosticsTool, mkdirTool, moveFileTool, copyFileTool,
-  gitBlameTool, gitHistoryTool, systemInfoTool, findReferencesTool, findDefinitionsTool,
+  gitBlameTool, gitHistoryTool, gitBisectTool, systemInfoTool, findReferencesTool, findDefinitionsTool,
   dbInspectTool, createPrTool, thinkTool, webCrawlTool, renameSymbolTool, replTool,
   blastRadiusTool, mergeConflictTool, codeSimilarityTool, securityAuditTool, codebaseMapTool,
   ...symbolTools, replaceSymbolTool, chameleonTool,
@@ -93,6 +97,7 @@ export const ALL_TOOLS: Tool[] = [
   notesTool, tuiBuilderTool, mcpManageTool, markdownTool, colorTool,
   toolFactoryTool,
   browserTool,
+  computerTool,
   acceptPlanTool,
   askQuestionTool,
   notebookTool,
@@ -109,12 +114,13 @@ export const AUXILIARY_TOOL_NAMES = new Set([
 ]);
 
 /** MCH-91: heavy/rare tools — executable if invoked, but NOT advertised by default
- *  for focused coding tasks (implement/fix/refactor/test). Their combined schemas
- *  cost ~4-5K tokens on EVERY model call; a 2-file edit task does not need
- *  browser/db/PR/SQL tooling, and competitors advertise ~10 tools for the same
- *  work. The model can pull any of these in mid-run via the `load_tools` tool. */
+ *  for focused coding tasks (implement/fix/refactor/test). The full default
+ *  schema is ~69 tools ≈ 11K tokens on EVERY model call; a 2-file edit task
+ *  does not need browser/db/PR/SQL tooling, and competitors advertise ~10
+ *  tools for the same work. The model can pull any of these in mid-run via
+ *  the `load_tools` tool. */
 export const HEAVY_TOOL_NAMES = new Set([
-  'browser', 'db_inspect', 'deepwiki', 'sql_codebase_query', 'create_pr', 'review_pr', 'repl',
+  'browser', 'computer', 'db_inspect', 'deepwiki', 'sql_codebase_query', 'create_pr', 'review_pr', 'repl',
   'perf', 'clipboard', 'mcp_manage', 'lint', 'format', 'diff', 'tree',
   'analyze_code', 'code_similarity', 'type_hierarchy', 'rename_symbol',
   'resolve_conflicts', 'system_info',
@@ -139,8 +145,9 @@ export function trimHeavyTools(map: Map<string, Tool>, taskText: string): number
 /** MCH-110: LEAN tier — minimal core advertised for simple, focused coding
  *  tasks (create/edit/run/verify a few files). Everything outside this set
  *  (including most always-include auxiliary tools) is deferred to `load_tools`.
- *  Cuts first-call schema from ~7-11K to ~2.5K tokens, directly shrinking TTFC
- *  and per-call burn on the dominant task shapes. */
+ *  Cuts the first-call schema from the full default (~69 tools, ~11K tokens)
+ *  to the ~21 core tools (~2.5K tokens), directly shrinking TTFC and per-call
+ *  burn on the dominant task shapes. */
 export const LEAN_TOOL_NAMES = new Set([
   'read', 'write', 'edit', 'patch', 'search', 'glob', 'shell', 'git', 'think', 'ask_question',
   'todo', 'load_tools', 'verify', 'lint', 'format', 'find_definitions',
@@ -163,10 +170,11 @@ export function trimToLeanTier(map: Map<string, Tool>, taskText: string): number
 }
 
 /** READ tier — read-only essentials for research/document/plan tasks, which
- *  previously advertised the full ~65-tool schema (~10K tokens/call) despite
- *  never legitimately mutating (plan mode vetoes mutations anyway). Mutating
- *  tools stay restorable mid-run via `load_tools`, exactly like lean/heavy.
- *  Cuts the research prompt to ~16 small schemas. */
+ *  previously advertised the full default schema (~69 tools, ~11K
+ *  tokens/call) despite never legitimately mutating (plan mode vetoes
+ *  mutations anyway). Mutating tools stay restorable mid-run via
+ *  `load_tools`, exactly like lean/heavy. Cuts the research prompt to the
+ *  17 schemas below. */
 export const READ_TOOL_NAMES = new Set([
   'read', 'search', 'glob', 'outline', 'inspect', 'tree', 'diff', 'fetch',
   'web_search', 'skill', 'think', 'ask_question', 'load_tools', 'todo',
@@ -235,7 +243,7 @@ export function loadToolsTool(getTools: () => Map<string, Tool>): Tool {
  */
 const CORE_TOOL_NAMES = new Set([
   'read', 'write', 'edit', 'patch', 'replace_symbol', 'delete', 'shell', 'search', 'glob', 'outline', 'ast_slice',
-  'git', 'inspect', 'todo', 'skill', 'subagent', 'bg_task', 'fetch', 'web_search', 'web_crawl', 'think', 'ask_question', 'chameleon', 'blast_radius', 'session_recall', 'codebase_map', 'security_audit'
+  'git', 'inspect', 'todo', 'skill', 'subagent', 'collect_agent', 'cancel_agent', 'review_fleet', 'bg_task', 'fetch', 'web_search', 'web_crawl', 'think', 'ask_question', 'chameleon', 'blast_radius', 'session_recall', 'codebase_map', 'security_audit'
 ]);
 
 /** Detect whether a model name implies a weak/free-tier model that struggles
@@ -264,6 +272,9 @@ export function buildTools(config: MochiConfig, allowed?: string[]): Map<string,
       name === 'todo' ||
       name === 'skill' ||
       name === 'subagent' ||
+      name === 'collect_agent' ||
+      name === 'cancel_agent' ||
+      name === 'review_fleet' ||
       name === 'chameleon' ||
       name === 'blast_radius' ||
       name === 'think' ||
@@ -426,6 +437,28 @@ export const TOOL_ALIASES: Record<string, string> = {
   astSlice: 'ast_slice',
 };
 
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** P1.3: tools a task text explicitly names — by canonical name or by any
+ *  known alias ("grep", "apply_patch", "browser_action", …). Measured
+ *  exposure treats these as forced: a tool the user/model was told to use
+ *  is never dropped by the schema budget. Word-boundary, case-insensitive;
+ *  computed once per run at tiering time. */
+export function toolsNamedInText(text: string): Set<string> {
+  const out = new Set<string>();
+  if (!text) return out;
+  for (const name of ALL_TOOLS_MAP.keys()) {
+    if (new RegExp(`\\b${escapeRegExp(name)}\\b`, 'i').test(text)) out.add(name);
+  }
+  for (const [alias, target] of Object.entries(TOOL_ALIASES)) {
+    if (!ALL_TOOLS_MAP.has(target) || out.has(target)) continue;
+    if (new RegExp(`\\b${escapeRegExp(alias)}\\b`, 'i').test(text)) out.add(target);
+  }
+  return out;
+}
+
 export function normalizeToolArgs(toolName: string, args: Record<string, unknown>): Record<string, unknown> {
   const norm: Record<string, unknown> = { ...args };
 
@@ -542,17 +575,6 @@ export function normalizeToolArgs(toolName: string, args: Record<string, unknown
   return norm;
 }
 
-export function toolDescriptions(tools: Map<string, Tool>): string {
-  const lines: string[] = [];
-  for (const [name, tool] of tools) {
-    lines.push(`## ${name}`);
-    lines.push(tool.def.description);
-    if (tool.def.dangerous) lines.push('**Requires approval.**');
-    lines.push(`Parameters: ${tool.def.parameters.map((p) => `${p.name}: ${p.type}${p.required ? '' : '?'}`).join(', ')}`);
-  }
-  return lines.join('\n');
-}
-
 export function validateArgs(tool: Tool, args: Record<string, unknown>): string | undefined {
   const missing = tool.def.parameters.filter(
     (p) => p.required && (args[p.name] === undefined || args[p.name] === null || args[p.name] === ''),
@@ -613,6 +635,19 @@ export async function executeTool(
   const tool = tools.get(name) || ALL_TOOLS_MAP.get(name);
   if (!tool) return { output: '', error: `Unknown tool: ${rawName}`, durationMs: 0 };
 
+  // Role-scope enforcement (multi-agent presets): a scoped child's allowlist
+  // is a hard boundary at the tool layer. The tools.get/ALL_TOOLS_MAP
+  // fallback above exists so deferred tools stay executable — which also
+  // means merely omitting a tool from a child's advertised set does NOT stop
+  // a hallucinated call. The allowlist does.
+  if (ctx.toolAllowlist && !ctx.toolAllowlist.has(name)) {
+    return {
+      output: '',
+      error: `Tool '${name}' is not available to this agent — its role preset scopes it to: ${[...ctx.toolAllowlist].slice(0, 12).join(', ')}${ctx.toolAllowlist.size > 12 ? ', …' : ''}. Work within that toolset; do not retry '${name}'.`,
+      durationMs: 0,
+    };
+  }
+
   const args = normalizeToolArgs(name, rawArgs);
   const validation = validateArgs(tool, args);
   if (validation) return { output: '', error: validation, durationMs: 0 };
@@ -651,10 +686,16 @@ export async function executeTool(
   try {
     const output = await tool.execute(args, ctx);
     const durationMs = Math.round(performance.now() - start);
+    // P1.3 measured exposure: this function is the single chokepoint every
+    // execution funnels through (loop, speculative path, harness helpers),
+    // and speculative replays never re-enter it — so recording here counts
+    // each real execution exactly once. Fail-silent by construction.
+    recordToolExposureUsage(ctx.workspace, name, true, ctx.taskKind);
     return { output, durationMs };
   } catch (err) {
     const durationMs = Math.round(performance.now() - start);
     const error = err instanceof Error ? err.message : String(err);
+    recordToolExposureUsage(ctx.workspace, name, false, ctx.taskKind);
     // Don't discard what the tool produced before it threw: surface any
     // partial stdout/stderr/result carried on the error as `output` (the
     // agent loop renders it as `Error: <msg>\n<partial>`, same as the shell
