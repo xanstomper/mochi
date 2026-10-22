@@ -77,10 +77,20 @@ export interface SafetyConfig {
   };
   maxToolCalls?: number;
   maxModelCalls?: number;
-  /** OS-level sandbox for spawned commands: 'off' (default, direct exec),
-   *  'auto' (bubblewrap when available, else direct), 'bubblewrap' (fail
-   *  loudly if bwrap is missing). Env: MOCHI_SANDBOX. */
-  sandbox?: 'off' | 'auto' | 'bubblewrap';
+  /** OS-level sandbox for spawned commands: 'off' (direct exec),
+   *  'auto' (best OS backend — bubblewrap, then unshare namespaces — else
+   *  the labeled SOFT jail: env scrub + cwd clamp), 'bubblewrap' /
+   *  'unshare' (force that backend, fail loudly if unavailable).
+   *  When unset, the tier default applies: engaged ('auto') for
+   *  safe/ask/auto, off for uncensored. Env: MOCHI_SANDBOX. */
+  sandbox?: 'off' | 'auto' | 'bubblewrap' | 'unshare';
+  /** Allow network inside the sandbox for shell commands. Default false:
+   *  sandboxed shell commands are network-isolated unless the operator
+   *  opts in here. Env: MOCHI_SANDBOX_NETWORK=1. */
+  sandboxNetwork?: boolean;
+  /** Extra writable paths inside the sandbox, beyond the workspace, the
+   *  OS tmpdir, and dev-tool caches. */
+  sandboxWritablePaths?: string[];
   maxVerifyRetries?: number;
   /** B27 restructure: hostnames whose POST/PUT/PATCH/DELETE endpoints are
    *  OPERATOR-DECLARED read-only (GraphQL query endpoints, search APIs that
@@ -154,6 +164,15 @@ export interface MochiConfig {
   discipline?: DisciplineConfig;
   /** Evidence-based skill lifecycle (see SkillsConfig). Probation default on. */
   skills?: SkillsConfig;
+  /** Semantic code retrieval (Wave J, src/repo/semantic-index.ts). When an
+   *  embedding model is configured here (or the configured provider is a
+   *  known embedding-capable one), the .mochi/index semantic index embeds
+   *  chunks with that provider model; otherwise it uses a deterministic
+   *  local LEXICAL-fallback embedder — never true semantics, and labelled
+   *  as such everywhere. semanticIndex:false disables the index entirely.
+   *  Env overrides: MOCHI_EMBEDDING_MODEL / MOCHI_EMBEDDING_PROVIDER /
+   *  MOCHI_SEMANTIC_INDEX=0. */
+  retrieval?: { embeddingProvider?: string; embeddingModel?: string; semanticIndex?: boolean };
   telemetry: boolean;
   projectDir: string;
   configDir: string;
@@ -381,18 +400,31 @@ export type MochiEvent =
   | { type: 'agent:completed'; id: string; taskId: string }
   | { type: 'subagent:started'; agentId: string; parentId: string; role: AgentRole; prompt: string }
   | { type: 'subagent:completed'; agentId: string; parentId: string; role: AgentRole; success: boolean; summary: string; tokensUsed: number }
+  /** B21: a mid-run steer was DELIVERED into a running subagent's context
+   *  (emitted by the child at the turn boundary where it drained the
+   *  steer). Carries provenance only — who steered, when, and the steer's
+   *  sha256/length; the raw steer text never rides the bus into traces.
+   *  The trajectory exporter lifts these into the record's steerEvents so
+   *  a steered run's outcome is never credited as unsteered evidence. */
+  | { type: 'subagent:steered'; agentId: string; parentId: string; from: string; at: number; hash: string; chars: number }
   | { type: 'agent:log'; agentId: string; message: string }
   /** Run-finish skill attribution: which skills the run loaded, joined with
    *  the run's final verifier-gate verdict. The trajectory exporter lifts
    *  this into the record's `skills[]`/`verification` so offline tooling can
    *  compute per-skill fix-rates. Emitted once per run by finishOnce. */
-  | { type: 'skills:attributed'; agentId: string; skills: Array<{ id: string; verdict: 'pass' | 'fail' | 'partial' | 'blocked' | 'none' }>; verifyStatus?: string; taskKind?: string }
+  | { type: 'skills:attributed'; agentId: string; skills: Array<{ id: string; verdict: 'pass' | 'fail' | 'partial' | 'blocked' | 'none' }>; verifyStatus?: string; taskKind?: string; steered?: boolean }
   | { type: 'agent:reasoning'; content: string; agentId: string }
   | { type: 'agent:iteration'; agentId: string; trace: IterationTrace }
   | { type: 'tool:called'; tool: string; args: unknown; agentId: string; tool_call_id?: string }
   | { type: 'tool:completed'; tool: string; result: ToolResult; agentId: string }
   | { type: 'tool:failed'; tool: string; error: string; agentId: string }
   | { type: 'file:changed'; path: string; operation: 'write' | 'edit' | 'delete'; agentId: string }
+  /** Edit-application telemetry (edit tool): one event per edit call outcome,
+   *  so edit reliability (strategy mix, failure kinds, integrity reverts) is
+   *  measurable per run. Lifted into trajectory records as `editStats`. */
+  | { type: 'edit:applied'; path: string; strategy: 'exact' | 'normalized' | 'relaxed' | 'anchored'; attempts: number; integrity: 'passed' | 'pre-existing-errors'; agentId: string }
+  | { type: 'edit:reverted'; path: string; strategy: 'exact' | 'normalized' | 'relaxed' | 'anchored'; errors: string; agentId: string }
+  | { type: 'edit:failed'; path: string; failureKind: 'not-found' | 'ambiguous' | 'no-change'; attempts: number; nearMisses: number; agentId: string }
   | { type: 'message:chunk'; content: string; agentId: string }
   | { type: 'usage:updated'; agentId: string; inputTokens: number; outputTokens: number; cacheTokens: number; totalTokens: number; costUsd?: number; model?: string }
   | { type: 'error'; error: string; agentId?: string }

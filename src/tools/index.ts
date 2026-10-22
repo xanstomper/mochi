@@ -9,6 +9,7 @@ import { editTool } from './edit.js';
 import { deleteTool } from './delete.js';
 import { shellTool } from './shell.js';
 import { searchTool } from './search.js';
+import { semanticSearchTool } from './semantic-search.js';
 import { globTool } from './glob.js';
 import { gitTool } from './git.js';
 import { inspectTool } from './inspect.js';
@@ -19,7 +20,7 @@ import { chameleonTool } from './chameleon.js';
 import { todoTool } from './todo.js';
 import { skillTool } from './skill.js';
 import { subagentTool } from './subagent.js';
-import { collectAgentTool, cancelAgentTool, reviewFleetTool } from './agent-fleet.js';
+import { collectAgentTool, cancelAgentTool, steerAgentTool, reviewFleetTool } from './agent-fleet.js';
 import { sessionCollabTool } from './session-collab.js';
 import { patchTool } from './patch.js';
 import { fetchTool } from './fetch.js';
@@ -63,6 +64,7 @@ import { skillManageTool } from '../skills/skill-manager.js';
 import { astSliceTool } from './ast-slice.js';
 import { compilePromptTool } from './compile-prompt.js';
 import { toolFactoryTool, RESERVED_TOOL_NAMES, loadAuthoredTools } from './tool-factory.js';
+import { loadForgedToolsSafe } from './tool-forge.js';
 import { browserTool } from './browser.js';
 import { recordToolExposureUsage } from './tool-exposure.js';
 
@@ -81,9 +83,9 @@ import { askQuestionTool } from './ask-question.js';
 import { notebookTool } from './notebook.js';
 
 export const ALL_TOOLS: Tool[] = [
-  readTool, writeTool, editTool, deleteTool, shellTool, searchTool, globTool, outlineTool, astSliceTool,
+  readTool, writeTool, editTool, deleteTool, shellTool, searchTool, semanticSearchTool, globTool, outlineTool, astSliceTool,
   compilePromptTool,
-  gitTool, inspectTool, memoryTool, sessionRecallTool, recallOutputTool, todoTool, skillTool, subagentTool, collectAgentTool, cancelAgentTool, reviewFleetTool, sessionCollabTool, patchTool,
+  gitTool, inspectTool, memoryTool, sessionRecallTool, recallOutputTool, todoTool, skillTool, subagentTool, collectAgentTool, cancelAgentTool, steerAgentTool, reviewFleetTool, sessionCollabTool, patchTool,
   bgTaskTool, fetchTool, diffTool, treeTool, regexReplaceTool, deepwikiTool, clipboardTool, sqlCodebaseTool,
   searchReplaceMultiTool, analyzeCodeTool, verifyTool, perfTool,
   webSearchTool, getDiagnosticsTool, mkdirTool, moveFileTool, copyFileTool,
@@ -243,7 +245,7 @@ export function loadToolsTool(getTools: () => Map<string, Tool>): Tool {
  */
 const CORE_TOOL_NAMES = new Set([
   'read', 'write', 'edit', 'patch', 'replace_symbol', 'delete', 'shell', 'search', 'glob', 'outline', 'ast_slice',
-  'git', 'inspect', 'todo', 'skill', 'subagent', 'collect_agent', 'cancel_agent', 'review_fleet', 'bg_task', 'fetch', 'web_search', 'web_crawl', 'think', 'ask_question', 'chameleon', 'blast_radius', 'session_recall', 'codebase_map', 'security_audit'
+  'git', 'inspect', 'todo', 'skill', 'subagent', 'collect_agent', 'cancel_agent', 'steer_agent', 'review_fleet', 'bg_task', 'fetch', 'web_search', 'web_crawl', 'think', 'ask_question', 'chameleon', 'blast_radius', 'session_recall', 'codebase_map', 'security_audit'
 ]);
 
 /** Detect whether a model name implies a weak/free-tier model that struggles
@@ -274,6 +276,7 @@ export function buildTools(config: MochiConfig, allowed?: string[]): Map<string,
       name === 'subagent' ||
       name === 'collect_agent' ||
       name === 'cancel_agent' ||
+      name === 'steer_agent' ||
       name === 'review_fleet' ||
       name === 'chameleon' ||
       name === 'blast_radius' ||
@@ -293,6 +296,13 @@ export function buildTools(config: MochiConfig, allowed?: string[]): Map<string,
     // For weak models, only include core tools to keep tool schema lean.
     if (weak && !CORE_TOOL_NAMES.has(name) && !alwaysInclude) continue;
     map.set(name, tool);
+  }
+  // Tool Forge (Wave O): forged tools (self-synthesised, sandbox-gated,
+  // probation/active only) merge in last and NEVER shadow a name already
+  // present — built-ins and human/agent-authored tools win every collision.
+  // Probationary ones are relevance-trimmed per task by the agent loop.
+  for (const [name, tool] of loadForgedToolsSafe(projectDir)) {
+    if (!map.has(name) && !RESERVED_TOOL_NAMES.has(name)) map.set(name, tool);
   }
   // MCH-91: deferred tool discovery — always-available escape hatch for heavy
   // tools (trimmed per-task by trimHeavyTools) and auxiliary tools.
@@ -397,6 +407,8 @@ export const TOOL_ALIASES: Record<string, string> = {
   agent_delegate: 'subagent',
   spawn_agent: 'subagent',
   invokeSubagent: 'subagent',
+  steer_subagent: 'steer_agent',
+  redirect_agent: 'steer_agent',
 
   // Background tasks
   manage_task: 'bg_task',
