@@ -122,31 +122,88 @@ function isInStringOrComment(source: string, idx: number): boolean {
  * arrows or '>=' / '<=' / '<<' / '>>' pairs are skipped (flipping those makes
  * syntax errors, not logic bugs).
  */
+/** True when the operator at `idx` is really part of a larger token that a
+ *  bare flip would corrupt ('=>' arrows, '>='/'<='/'<<'/'>>' pairs). */
+function isPartOfLargerToken(source: string, idx: number, from: string): boolean {
+  const prev = source[idx - 1] ?? '';
+  const next = source[idx + from.length] ?? '';
+  // '=>' arrow: the '>' belongs to the arrow token.
+  if (from === '>' && prev === '=') return true;
+  // '>' or '<' adjacent to another comparison/shift char forms a longer token
+  // ('>=', '<=', '<<', '>>', '</', '/>') that a bare flip would corrupt.
+  if ((from === '>' || from === '<') && ['>', '<', '='].includes(next)) return true;
+  if ((from === '>' || from === '<') && ['>', '<'].includes(prev)) return true;
+  // JSX-ish or type-parameter angle brackets usually sit next to identifiers,
+  // but we cannot know cheaply; the tokens above are the dangerous ones.
+  return false;
+}
+
 export function findMutation(source: string): { index: number; from: string; to: string } | null {
-  const isPartOfLargerToken = (idx: number, from: string): boolean => {
-    const prev = source[idx - 1] ?? '';
-    const next = source[idx + from.length] ?? '';
-    // '=>' arrow: the '>' belongs to the arrow token.
-    if (from === '>' && prev === '=') return true;
-    // '>' or '<' adjacent to another comparison/shift char forms a longer token
-    // ('>=', '<=', '<<', '>>', '</', '/>') that a bare flip would corrupt.
-    if ((from === '>' || from === '<') && ['>', '<', '='].includes(next)) return true;
-    if ((from === '>' || from === '<') && ['>', '<'].includes(prev)) return true;
-    // JSX-ish or type-parameter angle brackets usually sit next to identifiers,
-    // but we cannot know cheaply; the tokens above are the dangerous ones.
-    return false;
-  };
   for (const f of FLIPS) {
     let idx = -1;
     let cursor = 0;
     while ((idx = source.indexOf(f.from, cursor)) !== -1) {
-      if (!isInStringOrComment(source, idx) && !isPartOfLargerToken(idx, f.from)) {
+      if (!isInStringOrComment(source, idx) && !isPartOfLargerToken(source, idx, f.from)) {
         return { index: idx, from: f.from, to: f.to };
       }
       cursor = idx + 1;
     }
   }
   return null;
+}
+
+export interface MutationSite { index: number; from: string; to: string }
+
+/**
+ * Enumerate EVERY flippable operator site in source order. findMutation
+ * alone cannot do this: it prioritises operator TYPE over position (===
+ * anywhere beats + earlier in the file), so offset-walking it skips sites.
+ * This scan computes the string/comment mask in one pass (same state
+ * machine as isInStringOrComment), then walks positions left to right,
+ * preferring the longest flip at each position (=== before ==) and never
+ * producing overlapping sites. Added for the failure curriculum (D10),
+ * which needs many candidate mutations per file, not just the first.
+ */
+export function enumerateMutations(source: string): MutationSite[] {
+  const masked = new Array<boolean>(source.length).fill(false);
+  let inString: string | null = null;
+  let inLineComment = false;
+  let inBlock = false;
+  for (let i = 0; i < source.length; i++) {
+    masked[i] = inString !== null || inLineComment || inBlock;
+    const c = source[i];
+    const n = source[i + 1];
+    if (inLineComment) {
+      if (c === '\n') inLineComment = false;
+      continue;
+    }
+    if (inBlock) {
+      if (c === '*' && n === '/') { inBlock = false; i++; if (i < source.length) masked[i] = true; }
+      continue;
+    }
+    if (inString) {
+      if (c === '\\') { i++; if (i < source.length) masked[i] = true; continue; }
+      if (c === inString) inString = null;
+      continue;
+    }
+    if (c === '/' && n === '/') { inLineComment = true; i++; if (i < source.length) masked[i] = true; continue; }
+    if (c === '/' && n === '*') { inBlock = true; i++; if (i < source.length) masked[i] = true; continue; }
+    if (c === '"' || c === "'" || c === '`') inString = c;
+  }
+  const out: MutationSite[] = [];
+  let i = 0;
+  while (i < source.length) {
+    if (masked[i]) { i++; continue; }
+    let hit: MutationSite | null = null;
+    for (const f of FLIPS) {
+      if (source.startsWith(f.from, i) && !isPartOfLargerToken(source, i, f.from)) {
+        hit = { index: i, from: f.from, to: f.to };
+        break;
+      }
+    }
+    if (hit) { out.push(hit); i += hit.from.length; } else { i++; }
+  }
+  return out;
 }
 
 /** Working-tree changed source files (added/modified/untracked) we may mutate.
@@ -205,6 +262,15 @@ export function changedSourceFiles(cwd: string): string[] {
  *            runner and so tests can present a fake runner without invoking a
  *            real model or shell.
  */
+/** Strip volatile timing/timestamp tokens from captured test output so the
+ *  mutation output-diff compares signal, not scheduler weather. */
+function normalizeForMutationDiff(out: string): string {
+  return out
+    .replace(/\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b/g, '<ts>')
+    .replace(/duration_ms\s+\d+(?:\.\d+)?/g, 'duration_ms <t>')
+    .replace(/\b\d+(?:\.\d+)?\s?(?:ms|us|µs|ns|s|m|h)\b/g, '<t>');
+}
+
 export async function runMutationCheck(
   cwd: string,
   testCommand: string,
@@ -216,6 +282,15 @@ export async function runMutationCheck(
    *  produce a meaningless "survived" verdict against an implementation the
    *  tests actually do cover. */
   fileScope?: string[],
+  options?: {
+    /** When true, skip the check if the green baseline capture carries no
+     *  observable test output (only package-manager banner/echo lines or
+     *  nothing at all — e.g. `npm test` → `node -e "process.exit(0)"`).
+     *  Such a command cannot observe the code, so EVERY mutant "survives"
+     *  and a downgrade would be a false positive. Opt-in: the goals-layer
+     *  engine's historical behavior is unchanged without it. */
+    requireObservableBaseline?: boolean;
+  },
 ): Promise<MutationCheck> {
   const all = changedSourceFiles(cwd);
   const files = fileScope && fileScope.length > 0
@@ -251,6 +326,20 @@ export async function runMutationCheck(
     }
   }
 
+  if (options?.requireObservableBaseline) {
+    const observable = baseline.split('\n').filter((l) => {
+      const t = l.trim();
+      // Non-observable: blanks, package-manager banner/echo ('>' lines),
+      // shell framing ('$ cmd', 'exit_code:', the shell tool's
+      // 'stdout:'/'stderr:'/'(empty)' scaffold), and the command echo.
+      return t !== '' && !t.startsWith('>') && !t.startsWith('$') && !/^exit_code:/.test(t)
+        && t !== 'stdout:' && t !== 'stderr:' && t !== '(empty)' && t !== testCommand;
+    });
+    if (observable.length === 0) {
+      return { applied: false, note: `Mutation check skipped: "${testCommand}" produced no observable output on a green run, so a surviving mutant would prove nothing.` };
+    }
+  }
+
   writeFileSync(full, mutated);
   let exit = 1;
   let mutatedOut = '';
@@ -268,7 +357,14 @@ export async function runMutationCheck(
     writeFileSync(full, original);
   }
 
-  const outputChanged = !!capture && baseline !== '' && mutatedOut !== baseline;
+  // Print-style diff, noise-normalized: test reporters embed per-run
+  // durations ("(0.95913ms)", "1 passed in 0.50s", "Duration 5.58s") and
+  // timestamps that differ between ANY two runs. A raw string compare marks
+  // every mutant KILLED on such suites — the check becomes a no-op exactly
+  // where it matters — so volatile timing tokens are stripped from both
+  // captures before diffing. Assertion text ("expected 5 to be 6") carries
+  // no timing units and survives normalization untouched.
+  const outputChanged = !!capture && baseline !== '' && normalizeForMutationDiff(mutatedOut) !== normalizeForMutationDiff(baseline);
   const killed = exit !== 0 || outputChanged;
   const howKilled = exit !== 0 && outputChanged
     ? 'exit code and output changed'

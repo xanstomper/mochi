@@ -14,7 +14,6 @@ import { SessionStore } from '../state/session-store.js';
 import { HookManager } from '../hooks.js';
 import { classifyOneShot } from '../core/one-shot.js';
 import { consolidate } from '../memory/consolidate.js';
-import { resolve } from 'node:path';
 import type { ReadCache } from '../tools/types.js';
 
 export interface GoalResult {
@@ -413,9 +412,16 @@ Return ONLY the JSON array, no markdown.`;
     this.workspace.saveTasks(goal.id, scheduler.all());
 
     const snap = budget.snapshot(this.config.model.model);
+    const costLabel = snap.costSource === 'provider'
+      ? 'provider-reported'
+      : snap.costSource === 'mixed'
+        ? 'provider-reported + price-table estimate'
+        : 'price-table estimate';
     const costLine = snap.usedCostUsd > 0
-      ? `Cost: $${snap.usedCostUsd.toFixed(4)} (provider-reported). `
-      : `Cost: not reported by this provider. `;
+      ? `Cost: $${snap.usedCostUsd.toFixed(4)} (${costLabel}). `
+      : snap.costSource === 'estimated'
+        ? `Cost: $0.0000 (price-table estimate; model priced at $0). `
+        : `Cost: not reported by this provider. `;
     const result: GoalResult = {
       success: !aborted && failed.length === 0,
       goal,
@@ -587,42 +593,14 @@ Return ONLY the JSON array, no markdown.`;
     // there BLOCKs correct one-shot builds instead of completing them.
     const needsVerification = !this.config.planMode && (task.acceptanceCriteria.length > 0 || Boolean(task.verificationCommand));
     if (needsVerification) {
-      // Simple acceptance criteria shortcut: if there is no explicit verification command
-      // and the criteria are plain "<path> exists" checks, perform a lightweight file existence
-      // test instead of running the full verifier (which may invoke repo-wide test suites).
-      if (!task.verificationCommand && task.acceptanceCriteria.length > 0) {
-        const fs = await import('node:fs');
-        let simplePass = true;
-        for (const crit of task.acceptanceCriteria) {
-          const trimmed = crit.trim().toLowerCase();
-          const match = trimmed.match(/^(.+?)\s+exists$/);
-          // Only path-like criteria qualify ("src/x.ts exists"). The old
-          // regex accepted any "<words> exists" ("Database exists") and
-          // probed `<cwd>/database`. Empty files don't satisfy: a 0-byte
-          // deliverable is not done.
-          const rawPath = match?.[1].replace(/^['\"]|['\"]$/g, '') ?? '';
-          const pathLike = match && (rawPath.includes('/') || rawPath.includes('\\') || /\.[a-z0-9]{1,8}$/.test(rawPath));
-          if (!pathLike) {
-            simplePass = false;
-            break;
-          }
-          try {
-            fs.accessSync(resolve(this.cwd, rawPath));
-            const st = fs.statSync(resolve(this.cwd, rawPath));
-            if (st.isFile() && st.size === 0) simplePass = false;
-          } catch {
-            simplePass = false;
-            break;
-          }
-          if (!simplePass) break;
-        }
-        if (simplePass) {
-          task.output = 'All acceptance criteria passed (simple check).';
-          scheduler.complete(task.id, this.agentId(task));
-          await this.hooks.runAfter('after_task', { task: task.id });
-          return;
-        }
-      }
+      // P0.5: the "path exists" shortcut that used to complete criteria-only
+      // tasks on a bare fs.access probe is DELETED. It bypassed the
+      // VerifierEngine's evidence standard (scoped diff, command evidence,
+      // mutation check, judge veto) for exactly the tasks that bothered to
+      // declare criteria — a file existing was never proof the task is done.
+      // Criteria tasks now always reach verifier.verify(); the engine judges
+      // existence-shaped content deliverables through its own content-only
+      // branches, and behavior tasks get real checks or an honest BLOCKED.
       let verification = await verifier.verify(task, result.summary);
       // Self-review improvement passes: iterate the task toward verified-passing
       // before declaring it done, so /goal refines each step instead of leaving
@@ -671,7 +649,11 @@ Return ONLY the JSON array, no markdown.`;
         verification = await verifier.verify(task, reviewResult.summary);
       }
       task.output = verification.summary;
-      if (verification.status !== 'PASS') {
+      // FLAKY-PASS completes like PASS: the suite demonstrably went green on
+      // re-run with the tree unchanged. The flaky tests are named in the
+      // summary (and the quarantine registry) — visible, never silent — but
+      // a coin-flip test must not fail finished work.
+      if (verification.status !== 'PASS' && verification.status !== 'FLAKY-PASS') {
         scheduler.fail(task.id, verification.summary, this.agentId(task));
         await this.hooks.runAfter('after_task', { task: task.id, status: 'failed' });
         return;
