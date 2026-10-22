@@ -18,6 +18,9 @@ runs the official harness).
 | `swebench.mjs` | Runs Mochi headlessly on SWE-bench-style instances, emits official-format predictions |
 | `score-swebench.md` | How predictions become a score (official `swebench` harness — never reimplemented here) |
 | `terminalbench.mjs` | Runs Mochi on Terminal-Bench-style task dirs, grades with each task's own tests |
+| `targets.mjs` | Adapters for the current targets: Terminal-Bench 4.0 (Harbor format) + SWE-bench Pro V2 (public + Hard split) — validate / enumerate / run / emit, eval-only enforced |
+| `targets.test.mjs` | `node --test` suite for the target adapters (offline, fixture-based) |
+| `fixtures/` | Synthetic format-faithful fixtures for the adapters (NOT real eval tasks) |
 | `blocklist.mjs` | The contamination filter library + CLI (load / `isBlocked` / `filterRecords` / `expand` / `coverage`) |
 | `eval_blocklist.json` | The blocklist data: eval dataset identifiers (+ instance IDs once expanded) |
 | `blocklist.test.mjs` | `node --test` suite for the blocklist contract |
@@ -111,6 +114,44 @@ This runner does **not** — it runs Mochi and the tests locally, in a copied
 directory, with your permissions. Use it for plumbing/smoke/trusted task sets,
 or run the whole script inside a disposable VM/container for untrusted tasks.
 
+## Current targets (targets.mjs)
+
+**Terminal-Bench 4.0** — 66 tasks in Harbor format (`task.toml` with
+`[task] name = "org/name"`, `instruction.md`, `environment/`,
+`tests/test.sh`, optional `solution/solve.sh`). The adapter validates and
+enumerates that layout, and for a run it materializes a
+terminalbench.mjs-shaped shadow (instruction + plain environment files —
+the Dockerfile is *excluded*, the thin runner does not build images) and
+invokes the existing runner. A task's `solution/solve.sh` becomes the
+`--dry-run` oracle stub, so the smoke path actually discriminates.
+
+```bash
+node bench/external/targets.mjs validate --target tb4 --tasks-dir ~/data/terminal-bench-4.0/tasks
+node bench/external/targets.mjs run --target tb4 --tasks-dir ~/data/terminal-bench-4.0/tasks \
+  --purpose eval --dry-run --out runs/tb4-smoke.jsonl
+```
+
+**SWE-bench Pro V2** — Scale's revised public split (642 tasks;
+arXiv:2610.24206) plus the separate 51-task Hard split. The adapter
+validates the instance schema, normalizes records into the exact dataset
+shape `swebench.mjs` consumes, and **drops the gold `patch`/`test_patch`**
+— an emitted eval dataset never carries the answers. Hard-split membership
+comes only from record fields or an explicit `--ids` file; with neither
+signal the adapter refuses rather than guessing.
+
+```bash
+node bench/external/targets.mjs emit-dataset --target swebench-pro-v2 \
+  --dataset ~/data/SWE-bench_Pro_V2.jsonl --purpose eval --split hard \
+  --ids ~/data/pro-v2-hard-ids.txt --out runs/pro-v2-hard.jsonl
+# then run/score exactly like the SWE-bench runner above.
+```
+
+**Eval-only, enforced:** `run` / `emit-dataset` require `--purpose eval`.
+Any training-shaped purpose (`train`, `curriculum-generation`, …) is a
+hard refusal (exit 3) — the frozen gate's rule, applied at the adapter.
+Both targets are named in `eval_blocklist.json` (seed-only until expanded
+from the canonical releases, like every other entry).
+
 ## The blocklist (contamination rules)
 
 > If a task, repo, or answer could appear in an eval Mochi reports, it does
@@ -169,7 +210,7 @@ filtered its training corpus — that statement is part of the score.
 ## Tests
 
 ```bash
-node --test bench/external/blocklist.test.mjs
+node --test bench/external/blocklist.test.mjs bench/external/targets.test.mjs
 ```
 
 Proves: match by `instance_id`, match by repo+commit and by commit alone,

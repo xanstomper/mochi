@@ -1,0 +1,21 @@
+# Fixture task in Terminal-Bench 4.0 (Harbor) format — synthetic and tiny.
+# Exists only so the targets adapter can be tested offline; NOT a real TB task.
+[task]
+name = "mochi-fixtures/fix-csv-sum"
+version = "1.0.0"
+
+[metadata]
+difficulty = "easy"
+task_type = "data-processing"
+tags = ["csv", "shell", "fixture"]
+languages = ["shell"]
+
+[agent]
+timeout_sec = 600
+
+[verifier]
+timeout_sec = 120
+
+[environment]
+cpus = 1
+memory_mb = 512
