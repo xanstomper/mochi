@@ -161,4 +161,42 @@ describe('background tasks', () => {
     for (let i = 0; i < 30 && !t.output.includes('GOT:via-ledger'); i++) await sleep(100);
     expect(t.output).toContain('GOT:via-ledger');
   }, 60_000);
+
+  it('relay teardown leaves no orphaned cat/sh holding the FIFO (process-leak regression)', async () => {
+    const { execSync } = await import('node:child_process');
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-bg-leak-'));
+    const t = startBackgroundTask('while IFS= read -r l; do echo "GOT:$l"; done', dir, { description: 'leak proof' });
+    await sleep(300);
+    expect(t.fifoPath).toBeTruthy();
+    // Writer appears and closes → the relay's cat hits EOF and REOPENS; a
+    // second writer proves a fresh cat is running (the exact process the old
+    // direct-kill teardown orphaned).
+    execSync(`sh -c 'echo one >> "${t.fifoPath}"'`);
+    for (let i = 0; i < 30 && !t.output.includes('GOT:one'); i++) await sleep(100);
+    execSync(`sh -c 'echo two >> "${t.fifoPath}"'`);
+    for (let i = 0; i < 30 && !t.output.includes('GOT:two'); i++) await sleep(100);
+    expect(t.output).toContain('GOT:two');
+    // Count live relay processes pinned to THIS task's fifo path (walk /proc:
+    // pgrep -fc would match the probe's own sh -c cmdline), then kill the
+    // task, then require the count to drop to zero.
+    const { readdirSync, readFileSync } = await import('node:fs');
+    const needle = t.fifoPath!;
+    const probe = (): number => {
+      let n = 0;
+      for (const pid of readdirSync('/proc').filter((d) => /^\d+$/.test(d))) {
+        if (pid === String(process.pid)) continue;
+        try {
+          const cmd = readFileSync(`/proc/${pid}/cmdline`, 'utf8');
+          if (cmd.includes(needle) && !cmd.includes('pgrep')) n++;
+        } catch { /* process exited */ }
+      }
+      return n;
+    };
+    const relaysBefore = probe();
+    expect(relaysBefore).toBeGreaterThan(0);
+    const { killTask } = await import('./background-tasks.js');
+    expect(killTask(t.id)).toBe(true);
+    await sleep(500);
+    expect(probe()).toBe(0);
+  }, 60_000);
 });

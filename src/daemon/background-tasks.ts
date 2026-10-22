@@ -165,13 +165,25 @@ export function startBackgroundTask(
     // that writer's bytes into the child's stdin, hits EOF when the writer
     // closes, and REOPENS — so the FIFO accepts steering lines for the whole
     // life of the task, not just the first writer.
-    const relay = spawn('sh', ['-c', `while :; do cat "${fifoPath}" || break; done`], { cwd, detached: false, stdio: ['ignore', 'pipe', 'ignore'] });
+    // detached:true + group SIGKILL: `sh -c 'while ...'` forks a fresh `cat`
+    // per reopen, and killing the sh alone orphans the running cat (it keeps
+    // the FIFO open forever — the process-leak bug). The relay is its own
+    // process group, so every cleanup kills sh AND its cat children in one
+    // signal. (Node kills only the direct child; the negative pid targets
+    // the group.)
+    const relay = spawn('sh', ['-c', `while :; do cat "${fifoPath}" || break; done`], { cwd, detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
     relays.set(id, relay);
     relay.stdout?.on('data', (d: Buffer) => {
       if (child.stdin && !child.stdin.destroyed) child.stdin.write(d);
     });
-    const cleanupFifo = () => {
+    const killRelayGroup = () => {
+      // Group kill first (sh + every forked cat); fall back to direct kill
+      // when the group is already gone or the platform refuses negative pids.
+      try { if (relay.pid) process.kill(-relay.pid, 'SIGKILL'); } catch { /* group gone */ }
       try { relay.kill('SIGKILL'); } catch { /* gone */ }
+    };
+    const cleanupFifo = () => {
+      killRelayGroup();
       try { unlinkSync(fifoPath); } catch { /* gone */ }
     };
     child.on('exit', cleanupFifo);
@@ -211,7 +223,7 @@ export function startBackgroundTask(
     task.endedAt = Date.now();
     task.output = buffer;
     const r = relays.get(id);
-    if (r) { try { r.kill('SIGKILL'); } catch { /* gone */ } }
+    if (r) { try { if (r.pid) process.kill(-r.pid, 'SIGKILL'); } catch { /* group gone */ } try { r.kill('SIGKILL'); } catch { /* gone */ } }
     relays.delete(id);
     try { unlinkSync(fifoPath); } catch { /* gone */ }
     persist();
@@ -220,7 +232,7 @@ export function startBackgroundTask(
     clearTimeout(timer);
     processes.delete(id);
     const r = relays.get(id);
-    if (r) { try { r.kill('SIGKILL'); } catch { /* gone */ } }
+    if (r) { try { if (r.pid) process.kill(-r.pid, 'SIGKILL'); } catch { /* group gone */ } try { r.kill('SIGKILL'); } catch { /* gone */ } }
     relays.delete(id);
     try { unlinkSync(fifoPath); } catch { /* gone */ }
     if (task.status === 'running') {
@@ -236,7 +248,7 @@ export function startBackgroundTask(
     clearTimeout(timer);
     processes.delete(id);
     const r = relays.get(id);
-    if (r) { try { r.kill('SIGKILL'); } catch { /* gone */ } }
+    if (r) { try { if (r.pid) process.kill(-r.pid, 'SIGKILL'); } catch { /* group gone */ } try { r.kill('SIGKILL'); } catch { /* gone */ } }
     relays.delete(id);
     try { unlinkSync(fifoPath); } catch { /* gone */ }
     task.status = 'failed';
@@ -264,7 +276,7 @@ export function killTask(id: string): boolean {
     }
   }
   const relay = relays.get(id);
-  if (relay) { try { relay.kill('SIGKILL'); } catch { /* gone */ } }
+  if (relay) { try { if (relay.pid) process.kill(-relay.pid, 'SIGKILL'); } catch { /* group gone */ } try { relay.kill('SIGKILL'); } catch { /* gone */ } }
   relays.delete(id);
   if (t.fifoPath) { try { unlinkSync(t.fifoPath); } catch { /* gone */ } }
   processes.delete(id);
