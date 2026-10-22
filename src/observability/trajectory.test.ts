@@ -17,7 +17,7 @@ describe('buildTrajectory', () => {
     ];
     const rec = buildTrajectory(entries, { runId: 'run1' });
 
-    expect(rec.schemaVersion).toBe(1);
+    expect(rec.schemaVersion).toBe(2); // D9: buildTrajectory emits the v2 schema
     expect(rec.runId).toBe('run1');
     expect(rec.startedAt).toBe(1000);
     expect(rec.endedAt).toBe(1600);
@@ -83,6 +83,15 @@ describe('buildTrajectory', () => {
     expect(without.usage).toBeNull();
   });
 
+  it('C5: $0-cost trace with model + token split surfaces a separate price-table estimate', () => {
+    const rec = buildTrajectory([
+      { t: 1, kind: 'usage:updated', model: 'gpt-4o', inputTokens: 800_000, outputTokens: 100_000, cacheTokens: 200_000, totalTokens: 1_100_000, costUsd: 0 },
+    ], { runId: 'r-est' });
+    expect(rec.usage?.costUsd).toBe(0); // recorded cost untouched
+    expect(rec.usage?.estimatedCostUsd).toBeCloseTo(3.25, 8);
+    expect(rec.usage?.costSource).toBe('estimated');
+  });
+
   it('caps output snippets at 500 chars and keeps uncompleted / orphan steps in order', () => {
     const rec = buildTrajectory([
       { t: 1, kind: 'tool:called', tool: 'shell', args: { command: 'x' } },
@@ -132,7 +141,7 @@ describe('exportTrajectory', () => {
     const fileLines = readFileSync(out!.path, 'utf8').split('\n').filter(Boolean);
     expect(fileLines).toHaveLength(1);
     const parsed = JSON.parse(fileLines[0]);
-    expect(parsed).toMatchObject({ schemaVersion: 1, runId: 'runX' });
+    expect(parsed).toMatchObject({ schemaVersion: 2, runId: 'runX' });
     expect(parsed.steps).toHaveLength(1);
     expect(parsed.outcome.completed).toBe(true);
     expect(out!.record.runId).toBe('runX');

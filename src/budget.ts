@@ -1,4 +1,7 @@
 import type { SafetyConfig } from './types.js';
+import { estimateCostUsd, type PriceOverrides, type UsageBreakdown } from './pricing.js';
+
+export type { PriceOverrides, UsageBreakdown };
 
 export interface BudgetLimits {
   maxTokens: number;
@@ -11,9 +14,21 @@ export interface BudgetLimits {
 
 export type BudgetPhase = 'full' | 'reduced' | 'cheap' | 'verify' | 'exhausted';
 
+export type CostSource = 'provider' | 'estimated' | 'mixed' | 'none';
+
 export interface BudgetSnapshot {
   usedTokens: number;
+  /** Effective cost: provider-reported where nonzero, else the price-table
+   *  estimate. This is the figure budget limits enforce against. */
   usedCostUsd: number;
+  /** Portion of usedCostUsd the provider itself reported (never estimated). */
+  usedProviderCostUsd: number;
+  /** Portion of usedCostUsd filled in by the offline price table because the
+   *  provider reported $0 / nothing. */
+  usedEstimatedCostUsd: number;
+  /** Where usedCostUsd came from; 'estimated'/'mixed' must be labelled as
+   *  estimates anywhere the number is shown. */
+  costSource: CostSource;
   usedDurationMs: number;
   usedToolCalls: number;
   usedModelCalls: number;
@@ -24,31 +39,47 @@ export interface BudgetSnapshot {
   phase: BudgetPhase;
   ratio: number;
   /** MCH-79: per-model token/cost breakdown for the summary card. */
-  byModel: Array<{ model: string; tokens: number; costUsd: number; calls: number }>;
+  byModel: Array<{ model: string; tokens: number; costUsd: number; providerCostUsd: number; estimatedCostUsd: number; calls: number }>;
 }
 
 import { nativeBudgetDecide } from './native/core.js';
 
-// NOTE: no local price table. A hardcoded per-model pricing map can never stay
-// current (new models ship weekly, and the same model id bills differently per
-// hosting provider), so inventing a number was worse than showing none. Cost is
-// only ever recorded when the PROVIDER's own usage object reports billing
-// (OpenRouter-style usage.cost); otherwise the UI says so and the real
-// provider-measured metrics — tokens in/out/cached and context consumed —
-// carry the accounting.
+// Cost accounting (C5): provider-reported billing (OpenRouter-style
+// usage.cost) ALWAYS wins when nonzero — it is a measurement, the table is
+// not. When the provider reports $0 / nothing, the offline price table
+// (pricing.ts, config-overridable via safety.pricing) fills the gap so that
+// maxCostUsd limits and cost-per-solve stay computable on endpoints that
+// never bill-report. The two sources are ledgered SEPARATELY
+// (usedProviderCostUsd vs usedEstimatedCostUsd, snapshot.costSource) so no
+// surface ever presents an estimate as a provider measurement. A record
+// without a token breakdown cannot be estimated (input/output split
+// unknown) and charges $0, exactly as before.
+
+export interface BudgetEngineOptions {
+  /** Price-table overrides; defaults to safety.pricing.overrides. */
+  pricing?: PriceOverrides;
+  /** Disable the price-table fallback entirely (legacy $0 behavior). */
+  pricingDisabled?: boolean;
+}
 
 export class BudgetEngine {
   private limits: BudgetLimits;
   private startedAt = 0;
   private usedTokens = 0;
   private usedCostUsd = 0;
+  private usedProviderCostUsd = 0;
+  private usedEstimatedCostUsd = 0;
+  private providerPricedCalls = 0;
+  private estimatedCalls = 0;
+  private pricingOverrides?: PriceOverrides;
+  private pricingDisabled: boolean;
   private usedToolCalls = 0;
   private usedModelCalls = 0;
   private usedAgents = 0;
   /** MCH-79: per-model token/cost ledger. */
-  private byModel = new Map<string, { tokens: number; costUsd: number; calls: number }>();
+  private byModel = new Map<string, { tokens: number; costUsd: number; providerCostUsd: number; estimatedCostUsd: number; calls: number }>();
 
-  constructor(safety: SafetyConfig) {
+  constructor(safety: SafetyConfig, opts: BudgetEngineOptions = {}) {
     this.limits = {
       maxTokens: safety.maxTokens ?? Number.POSITIVE_INFINITY,
       maxCostUsd: safety.maxCostUsd ?? Number.POSITIVE_INFINITY,
@@ -57,6 +88,8 @@ export class BudgetEngine {
       maxModelCalls: safety.maxModelCalls ?? Number.POSITIVE_INFINITY,
       maxAgents: safety.maxConcurrentAgents,
     };
+    this.pricingOverrides = opts.pricing ?? safety.pricing?.overrides;
+    this.pricingDisabled = opts.pricingDisabled ?? safety.pricing?.disabled ?? false;
   }
 
   start() {
@@ -64,21 +97,70 @@ export class BudgetEngine {
   }
 
   /** @param realCostUsd Provider-REPORTED cost for this record (usage.cost from
-   *  the API's own usage object). Never invented: without it the record
-   *  charges $0 and the UI labels cost as not reported. The token limit
-   *  still counts output-only tokens (full re-billing exhausts maxTokens
-   *  early) — output tokens are the resource that scales with agent work. */
-  recordTokens(tokens: number, model: string, provider = '', realCostUsd?: number) {
-    void provider; // kept for call-site stability; pricing is provider-reported only
+   *  the API's own usage object). When it is nonzero it is charged as-is and
+   *  the price table is NOT consulted. When it is $0/omitted AND a token
+   *  breakdown (`usage`) is supplied, the offline price table estimates the
+   *  record instead (ledgered as estimated, never as reported). Without a
+   *  breakdown the record charges $0 — a bare token count has no honest
+   *  input/output split to price. The token limit still counts the `tokens`
+   *  argument as given by the caller (the loop passes output-only tokens:
+   *  full re-billing exhausts maxTokens early, and output tokens are the
+   *  resource that scales with agent work). */
+  recordTokens(tokens: number, model: string, provider = '', realCostUsd?: number, usage?: UsageBreakdown) {
+    void provider; // kept for call-site stability; the table is keyed by model id
     this.usedTokens += tokens;
-    const cost = realCostUsd ?? 0;
+    let providerCost = 0;
+    let estimatedCost = 0;
+    if (realCostUsd !== undefined && realCostUsd > 0) {
+      providerCost = realCostUsd;
+      this.providerPricedCalls++;
+    } else if (usage && !this.pricingDisabled) {
+      const est = estimateCostUsd(model, usage, this.pricingOverrides);
+      if (est) {
+        estimatedCost = est.costUsd;
+        this.estimatedCalls++;
+      }
+    }
+    const cost = providerCost + estimatedCost;
     this.usedCostUsd += cost;
+    this.usedProviderCostUsd += providerCost;
+    this.usedEstimatedCostUsd += estimatedCost;
     // MCH-79: per-model ledger for the /usage cost breakdown.
-    const e = this.byModel.get(model) ?? { tokens: 0, costUsd: 0, calls: 0 };
+    const e = this.byModel.get(model) ?? { tokens: 0, costUsd: 0, providerCostUsd: 0, estimatedCostUsd: 0, calls: 0 };
     e.tokens += tokens;
     e.costUsd += cost;
+    e.providerCostUsd += providerCost;
+    e.estimatedCostUsd += estimatedCost;
     e.calls += 1;
     this.byModel.set(model, e);
+  }
+
+  /** Record a full provider usage object. Token-limit accounting keeps the
+   *  historical rule (output tokens only, falling back to total), while the
+   *  price-table fallback sees the full input/output/cache split. */
+  recordUsage(
+    usage: { promptTokens?: number; completionTokens?: number; totalTokens?: number; cachedTokens?: number; costUsd?: number },
+    model: string,
+    provider = '',
+  ): void {
+    const tokens = usage.completionTokens ?? usage.totalTokens ?? 0;
+    const inputTokens = usage.promptTokens
+      ?? (usage.totalTokens !== undefined && usage.completionTokens !== undefined
+        ? Math.max(0, usage.totalTokens - usage.completionTokens)
+        : undefined);
+    this.recordTokens(tokens, model, provider, usage.costUsd, {
+      inputTokens,
+      outputTokens: usage.completionTokens,
+      cacheReadTokens: usage.cachedTokens,
+    });
+  }
+
+  /** Where the accumulated cost came from (see BudgetSnapshot.costSource). */
+  costSource(): CostSource {
+    if (this.providerPricedCalls > 0 && this.estimatedCalls > 0) return 'mixed';
+    if (this.providerPricedCalls > 0) return 'provider';
+    if (this.estimatedCalls > 0) return 'estimated';
+    return 'none';
   }
 
   recordToolCall() {
@@ -165,6 +247,9 @@ export class BudgetEngine {
     return {
       usedTokens: this.usedTokens,
       usedCostUsd: this.usedCostUsd,
+      usedProviderCostUsd: this.usedProviderCostUsd,
+      usedEstimatedCostUsd: this.usedEstimatedCostUsd,
+      costSource: this.costSource(),
       usedDurationMs: this.startedAt === 0 ? 0 : performance.now() - this.startedAt,
       usedToolCalls: this.usedToolCalls,
       usedModelCalls: this.usedModelCalls,
@@ -176,7 +261,7 @@ export class BudgetEngine {
       ratio: this.ratio(),
       // MCH-79: ranked highest-cost-first for the summary card.
       byModel: Array.from(this.byModel.entries())
-        .map(([model, e]) => ({ model, tokens: e.tokens, costUsd: e.costUsd, calls: e.calls }))
+        .map(([model, e]) => ({ model, tokens: e.tokens, costUsd: e.costUsd, providerCostUsd: e.providerCostUsd, estimatedCostUsd: e.estimatedCostUsd, calls: e.calls }))
         .sort((a, b) => b.costUsd - a.costUsd),
     };
   }

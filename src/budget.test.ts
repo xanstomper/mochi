@@ -12,12 +12,12 @@ const base = {
 };
 
 describe('BudgetEngine', () => {
-  it('never invents cost — only provider-reported billing is recorded', () => {
+  it('never invents cost without a token breakdown — only provider-reported billing is recorded', () => {
     const b = new BudgetEngine({ ...base, maxTokens: 1000 });
     b.start();
-    // No local price table: an unpriced model records $0 no matter the token
-    // count (the old flat-rate fallback reported fake spend on free endpoints
-    // and stale prices on paid ones).
+    // A bare token count has no input/output split to price: an unpriced
+    // model records $0 (the C5 price-table fallback needs the breakdown —
+    // see recordUsage and the price-table describe block below).
     b.recordTokens(1000, 'some-model-nobody-prices', 'some-provider');
     expect(b.snapshot('some-model-nobody-prices').usedCostUsd).toBe(0);
     // The loop records output tokens as the LIMIT resource; provider-reported
@@ -41,6 +41,68 @@ describe('BudgetEngine', () => {
     b.recordTokens(50, 'gpt-4o');
     expect(b.phase()).toBe('verify');
     b.recordTokens(60, 'gpt-4o');
+    expect(b.phase()).toBe('exhausted');
+    expect(b.canMakeModelCall()).toBe(false);
+  });
+
+  it('price-table fallback (C5): $0 provider cost + token breakdown → estimated, ledgered separately', () => {
+    const b = new BudgetEngine({ ...base, maxTokens: 10_000_000 });
+    b.start();
+    // gpt-4o $2.50/$10/$1.25-cache per 1M: 800k fresh in + 200k cached + 100k out = $3.25.
+    b.recordUsage(
+      { promptTokens: 1_000_000, completionTokens: 100_000, totalTokens: 1_100_000, cachedTokens: 200_000, costUsd: 0 },
+      'gpt-4o', 'openai',
+    );
+    const snap = b.snapshot('gpt-4o');
+    expect(snap.usedTokens).toBe(100_000); // limit accounting still output-only
+    expect(snap.usedCostUsd).toBeCloseTo(3.25, 8);
+    expect(snap.usedEstimatedCostUsd).toBeCloseTo(3.25, 8);
+    expect(snap.usedProviderCostUsd).toBe(0);
+    expect(snap.costSource).toBe('estimated');
+    expect(snap.byModel[0]).toMatchObject({ model: 'gpt-4o', estimatedCostUsd: 3.25, providerCostUsd: 0 });
+  });
+
+  it('price-table fallback (C5): provider-reported cost wins when nonzero', () => {
+    const b = new BudgetEngine({ ...base, maxTokens: 10_000_000 });
+    b.start();
+    b.recordUsage(
+      { promptTokens: 1_000_000, completionTokens: 100_000, totalTokens: 1_100_000, cachedTokens: 200_000, costUsd: 0.42 },
+      'gpt-4o', 'openai',
+    );
+    // A second, $0-reported call estimates → source becomes mixed.
+    b.recordUsage(
+      { promptTokens: 1_000_000, completionTokens: 100_000, totalTokens: 1_100_000, cachedTokens: 200_000, costUsd: 0 },
+      'gpt-4o', 'openai',
+    );
+    const snap = b.snapshot('gpt-4o');
+    expect(snap.usedProviderCostUsd).toBeCloseTo(0.42, 8);
+    expect(snap.usedEstimatedCostUsd).toBeCloseTo(3.25, 8);
+    expect(snap.usedCostUsd).toBeCloseTo(3.67, 8);
+    expect(snap.costSource).toBe('mixed');
+  });
+
+  it('price-table fallback (C5): config override changes the estimate; disabled restores $0', () => {
+    const usage = { promptTokens: 1_000_000, completionTokens: 100_000, totalTokens: 1_100_000, costUsd: 0 };
+    const overridden = new BudgetEngine({ ...base, maxTokens: 10_000_000, pricing: { overrides: { 'gpt-4o': { output: 20 } } } });
+    overridden.start();
+    overridden.recordUsage(usage, 'gpt-4o', 'openai');
+    expect(overridden.snapshot('gpt-4o').usedEstimatedCostUsd).toBeCloseTo(4.5, 8); // 2.50 in + 100k*20 out
+
+    const disabled = new BudgetEngine({ ...base, maxTokens: 10_000_000, pricing: { disabled: true } });
+    disabled.start();
+    disabled.recordUsage(usage, 'gpt-4o', 'openai');
+    expect(disabled.snapshot('gpt-4o').usedCostUsd).toBe(0);
+    expect(disabled.snapshot('gpt-4o').costSource).toBe('none');
+  });
+
+  it('price-table fallback (C5): estimated cost enforces maxCostUsd like reported cost', () => {
+    const b = new BudgetEngine({ ...base, maxTokens: 10_000_000, maxCostUsd: 1 });
+    b.start();
+    b.recordUsage(
+      { promptTokens: 1_000_000, completionTokens: 100_000, totalTokens: 1_100_000, cachedTokens: 200_000, costUsd: 0 },
+      'gpt-4o', 'openai',
+    );
+    expect(b.remainingCostUsd()).toBe(0);
     expect(b.phase()).toBe('exhausted');
     expect(b.canMakeModelCall()).toBe(false);
   });
