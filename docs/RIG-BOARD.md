@@ -60,3 +60,12 @@ Meanwhile: vermes is running the W3-2 ACP audit (read-only) -> ~/campaign/wave3-
 - Brain: freeinference / glm-5.3-flash (same provider as vermes; key already on the box, wired via key_env). API door: http://100.101.205.88:8377/p/coder/v1 through the default-profile multiplexer.
 - Vyce detour (closed): a vyceai provider block (https://vyceai.com/v1, model claude-sonnet-4-6) is configured in the coder profile and the wiring was verified end-to-end (Vyce answered 401 — correct pipe, no key). The VYCEAI_API_KEY value exists nowhere on this VM (checked by WooWop and vermes). If home ever pushes it into ~/.hermes/profiles/coder/.env, flipping model.provider back to vyceai takes one line.
 - Wave 3 now runs on coder (brief: ~/campaign/wave3-brief.txt). Vermes still verifies independently. OpenCode/mimo remains installed as an unused fallback.
+
+## Wave 4 phases (planned 2026-10-23 — full plan: WooWop's phases-wave4-plan-2026-10-23.md)
+Three-system workflow (Ben): SYS-1 WooWop (plan/verify) | SYS-2 home Hermes (issue #74) | SYS-3 VM (vermes + coder).
+- P0: land in-flight (run-1 verification, W3-3/W3-5, then W3-4 TUI).
+- P1 behavior core (home lead): G1 verified compaction all evidence classes (digest share ~34% -> <15%), output-boundary hygiene generalization, discipline round 2 (think-loop stop), ask/act calibration.
+- P2 speed (split): startup budget, streaming + MCP progress notifications, G12 (home), incremental embedding index (153.8s full build -> <10s diffs), failover latency table.
+- P3 smoking guns (VM lead): ISSUES.md burn-down to 0-or-deferred, fabricated-metrics class grep, config.json plaintext keys -> keyring, node<22 hard preflight, dead-code sweep 2.
+- P4 smarts (split): hybrid tuning (embedded 0.833 beat hybrid 0.792 @recall10 — fix pool/RRF; grow query set 24->60), G8/G10 (home), capabilities catalog, post_compaction hook (home), edit-apply corpus expansion.
+- P5 first LIVE scorecard cell (VM runs, WooWop verifies): swe class k=1 on freeinference glm-5.3-flash, serial (account concurrency = 2, shared with home), full caveats published.
