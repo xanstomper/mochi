@@ -28,7 +28,7 @@
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import {
-  cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync,
+  cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync,
   rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -815,7 +815,3 @@ export class CurriculumProgress {
   }
 }
 
-/** List files under a dir (helper kept tiny for tests/diagnostics). */
-export function listDir(dir: string): string[] {
-  return existsSync(dir) ? readdirSync(dir).sort() : [];
-}
