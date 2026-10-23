@@ -208,6 +208,10 @@ export function verifySummaryEvidenced(summary: string): boolean {
   if (!summary.startsWith('All checks passed:')) return false;
   const cmds = summary
     .slice('All checks passed:'.length)
+    // Lane markers (`[fast lane — targeted set]`) are presentation, not
+    // evidence: strip them or `true [fast lane…]` escapes the trivial set
+    // and a vacuous pass masquerades as evidenced (skips self-review).
+    .replace(/\s*\[fast lane[^\]]*\]/g, '')
     .split(',')
     .map((c) => c.trim().toLowerCase())
     .filter(Boolean);
