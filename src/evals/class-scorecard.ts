@@ -25,7 +25,7 @@
 // — see bench/classes/README.md for the full integration contract.
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { cpSync } from 'node:fs';
 import { estimateCostUsd } from '../pricing.js';
@@ -182,16 +182,30 @@ function taskContentFiles(setDir: string, entry: { prompt: string; filesDir?: st
   const push = (rel: string) => out.push(join(setDir, rel));
   push(entry.prompt);
   push(entry.verifier);
+  const walked = new Set<string>();
+  const walk = (d: string) => {
+    for (const name of readdirSync(d).sort()) {
+      const p = join(d, name);
+      if (statSync(p).isDirectory()) walk(p);
+      else out.push(p);
+    }
+  };
+  // Undeclared task-dir siblings count as content: when a task is laid out
+  // as its own subdirectory, a copier can stash stolen bytes there under an
+  // innocuous name (extra.txt, notes.md) and the declared-path scan below
+  // would never see them. Only applies when the task dir is strictly inside
+  // the set dir — flat layouts (prompt at set root) keep the old behavior,
+  // otherwise every task would sweep the whole set and self-collide.
+  for (const rel of [entry.prompt, entry.verifier]) {
+    const dir = resolve(setDir, rel, '..');
+    if (dir !== resolve(setDir) && !walked.has(dir) && existsSync(dir) && statSync(dir).isDirectory()) {
+      walked.add(dir);
+      walk(dir);
+    }
+  }
   for (const dir of [entry.filesDir, entry.solutionDir]) {
     if (!dir) continue;
     const abs = join(setDir, dir);
-    const walk = (d: string) => {
-      for (const name of readdirSync(d).sort()) {
-        const p = join(d, name);
-        if (statSync(p).isDirectory()) walk(p);
-        else out.push(p);
-      }
-    };
     if (existsSync(abs)) walk(abs);
   }
   return out;
