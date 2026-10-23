@@ -96,6 +96,7 @@ import { SpeculativeEngine } from './speculative.js';
 import { retrieveSpeculationMemory, recordSpeculationOutcome, speculationMemoryToPrompt, predictNextFiles } from './speculative.js';
 import { join } from 'node:path';
 import { detectSkillOpportunities, opportunitiesToPrompt, shouldRunCurator, runCurator, recordCuratorRun, defaultCuratorConfig } from '../skills/skill-curator.js';
+import { resolveSpawnPreset } from './agent-forge.js';
 import { LearningStore } from '../learning.js';
 import { classifyFailure as classifyErrorPattern } from '../learning.js';
 import {
@@ -4774,7 +4775,9 @@ Continue from 'Next:', do not redo completed progress.`,
    *  late child failure can never surface as an unhandled rejection in the
    *  parent. */
   private async startChildRun(spec: ChildRunSpec): Promise<PreparedChild> {
-    const preset = resolvePreset(spec.preset);
+    // Forged personas (agent-forge) resolve first: `forged/<name>` is a
+    // registry persona; anything else falls through to the static presets.
+    const preset = resolveSpawnPreset(this.workspace.dir, spec.preset) ?? resolvePreset(spec.preset);
     const roleStr = spec.role ?? (preset ? String(preset.role) : undefined);
     const childRole = (roleStr ?? 'coder') as import('../types.js').AgentRole;
     const childProfile = new AgentProfileService(this.workspace.dir).get(childRole) ?? this.profile;
@@ -5072,7 +5075,7 @@ Continue from 'Next:', do not redo completed progress.`,
   /** Register a background child: persist its record, enqueue it under the
    *  concurrency cap, and return the live handle immediately. */
   private registerChild(spec: ChildRunSpec): LiveChildRun {
-    const preset = resolvePreset(spec.preset);
+    const preset = resolveSpawnPreset(this.workspace.dir, spec.preset) ?? resolvePreset(spec.preset);
     const id = spec.runId ?? `sub-${randomUUID().slice(0, 8)}`;
     const record: ChildRunRecord = {
       id,

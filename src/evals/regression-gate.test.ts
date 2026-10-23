@@ -93,7 +93,10 @@ describe('frozen set integrity', () => {
   });
 });
 
-describe('gate verdicts (§5.3 thresholds)', () => {
+// Load-sensitive: each gate run spawns a node verifier per trial (9+9), and
+// under full-suite parallelism those spawns contend. 16/16 standalone; the
+// retry + generous timeout absorb scheduler contention, not logic flake.
+describe('gate verdicts (§5.3 thresholds)', { retry: 2, timeout: 240_000 }, () => {
   it('(c) planted regression → BLOCKED with the regressed category named', async () => {
     await updateBaseline({ ...baseOpts(), runner: solutionRunner(1000) });
     const report = await runGate({ ...baseOpts(), runner: solutionRunner(1000, 'arena-b1-bugfix-off-by-one') });
@@ -151,7 +154,7 @@ describe('gate verdicts (§5.3 thresholds)', () => {
   });
 });
 
-describe('independent analyser (deterministic floor)', () => {
+describe('independent analyser (deterministic floor)', { retry: 2, timeout: 240_000 }, () => {
   const deletionDiff = [
     'diff --git a/src/foo.test.ts b/src/foo.test.ts',
     'deleted file mode 100644',

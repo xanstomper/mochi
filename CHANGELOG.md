@@ -46,7 +46,14 @@
 - **Skill training loop closed (MCH-211)**: `selfPatchSkill` now clears the skill's failure queue after a successful rewrite — the patch is the training signal, so the next run re-tests the rewritten procedure fresh instead of instantly re-patching stale failures (was burning patches on untested rewrites up to the ≥5 cap).
 - **Self-improvement daemon tick (MCH-212)**: daemon start auto-provisions ONE recurring cron job (every 6h, marker-detectable, idempotent) whose prompt runs the full flywheel — curator, pitfall mining, lesson graduation, self-patch, skills report. Opt out via `selfImprovement: false`. Skipped under vitest. Self-improvement now happens even between user tasks.
 
-## [Unreleased]
+## Unreleased
+
+### Added (agent-forge — verifier-gated spawn persona synthesis)
+- `src/agent/agent-forge.ts`: mines verifier-passed trajectories for recurring delegation shapes (≥3 evidence runs, preset + tool fingerprint), synthesizes a persona as a DELTA over an existing spawn preset (addendum cap 600 chars; allowlist can only NARROW — access never widens), probes it live against its base preset (2 seeds/arm: quality ≥ base, tokens ≤ 1.5×), and persists only gated personas.
+- Lifecycle mirrors skill-curator: probation → promote at ≥3 helpful uses with 0 regressions; first attributable regression discards; stale-probation trim (14d). Discard reasons land in `.mochi/agents/forge-log.jsonl`.
+- Spawn integration: `forged/<name>` preset names resolve via the registry at both child-spawn sites (foreground + background); unknown names fall through to static presets.
+- 17 new tests (mining evidence bar, hard subset/mutation-escalation gates, probe arms, verdict-gated persistence, promotion/discard/stale lifecycle, forged/ resolution).
+
 
 ### Added (MCH-205..208 — self-improvement flywheel, commit 2)
 
