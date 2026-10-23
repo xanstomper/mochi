@@ -206,8 +206,13 @@ const TRIVIAL_VERIFY_COMMANDS = new Set(['true', ':', 'exit 0', 'echo', 'echo pa
 export function verifySummaryEvidenced(summary: string): boolean {
   if (summary.startsWith('Manual check passed')) return true;
   if (!summary.startsWith('All checks passed:')) return false;
+  // Only the first line is the command list — FLAKY-PASS appends a flaky
+  // report on subsequent lines; without this, `All checks passed: true\nFlaky: …`
+  // parses as the non-trivial chunk 'true\nflaky: …' and a coin-flip pass
+  // counts as evidenced (skips self-review).
   const cmds = summary
     .slice('All checks passed:'.length)
+    .split('\n')[0]
     // Lane markers (`[fast lane — targeted set]`) are presentation, not
     // evidence: strip them or `true [fast lane…]` escapes the trivial set
     // and a vacuous pass masquerades as evidenced (skips self-review).

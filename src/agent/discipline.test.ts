@@ -84,6 +84,15 @@ describe('verifySummaryEvidenced', () => {
     expect(verifySummaryEvidenced('Greenfield build: files created, no repo suite applicable (skipped by design).')).toBe(false);
     expect(verifySummaryEvidenced('Verification skipped by profile.')).toBe(false);
   });
+
+  it('presentation markers never turn a vacuous pass into evidence', () => {
+    // fast-lane marker appended to the command list
+    expect(verifySummaryEvidenced('All checks passed: true [fast lane — targeted set]')).toBe(false);
+    // FLAKY-PASS appends a flaky report after the command line
+    expect(verifySummaryEvidenced('All checks passed: true\nFlaky: npm test (2 flaky hits)')).toBe(false);
+    // a real command with markers is still evidenced
+    expect(verifySummaryEvidenced('All checks passed: npm test [fast lane — targeted set]')).toBe(true);
+  });
 });
 
 describe('replan gate (mechanism 1)', () => {
