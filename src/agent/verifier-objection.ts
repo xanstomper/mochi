@@ -59,7 +59,7 @@ export function salientFailureLines(summary: string): string[] {
   if (salient.length === 0) {
     // Nothing pattern-matched: fall back to the head of the output that
     // followed the first failing check (or of the summary itself).
-    const idx = lines.findIndex((l) => l.startsWith('Check failed:'));
+    const idx = lines.findIndex((l) => l.startsWith('Check failed:') || l.startsWith('Check failed (fast lane):'));
     const from = idx >= 0 ? idx + 1 : 0;
     for (const line of lines.slice(from, from + 3)) {
       const capped = capLine(line);
