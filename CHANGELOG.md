@@ -52,7 +52,9 @@
 - `src/agent/agent-forge.ts`: mines verifier-passed trajectories for recurring delegation shapes (≥3 evidence runs, preset + tool fingerprint), synthesizes a persona as a DELTA over an existing spawn preset (addendum cap 600 chars; allowlist can only NARROW — access never widens), probes it live against its base preset (2 seeds/arm: quality ≥ base, tokens ≤ 1.5×), and persists only gated personas.
 - Lifecycle mirrors skill-curator: probation → promote at ≥3 helpful uses with 0 regressions; first attributable regression discards; stale-probation trim (14d). Discard reasons land in `.mochi/agents/forge-log.jsonl`.
 - Spawn integration: `forged/<name>` preset names resolve via the registry at both child-spawn sites (foreground + background); unknown names fall through to static presets.
-- 17 new tests (mining evidence bar, hard subset/mutation-escalation gates, probe arms, verdict-gated persistence, promotion/discard/stale lifecycle, forged/ resolution).
+- Production wiring: corpus mining from `.mochi/exports/trajectory-*.jsonl` (each ok `subagent` step in a verifier-passed record = one evidence spawn), `runAgentForgePass` orchestrator (mine → synthesize → static gate → probe gate → persist; skip already-forged/discarded shapes; `maxForges` spend budget), model synthesizer on the router's reasoning tier (`createProvider(config.model, 'reasoning')` — works on every provider, no model-specific features), spawn ledger recording at `subagent:completed` (helpful/neutral/regression; wrapped so it can never break delegation).
+- CLI: `mochi forge-agents list|disable <name>|evaluate|run [--max-forges N]` — audit view with provenance + ledger, operator discard, lifecycle evaluation, bounded forge passes.
+- 20 new tests (mining evidence bar, hard subset/mutation-escalation gates, probe arms, verdict-gated persistence, promotion/discard/stale lifecycle, forged/ resolution, corpus mining, full forge pass, CLI lifecycle ops).
 
 
 ### Added (MCH-205..208 — self-improvement flywheel, commit 2)

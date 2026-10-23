@@ -2755,6 +2755,12 @@ async function main() {
     return;
   }
 
+  if (first === 'forge-agents') {
+    const { handleForgeAgentsCommand } = await import('./agent/agent-forge-cli.js');
+    await handleForgeAgentsCommand({ positional, flags, cwd });
+    return;
+  }
+
   if (first === 'trace') {
     const { readTrace, formatTrace } = await import('./observability/trace.js');
     const id = positional[1] ?? '';

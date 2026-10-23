@@ -96,7 +96,7 @@ import { SpeculativeEngine } from './speculative.js';
 import { retrieveSpeculationMemory, recordSpeculationOutcome, speculationMemoryToPrompt, predictNextFiles } from './speculative.js';
 import { join } from 'node:path';
 import { detectSkillOpportunities, opportunitiesToPrompt, shouldRunCurator, runCurator, recordCuratorRun, defaultCuratorConfig } from '../skills/skill-curator.js';
-import { resolveSpawnPreset } from './agent-forge.js';
+import { resolveSpawnPreset, recordAgentForgeSpawn } from './agent-forge.js';
 import { LearningStore } from '../learning.js';
 import { classifyFailure as classifyErrorPattern } from '../learning.js';
 import {
@@ -564,6 +564,8 @@ interface PreparedChild {
    *  when the steer actually lands in its context. */
   steerChild: (text: string, event: ChildSteerEvent) => boolean;
   completion: Promise<{ result?: AgentResult; error?: string }>;
+  /** Set when the child ran under a forged persona (agent-forge ledger). */
+  forgedPersonaName?: string;
 }
 
 /** One queued mid-run steer line. `user` entries come from Agent.steer()
@@ -4964,6 +4966,7 @@ Continue from 'Next:', do not redo completed progress.`,
       stopCounting,
       steerChild: (text: string, event: ChildSteerEvent) => child.acceptParentSteer(text, event),
       completion,
+      ...(spec.preset?.startsWith('forged/') ? { forgedPersonaName: spec.preset.slice('forged/'.length) } : {}),
     };
   }
 
@@ -4997,6 +5000,19 @@ Continue from 'Next:', do not redo completed progress.`,
         summary: result.summary,
         tokensUsed: result.tokensUsed,
       });
+      // Agent-forge ledger: a forged persona's survival depends on honest
+      // post-run accounting. The child's verdict of its own work (success)
+      // plus parent's contract compliance is the helpfulness signal.
+      if (prepared.forgedPersonaName) {
+        try {
+          recordAgentForgeSpawn(this.workspace.dir, prepared.forgedPersonaName, {
+            ok: result.success,
+            helpfulness: result.success && !result.summary.includes('[contract: missing]') ? 'helpful' : (result.success ? 'neutral' : 'regression'),
+            tokens: result.tokensUsed,
+            ...(result.success ? {} : { detail: result.summary.slice(0, 200) }),
+          });
+        } catch { /* ledger must never break delegation */ }
+      }
       // MCH-87b: extract the output-contract footer when present. The parent
       // gets a structured tail `[contract: STATUS files=...]` plus the child's
       // summary; when the child ignored the contract the summary is returned

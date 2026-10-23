@@ -219,3 +219,100 @@ describe('resolution (forged/<name> spawn target)', () => {
     expect(resolved?.systemAddendum).toContain('Check loop bounds');
   });
 });
+
+// ─── Production surface: corpus mining, forge pass, lifecycle CLI ops ─────
+
+import type { TrajectoryRecord } from '../observability/trajectory.js';
+import { mineAgentForgeCandidatesFromCorpus, runAgentForgePass, discardForgedPersona, evaluateAgentForgeLifecycle, type AgentForgeSynthesizer } from './agent-forge.js';
+
+function corpusRecord(runId: string, preset: string, tools: string[], verified: boolean, prompt: string): TrajectoryRecord {
+  // Step 0 = the parent's subagent call; steps after it = tools the run used.
+  const steps = [
+    { index: 0, tool: 'subagent', args: { preset, prompt }, ok: true, output: '' },
+    ...tools.map((tool, i) => ({ index: i + 1, tool, args: { query: prompt.slice(0, 20) }, ok: true, output: '' })),
+  ];
+  return {
+    schemaVersion: 2, runId, verified,
+    startedAt: 1, endedAt: 2, durationMs: 1,
+    task: { prompt },
+    steps,
+    skills: [],
+    verification: verified ? { status: 'PASS', verdict: 'pass' } : { status: 'FAIL', verdict: 'fail' },
+    outcome: { completed: true },
+    usage: null,
+    failureTaxonomy: [],
+  };
+}
+
+describe('production surface (corpus + pass + CLI ops)', () => {
+  it('mineAgentForgeCandidatesFromCorpus: keeps verified-only records, keys prompts into the shape', () => {
+    const prompt = 'review the parser diff for null-deref regressions';
+    const records = [
+      corpusRecord('a1', 'pr-reviewer', ['read_file', 'grep'], true, prompt),
+      corpusRecord('a2', 'pr-reviewer', ['grep', 'read_file'], true, 'review the parser diff for null-deref regressions in tests'),
+      corpusRecord('a3', 'pr-reviewer', ['read_file', 'grep'], true, 'another parser review with the same tool fingerprint here'),
+      corpusRecord('a4', 'pr-reviewer', ['read_file', 'grep'], false, prompt), // unverified → dropped
+    ];
+    const candidates = mineAgentForgeCandidatesFromCorpus(records);
+    expect(candidates.length).toBe(1);
+    expect(candidates[0].basePreset).toBe('pr-reviewer');
+    expect(candidates[0].provenanceRunIds).toEqual(['a1', 'a2', 'a3']);
+    expect(candidates[0].promptSamples.length).toBeGreaterThan(0);
+  });
+
+  it('runAgentForgePass: mines from injected records, gates, persists persona, skips re-forging', async () => {
+    const prompt = 'review the parser diff for null-deref regressions';
+    const records = [
+      corpusRecord('b1', 'pr-reviewer', ['read_file', 'grep'], true, prompt),
+      corpusRecord('b2', 'pr-reviewer', ['grep', 'read_file'], true, prompt + ' in tests'),
+      corpusRecord('b3', 'pr-reviewer', ['read_file', 'grep'], true, prompt + ' and mirrors'),
+    ];
+    const synth: AgentForgeSynthesizer = {
+      async synthesize(candidate) {
+        return { systemAddendum: 'For each file, verify the null-check before the deref.', description: `Delta over ${candidate.basePreset}` };
+      },
+    };
+    // Two-armed probe: persona draft vs base. Wire through runAgentForgePass opts.
+    const pass1 = await runAgentForgePass(root, {
+      synthesizer: synth,
+      records,
+      prober: {
+        async probe(_prompt: string, persona: { systemAddendum: string }) {
+          // Persona arm: slightly better + cheaper than base → survives.
+          return persona.systemAddendum.includes('null-check')
+            ? { quality: 0.6, totalTokens: 90 }
+            : { quality: 0.5, totalTokens: 100 };
+        },
+      },
+      maxForges: 1,
+    });
+    expect(pass1.candidatesFound).toBe(1);
+    expect(pass1.forged.length).toBe(1);
+    expect(pass1.discarded.length).toBe(0);
+    const reg = loadAgentForgeRegistry(root);
+    const persona = Object.values(reg.personas)[0]!;
+    expect(persona.state).toBe('probation');
+    expect(persona.shapeKey).toMatch(/^pr-reviewer::/);
+    expect(persona.systemAddendum).toContain('null-check before the deref');
+
+    // Second pass over the same corpus: skip (already forged).
+    const pass2 = await runAgentForgePass(root, { synthesizer: synth, records, maxForges: 1 });
+    expect(pass2.forged.length).toBe(0);
+    expect(pass2.skipped.length).toBe(1);
+  });
+
+  it('discardForgedPersona + evaluateAgentForgeLifecycle: operator discard works, unknown name does not', async () => {
+    const base = SPAWN_PRESETS['pr-reviewer'];
+    const cand = { shapeKey: 'pr-reviewer::grep', basePreset: 'pr-reviewer', provenanceRunIds: ['1', '2', '3'], observedTools: [], avgPromptChars: 50, promptSamples: [] };
+    const gate = { ok: true, checks: [], errors: [] } as { ok: boolean; checks: { name: string; ok: boolean }[]; errors: string[] };
+    const p = persistForgedPersona(root, cand, { systemAddendum: 'x', description: 'd' }, gate);
+    const name = (p as { name: string }).name;
+    expect(discardForgedPersona(root, 'nope', 'test')).toBe(false);
+    expect(discardForgedPersona(root, name, 'operator')).toBe(true);
+    expect(resolveForgedPersona(root, name)).toBeUndefined();
+    expect(discardForgedPersona(root, name, 'again')).toBe(false);
+    const { promoted, trimmed } = evaluateAgentForgeLifecycle(root);
+    expect(promoted).toEqual([]);
+    expect(trimmed).toEqual([]);
+  });
+});

@@ -179,6 +179,15 @@ export const COMPLETION_COMMANDS: CompletionCommand[] = [
       { name: 'forged', description: 'Audit view of forged tools (state + provenance); disable/evaluate/run' },
     ],
   },
+  {
+    name: 'forge-agents', description: 'Agent Forge: self-forged spawn personas (audit, disable, evaluate, run)',
+    subcommands: [
+      { name: 'list', description: 'Audit view of forged personas (state + provenance + ledger)' },
+      { name: 'disable', description: 'Discard a forged persona' },
+      { name: 'evaluate', description: 'Run the promotion/trim lifecycle evaluation now' },
+      { name: 'run', description: 'Mine verifier-passed trajectories and forge new personas' },
+    ],
+  },
   { name: 'health', description: 'Proactive repo health scan (--force, --offline)' },
   { name: 'speculate', description: 'Speculative execution' },
   { name: 'usage', description: 'Token usage and cost' },

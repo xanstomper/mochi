@@ -17,6 +17,10 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { SPAWN_PRESETS, MUTATING_TOOL_NAMES, resolvePreset, type SpawnPreset } from '../teams/presets.js';
+import { isVerifiedRecord, type TrajectoryRecord } from '../observability/trajectory.js';
+import { loadTrajectoryCorpus } from '../tools/tool-forge.js';
+import { createProvider } from '../model/router.js';
+import type { MochiConfig } from '../types.js';
 
 // ─── Constants (mirroring tool-forge) ─────────────────────────────────────
 
@@ -71,6 +75,8 @@ export interface ForgedAgentPersona {
   description: string;
   createdAt: number;
   stateAt: number;
+  /** The mined delegation shape this persona was forged from. */
+  shapeKey: string;
   provenanceRunIds: string[];
   /** Spawn ledger (recordAgentForgeSpawn). */
   uses: number;
@@ -332,6 +338,7 @@ export function persistForgedPersona(
     name: finalName,
     state: 'probation',
     basePreset: candidate.basePreset,
+    shapeKey: candidate.shapeKey,
     systemAddendum: synth.systemAddendum,
     tools: synth.tools,
     description: synth.description,
@@ -404,6 +411,29 @@ export function trimStaleForgedPersonas(projectDir: string, now: number = Date.n
   return trimmed;
 }
 
+/** Operator discard (CLI): mark a persona dead + archive it out of the
+ *  resolvable set. Returns false when nothing lived under that name. */
+export function discardForgedPersona(projectDir: string, name: string, reason: string): boolean {
+  const reg = loadAgentForgeRegistry(projectDir);
+  const p = reg.personas[name];
+  if (!p || p.state === 'discarded' || p.state === 'disabled') return false;
+  p.state = 'discarded';
+  p.stateAt = Date.now();
+  p.lastReason = reason;
+  saveAgentForgeRegistry(projectDir, reg);
+  appendAgentForgeLog(projectDir, { event: 'archived', name, reason });
+  return true;
+}
+
+/** Pull-in evaluation (CLI): stale-probation trim + log report. Promotion
+ *  and regression discards happen at spawn time (recordAgentForgeSpawn). */
+export function evaluateAgentForgeLifecycle(projectDir: string, now: number = Date.now()): { promoted: string[]; trimmed: string[] } {
+  const trimmed = trimStaleForgedPersonas(projectDir, now);
+  const reg = loadAgentForgeRegistry(projectDir);
+  const promoted = Object.values(reg.personas).filter((p) => p.state === 'active' && p.stateAt >= now - 60_000).map((p) => p.name);
+  return { promoted, trimmed };
+}
+
 /** Resolve a forged persona to a SpawnPreset-shaped spawn config. Names are
  *  addressed as `forged/<name>`. Access NEVER widens: the base preset's
  *  allowlist and access level always apply; the persona only narrows. */
@@ -425,6 +455,211 @@ export function resolveForgedPersona(projectDir: string, name: string): SpawnPre
 /** List forged personas for `mochi forge-agents` / status surfaces. */
 export function listForgedPersonas(projectDir: string): ForgedAgentPersona[] {
   return Object.values(loadAgentForgeRegistry(projectDir).personas).sort((a, b) => b.createdAt - a.createdAt);
+}
+
+// ─── Mining from the trajectory corpus ────────────────────────────────────
+
+/** Lift delegation shapes this project actually exercises out of the SAME
+ *  durable corpus tool-forge mines (.mochi/exports/trajectory-*.jsonl):
+ *  each ok `subagent` step in a verifier-passed record becomes one
+ *  MineableSpawn; the child's observed tools are the successful steps after
+ *  its call (parent + child share the run record), capped at 12. The pure
+ *  miner above does all the evidence work — this is only an adapter. */
+export function mineAgentForgeCandidatesFromCorpus(
+  records: readonly TrajectoryRecord[],
+  opts: { maxCandidates?: number } = {},
+): AgentForgeCandidate[] {
+  const spawns: MineableSpawn[] = [];
+  for (const rec of records) {
+    const verified = isVerifiedRecord(rec);
+    for (let i = 0; i < rec.steps.length; i++) {
+      const step = rec.steps[i];
+      if (step.tool !== 'subagent' || !step.ok) continue;
+      const args = (step.args ?? {}) as Record<string, unknown>;
+      const prompt = typeof args.prompt === 'string' ? args.prompt : (rec.task?.prompt ?? '');
+      if (!prompt.trim()) continue;
+      const preset = typeof args.preset === 'string' && args.preset ? args.preset : undefined;
+      const role = typeof args.role === 'string' && args.role ? args.role : undefined;
+      const toolsUsed = [...new Set(rec.steps.slice(i + 1).filter((s) => s.ok).map((s) => s.tool))].slice(0, 12);
+      spawns.push({ runId: rec.runId, ...(preset ? { preset } : {}), ...(role ? { role } : {}), prompt, toolsUsed, runVerified: verified });
+    }
+  }
+  return mineAgentForgeCandidates(spawns).slice(0, opts.maxCandidates ?? 4);
+}
+
+// ─── Model synthesizer (the maker: router reasoning tier, LATM) ───────────
+
+const AGENT_FORGE_SYSTEM_PROMPT = `You are Mochi's Agent Forge maker model. A parent agent repeatedly delegates the SAME KIND of subtask to child agents, and the children keep succeeding. You write ONE spawn persona — a delta over an existing spawn preset — so future children of that shape start with the accumulated guidance.
+
+Hard rules (the forge gate enforces them; a violation discards the persona):
+- systemAddendum: at most 600 characters of GUIDANCE — how to approach this shape of task, what to check, what to avoid, in what order to work. No tool-instruction escalation, no access changes, no "you may now use X".
+- tools: OPTIONAL array of tool names STRICT SUBSET of the base preset's allowlist (given below). Narrow it only when the observed evidence shows those tools are all the shape needs. Omit entirely when unsure.
+- description: one sentence, what this persona is for.
+
+Respond with ONLY a JSON object: {"systemAddendum": "...", "description": "..."} or with "tools" added when narrowing is clearly warranted.`;
+
+/** Production synthesizer: the router's reasoning (frontier) tier writes the
+ *  persona; the everyday models merely use it. Mirrors tool-forge's maker. */
+export function createModelAgentForgeSynthesizer(config: MochiConfig): AgentForgeSynthesizer {
+  const provider = createProvider(config.model, 'reasoning');
+  return {
+    async synthesize(candidate, base) {
+      const user = [
+        `Base preset: ${base.name} — role ${String(base.role)}, access '${base.access}'.`,
+        `Base preset's tool allowlist (persona tools must be a subset): ${base.tools.join(', ')}`,
+        `Base preset's existing addendum (yours is APPENDED after it): ${base.systemAddendum.slice(0, 300)}`,
+        `Evidence: ${candidate.provenanceRunIds.length} verifier-passed runs delegated this shape.`,
+        `Tools the successful children actually used: ${candidate.observedTools.join(', ') || '(none recorded)'}`,
+        `Average prompt length: ${candidate.avgPromptChars} chars. Sample prompts:`,
+        ...candidate.promptSamples.map((p) => `  - ${p}`),
+        'Write the persona now.',
+      ].join('\n');
+      const res = await provider.chat(
+        [{ role: 'system', content: AGENT_FORGE_SYSTEM_PROMPT }, { role: 'user', content: user }],
+        [],
+        { temperature: 0.2, maxTokens: 1_200 },
+      );
+      const text = res.content ?? '';
+      const start = text.indexOf('{');
+      const end = text.lastIndexOf('}');
+      if (start < 0 || end <= start) throw new Error('synthesizer returned no JSON object');
+      const parsed = JSON.parse(text.slice(start, end + 1)) as { systemAddendum?: string; tools?: string[]; description?: string };
+      if (typeof parsed.systemAddendum !== 'string' || typeof parsed.description !== 'string') {
+        throw new Error('synthesizer JSON missing systemAddendum/description');
+      }
+      return {
+        systemAddendum: parsed.systemAddendum,
+        ...(Array.isArray(parsed.tools) ? { tools: parsed.tools.filter((t): t is string => typeof t === 'string') } : {}),
+        description: parsed.description,
+      };
+    },
+  };
+}
+
+// ─── Live prober (replays a mined subtask, persona vs base) ───────────────
+
+/** Production prober: spawns a REAL child agent with the persona (or base)
+ *  config on the mined prompt and asks the parent-tier model to judge the
+ *  child's result quality 0..1. The probe is one agent-roundtrip per arm —
+ *  bounded ambient spend, same as a forge gate run. */
+export function createAgentForgeProber(config: MochiConfig, spawnChild: (systemAddendum: string, tools?: string[]) => Promise<{ summary: string; success: boolean; tokensUsed: number }>): AgentForgeProber {
+  const provider = createProvider(config.model, 'reasoning');
+  const judge = async (summary: string, prompt: string): Promise<number> => {
+    try {
+      const res = await provider.chat(
+        [{ role: 'system', content: 'You judge whether an agent\'s result fully handled the task. Respond with ONLY a number 0.0-1.0 (1.0 = fully handled, correct, complete).' },
+         { role: 'user', content: `Task: ${prompt.slice(0, 400)}\n\nResult: ${summary.slice(0, 1_500)}` }],
+        [],
+        { temperature: 0, maxTokens: 20 },
+      );
+      const m = (res.content ?? '').match(/([01](?:\.\d+)?)/);
+      return m ? Math.min(1, Math.max(0, Number(m[1]))) : 0.5;
+    } catch {
+      return 0.5; // judge unavailable → neutral; the cost check still runs
+    }
+  };
+  return {
+    async probe(prompt, persona) {
+      const r = await spawnChild(persona.systemAddendum, persona.tools);
+      const quality = await judge(r.summary, prompt);
+      return { quality: r.success ? quality : 0, totalTokens: r.tokensUsed };
+    },
+  };
+}
+
+// ─── The forge pass (mine → synthesize → gate → persist) ──────────────────
+
+export interface AgentForgePassOptions {
+  synthesizer: AgentForgeSynthesizer;
+  prober?: AgentForgeProber;
+  records?: readonly TrajectoryRecord[];
+  /** Max personas to attempt this pass (bounded ambient spend). */
+  maxForges?: number;
+  now?: number;
+}
+
+export interface AgentForgePassResult {
+  candidatesFound: number;
+  forged: string[];
+  discarded: Array<{ name?: string; shapeKey: string; reason: string }>;
+  skipped: Array<{ shapeKey: string; reason: string }>;
+}
+
+/** One persona forge pass over the trajectory corpus. Mirrors tool-forge's
+ *  runForgePass: evidence-mined candidates only, gate decides (never the
+ *  model), discarded shapes are not retried on the same evidence. */
+export async function runAgentForgePass(projectDir: string, opts: AgentForgePassOptions): Promise<AgentForgePassResult> {
+  const now = opts.now ?? Date.now();
+  const records = opts.records ?? loadTrajectoryCorpus(projectDir);
+  const candidates = mineAgentForgeCandidatesFromCorpus(records);
+  const result: AgentForgePassResult = { candidatesFound: candidates.length, forged: [], discarded: [], skipped: [] };
+  const reg = loadAgentForgeRegistry(projectDir);
+  const maxForges = opts.maxForges ?? 2;
+  let attempted = 0;
+
+  for (const candidate of candidates) {
+    const prior = Object.values(reg.personas).find((p) => p.shapeKey === candidate.shapeKey && p.state !== 'discarded');
+    if (prior) {
+      result.skipped.push({ shapeKey: candidate.shapeKey, reason: `already forged as '${prior.name}' (${prior.state})` });
+      continue;
+    }
+    const deadPrior = Object.values(reg.personas).find((p) => p.shapeKey === candidate.shapeKey && p.state === 'discarded');
+    if (deadPrior) {
+      result.skipped.push({ shapeKey: candidate.shapeKey, reason: `already attempted and discarded (${deadPrior.lastReason ?? 'gate failed'}) — failed personas are not retried on the same evidence` });
+      continue;
+    }
+    if (attempted >= maxForges) {
+      result.skipped.push({ shapeKey: candidate.shapeKey, reason: 'pass budget (maxForges) reached' });
+      continue;
+    }
+    attempted++;
+
+    const base = SPAWN_PRESETS[candidate.basePreset];
+    if (base == null) {
+      result.discarded.push({ shapeKey: candidate.shapeKey, reason: `unknown base preset ${candidate.basePreset}` });
+      continue;
+    }
+    let synth: { systemAddendum: string; tools?: string[]; description: string };
+    try {
+      synth = await opts.synthesizer.synthesize(candidate, base);
+    } catch (err) {
+      const reason = `synthesis failed: ${err instanceof Error ? err.message : String(err)}`;
+      result.discarded.push({ shapeKey: candidate.shapeKey, reason });
+      appendAgentForgeLog(projectDir, { event: 'discarded', shapeKey: candidate.shapeKey, reason, provenanceRunIds: candidate.provenanceRunIds, at: now });
+      continue;
+    }
+
+    // Static gate first (free); only gate-passing drafts earn a probe.
+    const gate = validateForgedPersona(candidate, base, synth);
+    if (!gate.ok) {
+      result.discarded.push({ shapeKey: candidate.shapeKey, reason: `static gate failed — ${gate.errors.join('; ')}` });
+      appendAgentForgeLog(projectDir, { event: 'discarded', shapeKey: candidate.shapeKey, reason: gate.errors.join('; '), provenanceRunIds: candidate.provenanceRunIds, at: now });
+      continue;
+    }
+    // Probe gate (spends tokens). No prober → no persist, ever.
+    if (opts.prober == null) {
+      result.discarded.push({ shapeKey: candidate.shapeKey, reason: 'no prober configured — persona survives only with live probe evidence' });
+      appendAgentForgeLog(projectDir, { event: 'discarded', shapeKey: candidate.shapeKey, reason: 'no prober configured', provenanceRunIds: candidate.provenanceRunIds, at: now });
+      continue;
+    }
+    const probe = await probeForgedPersona(candidate, { basePreset: base.name, systemAddendum: synth.systemAddendum, ...('tools' in synth ? { tools: synth.tools } : {}) }, opts.prober);
+    if (!probe.ok) {
+      result.discarded.push({ shapeKey: candidate.shapeKey, reason: `probe gate failed — ${probe.errors.join('; ')}` });
+      appendAgentForgeLog(projectDir, { event: 'discarded', shapeKey: candidate.shapeKey, reason: probe.errors.join('; '), provenanceRunIds: candidate.provenanceRunIds, at: now });
+      continue;
+    }
+
+    const persisted = persistForgedPersona(projectDir, candidate, synth, { ok: true, checks: gate.checks, errors: [] });
+    if ('error' in persisted) {
+      result.discarded.push({ shapeKey: candidate.shapeKey, reason: persisted.error });
+      continue;
+    }
+    result.forged.push(persisted.name);
+    appendAgentForgeLog(projectDir, { event: 'forged', name: persisted.name, shapeKey: candidate.shapeKey, provenanceRunIds: candidate.provenanceRunIds, at: now });
+  }
+  // Same janitor as every forge surface: stale probation never lingers.
+  trimStaleForgedPersonas(projectDir, now);
+  return result;
 }
 
 /** Spawn-site resolution: `forged/<name>` personas first (gated, lifecycle-
