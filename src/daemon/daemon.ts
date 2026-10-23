@@ -587,7 +587,6 @@ async function handleRequest(
     res.writeHead(200, { 'content-type': 'application/json', ...corsHeadersForOrigin(req.headers.origin) });
     res.end(JSON.stringify({ ok: true, version: daemonVersion(), uptimeSec: Math.floor(process.uptime()) }));
     return;
-    return;
   }
 
 

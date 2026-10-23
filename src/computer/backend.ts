@@ -39,8 +39,3 @@ export function getDisplayBackend(): DisplayBackend {
     'Run under an X session (or Xvfb), or set MOCHI_COMPUTER_BACKEND=fake for the simulated display.',
   );
 }
-
-/** Drop the cached backend (after close or a connection failure). */
-export function resetDisplayBackend(): void {
-  cached = null;
-}
