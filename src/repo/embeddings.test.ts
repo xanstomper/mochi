@@ -90,34 +90,68 @@ describe('resolveEmbedder', () => {
     expect(r.embedder.kind).toBe('lexical-fallback');
   });
 
-  it('falls back for a non-OpenAI-kind provider (anthropic)', () => {
-    const cfg = { model: { provider: 'anthropic', baseUrl: '', model: 'claude-sonnet-4-5', apiKey: 'k' } } as MochiConfig;
+  it('gate: a configured embedding-capable CHAT provider does NOT auto-wire provider embeddings', () => {
+    const cfg = { model: { provider: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-5.4', apiKey: 'sk-test' } } as MochiConfig;
+    const r = resolveEmbedder(cfg);
+    expect(r.embedder.kind).toBe('lexical-fallback');
+    expect(r.reason).toMatch(/OFF by default/);
+  });
+
+  it('gate: falls back for a non-OpenAI-kind provider when explicitly requested (anthropic)', () => {
+    const cfg = { retrieval: { embeddingProvider: 'anthropic' } } as MochiConfig;
     const r = resolveEmbedder(cfg);
     expect(r.embedder.kind).toBe('lexical-fallback');
     expect(r.reason).toMatch(/anthropic/);
   });
 
-  it('uses the known embedding model when the configured provider is openai with a key', () => {
-    const cfg = { model: { provider: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-5.4', apiKey: 'test-key' } } as MochiConfig;
+  it('honours an explicit embeddingProvider with its known embedding model', () => {
+    const cfg = {
+      model: { provider: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-5.4', apiKey: 'sk-test' },
+      retrieval: { embeddingProvider: 'openai' },
+    } as MochiConfig;
     const r = resolveEmbedder(cfg);
     expect(r.embedder.kind).toBe('provider');
     expect(r.embedder.id).toBe('openai:text-embedding-3-small');
   });
 
-  it('falls back when the provider has no known embedding model and none is configured', () => {
-    const cfg = { model: { provider: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', apiKey: 'k' } } as MochiConfig;
+  it('honours an explicit provider+model pair regardless of the chat provider (keyless provider)', () => {
+    const cfg = {
+      model: { provider: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', apiKey: 'sk-test' },
+      retrieval: { embeddingProvider: 'ollama', embeddingModel: 'nomic-embed-text' },
+    } as MochiConfig;
+    const r = resolveEmbedder(cfg);
+    expect(r.embedder.kind).toBe('provider');
+    expect(r.embedder.id).toBe('ollama:nomic-embed-text');
+  });
+
+  it('falls back when the requested provider has no known embedding model and none is configured', () => {
+    const cfg = { retrieval: { embeddingProvider: 'deepseek' } } as MochiConfig;
     const r = resolveEmbedder(cfg);
     expect(r.embedder.kind).toBe('lexical-fallback');
     expect(r.reason).toMatch(/no known embedding model/);
   });
 
-  it('honours an explicitly configured embedding model', () => {
-    const cfg = {
-      model: { provider: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', apiKey: 'k' },
-      retrieval: { embeddingModel: 'some-embed-model' },
-    } as MochiConfig;
+  it('falls back when a model is configured without any provider', () => {
+    const cfg = { retrieval: { embeddingModel: 'some-embed-model' } } as MochiConfig;
     const r = resolveEmbedder(cfg);
-    expect(r.embedder.kind).toBe('provider');
-    expect(r.embedder.id).toBe('deepseek:some-embed-model');
+    expect(r.embedder.kind).toBe('lexical-fallback');
+    expect(r.reason).toMatch(/without a provider/);
+  });
+
+  it('honours the MOCHI_EMBEDDING_PROVIDER/MODEL env overrides (keyless provider)', () => {
+    const prevP = process.env.MOCHI_EMBEDDING_PROVIDER;
+    const prevM = process.env.MOCHI_EMBEDDING_MODEL;
+    process.env.MOCHI_EMBEDDING_PROVIDER = 'ollama';
+    process.env.MOCHI_EMBEDDING_MODEL = 'nomic-embed-text';
+    try {
+      const r = resolveEmbedder(undefined);
+      expect(r.embedder.kind).toBe('provider');
+      expect(r.embedder.id).toBe('ollama:nomic-embed-text');
+    } finally {
+      if (prevP === undefined) delete process.env.MOCHI_EMBEDDING_PROVIDER;
+      else process.env.MOCHI_EMBEDDING_PROVIDER = prevP;
+      if (prevM === undefined) delete process.env.MOCHI_EMBEDDING_MODEL;
+      else process.env.MOCHI_EMBEDDING_MODEL = prevM;
+    }
   });
 });
