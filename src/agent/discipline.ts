@@ -204,9 +204,15 @@ const TRIVIAL_VERIFY_COMMANDS = new Set(['true', ':', 'exit 0', 'echo', 'echo pa
  *  exactly the case self-review exists for (e.g. a wrong constant no test
  *  can see). */
 export function verifySummaryEvidenced(summary: string): boolean {
-  if (summary.startsWith('Manual check passed')) return true;
-  if (!summary.startsWith('All checks passed:')) return false;
-  const cmds = summary
+  // The fast lane appends ' [fast lane — targeted set]' AFTER the command
+  // list. Left in place, a trivial `true` becomes 'true [fast lane …]' which
+  // misses TRIVIAL_VERIFY_COMMANDS — a vacuous pass then counts as evidenced
+  // and decisive finish wrongly skips self-review. Strip bracketed
+  // suffix annotations before parsing the command list.
+  const s = summary.replace(/\s*\[[^\]]*\]\s*$/, '');
+  if (s.startsWith('Manual check passed')) return true;
+  if (!s.startsWith('All checks passed:')) return false;
+  const cmds = s
     .slice('All checks passed:'.length)
     .split(',')
     .map((c) => c.trim().toLowerCase())
