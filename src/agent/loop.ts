@@ -8117,7 +8117,7 @@ Continue from 'Next:', do not redo completed progress.`,
     if (!this.contentOnly && !greenfield && !this.greenfieldTask) {
       const mutationCmd =
         (autoTestCmd && genuinePasses.includes(autoTestCmd) ? autoTestCmd : undefined) ??
-        (repo.testCommand && genuinePasses.includes(repo.testCommand) ? repo.testCommand : undefined) ??
+        (repo.testCommand && genuinePasses.includes(repo.testCommand) && !isWeakVerification(repo.testCommand) ? repo.testCommand : undefined) ??
         (pushedTaskCmd && genuinePasses.includes(pushedTaskCmd) && !isWeakVerification(task.verificationCommand) ? pushedTaskCmd : undefined);
       // Flaky commands are excluded from the mutation check (VerifierEngine
       // parity): a baseline that flips on its own makes killed/survived
