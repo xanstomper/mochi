@@ -44,3 +44,13 @@ Branch opencode/improvements @ 3ab1b49 verified in a fresh worktree (~/mochi-ver
 - PARTIAL remainder from the sweep (free-tier cap cut the run): listDir removal
   (src/curriculum/curriculum.ts) and ISSUES.md L-14 (SDK re-exports of sleeptime
   stubs) still open — first items for the next opencode run.
+
+## Wave 3 (staged 2026-10-23 — brief: ~/campaign/wave3-brief.txt)
+Coding run gated on OpenCode free-tier quota (still capped at staging time).
+- Leftovers: listDir removal; ISSUES L-14 stub re-exports.
+- W3-1 embedder: wire freeinference bge-m3 into retrieval (config-gated), recall harness, ship only if hybrid >= lexical.
+- W3-2 ACP v1 completeness: session/resume|list|close|delete, additionalDirectories + conformance tests. ACP v2 is draft — hands off.
+- W3-3 MCP: tools/list caching (ttlMs/cacheScope, list_changed), lazy tool-schema loading with token measurement, server/discover audit for the 2026-07-28 revision. G12 first-turn latency stays home's.
+- W3-4 TUI: evidence status line, subagent panel, per-hunk edit review.
+- W3-5 environment: sandbox preflight, exec ceilings, subagent worktree isolation.
+Meanwhile: vermes is running the W3-2 ACP audit (read-only) -> ~/campaign/wave3-acp-audit.md.
