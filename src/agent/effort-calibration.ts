@@ -82,18 +82,22 @@ function parseStats(raw: string): EffortStats {
   }
 }
 
-const readCache = new Map<string, { mtimeMs: number; stats: EffortStats }>();
+const readCache = new Map<string, { mtimeNs: bigint; stats: EffortStats }>();
 
-/** Load the outcome table (mtime-cached; corrupt/missing -> empty). */
+/** Load the outcome table (mtime-cached; corrupt/missing -> empty).
+ *  Cache key uses NANOSECOND mtime (bigint stat): tests and fast writers
+ *  rewrite the file within the same millisecond, and an ms-resolution key
+ *  served stale stats (calibration silently ignored a fresh seed). ns
+ *  precision makes same-ms rewrites a cache miss, not a stale hit. */
 export function loadEffortStats(workspaceDir: string): EffortStats {
   const path = effortStatsPath(workspaceDir);
   try {
     if (!existsSync(path)) return emptyStats();
-    const { mtimeMs } = statSync(path);
+    const mtimeNs = statSync(path, { bigint: true }).mtimeNs;
     const cached = readCache.get(path);
-    if (cached && cached.mtimeMs === mtimeMs) return cached.stats;
+    if (cached && cached.mtimeNs === mtimeNs) return cached.stats;
     const stats = parseStats(readFileSync(path, 'utf8'));
-    readCache.set(path, { mtimeMs, stats });
+    readCache.set(path, { mtimeNs, stats });
     return stats;
   } catch {
     return emptyStats();
@@ -120,7 +124,7 @@ export function recordEffortOutcome(workspaceDir: string, kind: string, tier: st
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, JSON.stringify(stats, null, 2));
     try {
-      readCache.set(path, { mtimeMs: statSync(path).mtimeMs, stats });
+      readCache.set(path, { mtimeNs: statSync(path, { bigint: true }).mtimeNs, stats });
     } catch { /* cache refresh is best-effort */ }
   } catch { /* calibration data must never affect a run */ }
 }
