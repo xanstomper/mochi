@@ -108,6 +108,18 @@ describe('gate verdicts (§5.3 thresholds)', () => {
     await updateBaseline({ ...baseOpts(), runner: solutionRunner(1000) });
     const report = await runGate({ ...baseOpts(), runner: solutionRunner(800) });
     expect(report.comparison.checks.efficiency).toBe(true);
+    // DBG(flake): a full-suite-only 0.2111-vs-0.2 failure was observed twice.
+    // Dump trial-level data so the next occurrence is diagnosable instead of
+    // a bare number.
+    if (Math.abs((report.comparison.costReduction ?? 0) - 0.2) > 1e-6) {
+      const { writeFileSync } = await import('node:fs');
+      writeFileSync(`/tmp/reggate-flake-${Date.now()}.json`, JSON.stringify({
+        costReduction: report.comparison.costReduction,
+        baseRun: report.baseline?.results ?? null,
+        chalRun: report.results ?? null,
+      }, null, 2));
+      console.error('DBG costReduction', report.comparison.costReduction, 'dumped to /tmp/reggate-flake-*.json');
+    }
     expect(report.comparison.costReduction).toBeCloseTo(0.2, 5);
     expect(report.comparison.deltaPp).toBe(0);
     expect(report.verdict).toBe('PASS');
