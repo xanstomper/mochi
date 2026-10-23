@@ -48,6 +48,7 @@
 
 ## Unreleased
 
+## 0.28.0
 ### Added (agent-forge — verifier-gated spawn persona synthesis)
 - `src/agent/agent-forge.ts`: mines verifier-passed trajectories for recurring delegation shapes (≥3 evidence runs, preset + tool fingerprint), synthesizes a persona as a DELTA over an existing spawn preset (addendum cap 600 chars; allowlist can only NARROW — access never widens), probes it live against its base preset (2 seeds/arm: quality ≥ base, tokens ≤ 1.5×), and persists only gated personas.
 - Lifecycle mirrors skill-curator: probation → promote at ≥3 helpful uses with 0 regressions; first attributable regression discards; stale-probation trim (14d). Discard reasons land in `.mochi/agents/forge-log.jsonl`.
