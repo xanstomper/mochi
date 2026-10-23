@@ -209,7 +209,7 @@ describe('cost-per-solve routing (loop)', () => {
     dir = makeRepo(false);
     const safety = {
       mode: 'auto', commandTimeoutSeconds: 10, maxIterations: 40, maxRuntimeMinutes: 5,
-      maxConcurrentAgents: 1, contextBudgetTokens: 8000, maxCostUsd: 0.0135,
+      maxConcurrentAgents: 1, contextBudgetTokens: 8000, maxCostUsd: 0.0141, // 7.05 calls: call 7 (the 3rd verify-failure turn) charges past the cap leaving remaining=$0.0001 — enough for canMakeModelCall() to pass the escalation gate, then escalationBudgetBlock() fires 'cost cap reached'. At 0.0135 the run died of exhaustion one call BEFORE the 3rd failure; higher and the switch would run instead of being blocked.
     } as never;
     const budget = new BudgetEngine(safety);
     budget.start();
