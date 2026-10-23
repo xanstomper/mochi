@@ -321,6 +321,8 @@ export function execArgvText(cmd: string, args: readonly string[], opts: { cwd?:
 export {
   detectBubblewrapBin as detectBubblewrap,
   buildBubblewrapArgs,
+  detectUnshare,
+  buildUnshareArgs,
   probeSandboxCapabilities,
   resetSandboxProbeCache as resetBubblewrapCache,
 } from './security/sandbox.js';

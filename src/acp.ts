@@ -30,7 +30,7 @@ export const ACP_PROTOCOL_VERSION = 1;
 
 // Baked-in default overridden by the package.json version at runtime (matching
 // the CLI); the baked constant keeps the compiled binary versioned correctly.
-let ACP_AGENT_VERSION = '0.30.0';
+let ACP_AGENT_VERSION = '0.31.0';
 try {
   const pkgPath = resolve(process.cwd(), 'package.json');
   ACP_AGENT_VERSION = JSON.parse(readFileSync(pkgPath, 'utf8')).version;
