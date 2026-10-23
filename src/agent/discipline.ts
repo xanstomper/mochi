@@ -187,6 +187,7 @@ export function failureClassOf(summary: string): string {
         .replace(/[+-]?\d+(\.\d+)?/g, '#')
         .replace(/\s+/g, ' ')
         .trim()
+        .replace(/\s*:/g, ':')
         .toLowerCase(),
     )
     .join(' | ')
