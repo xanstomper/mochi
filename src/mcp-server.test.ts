@@ -16,7 +16,7 @@ describe('MCP server (editor ubiquity — stdio JSON-RPC core)', () => {
   it('tools/list exposes mochi_run, mochi_plan, mochi_status', async () => {
     const r = await handleMcp({ id: 2, method: 'tools/list' }, freshState());
     const tools = (r.result as { tools: Array<{ name: string }> }).tools;
-    expect(tools.map((t) => t.name)).toEqual(['mochi_run', 'mochi_plan', 'mochi_status']);
+    expect(tools.map((t) => t.name)).toEqual(['mochi_run', 'mochi_plan', 'mochi_status', 'mochi_delegate', 'mochi_review', 'mochi_answer']);
   });
 
   it('unknown method errors with -32601', async () => {
@@ -77,7 +77,7 @@ describe('MCP server (editor ubiquity — stdio JSON-RPC core)', () => {
   it('prompts/list + prompts/get build real workflow prompts', async () => {
     const l = await handleMcp({ id: 13, method: 'prompts/list' }, freshState());
     const names = (l.result as { prompts: Array<{ name: string }> }).prompts.map((p) => p.name);
-    expect(names).toEqual(['fix-tests', 'review', 'implement', 'explain']);
+    expect(names).toEqual(['fix-tests', 'review', 'implement', 'explain', 'a2a-brief']);
     const g = await handleMcp({ id: 14, method: 'prompts/get', params: { name: 'implement', arguments: { feature: 'avatars' } } }, freshState());
     const msgs = (g.result as { messages: Array<{ content: { text: string } }> }).messages;
     expect(msgs[0].content.text).toContain('avatars');
