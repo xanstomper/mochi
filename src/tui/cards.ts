@@ -123,10 +123,42 @@ export function describeToolOutcome(
   const firstLine = lines[0] ?? '';
   const tool = TOOL_ALIASES[rawTool] || rawTool;
   if (firstLine) {
-    const trimmed = firstLine.length > 100 ? firstLine.slice(0, 97) + '…' : firstLine;
+    // A giant single-line JSON blob used to surface as a raw 100-char
+    // prefix slice (`{"users":[{"id":…`) — meaningless on the card. When
+    // the output IS JSON, summarize its structure instead; the full text
+    // stays one keystroke away in the inspector (Wave S3).
+    let summary = firstLine;
+    if (firstLine.length > 60 && (firstLine.startsWith('{') || firstLine.startsWith('['))) {
+      summary = summarizeJsonBlob(out) ?? firstLine;
+    }
+    const trimmed = summary.length > 100 ? summary.slice(0, 97) + '…' : summary;
     return { kind: 'success', summary: trimmed, durationMs: dur };
   }
   return { kind: 'success', summary: `${tool} completed${out.length === 0 ? ' (no output)' : ''}`, durationMs: dur };
+}
+
+/** Structural one-liner for a JSON tool result: `JSON · {id, name, … +4
+ *  keys}` / `JSON · 12 items`. Returns null when the text isn't JSON. */
+export function summarizeJsonBlob(text: string): string | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return 'JSON · empty array';
+    const first = value[0];
+    const kind = Array.isArray(first) ? 'arrays' : typeof first;
+    return `JSON · ${value.length} item${value.length === 1 ? '' : 's'} of ${kind}`;
+  }
+  if (value !== null && typeof value === 'object') {
+    const keys = Object.keys(value as Record<string, unknown>);
+    if (keys.length === 0) return 'JSON · empty object';
+    const shown = keys.slice(0, 4).join(', ');
+    return `JSON · {${shown}${keys.length > 4 ? `, … +${keys.length - 4} keys` : ''}}`;
+  }
+  return `JSON · ${typeof value}`;
 }
 
 export interface ToolCardOptions {

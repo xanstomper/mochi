@@ -34,7 +34,8 @@ import {
   farewellFrame,
   statusBarRow1,
   statusBarRow2,
-  renderMarkdown,
+  createStreamMarkdownRenderer,
+  type StreamMarkdownRenderer,
   renderDropdown,
   composerRow,
   composerPlaceholderRow,
@@ -630,6 +631,10 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
    *  tail + the actively-streaming last line) instead of the whole 500-line
    *  transcript. This is the fix for the freeze while the agent works. */
   let transCache: { text: string; kind: LineKind; out: string[] }[] = [];
+  /** Per-assistant-line streaming markdown renderers (Wave S3), keyed by
+   *  Line object identity — state.ts mutates the same object as chunks
+   *  append. Entries die with their Line (trimmed lines leave state). */
+  const streamRenderers = new WeakMap<Line, StreamMarkdownRenderer>();
   let transMw = 0;
   /** How many head-trims the cache has already absorbed (see transcriptLines). */
   let transSeenTrimmed = 0;
@@ -889,7 +894,18 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         // exact transcript width and emits hanging-indented final rows, so
         // the downstream pass-through must NOT re-wrap (a second wrap would
         // destroy the continuation-line alignment under list markers).
-        const mdRows = renderMarkdown(cleanText, Math.max(20, maxWidth - 2));
+        // Wave S3: streamed through the sealing renderer — completed
+        // blocks render once and only the unfinished tail re-parses per
+        // frame (per-frame cost used to grow with the whole message).
+        // state.ts mutates this same Line object as chunks append, so the
+        // WeakMap key is stable for the life of the stream; a width change
+        // or a non-append text replacement resets it internally.
+        let streamRenderer = streamRenderers.get(line);
+        if (!streamRenderer) {
+          streamRenderer = createStreamMarkdownRenderer();
+          streamRenderers.set(line, streamRenderer);
+        }
+        const mdRows = streamRenderer.render(cleanText, Math.max(20, maxWidth - 2));
         for (const r of mdRows) {
           rows.push(r);
         }
