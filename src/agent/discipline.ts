@@ -182,9 +182,11 @@ export function failureClassOf(summary: string): string {
           return tok;
         })
         .join(' ')
+        .replace(/\(fast lane\)/g, '')
         .replace(/:\d+(:\d+)?/g, ':L')
         .replace(/[+-]?\d+(\.\d+)?/g, '#')
         .replace(/\s+/g, ' ')
+        .trim()
         .toLowerCase(),
     )
     .join(' | ')
