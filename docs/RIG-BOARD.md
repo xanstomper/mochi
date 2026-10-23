@@ -33,3 +33,14 @@ One repo, three workers, measured bar: a change that moves no number does not co
 - Whoever finishes a task updates this board in their branch/commit message.
 - Failures get files, not vibes: failing test name + first failing assertion.
 - PARTIAL results are labeled PARTIAL. UNMEASURED stays UNMEASURED.
+
+## Verification update (2026-10-23, vermes)
+Branch opencode/improvements @ 3ab1b49 verified in a fresh worktree (~/mochi-verify):
+- tsc: CLEAN
+- Target files: discipline-loop PASS, loop PASS (90 passed / 3 skipped)
+- Full suite: 3,271 passed / 0 failed / 14 skipped — baseline was 3,269 / 2 failed.
+  Exactly the 2 baseline failures flipped; zero regressions.
+- Verdicts: cfcba5f PASS, e8df39c PASS, sweep 3ab1b49 PASS (dead-code removals safe).
+- PARTIAL remainder from the sweep (free-tier cap cut the run): listDir removal
+  (src/curriculum/curriculum.ts) and ISSUES.md L-14 (SDK re-exports of sleeptime
+  stubs) still open — first items for the next opencode run.
