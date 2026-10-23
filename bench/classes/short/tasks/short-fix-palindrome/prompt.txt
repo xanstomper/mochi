@@ -1,0 +1,9 @@
+palindrome.js exports isPalindrome(text): it should report whether a text
+reads the same forwards and backwards, IGNORING case, spaces and punctuation
+(so "A man, a plan, a canal: Panama" is a palindrome).
+
+Bug report: real-world phrases with punctuation come back false even when
+they are palindromes. Plain lowercase words work fine.
+
+Fix palindrome.js so the documented contract holds for all inputs, including
+digits and empty text.

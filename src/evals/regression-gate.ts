@@ -255,6 +255,9 @@ export interface AgentStepResult {
   timedOut: boolean;
   tokens: number | null;
   costUsd: number | null;
+  /** Model turns (usage:updated events) when the runner can count them;
+   *  null = unknown. Added for the class scorecard (bench classes). */
+  turns?: number | null;
   /** Coarse failure-class hint from traces ('F7' | 'F12' | 'X'); the core
    *  refines it. Null when no signal. */
   failureClass: string | null;
@@ -272,6 +275,9 @@ export interface TrialOutcome {
   passed: boolean;
   tokens: number | null;
   costUsd: number | null;
+  /** Model turns counted from traces; null when unknown (older baselines,
+   *  dry-run plumbing). Never interpolated. */
+  turns: number | null;
   /** F-label (pipeline §4.2) for failed trials; null for passes. 'F3' is the
    *  coarse default when the verifier failed without a better signal. */
   failureClass: string | null;
@@ -295,10 +301,11 @@ export interface RunResults {
  *  computable for providers that never report billing. An event whose cost
  *  can be neither reported nor estimated keeps costUsd null (unknown, not
  *  a flattering partial sum). */
-export function scanRunTraces(workdir: string, opts: { pricing?: PriceOverrides } = {}): { tokens: number | null; costUsd: number | null; costEstimated: boolean; failureClass: string | null; traceIds: string[] } {
+export function scanRunTraces(workdir: string, opts: { pricing?: PriceOverrides } = {}): { tokens: number | null; costUsd: number | null; costEstimated: boolean; failureClass: string | null; traceIds: string[]; turns: number | null } {
   const dir = join(workdir, '.mochi', 'traces');
   const traceIds: string[] = [];
   let tokens = 0;
+  let turns = 0;
   let sawUsage = false;
   let cost = 0;
   let costComplete = true;
@@ -313,6 +320,7 @@ export function scanRunTraces(workdir: string, opts: { pricing?: PriceOverrides 
         try { e = JSON.parse(line) as Record<string, unknown>; } catch { continue; }
         if (e.kind === 'usage:updated') {
           sawUsage = true;
+          turns += 1; // one usage:updated event per billed model call ≈ one turn
           if (typeof e.totalTokens === 'number') tokens += e.totalTokens;
           if (typeof e.costUsd === 'number' && e.costUsd > 0) {
             cost += e.costUsd;
@@ -350,6 +358,7 @@ export function scanRunTraces(workdir: string, opts: { pricing?: PriceOverrides 
     costEstimated,
     failureClass: looped ? 'F7' : null,
     traceIds,
+    turns: sawUsage ? turns : null,
   };
 }
 
@@ -368,6 +377,7 @@ export function createSubprocessRunner(opts: { mochiBin: string; timeoutMs?: num
       timedOut,
       tokens: scan.tokens,
       costUsd: scan.costUsd,
+      turns: scan.turns,
       failureClass: timedOut ? 'F12' : scan.failureClass ?? (r.error && !timedOut ? 'X' : null),
       traceIds: scan.traceIds,
       detail: timedOut ? `agent timed out after ${timeoutMs}ms` : `agent exit ${r.status}`,
@@ -440,6 +450,7 @@ export async function executeRun(
           passed: v.passed,
           tokens: step.tokens,
           costUsd: step.costUsd,
+          turns: step.turns ?? null,
           failureClass: v.passed ? null : step.failureClass ?? 'F3',
           detail: v.passed ? v.detail : `${v.detail} [${step.detail}]`,
           durationMs: Date.now() - t0,

@@ -1,0 +1,15 @@
+events/bus.js is a tiny event bus that grew organically; app/counter.js and
+app/logger.js consume it. Refactor the bus internals so the bus satisfies
+this behavioral contract (the consumers must keep working unchanged):
+
+  1. Listeners for an event run in registration order.
+  2. A listener that throws must NOT stop later listeners from running, and
+     emit() itself must not throw because of a listener. The error is
+     recorded on the bus as bus.errors entries of { event, error }.
+  3. emit() returns the results of the listeners that succeeded, in order.
+  4. off(event, fn) removes exactly ONE registration (the earliest matching
+     one), even if the same fn was registered more than once.
+  5. A once() listener fires exactly once - including when it throws.
+
+You may restructure bus.js freely; its public surface (on/once/off/emit and
+the errors array) must match the contract above.

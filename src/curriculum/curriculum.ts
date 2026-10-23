@@ -296,7 +296,19 @@ export function enumerateMutationCandidates(source: string, maxCandidates = 24):
 // Isolated copies — scratch validation + practice materialization
 // ---------------------------------------------------------------------------
 
-const COPY_EXCLUDE = new Set(['node_modules', '.git', 'dist', 'coverage']);
+const COPY_EXCLUDE = new Set(['node_modules', '.git', 'dist', 'coverage', '__pycache__']);
+
+/** Remove the bytecode cache sitting next to a scratch source file.
+ *  Python validates a .pyc by its source's mtime+size, so a same-length
+ *  mutation written within the same second as the baseline run is shadowed
+ *  by the baseline's cache: the mutated code never executes, the test
+ *  stays green, and the flip check reports a false "mutation survived".
+ *  (Found by the audit-fix wave: the sleeptime curriculum fixtures'
+ *  `a + b` → `a - b` mutation was invisible to the runner this way.)
+ *  Purging after every rewrite of the target removes the race. */
+function purgeSiblingBytecodeCache(sourceAbs: string): void {
+  rmSync(join(dirname(sourceAbs), '__pycache__'), { recursive: true, force: true });
+}
 
 /** Copy a repo tree (minus deps/build/VCS internals) into dest. */
 export function copyRepoTree(srcRoot: string, dest: string): void {
@@ -442,6 +454,7 @@ export async function generateCurriculumTask(opts: GenerateOptions): Promise<Cur
   try {
     copyRepoTree(repoRoot, scratch);
     const targetInScratch = join(scratch, relPosix);
+    purgeSiblingBytecodeCache(targetInScratch);
 
     const baseline = await runner(scratch);
     if (!baseline.passed) {
@@ -454,6 +467,7 @@ export async function generateCurriculumTask(opts: GenerateOptions): Promise<Cur
     for (const cand of candidates) {
       tried++;
       writeFileSync(targetInScratch, cand.mutatedSource);
+      purgeSiblingBytecodeCache(targetInScratch);
       const outcome = await runner(scratch);
       if (outcome.passed) continue;                    // mutation survived → not a task
       if (PARSE_ERROR_RE.test(outcome.output)) continue; // syntax break → trivial, skip
@@ -466,6 +480,7 @@ export async function generateCurriculumTask(opts: GenerateOptions): Promise<Cur
 
     // Restore-and-reverify: the exact falsifiable property of the task.
     writeFileSync(targetInScratch, originalContent);
+    purgeSiblingBytecodeCache(targetInScratch);
     const restored = await runner(scratch);
     if (!restored.passed) {
       throw new CurriculumError('io', `restoring the original ${relPosix} did not return the suite to green — refusing to emit an unverifiable task`);

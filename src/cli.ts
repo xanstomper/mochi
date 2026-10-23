@@ -111,6 +111,8 @@ Usage:
   mochi inspect "<query>"
   mochi trace [<goalId>]             # replay the run trace for a goal
   mochi gate run|baseline|freeze|check  # frozen regression gate (bench/frozen/)
+  mochi costs routing [--rebuild]    # measured cost-per-solve routing table (per task kind × model)
+  mochi learn [path] [--no-verify] [--timeout <sec>] [--json]  # author/update the repo-architecture skill; every named command is run and marked verified only on success
   mochi sleeptime [--cap <usd>] [--dry-run]  # nightly consolidation pipeline (repair+curator+gate+health+curriculum, hard spend cap)
   mochi tools forged [disable <name>|evaluate|run]  # Tool Forge audit view: self-synthesised tools, provenance + state
   mochi health [--force] [--offline]  # proactive repo health scan (tests/deps/TODOs/dead code/hotspots digest)
@@ -2734,6 +2736,24 @@ async function main() {
   if (first === 'gate') {
     const { handleGateCommand } = await import('./evals/gate-cli.js');
     await handleGateCommand({ positional, flags, cwd });
+    return;
+  }
+
+  if (first === 'costs') {
+    const { handleCostsCommand } = await import('./observability/routing-cli.js');
+    await handleCostsCommand({ positional, flags, cwd });
+    return;
+  }
+
+  if (first === 'bench') {
+    const { handleBenchCommand } = await import('./evals/classes-cli.js');
+    await handleBenchCommand({ positional, flags, cwd });
+    return;
+  }
+
+  if (first === 'learn') {
+    const { handleLearnCommand } = await import('./learn.js');
+    await handleLearnCommand({ positional, flags, cwd });
     return;
   }
 

@@ -1,0 +1,13 @@
+A report tool lives in report/: data.js (the rows), format.js (a plain-text
+table formatter) and cli.js (prints the table when run as
+`node report/cli.js` - paths below are relative to the workdir root).
+
+Add a CSV mode: when invoked as `node report/cli.js --csv`, the tool prints
+the rows as CSV instead of the table:
+  - a header line: name,role,note
+  - one line per row, in data order
+  - RFC 4180 quoting: a field containing a comma, a double quote or a
+    newline is wrapped in double quotes, and embedded double quotes are
+    doubled.
+The default (no-flag) table output must stay byte-for-byte what format.js
+produces today.

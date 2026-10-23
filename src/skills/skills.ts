@@ -231,6 +231,13 @@ export function loadProjectSkills(projectDir: string, userDir?: string, extraDir
 /** Format skills for injection into the system prompt (Agent Skills XML). */
 export function formatSkillsForPrompt(skills: Skill[], limit?: number): string {
   let visible = skills.filter((s) => !s.disableModelInvocation);
+  // P5 (cache stability): render in canonical name order. Discovery walks
+  // the filesystem (readdir order is OS/fs-dependent) and callers pass
+  // selections in score order — without a canonical render order the same
+  // skill set could serialize differently across runs and break the
+  // provider prefix cache. Callers that need score order (pickers) use
+  // the search API, not this prompt block.
+  visible = [...visible].sort((a, b) => a.name.localeCompare(b.name));
   if (limit && limit > 0) visible = visible.slice(0, limit);
   if (visible.length === 0) return '';
   const lines = [

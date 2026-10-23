@@ -1,0 +1,13 @@
+qs.js exports parseQuery(qs): it parses a URL query string (without the
+leading '?') into an object. Contract:
+  - repeated keys collect into an array, in order of appearance;
+  - '+' decodes to a space (percent-decoding also applies);
+  - a key with no '=' maps to the empty string;
+  - an empty query string yields {}.
+
+Bug report: filters are being lost - when a URL repeats a parameter (the
+standard way to pass a multi-value filter), only the last value survives,
+and search terms containing '+' come through with the plus signs still in
+them.
+
+Fix qs.js so the full contract holds.

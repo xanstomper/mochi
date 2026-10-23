@@ -11,6 +11,7 @@ export {
   runSleeptime, renderSleeptimeReportMd, nightKeyFor, loadSleeptimeLedger, sleeptimeLedgerPath,
   estimateUsageCostUsd, estimatedUnitCostUsd, defaultSleeptimeSteps,
   createRepairStep, createCuratorStep, createGateStep, createCurriculumStep,
+  createSkillRepairPort, createCurriculumPort, demotedRepairCandidates,
   createCuratorStubRepairPort, createFrozenIntegrityGatePort, createUnavailableCurriculumPort,
   SleeptimeError, DEFAULT_SLEEPTIME_CAP_USD, DEFAULT_REPAIR_ESTIMATE,
   type SleeptimeOptions, type SleeptimeReport, type SleeptimeStep, type SleeptimeUsage,

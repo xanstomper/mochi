@@ -43,6 +43,7 @@
     "bench:memory": "node bench/memory.mjs",
     "gate": "tsx src/cli.ts gate run",
     "bench:speculation": "tsx bench/speculation.mjs",
+    "bench:endurance": "tsx bench/endurance.ts",
     "release:check": "node scripts/release-check.mjs"
   },
   "engines": {

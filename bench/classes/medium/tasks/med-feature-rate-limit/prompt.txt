@@ -1,0 +1,19 @@
+A tiny HTTP-ish layer lives in http/ (router.js dispatching to handler.js),
+and limits/bucket.js holds a TokenBucket stub that currently allows
+everything. Implement rate limiting end to end:
+
+Token bucket (limits/bucket.js), constructed with
+{ capacity, refillPerSec, now } where now() returns milliseconds:
+  - the bucket starts full and refills continuously at refillPerSec
+    tokens/second, never exceeding capacity;
+  - tryRemove(n = 1): if at least n tokens are available, subtract n and
+    return true; otherwise change nothing and return false;
+  - retryAfterSec(): 0 when at least 1 token is available, otherwise the
+    seconds until 1 token is available, rounded UP to a whole second.
+
+Router wiring (http/router.js): routes under /api/ are limited by one
+bucket with capacity 3 and refill 1/sec (constructed with the router so a
+clock can be injected: createRouter({ now })). A denied request returns
+status 429, a 'retry-after' header carrying retryAfterSec() as a string,
+and body { error: 'rate limited' }. Routes outside /api/ (e.g. /health)
+are never limited.

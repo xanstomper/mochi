@@ -704,37 +704,104 @@ export function formatInlineMarkdown(text: string): string {
   return `${BASE}${s}${T.reset}`;
 }
 
-function highlightCodeLine(line: string): string {
-  // Syntax highlight using semantically-coordinated role colors. Each
-  // token emits a single SGR so a downstream wrap that splits the line
-  // resumes the base color cleanly at the next row.
-  //
-  // SINGLE-PASS tokenizer (one combined regex, one replace call). The old
-  // code ran 7 sequential passes, and later passes matched INSIDE escape
-  // sequences emitted by earlier ones — e.g. the number pass re-wrapped the
-  // `38`, `2`, `216`… inside `\x1b[38;2;216;180;254m`, orphaning the `\x1b[`
-  // intro and printing SGR parameters as literal text (plus phantom width
-  // that broke every row after it). One pass can never re-scan its output.
-  const BASE = R.assistantText;
-  const KEYWORDS = 'const|let|var|function|return|import|export|from|class|extends|interface|type|async|await|if|else|switch|case|break|for|while|try|catch|throw|finally|new|typeof|instanceof|in|of|do|continue|delete';
-  const TYPES = 'string|number|boolean|void|any|unknown|never|null|undefined|Promise|Array|Record|Set|Map|Object|Function|true|false';
-  const TOKEN = new RegExp(
-    `(\\/\\/[^\\n]*)` +                                        // 1: comment
+// Syntax highlight using semantically-coordinated role colors. Each
+// token emits a single SGR so a downstream wrap that splits the line
+// resumes the base color cleanly at the next row.
+//
+// SINGLE-PASS tokenizer (one combined regex, one replace call). The old
+// code ran 7 sequential passes, and later passes matched INSIDE escape
+// sequences emitted by earlier ones — e.g. the number pass re-wrapped the
+// `38`, `2`, `216`… inside `\x1b[38;2;216;180;254m`, orphaning the `\x1b[`
+// intro and printing SGR parameters as literal text (plus phantom width
+// that broke every row after it). One pass can never re-scan its output.
+//
+// LANGUAGE-AWARE (Wave S3): the fence tag selects a profile. Previously
+// every fence used the JS profile, so Python `#` comments and `def`/`None`
+// rendered flat and shell scripts got no comment colour at all. Profiles:
+// python/shell ('#' comments + their own keywords), rust, go, json
+// (strings/numbers/constants only), an explicit text/plain fence gets NO
+// highlighting (prose fenced as text used to sprout spurious keyword
+// colour). Unknown/untagged fences keep the JS-flavoured default — an
+// untagged fence in model output is usually code.
+interface CodeProfile {
+  comment: string | null; // line-comment prefix; null = none
+  keywords: string;       // regex alternation, '' = none
+  types: string;          // regex alternation, '' = none
+  variable?: boolean;     // highlight $var tokens (shell)
+}
+const CODE_PROFILES: Record<string, CodeProfile> = {
+  clike: {
+    comment: '//',
+    keywords: 'const|let|var|function|return|import|export|from|class|extends|interface|type|async|await|if|else|switch|case|break|for|while|try|catch|throw|finally|new|typeof|instanceof|in|of|do|continue|delete',
+    types: 'string|number|boolean|void|any|unknown|never|null|undefined|Promise|Array|Record|Set|Map|Object|Function|true|false',
+  },
+  python: {
+    comment: '#',
+    keywords: 'def|return|if|elif|else|for|while|import|from|as|class|try|except|finally|with|lambda|pass|raise|yield|async|await|in|is|not|and|or|del|global|nonlocal|assert|break|continue',
+    types: 'None|True|False|self|cls|print|len|range|str|int|float|bool|list|dict|set|tuple|type|object|super|enumerate|zip|isinstance|getattr|setattr|hasattr|Exception|ValueError|TypeError|KeyError|RuntimeError|IndexError',
+  },
+  shell: {
+    comment: '#',
+    keywords: 'if|then|else|elif|fi|for|while|until|do|done|case|esac|function|in|select',
+    types: 'echo|cd|export|local|readonly|declare|source|eval|exec|exit|return|shift|set|unset|printf|read|trap|test|alias|unalias|pushd|popd|jobs|fg|bg|kill|wait|sudo|mkdir|rm|cp|mv|cat|grep|sed|awk|find|xargs|curl|wget|chmod|chown|tar|git|npm|node',
+    variable: true,
+  },
+  rust: {
+    comment: '//',
+    keywords: 'fn|let|mut|pub|struct|enum|impl|trait|for|in|if|else|match|return|use|mod|const|static|type|where|async|await|move|ref|dyn|crate|loop|while|break|continue|as|extern|unsafe',
+    types: 'Self|self|true|false|None|Some|Ok|Err|Vec|String|str|bool|char|i8|i16|i32|i64|i128|isize|u8|u16|u32|u64|u128|usize|f32|f64|Option|Result|Box|Iterator',
+  },
+  go: {
+    comment: '//',
+    keywords: 'func|var|const|type|struct|interface|map|chan|go|defer|return|if|else|for|range|switch|case|default|break|continue|import|package|select|fallthrough|goto',
+    types: 'nil|true|false|iota|string|bool|byte|rune|int|int8|int16|int32|int64|uint|uint8|uint16|uint32|uint64|uintptr|float32|float64|error|any|make|new|len|cap|append|copy|close|delete|panic|recover|print|println',
+  },
+  json: { comment: null, keywords: '', types: 'true|false|null' },
+  none: { comment: null, keywords: '', types: '' },
+};
+function codeProfileFor(lang: string): CodeProfile {
+  switch (lang.trim().toLowerCase()) {
+    case 'py': case 'python': case 'python3': return CODE_PROFILES.python;
+    case 'bash': case 'sh': case 'zsh': case 'shell': case 'console': return CODE_PROFILES.shell;
+    case 'rs': case 'rust': return CODE_PROFILES.rust;
+    case 'go': case 'golang': return CODE_PROFILES.go;
+    case 'json': case 'jsonc': case 'json5': return CODE_PROFILES.json;
+    case 'text': case 'plain': case 'plaintext': case 'txt': case 'md': case 'markdown': return CODE_PROFILES.none;
+    default: return CODE_PROFILES.clike;
+  }
+}
+const codeTokenReCache = new Map<CodeProfile, RegExp>();
+function codeTokenRe(profile: CodeProfile): RegExp {
+  const cached = codeTokenReCache.get(profile);
+  if (cached) return cached;
+  const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const never = '(?!)'; // non-capturing never-match placeholder keeps group numbering stable
+  const re = new RegExp(
+    (profile.comment ? `(${escRe(profile.comment)}[^\\n]*)` : `(${never})`) + // 1: comment
     `|('(?:\\\\.|[^'\\\\\\n])*'|"(?:\\\\.|[^"\\\\\\n])*"|\`(?:\\\\.|[^\`\\\\\\n])*\`)` + // 2: string
-    `|\\b(${KEYWORDS})\\b` +                                  // 3: keyword
-    `|\\b(${TYPES})\\b` +                                     // 4: type
-    `|\\b(\\d+(?:\\.\\d+)?)\\b` +                             // 5: number
-    `|\\b([a-zA-Z_$][\\w$]*)(?=\\s*\\()` +                    // 6: function call
-    `|([{}();,<>\\[\\]=+\\-*/%!&|?:])`,                       // 7: punctuation
+    (profile.keywords ? `|\\b(${profile.keywords})\\b` : `|(${never})`) +     // 3: keyword
+    (profile.types ? `|\\b(${profile.types})\\b` : `|(${never})`) +           // 4: type
+    `|\\b(\\d+(?:\\.\\d+)?)\\b` +                                            // 5: number
+    `|\\b([a-zA-Z_$][\\w$]*)(?=\\s*\\()` +                                    // 6: function call
+    `|([{}();,<>\\[\\]=+\\-*/%!&|?:])` +                                      // 7: punctuation
+    (profile.variable ? `|(\\$\\{[^}\\n]*\\}|\\$[A-Za-z_][\\w]*|\\$\\d)` : `|(${never})`), // 8: $var
     'g',
   );
-  const s = line.replace(TOKEN, (m, comment, str, kw, type, num, fn) => {
+  codeTokenReCache.set(profile, re);
+  return re;
+}
+function highlightCodeLine(line: string, lang = ''): string {
+  const profile = codeProfileFor(lang);
+  const BASE = R.assistantText;
+  if (profile === CODE_PROFILES.none) return `${BASE}${line}${T.reset}`;
+  const s = line.replace(codeTokenRe(profile), (m, comment, str, kw, type, num, fn, _punct, vr) => {
     if (comment !== undefined) return `${R.codeComment}${m}${T.reset}`;
     if (str !== undefined) return `${R.codeString}${m}${T.reset}`;
     if (kw !== undefined) return `${R.codeKeyword}${m}${T.reset}`;
     if (type !== undefined) return `${R.codeType}${m}${T.reset}`;
     if (num !== undefined) return `${R.codeNumber}${m}${T.reset}`;
     if (fn !== undefined) return `${R.codeFn}${m}${T.reset}`;
+    if (vr !== undefined) return `${R.codeNumber}${m}${T.reset}`;
     return `${R.codePunct}${m}${T.reset}`; // punct
   });
   return `${BASE}${s}${T.reset}`;
@@ -923,7 +990,7 @@ function formatTableCell(s: string, colW: number, align: TableAlignment = 'left'
 }
 
 /** Render a markdown table as a Cline-grade boxed matrix (┌─┬─┐, │ │ │, ├─┼─┤, └─┴─┘). */
-export function renderTable(headerRaw: string, delimRaw: string, bodyRaws: string[], maxW: number): string[] {
+export function renderTable(headerRaw: string, delimRaw: string, bodyRaws: string[], maxW: number, minColWidths?: number[], widthsOut?: number[][]): string[] {
   const headers = parseTableCells(headerRaw);
   if (headers.length === 0) return [];
   const numCols = headers.length;
@@ -937,6 +1004,28 @@ export function renderTable(headerRaw: string, delimRaw: string, bodyRaws: strin
   });
 
   const colWidths = computeColumnWidths(headers, bodyRows, maxW);
+  // Streaming hint (Wave S3): a table that is still receiving rows used to
+  // recompute its column widths from the rows seen so far on EVERY frame,
+  // so the whole box visibly jittered sideways as the model typed. The
+  // streaming renderer passes the widths the previous frame used as a
+  // floor; widths then only grow (never shrink mid-stream) and settle once
+  // when the table's block seals. Hints come from a feasible render at the
+  // same maxW; if natural growth + hints overflow, shave the widest
+  // columns back to fit.
+  if (minColWidths && minColWidths.length === numCols) {
+    for (let c = 0; c < numCols; c++) colWidths[c] = Math.max(colWidths[c], minColWidths[c]);
+    let total = colWidths.reduce((a, b) => a + b, 0) + numCols + 1;
+    while (total > maxW) {
+      let widest = -1;
+      for (let c = 0; c < numCols; c++) {
+        if (colWidths[c] > 3 && (widest === -1 || colWidths[c] > colWidths[widest])) widest = c;
+      }
+      if (widest === -1) break;
+      colWidths[widest]--;
+      total--;
+    }
+  }
+  if (widthsOut) widthsOut.push([...colWidths]);
   const borderCol = T.rule ?? T.grayDark ?? '\x1b[38;2;86;95;137m';
   const out: string[] = [];
 
@@ -984,6 +1073,24 @@ export function renderTable(headerRaw: string, delimRaw: string, bodyRaws: strin
  *  - proper vertical paragraph and block spacing (clean single blank lines)
  */
 export function renderMarkdown(text: string, width?: string | number): string[] {
+  return renderMarkdownInternal(text, width, {});
+}
+
+interface MarkdownRenderOpts {
+  /** Keep the single trailing blank row (a block separator) instead of
+   *  popping it — the streaming renderer seals segments at blank-line
+   *  boundaries, and the separator blank belongs between the segment and
+   *  whatever streams next. */
+  keepTrailingBlank?: boolean;
+  /** Per-table sticky column-width hints (by table ordinal in this render,
+   *  keyed by the table's raw header line so a replaced tail can't apply
+   *  one table's widths to a different table). */
+  tableMinWidths?: { key: string; widths: number[] }[];
+  /** Out-param: header key + column widths each rendered table used. */
+  tableWidthsOut?: { key: string; widths: number[] }[];
+}
+
+function renderMarkdownInternal(text: string, width: string | number | undefined, opts: MarkdownRenderOpts): string[] {
   const termW = typeof width === 'number' ? width : (process.stdout.columns || 100);
   const W = Math.max(20, Math.min(Number(termW) || 100, 200));
   // Same CR rule as wrap(): a `\r` inside code fences or table cells would
@@ -993,6 +1100,7 @@ export function renderMarkdown(text: string, width?: string | number): string[] 
   let inCodeBlock = false;
   let codeBlockLang = '';
   let paragraph: string[] = [];
+  let tableOrdinal = 0;
 
   const emitBlankIfNeeded = () => {
     if (out.length > 0 && out[out.length - 1] !== '') {
@@ -1002,7 +1110,14 @@ export function renderMarkdown(text: string, width?: string | number): string[] 
 
   // Emit one wrapped paragraph with a hanging indent: continuation rows pad
   // to `hang` visible columns so they align under the text, not the marker.
-  const emitWrapped = (content: string, indent: number, hang: number, styled: (s: string) => string): void => {
+  // Returns the index of the first row pushed. Callers used to RE-derive
+  // that index by re-wrapping the content with a hand-computed width — the
+  // numbered-list branch passed a width 3 columns narrower than the one
+  // used here, so its count overshot, stamping the number onto the wrong
+  // row in long documents and indexing before the array (crash) in short
+  // ones, e.g. a streaming tail that starts at a list (Wave S3 find).
+  const emitWrapped = (content: string, indent: number, hang: number, styled: (s: string) => string): number => {
+    const firstRow = out.length;
     const avail = Math.max(12, W - 2 - indent - 2);
     const wrapped = wrap(content, avail);
     wrapped.forEach((row, i) => {
@@ -1013,6 +1128,7 @@ export function renderMarkdown(text: string, width?: string | number): string[] 
       const body = i > 0 ? row.replace(/^\s+/, '') : row;
       out.push(`${' '.repeat(pad)}${styled(body)}`);
     });
+    return firstRow;
   };
 
   const flushParagraph = () => {
@@ -1063,7 +1179,7 @@ export function renderMarkdown(text: string, width?: string | number): string[] 
     }
 
     if (inCodeBlock) {
-      out.push(`  ${highlightCodeLine(raw)}`);
+      out.push(`  ${highlightCodeLine(raw, codeBlockLang)}`);
       continue;
     }
 
@@ -1093,22 +1209,34 @@ export function renderMarkdown(text: string, width?: string | number): string[] 
       }
       i--; // loop increment counter will advance to next line
 
-      const tableRows = renderTable(headerRaw, delimRaw, tableRowsRaw, W);
+      const hint = opts.tableMinWidths?.[tableOrdinal];
+      const tableUsed: number[][] = [];
+      const tableRows = renderTable(
+        headerRaw, delimRaw, tableRowsRaw, W,
+        hint && hint.key === headerRaw ? hint.widths : undefined,
+        tableUsed,
+      );
+      if (opts.tableWidthsOut) opts.tableWidthsOut.push({ key: headerRaw, widths: tableUsed[0] ?? [] });
+      tableOrdinal++;
       for (const row of tableRows) {
         out.push(row);
       }
       continue;
     }
 
-    // Headers (##/#/###): strip sigil, bold + colored, hairline matches text.
-    const hMatch = /^(#{1,3})\s+(.*)$/.exec(trimmed);
+    // Headers (#–######): strip sigil, bold + colored, hairline matches text.
+    // Levels 4–6 render as bold text without the hairline (and without the
+    // literal hashes the old {1,3} cap leaked into prose as a paragraph).
+    const hMatch = /^(#{1,6})\s+(.*)$/.exec(trimmed);
     if (hMatch) {
       flushParagraph();
       bulletStack.length = 0;
       emitBlankIfNeeded();
       const headingText = hMatch[2];
       out.push(`${R.mdHeading}${T.bold}${headingText}${T.reset}`);
-      out.push(`${R.mdHeading}${'─'.repeat(Math.max(8, Math.min(40, visibleLen(headingText))))}${T.reset}`);
+      if (hMatch[1].length <= 3) {
+        out.push(`${R.mdHeading}${'─'.repeat(Math.max(8, Math.min(40, visibleLen(headingText))))}${T.reset}`);
+      }
       continue;
     }
 
@@ -1140,10 +1268,9 @@ export function renderMarkdown(text: string, width?: string | number): string[] 
       bulletStack.length = depth; // deeper level starts a fresh sub-list
       bulletStack.push({ ordered: false, n: 0 });
       const indent = 2 + depth * 2;
-      emitWrapped(uMatch[3], indent, 2, formatInlineMarkdown);
-      // Prefix the first row with the glyph (after wrap so the indent math
-      // stays exact).
-      const first = out.length - wrappedCount(uMatch[3], W - 2 - indent - 2);
+      // Prefix the first emitted row with the glyph (emitWrapped reports
+      // exactly which row that is — no re-wrap guesswork).
+      const first = emitWrapped(uMatch[3], indent, 2, formatInlineMarkdown);
       out[first] = out[first].replace(/^(\s*)/, `$1${R.codeType}•${T.reset} `);
       continue;
     }
@@ -1164,8 +1291,7 @@ export function renderMarkdown(text: string, width?: string | number): string[] 
       const marker = `${R.codeNumber}${bulletStack[depth].n}.${T.reset}`;
       // Same grid as bullets (indent), hang 3 so continuation aligns under
       // the number's text column — markers never outdent the list.
-      emitWrapped(numMatch[3], indent, 3, formatInlineMarkdown);
-      const first = out.length - wrappedCount(numMatch[3], W - 2 - indent - 5);
+      const first = emitWrapped(numMatch[3], indent, 3, formatInlineMarkdown);
       out[first] = out[first].replace(/^(\s*)/, `$1${marker} `);
       continue;
     }
@@ -1175,16 +1301,160 @@ export function renderMarkdown(text: string, width?: string | number): string[] 
     paragraph.push(raw);
   }
   flushParagraph();
-  while (out.length > 0 && out[out.length - 1] === '') {
-    out.pop();
+  if (!opts.keepTrailingBlank) {
+    while (out.length > 0 && out[out.length - 1] === '') {
+      out.pop();
+    }
   }
   return out;
 }
 
-/** Count rows wrap() produces for a plain string at a width (helper for
- *  retroactive marker insertion — keeps wrap and marker math in one place). */
-function wrappedCount(text: string, width: number): number {
-  return wrap(text, Math.max(4, width)).length;
+// ── Streaming markdown renderer (Wave S3) ──────────────────────────────────
+// The transcript used to call renderMarkdown on the ENTIRE accumulated
+// assistant line on every coalesced frame — up to the 16K-char stream cap,
+// fully re-parsed ~33×/s. Measured on a 13.9K-char replay fixture: mean
+// 19.7ms/frame, p95 51ms, 43/92 frames over the 16ms budget — main-loop
+// time (and keystroke latency) grew with message length. This renderer
+// makes per-frame cost proportional to the UNFINISHED TAIL only:
+//
+//  - Text is SEALED at blank-line boundaries outside code fences. In this
+//    renderer a blank line flushes the paragraph and resets list state, so
+//    a sealed prefix renders identically standalone and inside the whole
+//    document (its trailing separator blank is kept on the sealed side).
+//    Sealed rows render once and are reused verbatim.
+//  - The tail is re-rendered per frame, but first gets a VIRTUAL CLOSURE:
+//    an unclosed ** or backtick in the final block gets its closer
+//    appended for display only, and a half-typed link collapses to its
+//    label — no raw markdown syntax is ever visible mid-stream. When the
+//    real closer streams in, the raw tail takes over seamlessly.
+//  - Tables in the tail receive the previous frame's column widths as a
+//    floor, so a streaming table's box never jitters sideways.
+//
+// Input must be append-only (state.ts appends chunks to the same Line
+// object). A width change or a non-append edit (provider re-send replaces
+// the line's text) resets the seal and falls back to a full render.
+export interface StreamMarkdownRenderer {
+  render(text: string, width?: string | number): string[];
+  stats(): { sealedChars: number; tailChars: number; segmentRenders: number; resets: number };
+}
+
+function streamWidthKey(width: string | number | undefined): number {
+  const termW = typeof width === 'number' ? width : (process.stdout.columns || 100);
+  return Math.max(20, Math.min(Number(termW) || 100, 200));
+}
+
+/** Largest offset ≤ text.length such that text.slice(from, offset) ends
+ *  just after a blank line and the scan is outside a code fence there.
+ *  `from` must itself be outside a fence (seal points always are). */
+function findSealEnd(text: string, from: number): number {
+  let inFence = false;
+  let seal = from;
+  let lineStart = from;
+  while (lineStart < text.length) {
+    const nl = text.indexOf('\n', lineStart);
+    const lineEnd = nl === -1 ? text.length : nl;
+    const trimmed = text.slice(lineStart, lineEnd).trim();
+    if (trimmed.startsWith('```')) inFence = !inFence;
+    else if (!inFence && trimmed === '') seal = nl === -1 ? text.length : nl + 1;
+    if (nl === -1) break;
+    lineStart = nl + 1;
+  }
+  return seal;
+}
+
+/** Display-only closure for the unfinished tail (see section comment).
+ *  Only the final block can hold a half-typed construct. If the stream
+ *  ends inside a code fence, the fence renderer already shows a sane
+ *  open state, so the text is returned untouched. */
+function closeTailForStreaming(tail: string): string {
+  const blockStarts: number[] = [0];
+  let inFence = false;
+  let lineStart = 0;
+  while (lineStart < tail.length) {
+    const nl = tail.indexOf('\n', lineStart);
+    const lineEnd = nl === -1 ? tail.length : nl;
+    const trimmed = tail.slice(lineStart, lineEnd).trim();
+    if (trimmed.startsWith('```')) inFence = !inFence;
+    else if (!inFence && trimmed === '' && nl !== -1) blockStarts.push(nl + 1);
+    if (nl === -1) break;
+    lineStart = nl + 1;
+  }
+  if (inFence) return tail;
+  // The final block may be empty when the stream pauses right after a
+  // newline — fall back to the last non-empty block.
+  let blockStart = blockStarts[blockStarts.length - 1];
+  while (blockStart > 0 && tail.slice(blockStart).trim() === '') {
+    blockStarts.pop();
+    blockStart = blockStarts[blockStarts.length - 1];
+  }
+  const head = tail.slice(0, blockStart);
+  let block = tail.slice(blockStart);
+  // Half-typed link at the very end: show just the label, not brackets.
+  block = block.replace(/\[([^\]\n]+)\]\([^)\n]*$/, '$1');
+  block = block.replace(/\[([^\]\n]*)$/, '$1');
+  // Unclosed inline code on the last line (code spans are single-line in
+  // formatInlineMarkdown): an odd backtick count means a span is open.
+  const lastLine = block.slice(block.lastIndexOf('\n') + 1);
+  const ticks = (lastLine.match(/`/g) ?? []).length;
+  if (ticks % 2 === 1 && !lastLine.endsWith('`')) block += '`';
+  // Unclosed bold in the final block: count ** outside code spans.
+  const noCode = block.replace(/`[^`\n]*`/g, '');
+  const bolds = (noCode.match(/\*\*/g) ?? []).length;
+  if (bolds % 2 === 1) block += '**';
+  return head + block;
+}
+
+export function createStreamMarkdownRenderer(): StreamMarkdownRenderer {
+  let widthKey = -1;
+  let prevText = '';
+  let sealedLen = 0;
+  let sealedRows: string[] = [];
+  let hints: { key: string; widths: number[] }[] = [];
+  let segmentRenders = 0;
+  let resets = 0;
+  let lastTailChars = 0;
+
+  function render(text: string, width?: string | number): string[] {
+    const W = streamWidthKey(width);
+    const norm = text.replace(/\r\n?/g, '\n');
+    if (W !== widthKey || !norm.startsWith(prevText)) {
+      widthKey = W;
+      sealedLen = 0;
+      sealedRows = [];
+      hints = [];
+      resets++;
+    }
+    // Extend the seal over every complete block now available.
+    const sealEnd = findSealEnd(norm, sealedLen);
+    if (sealEnd > sealedLen) {
+      sealedRows.push(...renderMarkdownInternal(norm.slice(sealedLen, sealEnd), W, { keepTrailingBlank: true }));
+      segmentRenders++;
+      sealedLen = sealEnd;
+      hints = [];
+    }
+    prevText = norm;
+    const tail = norm.slice(sealedLen);
+    lastTailChars = tail.length;
+    if (tail.trim() === '') {
+      // Nothing after the seal: drop the separator blank the whole-doc
+      // renderer would have popped at end of document.
+      const rows = sealedRows.slice();
+      if (rows.length > 1 && rows[rows.length - 1] === '') rows.pop();
+      return rows;
+    }
+    const widthsOut: { key: string; widths: number[] }[] = [];
+    const tailRows = renderMarkdownInternal(closeTailForStreaming(tail), W, {
+      tableMinWidths: hints,
+      tableWidthsOut: widthsOut,
+    });
+    hints = widthsOut;
+    return sealedRows.concat(tailRows);
+  }
+
+  return {
+    render,
+    stats: () => ({ sealedChars: sealedLen, tailChars: lastTailChars, segmentRenders, resets }),
+  };
 }
 
 const SEMANTIC_QUOTE = '\x1b[38;2;150;150;165m';

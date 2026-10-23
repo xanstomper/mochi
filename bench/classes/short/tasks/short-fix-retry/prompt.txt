@@ -1,0 +1,8 @@
+retry.js exports retry(fn, attempts): it calls the async fn until it
+succeeds, making at most `attempts` calls IN TOTAL, and rethrows the LAST
+error when every attempt fails.
+
+Bug report: callers are seeing one more invocation than they budgeted for -
+a downstream API with a hard quota is rejecting the extra call.
+
+Fix retry.js so the total number of calls never exceeds `attempts`.

@@ -1,0 +1,624 @@
+{
+  "generatedAt": "2026-10-22T15:55:13.338Z",
+  "records": [
+    {
+      "profile": "baseline",
+      "index": 1,
+      "success": true,
+      "primaryClass": null,
+      "evidence": [],
+      "anomalies": [
+        "exactly-once violation: probe-stage-1 appended 2 times — a completed shell side effect was re-executed after a context rewind/resume (journal replay does not cover it)"
+      ],
+      "parentTurns": 45,
+      "childTurns": 10,
+      "auxTurns": 23,
+      "tokens": 728196,
+      "stageTurns": {
+        "1": 8,
+        "2": 5,
+        "3": 10,
+        "4": 12,
+        "5": 8
+      },
+      "probeDupes": 1,
+      "compactions": 11,
+      "resumes": 0,
+      "journalReplayed": 0,
+      "journalRecorded": 41,
+      "chaos": {
+        "backendFlake": {
+          "injected": false,
+          "recovered": false,
+          "note": ""
+        },
+        "reconSubagentKill": {
+          "injected": false,
+          "recovered": false,
+          "note": ""
+        },
+        "steer": {
+          "injected": false,
+          "recovered": false,
+          "note": ""
+        },
+        "sigkillResume": {
+          "injected": false,
+          "recovered": false,
+          "note": ""
+        },
+        "compactionPressure": {
+          "injected": true,
+          "recovered": true,
+          "note": "11 context:compacted events under a 16000-token budget"
+        }
+      },
+      "wallMs": 100862,
+      "dir": "/tmp/mochi-endurance-baseline-1-MGSt99",
+      "branchTail": [
+        "t34: check:4 [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:- ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t35: ledger:4 [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:- ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t36: subagent:recon [files-read:- files-written:- STAGE_1_OK+ STAGE_2_OK- recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "digest→Stage checks confirmed: STAGE_1_OK STAGE_2_OK STAGE_3_OK. | ledger-appended: stage-1-complete stage-2-complete stage-3-complete. | recon: done. | display-snapshot: ok. | catalog: spawned. | catalog-handle: sub-8ccca692. ",
+        "t37: subagent:catalog-collect [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t38: write:src/discounts/discount.js [files-read:- files-written:- STAGE_1_OK- STAGE_2_OK- recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "digest→Stage checks confirmed: STAGE_1_OK STAGE_2_OK STAGE_3_OK. | ledger-appended: stage-1-complete stage-2-complete stage-3-complete. | recon: done. | display-snapshot: ok. | catalog: done. | catalog-handle: sub-8ccca692. | p",
+        "t39: probe:4 [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t40: write:docs/discounts.md [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "checkpoint→Stage checks confirmed: STAGE_1_OK STAGE_2_OK STAGE_3_OK. ledger-appended: stage-1-complete stage-2-complete stage-3-complete. recon: done. display-snapshot: ok. catalog: done. probes-appended: probe-",
+        "digest→Stage checks confirmed: STAGE_1_OK STAGE_2_OK STAGE_3_OK. | ledger-appended: stage-1-complete stage-2-complete stage-3-complete. | recon: done. | display-snapshot: ok. | catalog: done. | probes-appended: probe-stage-1 pr",
+        "t41: suite:final [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "digest→Stage checks confirmed: STAGE_1_OK STAGE_2_OK STAGE_3_OK. | ledger-appended: stage-1-complete stage-2-complete stage-3-complete. | recon: done. | display-snapshot: ok. | catalog: done. | probes-appended: probe-stage-1 pr",
+        "t42: check:5 [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t43: ledger:5 [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "digest→Stage checks confirmed: STAGE_1_OK STAGE_2_OK STAGE_3_OK STAGE_4_OK. | ledger-appended: stage-1-complete stage-2-complete stage-3-complete stage-4-complete. | recon: done. | display-snapshot: ok. | catalog: done. | probe",
+        "t44: probe:5 [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t45: CLAIM"
+      ]
+    },
+    {
+      "profile": "baseline",
+      "index": 2,
+      "success": true,
+      "primaryClass": null,
+      "evidence": [],
+      "anomalies": [
+        "exactly-once violation: probe-stage-1 appended 2 times — a completed shell side effect was re-executed after a context rewind/resume (journal replay does not cover it)"
+      ],
+      "parentTurns": 45,
+      "childTurns": 10,
+      "auxTurns": 23,
+      "tokens": 724857,
+      "stageTurns": {
+        "1": 8,
+        "2": 5,
+        "3": 10,
+        "4": 12,
+        "5": 8
+      },
+      "probeDupes": 1,
+      "compactions": 11,
+      "resumes": 0,
+      "journalReplayed": 0,
+      "journalRecorded": 41,
+      "chaos": {
+        "backendFlake": {
+          "injected": false,
+          "recovered": false,
+          "note": ""
+        },
+        "reconSubagentKill": {
+          "injected": false,
+          "recovered": false,
+          "note": ""
+        },
+        "steer": {
+          "injected": false,
+          "recovered": false,
+          "note": ""
+        },
+        "sigkillResume": {
+          "injected": false,
+          "recovered": false,
+          "note": ""
+        },
+        "compactionPressure": {
+          "injected": true,
+          "recovered": true,
+          "note": "11 context:compacted events under a 16000-token budget"
+        }
+      },
+      "wallMs": 101479,
+      "dir": "/tmp/mochi-endurance-baseline-2-gw8C9D",
+      "branchTail": [
+        "t34: check:4 [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:- ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t35: ledger:4 [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:- ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t36: subagent:recon [files-read:- files-written:- STAGE_1_OK+ STAGE_2_OK- recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "digest→Stage checks confirmed: STAGE_1_OK STAGE_2_OK STAGE_3_OK. | ledger-appended: stage-1-complete stage-2-complete stage-3-complete. | recon: done. | display-snapshot: ok. | catalog: spawned. | catalog-handle: sub-46fa03e7. ",
+        "t37: subagent:catalog-collect [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t38: write:src/discounts/discount.js [files-read:- files-written:- STAGE_1_OK- STAGE_2_OK- recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "digest→Stage checks confirmed: STAGE_1_OK STAGE_2_OK STAGE_3_OK. | ledger-appended: stage-1-complete stage-2-complete stage-3-complete. | recon: done. | display-snapshot: ok. | catalog: done. | catalog-handle: sub-46fa03e7. | p",
+        "t39: probe:4 [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t40: write:docs/discounts.md [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "checkpoint→Stage checks confirmed: STAGE_1_OK STAGE_2_OK STAGE_3_OK. ledger-appended: stage-1-complete stage-2-complete stage-3-complete. recon: done. display-snapshot: ok. catalog: done. probes-appended: probe-",
+        "digest→Stage checks confirmed: STAGE_1_OK STAGE_2_OK STAGE_3_OK. | ledger-appended: stage-1-complete stage-2-complete stage-3-complete. | recon: done. | display-snapshot: ok. | catalog: done. | probes-appended: probe-stage-1 pr",
+        "t41: suite:final [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "digest→Stage checks confirmed: STAGE_1_OK STAGE_2_OK STAGE_3_OK. | ledger-appended: stage-1-complete stage-2-complete stage-3-complete. | recon: done. | display-snapshot: ok. | catalog: done. | probes-appended: probe-stage-1 pr",
+        "t42: check:5 [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t43: ledger:5 [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "digest→Stage checks confirmed: STAGE_1_OK STAGE_2_OK STAGE_3_OK STAGE_4_OK. | ledger-appended: stage-1-complete stage-2-complete stage-3-complete stage-4-complete. | recon: done. | display-snapshot: ok. | catalog: done. | probe",
+        "t44: probe:5 [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t45: CLAIM"
+      ]
+    },
+    {
+      "profile": "baseline",
+      "index": 3,
+      "success": true,
+      "primaryClass": null,
+      "evidence": [],
+      "anomalies": [
+        "exactly-once violation: probe-stage-1 appended 2 times — a completed shell side effect was re-executed after a context rewind/resume (journal replay does not cover it)"
+      ],
+      "parentTurns": 45,
+      "childTurns": 10,
+      "auxTurns": 23,
+      "tokens": 723641,
+      "stageTurns": {
+        "1": 8,
+        "2": 5,
+        "3": 10,
+        "4": 12,
+        "5": 8
+      },
+      "probeDupes": 1,
+      "compactions": 11,
+      "resumes": 0,
+      "journalReplayed": 0,
+      "journalRecorded": 41,
+      "chaos": {
+        "backendFlake": {
+          "injected": false,
+          "recovered": false,
+          "note": ""
+        },
+        "reconSubagentKill": {
+          "injected": false,
+          "recovered": false,
+          "note": ""
+        },
+        "steer": {
+          "injected": false,
+          "recovered": false,
+          "note": ""
+        },
+        "sigkillResume": {
+          "injected": false,
+          "recovered": false,
+          "note": ""
+        },
+        "compactionPressure": {
+          "injected": true,
+          "recovered": true,
+          "note": "11 context:compacted events under a 16000-token budget"
+        }
+      },
+      "wallMs": 107503,
+      "dir": "/tmp/mochi-endurance-baseline-3-3XF09d",
+      "branchTail": [
+        "t34: check:4 [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:- ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t35: ledger:4 [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:- ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t36: subagent:recon [files-read:- files-written:- STAGE_1_OK+ STAGE_2_OK- recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "digest→Stage checks confirmed: STAGE_1_OK STAGE_2_OK STAGE_3_OK. | ledger-appended: stage-1-complete stage-2-complete stage-3-complete. | recon: done. | display-snapshot: ok. | catalog: spawned. | catalog-handle: sub-307abc64. ",
+        "t37: subagent:catalog-collect [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t38: write:src/discounts/discount.js [files-read:- files-written:- STAGE_1_OK- STAGE_2_OK- recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "digest→Stage checks confirmed: STAGE_1_OK STAGE_2_OK STAGE_3_OK. | ledger-appended: stage-1-complete stage-2-complete stage-3-complete. | recon: done. | display-snapshot: ok. | catalog: done. | catalog-handle: sub-307abc64. | p",
+        "t39: probe:4 [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t40: write:docs/discounts.md [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "checkpoint→Stage checks confirmed: STAGE_1_OK STAGE_2_OK STAGE_3_OK. ledger-appended: stage-1-complete stage-2-complete stage-3-complete. recon: done. display-snapshot: ok. catalog: done. probes-appended: probe-",
+        "digest→Stage checks confirmed: STAGE_1_OK STAGE_2_OK STAGE_3_OK. | ledger-appended: stage-1-complete stage-2-complete stage-3-complete. | recon: done. | display-snapshot: ok. | catalog: done. | probes-appended: probe-stage-1 pr",
+        "t41: suite:final [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "digest→Stage checks confirmed: STAGE_1_OK STAGE_2_OK STAGE_3_OK. | ledger-appended: stage-1-complete stage-2-complete stage-3-complete. | recon: done. | display-snapshot: ok. | catalog: done. | probes-appended: probe-stage-1 pr",
+        "t42: check:5 [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t43: ledger:5 [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "digest→Stage checks confirmed: STAGE_1_OK STAGE_2_OK STAGE_3_OK STAGE_4_OK. | ledger-appended: stage-1-complete stage-2-complete stage-3-complete stage-4-complete. | recon: done. | display-snapshot: ok. | catalog: done. | probe",
+        "t44: probe:5 [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t45: CLAIM"
+      ]
+    },
+    {
+      "profile": "chaos",
+      "index": 1,
+      "success": false,
+      "primaryClass": "F7",
+      "evidence": [
+        "stage 3 check fails post-run: STAGE_3_FAIL: 50% cap: expected discountCents 5000, got 0",
+        "stage 4 check fails post-run: STAGE_4_FAIL: Cannot find module '/tmp/mochi-endurance-chaos-1-DvWsD0/project/src/api/discounts-api.js' imported from /tmp/mochi-endurance-chaos-1-DvWsD0/project/tools/check-stage.mjs",
+        "stage 5 check fails post-run: STAGE_5_FAIL: docs/discounts.md missing",
+        "regression suite not green post-run",
+        "ledger not exactly-once: [stage-1-complete, stage-2-complete]",
+        "steer deliverable docs/discounts-faq.md missing or thin after run",
+        "finish gate rejected a claim mid-task and the run terminated instead of resuming work: Stopped a deliberation loop; verification does not pass:\nCheck failed: npm test\nexit_code: 1\nstdout:\n\n> ledgerline@0.1.0 test\n> node tools/run-tests.mjs\n\nFAIL discounts.test.mjs\nnode:internal/modules/run_main:107\n    tri"
+      ],
+      "anomalies": [
+        "exactly-once violation: probe-stage-1 appended 2 times — a completed shell side effect was re-executed after a context rewind/resume (journal replay does not cover it)"
+      ],
+      "parentTurns": 25,
+      "childTurns": 143,
+      "auxTurns": 5,
+      "tokens": 392689,
+      "stageTurns": {
+        "1": 9,
+        "2": 6
+      },
+      "probeDupes": 1,
+      "compactions": 4,
+      "resumes": 0,
+      "journalReplayed": 0,
+      "journalRecorded": 19,
+      "chaos": {
+        "backendFlake": {
+          "injected": true,
+          "recovered": true,
+          "note": "first display_snapshot call throws E_BACKEND_DOWN; run must retry and proceed"
+        },
+        "reconSubagentKill": {
+          "injected": true,
+          "recovered": true,
+          "note": "recon child provider-killed (HTTP 500); parent fell back to direct reads"
+        },
+        "steer": {
+          "injected": true,
+          "recovered": false,
+          "note": "steer delivered mid-run via host poller; faq present at end"
+        },
+        "sigkillResume": {
+          "injected": true,
+          "recovered": false,
+          "note": "kill never fired (catalog child request not observed)"
+        },
+        "compactionPressure": {
+          "injected": true,
+          "recovered": false,
+          "note": "4 context:compacted events under a 16000-token budget"
+        }
+      },
+      "wallMs": 204949,
+      "dir": "/tmp/mochi-endurance-chaos-1-DvWsD0",
+      "branchTail": [
+        "t11: write:src/store/discount-store.js [files-read:+ files-written:- STAGE_1_OK+ STAGE_2_OK- recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t12: subagent:recon [files-read:- files-written:- STAGE_1_OK+ STAGE_2_OK- recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t13: write:src/store/index.js [files-read:- files-written:- STAGE_1_OK+ STAGE_2_OK- recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t14: check:2 [files-read:- files-written:- STAGE_1_OK+ STAGE_2_OK- recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t15: write:src/discounts/discount.js [files-read:- files-written:- STAGE_1_OK+ STAGE_2_OK+ recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "digest→files-written: src/discounts/discount.js, src/discounts/index.js. | files-read: src/store/memory-store.js, src/domain/coupon.js, src/services/invoice-service.js, src/store/index.js.",
+        "t16: ledger:2 [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t17: probe:2 [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t18: write:src/discounts/index.js [files-read:- files-written:- STAGE_1_OK- STAGE_2_OK+ recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t19: check:1 [files-read:- files-written:- STAGE_1_OK- STAGE_2_OK+ recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t20: ledger:1 [files-read:- files-written:- STAGE_1_OK+ STAGE_2_OK+ recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t21: probe:1 [files-read:- files-written:- STAGE_1_OK+ STAGE_2_OK+ recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t22: subagent:recon [files-read:- files-written:- STAGE_1_OK+ STAGE_2_OK+ recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "digest→Stage checks confirmed: STAGE_1_OK STAGE_2_OK. | ledger-appended: stage-1-complete. | recon: failed. | probes-appended: probe-stage-1. | files-written: src/store/discount-store.js, src/store/index.js, src/discounts/disco",
+        "t23: probe:display [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:- ledger-appended:+ display-snapshot:- probes-appended:+]",
+        "t24: probe:display [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:- ledger-appended:+ display-snapshot:- probes-appended:+]",
+        "checkpoint→Stage checks confirmed: STAGE_1_OK STAGE_2_OK. ledger-appended: stage-1-complete stage-2-complete. recon: failed. probes-appended: probe-stage-1. files-written: src/store/discount-store.js, src/store/",
+        "t25: probe:display [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:- ledger-appended:+ display-snapshot:- probes-appended:+]"
+      ]
+    },
+    {
+      "profile": "chaos",
+      "index": 2,
+      "success": false,
+      "primaryClass": "F7",
+      "evidence": [
+        "stage 3 check fails post-run: STAGE_3_FAIL: 50% cap: expected discountCents 5000, got 0",
+        "stage 4 check fails post-run: STAGE_4_FAIL: Cannot find module '/tmp/mochi-endurance-chaos-2-q9pZ9F/project/src/api/discounts-api.js' imported from /tmp/mochi-endurance-chaos-2-q9pZ9F/project/tools/check-stage.mjs",
+        "stage 5 check fails post-run: STAGE_5_FAIL: docs/discounts.md missing",
+        "regression suite not green post-run",
+        "ledger not exactly-once: [stage-1-complete, stage-2-complete]",
+        "steer deliverable docs/discounts-faq.md missing or thin after run",
+        "finish gate rejected a claim mid-task and the run terminated instead of resuming work: Stopped a deliberation loop; verification does not pass:\nCheck failed: npm test\nexit_code: 1\nstdout:\n\n> ledgerline@0.1.0 test\n> node tools/run-tests.mjs\n\nFAIL discounts.test.mjs\nnode:internal/modules/run_main:107\n    tri"
+      ],
+      "anomalies": [
+        "exactly-once violation: probe-stage-1 appended 2 times — a completed shell side effect was re-executed after a context rewind/resume (journal replay does not cover it)"
+      ],
+      "parentTurns": 25,
+      "childTurns": 143,
+      "auxTurns": 5,
+      "tokens": 394300,
+      "stageTurns": {
+        "1": 9,
+        "2": 6
+      },
+      "probeDupes": 1,
+      "compactions": 4,
+      "resumes": 0,
+      "journalReplayed": 0,
+      "journalRecorded": 19,
+      "chaos": {
+        "backendFlake": {
+          "injected": true,
+          "recovered": true,
+          "note": "first display_snapshot call throws E_BACKEND_DOWN; run must retry and proceed"
+        },
+        "reconSubagentKill": {
+          "injected": true,
+          "recovered": true,
+          "note": "recon child provider-killed (HTTP 500); parent fell back to direct reads"
+        },
+        "steer": {
+          "injected": true,
+          "recovered": false,
+          "note": "steer delivered mid-run via host poller; faq present at end"
+        },
+        "sigkillResume": {
+          "injected": true,
+          "recovered": false,
+          "note": "kill never fired (catalog child request not observed)"
+        },
+        "compactionPressure": {
+          "injected": true,
+          "recovered": false,
+          "note": "4 context:compacted events under a 16000-token budget"
+        }
+      },
+      "wallMs": 197834,
+      "dir": "/tmp/mochi-endurance-chaos-2-q9pZ9F",
+      "branchTail": [
+        "t11: write:src/store/discount-store.js [files-read:+ files-written:- STAGE_1_OK+ STAGE_2_OK- recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t12: subagent:recon [files-read:- files-written:- STAGE_1_OK+ STAGE_2_OK- recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t13: write:src/store/index.js [files-read:- files-written:- STAGE_1_OK+ STAGE_2_OK- recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t14: check:2 [files-read:- files-written:- STAGE_1_OK+ STAGE_2_OK- recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t15: write:src/discounts/discount.js [files-read:- files-written:- STAGE_1_OK+ STAGE_2_OK+ recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "digest→files-written: src/discounts/discount.js, src/discounts/index.js. | files-read: src/store/memory-store.js, src/domain/coupon.js, src/services/invoice-service.js, src/store/index.js.",
+        "t16: ledger:2 [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t17: probe:2 [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t18: write:src/discounts/index.js [files-read:- files-written:- STAGE_1_OK- STAGE_2_OK+ recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t19: check:1 [files-read:- files-written:- STAGE_1_OK- STAGE_2_OK+ recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t20: ledger:1 [files-read:- files-written:- STAGE_1_OK+ STAGE_2_OK+ recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t21: probe:1 [files-read:- files-written:- STAGE_1_OK+ STAGE_2_OK+ recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t22: subagent:recon [files-read:- files-written:- STAGE_1_OK+ STAGE_2_OK+ recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "digest→Stage checks confirmed: STAGE_1_OK STAGE_2_OK. | ledger-appended: stage-1-complete. | recon: failed. | probes-appended: probe-stage-1. | files-written: src/store/discount-store.js, src/store/index.js, src/discounts/disco",
+        "t23: probe:display [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:- ledger-appended:+ display-snapshot:- probes-appended:+]",
+        "t24: probe:display [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:- ledger-appended:+ display-snapshot:- probes-appended:+]",
+        "checkpoint→Stage checks confirmed: STAGE_1_OK STAGE_2_OK. ledger-appended: stage-1-complete stage-2-complete. recon: failed. probes-appended: probe-stage-1. files-written: src/store/discount-store.js, src/store/",
+        "t25: probe:display [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:- ledger-appended:+ display-snapshot:- probes-appended:+]"
+      ]
+    },
+    {
+      "profile": "chaos",
+      "index": 3,
+      "success": false,
+      "primaryClass": "F7",
+      "evidence": [
+        "stage 3 check fails post-run: STAGE_3_FAIL: 50% cap: expected discountCents 5000, got 0",
+        "stage 4 check fails post-run: STAGE_4_FAIL: Cannot find module '/tmp/mochi-endurance-chaos-3-nC6hfk/project/src/api/discounts-api.js' imported from /tmp/mochi-endurance-chaos-3-nC6hfk/project/tools/check-stage.mjs",
+        "stage 5 check fails post-run: STAGE_5_FAIL: docs/discounts.md missing",
+        "regression suite not green post-run",
+        "ledger not exactly-once: [stage-1-complete, stage-2-complete]",
+        "steer deliverable docs/discounts-faq.md missing or thin after run",
+        "finish gate rejected a claim mid-task and the run terminated instead of resuming work: Stopped a deliberation loop; verification does not pass:\nCheck failed: npm test\nexit_code: 1\nstdout:\n\n> ledgerline@0.1.0 test\n> node tools/run-tests.mjs\n\nFAIL discounts.test.mjs\nnode:internal/modules/run_main:107\n    tri"
+      ],
+      "anomalies": [
+        "exactly-once violation: probe-stage-1 appended 2 times — a completed shell side effect was re-executed after a context rewind/resume (journal replay does not cover it)"
+      ],
+      "parentTurns": 25,
+      "childTurns": 141,
+      "auxTurns": 5,
+      "tokens": 393380,
+      "stageTurns": {
+        "1": 9,
+        "2": 6
+      },
+      "probeDupes": 1,
+      "compactions": 4,
+      "resumes": 0,
+      "journalReplayed": 0,
+      "journalRecorded": 19,
+      "chaos": {
+        "backendFlake": {
+          "injected": true,
+          "recovered": true,
+          "note": "first display_snapshot call throws E_BACKEND_DOWN; run must retry and proceed"
+        },
+        "reconSubagentKill": {
+          "injected": true,
+          "recovered": true,
+          "note": "recon child provider-killed (HTTP 500); parent fell back to direct reads"
+        },
+        "steer": {
+          "injected": true,
+          "recovered": false,
+          "note": "steer delivered mid-run via host poller; faq present at end"
+        },
+        "sigkillResume": {
+          "injected": true,
+          "recovered": false,
+          "note": "kill never fired (catalog child request not observed)"
+        },
+        "compactionPressure": {
+          "injected": true,
+          "recovered": false,
+          "note": "4 context:compacted events under a 16000-token budget"
+        }
+      },
+      "wallMs": 206578,
+      "dir": "/tmp/mochi-endurance-chaos-3-nC6hfk",
+      "branchTail": [
+        "t11: write:src/store/discount-store.js [files-read:+ files-written:- STAGE_1_OK+ STAGE_2_OK- recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t12: subagent:recon [files-read:- files-written:- STAGE_1_OK+ STAGE_2_OK- recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t13: write:src/store/index.js [files-read:- files-written:- STAGE_1_OK+ STAGE_2_OK- recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t14: check:2 [files-read:- files-written:- STAGE_1_OK+ STAGE_2_OK- recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t15: write:src/discounts/discount.js [files-read:- files-written:- STAGE_1_OK+ STAGE_2_OK+ recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "digest→files-written: src/discounts/discount.js, src/discounts/index.js. | files-read: src/store/memory-store.js, src/domain/coupon.js, src/services/invoice-service.js, src/store/index.js.",
+        "t16: ledger:2 [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t17: probe:2 [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t18: write:src/discounts/index.js [files-read:- files-written:- STAGE_1_OK- STAGE_2_OK+ recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t19: check:1 [files-read:- files-written:- STAGE_1_OK- STAGE_2_OK+ recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t20: ledger:1 [files-read:- files-written:- STAGE_1_OK+ STAGE_2_OK+ recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t21: probe:1 [files-read:- files-written:- STAGE_1_OK+ STAGE_2_OK+ recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "t22: subagent:recon [files-read:- files-written:- STAGE_1_OK+ STAGE_2_OK+ recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "digest→Stage checks confirmed: STAGE_1_OK STAGE_2_OK. | ledger-appended: stage-1-complete. | recon: failed. | probes-appended: probe-stage-1. | files-written: src/store/discount-store.js, src/store/index.js, src/discounts/disco",
+        "t23: probe:display [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:- ledger-appended:+ display-snapshot:- probes-appended:+]",
+        "t24: probe:display [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:- ledger-appended:+ display-snapshot:- probes-appended:+]",
+        "checkpoint→Stage checks confirmed: STAGE_1_OK STAGE_2_OK. ledger-appended: stage-1-complete stage-2-complete. recon: failed. probes-appended: probe-stage-1. files-written: src/store/discount-store.js, src/store/",
+        "t25: probe:display [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:- ledger-appended:+ display-snapshot:- probes-appended:+]"
+      ]
+    },
+    {
+      "profile": "chaosb",
+      "index": 1,
+      "success": true,
+      "primaryClass": null,
+      "evidence": [],
+      "anomalies": [
+        "exactly-once violation: probe-stage-1 appended 2 times — a completed shell side effect was re-executed after a context rewind/resume (journal replay does not cover it)",
+        "exactly-once violation: probe-stage-5 appended 2 times — a completed shell side effect was re-executed after a context rewind/resume (journal replay does not cover it)"
+      ],
+      "parentTurns": 80,
+      "childTurns": 10,
+      "auxTurns": 30,
+      "tokens": 1243548,
+      "stageTurns": {
+        "1": 8,
+        "2": 5,
+        "3": 13,
+        "4": 11,
+        "5": 35
+      },
+      "probeDupes": 2,
+      "compactions": 15,
+      "resumes": 1,
+      "journalReplayed": 27,
+      "journalRecorded": 5,
+      "chaos": {
+        "backendFlake": {
+          "injected": true,
+          "recovered": true,
+          "note": "first display_snapshot call throws E_BACKEND_DOWN; run must retry and proceed"
+        },
+        "reconSubagentKill": {
+          "injected": false,
+          "recovered": false,
+          "note": "recon child did not register as failed — inspect run"
+        },
+        "steer": {
+          "injected": true,
+          "recovered": true,
+          "note": "steer delivered mid-run via host poller; faq present at end"
+        },
+        "sigkillResume": {
+          "injected": true,
+          "recovered": true,
+          "note": "SIGKILL during background child flight; resumed once; journal replayed 27 steps, recorded 5"
+        },
+        "compactionPressure": {
+          "injected": true,
+          "recovered": true,
+          "note": "15 context:compacted events under a 16000-token budget"
+        }
+      },
+      "wallMs": 148754,
+      "dir": "/tmp/mochi-endurance-chaosb-1-jTOagI",
+      "branchTail": [
+        "t67: ledger:4 [files-read:- files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:- ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "checkpoint→Stage checks confirmed: STAGE_1_OK STAGE_2_OK STAGE_3_OK. ledger-appended: stage-1-complete stage-2-complete stage-3-complete. recon: done. display-snapshot: ok. catalog: done. catalog-handle: sub-e36",
+        "t68: probe:4 [files-read:- files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t69: write:docs/discounts.md [files-read:- files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t70: write:faq [files-read:- files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t71: suite:final [files-read:- files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t72: write:src/discounts/discount.js [files-read:- files-written:- STAGE_1_OK+ STAGE_2_OK- recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "digest→Stage checks confirmed: STAGE_1_OK STAGE_2_OK STAGE_3_OK STAGE_4_OK. | ledger-appended: stage-1-complete stage-2-complete stage-3-complete. | recon: done. | display-snapshot: ok. | catalog: done. | probes-appended: probe",
+        "t73: ledger:5 [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "digest→Stage checks confirmed: STAGE_1_OK STAGE_2_OK STAGE_3_OK STAGE_4_OK. | ledger-appended: stage-1-complete stage-2-complete stage-3-complete stage-4-complete. | recon: done. | display-snapshot: ok. | catalog: done. | probe",
+        "t74: probe:5 [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t75: CLAIM",
+        "t76: check:5 [files-read:- files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t77: ledger:5 [files-read:- files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t78: probe:5 [files-read:- files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t79: write:src/api/index.js [files-read:- files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "checkpoint→Stage checks confirmed: STAGE_1_OK STAGE_2_OK STAGE_3_OK STAGE_4_OK. ledger-appended: stage-1-complete stage-2-complete stage-3-complete. recon: done. display-snapshot: ok. catalog: done. probes-appen",
+        "t80: CLAIM"
+      ]
+    },
+    {
+      "profile": "chaosb",
+      "index": 2,
+      "success": false,
+      "primaryClass": "X",
+      "evidence": [
+        "runner process crashed: EPERM: operation not permitted, write"
+      ],
+      "anomalies": [
+        "exactly-once violation: probe-stage-1 appended 2 times — a completed shell side effect was re-executed after a context rewind/resume (journal replay does not cover it)",
+        "exactly-once violation: probe-stage-5 appended 2 times — a completed shell side effect was re-executed after a context rewind/resume (journal replay does not cover it)"
+      ],
+      "parentTurns": 80,
+      "childTurns": 10,
+      "auxTurns": 26,
+      "tokens": 1244510,
+      "stageTurns": {
+        "1": 8,
+        "2": 5,
+        "3": 13,
+        "4": 11,
+        "5": 36
+      },
+      "probeDupes": 2,
+      "compactions": 15,
+      "resumes": 1,
+      "journalReplayed": 0,
+      "journalRecorded": 0,
+      "chaos": {
+        "backendFlake": {
+          "injected": true,
+          "recovered": true,
+          "note": "first display_snapshot call throws E_BACKEND_DOWN; run must retry and proceed"
+        },
+        "reconSubagentKill": {
+          "injected": false,
+          "recovered": false,
+          "note": "recon child did not register as failed — inspect run"
+        },
+        "steer": {
+          "injected": true,
+          "recovered": true,
+          "note": "steer delivered mid-run via host poller; faq present at end"
+        },
+        "sigkillResume": {
+          "injected": true,
+          "recovered": false,
+          "note": "SIGKILL during background child flight; resumed once; journal replayed ? steps, recorded ?"
+        },
+        "compactionPressure": {
+          "injected": true,
+          "recovered": false,
+          "note": "15 context:compacted events under a 16000-token budget"
+        }
+      },
+      "wallMs": 126396,
+      "dir": "/tmp/mochi-endurance-chaosb-2-05Tp0Q",
+      "branchTail": [
+        "t67: ledger:4 [files-read:- files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:- ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "checkpoint→Stage checks confirmed: STAGE_1_OK STAGE_2_OK STAGE_3_OK. ledger-appended: stage-1-complete stage-2-complete stage-3-complete. recon: done. display-snapshot: ok. catalog: done. catalog-handle: sub-ba6",
+        "t68: probe:4 [files-read:- files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t69: write:docs/discounts.md [files-read:- files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t70: write:faq [files-read:- files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t71: suite:final [files-read:- files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t72: check:5 [files-read:- files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t73: write:src/discounts/discount.js [files-read:- files-written:- STAGE_1_OK+ STAGE_2_OK- recon:- catalog:- ledger-appended:- display-snapshot:- probes-appended:-]",
+        "digest→Stage checks confirmed: STAGE_1_OK STAGE_2_OK STAGE_3_OK STAGE_4_OK. | ledger-appended: stage-1-complete stage-2-complete stage-3-complete. | recon: done. | display-snapshot: ok. | catalog: done. | probes-appended: probe",
+        "t74: ledger:5 [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "digest→Stage checks confirmed: STAGE_1_OK STAGE_2_OK STAGE_3_OK STAGE_4_OK. | ledger-appended: stage-1-complete stage-2-complete stage-3-complete stage-4-complete. | recon: done. | display-snapshot: ok. | catalog: done. | probe",
+        "t75: probe:5 [files-read:+ files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t76: CLAIM",
+        "t77: ledger:5 [files-read:- files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t78: probe:5 [files-read:- files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "t79: write:src/api/index.js [files-read:- files-written:+ STAGE_1_OK+ STAGE_2_OK+ recon:+ catalog:+ ledger-appended:+ display-snapshot:+ probes-appended:+]",
+        "checkpoint→Stage checks confirmed: STAGE_1_OK STAGE_2_OK STAGE_3_OK STAGE_4_OK. ledger-appended: stage-1-complete stage-2-complete stage-3-complete. recon: done. display-snapshot: ok. catalog: done. probes-appen",
+        "t80: CLAIM"
+      ]
+    }
+  ]
+}

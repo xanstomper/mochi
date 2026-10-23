@@ -163,6 +163,27 @@ export const readTool: Tool = {
       }
       stats.__lastRead = sig;
     }
+    // S4: run-scoped repeat stub. MCH-84 only catches a read repeated
+    // IMMEDIATELY; the ordinary waste is non-adjacent — read A, read B,
+    // read A again — which re-injected A's full content. Track every
+    // (path+range) actually served in full, stamped with the file's
+    // (mtime, size) and the serving agent: the cache Map is shared with
+    // non-worktree subagents whose contexts do NOT hold the parent's
+    // reads, and another agent refreshing the entry must not make this
+    // agent's stub claim content it never saw. A stub is issued only
+    // when the exact bytes are provably already in THIS agent's context;
+    // on any stamp mismatch the full content is served (below) and the
+    // stamp refreshed. Kill-switch: MOCHI_READ_RUN_STUB=0.
+    if (cache && process.env.MOCHI_READ_RUN_STUB !== '0') {
+      const stats = cache as ReadCache & { __servedReads?: Map<string, string> };
+      const served = (stats.__servedReads ??= new Map<string, string>());
+      const sig = `${fullPath}:${offset}:${limit}`;
+      const stamp = `${ctx.agentId}@${stat.mtimeMs}:${stat.size}`;
+      if (cacheHit && served.get(sig) === stamp) {
+        return `[mochi:cache-hit] ${rawPath} lines ${offset}-${offset - 1 + limit} — identical to your earlier read in this run, content unchanged (mtime/size verified). Reuse it from context; re-read with a different offset/limit if you need another range.`;
+      }
+      served.set(sig, stamp);
+    }
     const slice = lines.slice(offset - 1, offset - 1 + limit);
     const numbered = slice.map((l, i) => `${(offset + i).toString().padStart(4, ' ')} | ${l}`).join('\n');
     // Char-level guard on top of the line window (minified lines are huge).

@@ -24,6 +24,23 @@ export interface DebugAttempt {
   atMs: number;             // wall-clock for traceability
 }
 
+/** Repro-synthesis attachment (observability/repro-synth.ts): the outcome
+ *  of automatically synthesising a minimal validated reproduction for this
+ *  task's failure. Optional — autopsies written before repro synthesis
+ *  existed (and tasks that never triggered it) simply omit the field. */
+export interface ReproAttachment {
+  outcome: 'validated' | 'no-repro' | 'refused';
+  /** The synthesised repro invocation, when one was produced. */
+  command?: string;
+  /** Id of the persisted FAIL_TO_PASS pair, when both directions validated. */
+  pairId?: string;
+  /** Shrink outcome as after/before bytes, when shrinking ran. */
+  shrinkRatio?: number;
+  /** One-line account (derivation, refusal reason, or no-repro stage). */
+  note: string;
+  atMs: number;
+}
+
 export interface Autopsy {
   schemaVersion: 1;
   taskId: string;
@@ -38,6 +55,7 @@ export interface Autopsy {
   rootCauseHypothesis?: string; // last confirmed/refuted hypothesis
   regressionTestAdded?: string;  // path of any auto-written test
   fixApplied?: string;          // path of the changed source
+  repro?: ReproAttachment;       // synthesised reproduction, when attempted
 }
 
 function autopsyDir(workspaceDir: string): string {
@@ -97,6 +115,18 @@ export function appendAttempt(
   attempt: DebugAttempt,
 ): Autopsy {
   const next: Autopsy = { ...autopsy, attempts: [...autopsy.attempts, attempt] };
+  mkdirSync(autopsyDir(workspaceDir), { recursive: true });
+  writeFileSync(autopsyPath(workspaceDir, autopsy.taskId), redact(JSON.stringify(next, null, 2)));
+  return next;
+}
+
+/** Attach a repro-synthesis result and persist (mirrors appendAttempt). */
+export function attachRepro(
+  workspaceDir: string,
+  autopsy: Autopsy,
+  repro: Omit<ReproAttachment, 'atMs'> & { atMs?: number },
+): Autopsy {
+  const next: Autopsy = { ...autopsy, repro: { ...repro, atMs: repro.atMs ?? Date.now() } };
   mkdirSync(autopsyDir(workspaceDir), { recursive: true });
   writeFileSync(autopsyPath(workspaceDir, autopsy.taskId), redact(JSON.stringify(next, null, 2)));
   return next;

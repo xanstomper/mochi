@@ -76,3 +76,42 @@ describe('costPerSolveFromTraces (C5)', () => {
     expect(costPerSolveFromTraces([{ entries: [zeroCostCall], solved: false }]).usdPerSolve).toBeNull();
   });
 });
+
+describe('cache-hit ratio (P5)', () => {
+  it('flat entries stamped cacheMeasured fold into a ratio over measured calls', () => {
+    const s = costFromTraceEntries([
+      { t: 1, kind: 'usage:updated', model: 'gpt-4o', inputTokens: 700, outputTokens: 10, cacheTokens: 300, totalTokens: 1010, costUsd: 0.01, cacheMeasured: true },
+      { t: 2, kind: 'usage:updated', model: 'gpt-4o', inputTokens: 1000, outputTokens: 10, cacheTokens: 0, totalTokens: 1010, costUsd: 0.01, cacheMeasured: true },
+      { t: 3, kind: 'usage:updated', model: 'gpt-4o', inputTokens: 500, outputTokens: 10, cacheTokens: 0, totalTokens: 510, costUsd: 0.01, cacheMeasured: false },
+    ]);
+    expect(s.cacheMeasured).toBe(true);
+    expect(s.cacheReadTokens).toBe(300);
+    expect(s.inputTokens).toBe(2500);
+    // Measured calls only: 300 / (1000 + 1000) — the unmeasured call is excluded.
+    expect(s.cacheHitRatio).toBeCloseTo(300 / 2000, 10);
+  });
+
+  it('no provider cache data anywhere → UNMEASURED (null), never a fabricated 0', () => {
+    const s = costFromTraceEntries([
+      { t: 1, kind: 'usage:updated', model: 'gpt-4o', inputTokens: 100, outputTokens: 5, cacheTokens: 0, totalTokens: 105, costUsd: 0.01 },
+    ]);
+    expect(s.cacheMeasured).toBe(false);
+    expect(s.cacheHitRatio).toBeNull();
+    expect(s.cacheReadTokens).toBe(0);
+  });
+
+  it('nested usage with cachedTokens counts as measured (includes-cache convention)', () => {
+    const s = costFromTraceEntries([
+      { t: 1, kind: 'agent:iteration', model: 'gpt-4o', usage: { promptTokens: 1000, completionTokens: 10, cachedTokens: 250, totalTokens: 1010 } },
+    ]);
+    expect(s.cacheMeasured).toBe(true);
+    expect(s.cacheHitRatio).toBeCloseTo(0.25, 10);
+    expect(s.inputTokens).toBe(1000);
+  });
+
+  it('legacy flat entries with positive cacheTokens count as measured', () => {
+    const s = costFromTraceEntries([zeroCostCall]);
+    expect(s.cacheMeasured).toBe(true);
+    expect(s.cacheHitRatio).toBeCloseTo(200_000 / 1_000_000, 10);
+  });
+});

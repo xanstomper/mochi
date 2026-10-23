@@ -7,7 +7,7 @@
  * the same dead ends.
  */
 
-import { existsSync, readFileSync, appendFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, appendFileSync, mkdirSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { homedir } from 'node:os';
 // B7: full-file rewrites of memory.jsonl (prune, attempt-marking, forget,
@@ -208,10 +208,46 @@ export function decayFacts(maxAgeMs = 60 * 24 * 3600 * 1000): number {
   return facts.length - live.length;
 }
 
+/** Memo for memoryDigest: the digest is rendered into the system prompt on
+ *  EVERY turn, and the uncached render re-read + re-parsed the whole facts
+ *  file two to three times per call (decayFacts + recallFacts/loadFacts).
+ *  The render is a pure function of (file contents, taskContext), so cache
+ *  it behind the file's size:mtimeMs:ino fingerprint — the same pattern
+ *  contractSection uses. Every write path in this module changes the
+ *  fingerprint: appends grow size, rewrites go through atomicWriteFileSync
+ *  (rename → new inode), and external writers are caught the same way. */
+let digestMemo: { key: string; text: string; facts: MemoryFact[] } | null = null;
+
+function factsFileFingerprint(file: string): string {
+  try {
+    const st = statSync(file);
+    return `${st.size}:${st.mtimeMs}:${st.ino}`;
+  } catch {
+    return ''; // missing file → loadFacts renders empty; key stays unstable-safe
+  }
+}
+
 /** Render facts as a prompt section, with MCH-42 upgrades:
  *  - auto-decay pass (60-day stale pruning) before rendering
  *  - ranked by semantic relevance when task context is provided */
 export function memoryDigest(taskContext?: string): string {
+  const file = memoryFile();
+  // Composition fix (S1×P5 integration): the render is NOT a pure function
+  // of the file alone — decayFacts prunes by age and recallFacts weights by
+  // recency, both against Date.now(). The original memo key (file
+  // fingerprint only) served a stale digest across time boundaries: P5's
+  // prefix-cache test advances the clock +25h and the boundary fact must
+  // decay out of the prompt tail, but the memo returned the pre-boundary
+  // render. Bucket the key by calendar day: at most one re-render per day
+  // per (file state, context) — the per-turn saving is preserved.
+  const dayBucket = new Date(Date.now()).toDateString();
+  const key = `${file}|${factsFileFingerprint(file)}|${taskContext ?? ''}|${dayBucket}`;
+  if (digestMemo && digestMemo.key === key) {
+    // Keep MCH-63 attribution exact on a cache hit: the rendered fact set is
+    // identical, so re-mark the same ids (the set add is idempotent).
+    for (const f of digestMemo.facts) noteFactSurfaced(f.id);
+    return digestMemo.text;
+  }
   decayFacts();
   let facts: MemoryFact[];
   if (taskContext && taskContext.trim().length > 20) {
@@ -221,7 +257,10 @@ export function memoryDigest(taskContext?: string): string {
     // Even without context, cap the digest so memory can't eat the prompt.
     if (facts.length > 20) facts = facts.slice(0, 20);
   }
-  if (facts.length === 0) return '';
+  if (facts.length === 0) {
+    digestMemo = { key, text: '', facts: [] };
+    return '';
+  }
   const lines: string[] = ['# DURABLE MEMORY (global facts)', ''];
   for (const f of facts) {
     noteFactSurfaced(f.id); // MCH-63: so the run outcome can be attributed back
@@ -230,5 +269,10 @@ export function memoryDigest(taskContext?: string): string {
   }
   lines.push('');
   lines.push('These facts persist across sessions. Act on them when relevant; do not re-derive.');
-  return lines.join('\n');
+  const text = lines.join('\n');
+  // Re-key AFTER the render: decayFacts/loadFacts may have rewritten the
+  // file during this call (prune), and the memo must describe the state the
+  // text was rendered from as it now stands on disk.
+  digestMemo = { key: `${file}|${factsFileFingerprint(file)}|${taskContext ?? ''}|${dayBucket}`, text, facts };
+  return text;
 }

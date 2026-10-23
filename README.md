@@ -69,7 +69,7 @@ Recurring work is owned by the daemon and persists in `.mochi/cron.json`;
 `mochi cron` manages it without HTTP. Device and desktop commands run through
 the same bounded exec policy as the shell tool.
 
-Zero runtime JS dependencies. Runs under **Node 22** or **Bun**, and ships a standalone native binary (`npm run build:bin`) that needs no runtime at all. The performance core is a zero-dependency Rust crate (`native/mochi_core`): tokenization, budget math, context compaction planning, and agent-loop decisions run natively — every native path has a parity-tested TypeScript fallback, so nothing breaks when the Rust binary is absent (CI, cold installs). The harness is polyglot: a 15-language registry, tree-sitter codegraph, and native Rust/C++ accelerators in the `edit`/`patch` hot paths.
+Zero runtime JS dependencies. Runs under **Node 22** or **Bun**, and ships a standalone native binary (`npm run build:bin`) that needs no runtime at all. The performance core is a zero-dependency Rust crate (`native/mochi_core`): tokenization, budget math, context compaction planning, and agent-loop decisions run natively — every native path has a parity-tested TypeScript fallback, so nothing breaks when the Rust binary is absent (CI, cold installs). The harness is polyglot: an 18-ecosystem repo detector, a 10-language tree-sitter codegraph, and native Rust/C++ accelerators in the `edit`/`patch` hot paths.
 
 <div align="center">
 
@@ -712,14 +712,14 @@ mochi bluebubbles run       # iMessage via a BlueBubbles server (aliases: imessa
 
 `get_function` / `find_callers` / `type_hierarchy` index the repo into an in-memory SQLite code graph. Two parsers back the index, selectable by env, with backend-agnostic read paths:
 
-- `tsc` (default): the TypeScript compiler AST, always available.
-- `tree-sitter`: a WASM CST walk for lower startup cost. Opt in with `npm i web-tree-sitter tree-sitter-typescript` and set `MOCHI_CPG_BACKEND=tree-sitter`; missing packages fall back automatically.
+- `tree-sitter` (default): a WASM CST walk for lower startup cost. Requires `npm i web-tree-sitter tree-sitter-typescript`; missing packages fall back to `tsc` automatically.
+- `tsc`: the TypeScript compiler AST, always available. Opt out of tree-sitter with `MOCHI_CPG_BACKEND=tsc`.
 
 ```bash
-MOCHI_CPG_BACKEND=tree-sitter mochi inspect "SessionManager"
+MOCHI_CPG_BACKEND=tsc mochi inspect "SessionManager"
 ```
 
-The registry covers **15 languages** (TypeScript, JavaScript, Python, Go, Rust, C, C++, Java, C#, Ruby, PHP, Kotlin, Swift, Zig, Lua — `_test.go` / `test_*.py` / `*Test.java` test-file matching included).
+The codegraph parses and indexes **10 languages** (TypeScript, JavaScript, Python, Rust, Go, Java, C++, C#, Ruby, PHP). The repo detector recognises 18 ecosystems (marker files, test/lint commands, hints), and test-file matching (`_test.go` / `test_*.py` / `*Test.java`) spans the detected set.
 
 ## Light Mode
 

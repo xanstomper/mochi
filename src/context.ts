@@ -20,6 +20,10 @@ import { contractSection } from './contract.js';
 import { memoryDigest, memoryFilePath } from './memory/memory-store.js';
 import { feedbackDigest } from './observability/feedback.js';
 import { detectCircle } from './circle.js';
+import {
+  sha256Hex, firstChangedSegment,
+  type PrefixBreak, type PrefixStats, type PrefixSegment,
+} from './prompt/stable-prefix.js';
 import { archiveToolOutput } from './tools/output-archive.js';
 import { evaluateOwl } from './cognitive/owl.js';
 import { formatEnvironmentBlock } from './core/env-profiler.js';
@@ -76,8 +80,13 @@ export function machineAccessBlock(projectRoot?: string): string {
   const mem = (() => {
     try {
       const total = (totalmem() / 1073741824).toFixed(1);
-      const free = (freemem() / 1073741824).toFixed(1);
-      return `${free} GB free / ${total} GB total`;
+      // P5 (cache stability): FREE memory is a live counter — it changed
+      // between two identical audit runs seconds apart (1.1→1.2 GB),
+      // breaking the provider prefix cache on every process start. The
+      // stable tier renders the static total only; the live free figure
+      // rides the volatile state prompt instead (fresher there anyway —
+      // it is recomputed per turn, not frozen at first render).
+      return `${total} GB total`;
     } catch { return 'unknown'; }
   })();
   const cpu = (() => {
@@ -281,7 +290,18 @@ const STALE_CHECK_INTERVAL_MS = 2000;
 export function cachedMessageTokens(m: { role: string; content?: unknown; name?: string; tool_calls?: unknown[]; tool_call_id?: string }): number {
   const hit = messageTokenCache.get(m);
   if (hit !== undefined) return hit;
-  const n = approxTokens(JSON.stringify(m));
+  const images = imagePartCount(m.content);
+  let n: number;
+  if (images === 0) {
+    n = approxTokens(JSON.stringify(m));
+  } else {
+    // Image parts are priced per image (IMAGE_PART_TOKENS), never by their
+    // serialized payload: swap each for the fixed placeholder before
+    // stringifying so neither a multi-MB base64 blob nor a bare URL string
+    // distorts the count (audit L-04).
+    const parts = (m.content as unknown[]).map((p) => (isImagePart(p) ? IMAGE_PART_PLACEHOLDER : p));
+    n = approxTokens(JSON.stringify({ ...m, content: parts })) + images * IMAGE_PART_TOKENS;
+  }
   messageTokenCache.set(m, n);
   return n;
 }
@@ -289,6 +309,42 @@ export function cachedMessageTokens(m: { role: string; content?: unknown; name?:
  *  (shrinkOldToolOutputs / condenseOutput rewrite tool results in place). */
 export function invalidateMessageTokens(m: object): void {
   messageTokenCache.delete(m);
+}
+
+/** Token estimate charged per image part (audit L-04). The counter has to
+ *  price an image the way providers do — by the image, not by its wire
+ *  encoding. Serializing a data-URI image into JSON and counting the base64
+ *  as text charged ~1.4M tokens for a 4 MB image whose real vision cost is
+ *  ~1–2K; an https URL counted ~10 tokens for the same image. Both forms
+ *  now cost this constant. Provider reality for the screenshot pipeline's
+ *  1280px cap (H3): Anthropic (w×h)/750 ≈ 1.4–2.2K, OpenAI high-detail
+ *  tiling ≈ 1.1K, Gemini ≈ 1–2K — 1200 sits in that range. Small images are
+ *  overestimated (a 200px icon really costs ~100–300) — acceptable for a
+ *  budget/compaction estimator, whose failure mode should be "compact a
+ *  little early", never "blow the window on an uncounted image". */
+export const IMAGE_PART_TOKENS = 1200;
+
+/** Structural stand-in serialized in place of an image part when a message
+ *  is counted: keeps the JSON shape (and its small structural overhead)
+ *  while the payload — base64 data or URL — is never tokenized as text. */
+const IMAGE_PART_PLACEHOLDER = { type: 'image_url', image_url: { url: '' } } as const;
+
+function isImagePart(p: unknown): boolean {
+  return !!p && typeof p === 'object' && (p as { type?: unknown }).type === 'image_url';
+}
+
+export function imagePartCount(content: unknown): number {
+  if (!Array.isArray(content)) return 0;
+  let n = 0;
+  for (const p of content) if (isImagePart(p)) n++;
+  return n;
+}
+
+/** True when the message carries at least one image part — the signal the
+ *  native batch paths (which count raw serialized JSON, payload included)
+ *  must NOT be used for this history. */
+export function messageHasImageParts(m: { content?: unknown }): boolean {
+  return imagePartCount(m.content) > 0;
 }
 
 /** Max skills to advertise in the system prompt for a given task. Keeping this
@@ -355,7 +411,11 @@ export function selectRelevantSkills(
     // or by pre-lifecycle loads must not launder a weak match into an
     // advertisement for an unproven skill.
     .filter((e) => e.score >= MIN_SKILL_SCORE && e.base >= (gated?.get(e.s.name) ?? 0))
-    .sort((a, b) => b.score - a.score || skills.indexOf(a.s) - skills.indexOf(b.s));
+    // P5: ties break by NAME, not input position — input order is the
+    // filesystem's discovery order, which is not stable across machines
+    // or checkouts; a tie that flips is a prefix change with no content
+    // change behind it.
+    .sort((a, b) => b.score - a.score || a.s.name.localeCompare(b.s.name));
   return scored.slice(0, max).map((e) => e.s);
 }
 
@@ -396,6 +456,21 @@ export class ContextEngine {
   private skillsInitialized = false;
   private todoCacheFp: string | null = null;
   private todoCacheBlock = '';
+  /** Token counts of the exact prompt strings buildPacket renders, memoized
+   *  by string value: the system/state prompts are re-rendered (and were
+   *  re-TOKENIZED, a per-char scan of ~10–50KB) on every turn even when
+   *  byte-identical to the previous turn's. approxTokens is a pure function
+   *  of the string, so the memo is exact; bounded to a few entries because
+   *  only the current prompts ever repeat. */
+  private promptTokenMemo = new Map<string, number>();
+  private tokenCountOf(text: string): number {
+    const hit = this.promptTokenMemo.get(text);
+    if (hit !== undefined) return hit;
+    const n = approxTokens(text);
+    if (this.promptTokenMemo.size >= 8) this.promptTokenMemo.clear();
+    this.promptTokenMemo.set(text, n);
+    return n;
+  }
   private config: MochiConfig;
   private userSkillsDir?: string;
   private lastSentTokens = 0;
@@ -417,6 +492,59 @@ export class ContextEngine {
    *  diagnostics read this; a failed final probe is surfaced here and in
    *  the compacted ledger instead of silently continuing. */
   lastCompactionVerification?: CompactionVerification;
+
+  // ── P5: prefix-cache bookkeeping ─────────────────────────────────────
+  // The composed system prompt is tracked per segment (see
+  // prompt/stable-prefix.ts). A mid-run change to the system bytes — or an
+  // in-place rewrite of the history under them — is a guaranteed provider
+  // prefix-cache break; breaks are counted and attributed to a cause
+  // instead of staying invisible.
+  private packetCount = 0;
+  private prefixBreaks: PrefixBreak[] = [];
+  private prevSegmentHashes: Array<{ name: string; hash: string }> | null = null;
+  private prevSystemHash: string | null = null;
+  private lastStableHash: string | null = null;
+  private lastSystemHash: string | null = null;
+  private lastHeadText = '';
+  private lastHeadSig = '';
+  /** Stable head inherited from a parent engine (fork inheritance). Used
+   *  only when this engine's own head signature matches it exactly. */
+  private inheritedHead?: { text: string; sig: string };
+
+  /** Record a prefix break with its cause (segment name or history
+   *  rewrite label). Called by the mutation points themselves. */
+  notePrefixBreak(cause: string): void {
+    this.prefixBreaks.push({ cause, packet: this.packetCount });
+  }
+
+  /** Prefix-cache stats for this engine: hashes, packet count, and every
+   *  attributed mid-run break. The loop surfaces this in the run result. */
+  prefixStats(): PrefixStats {
+    return {
+      stableHash: this.lastStableHash,
+      systemHash: this.lastSystemHash,
+      packets: this.packetCount,
+      breaks: [...this.prefixBreaks],
+      breakCount: this.prefixBreaks.length,
+    };
+  }
+
+  /** The stable head (core + root rules + repo info) as last rendered,
+   *  with the signature a child must match to inherit it. Null before the
+   *  first packet. Forking parents pass this to children so the child's
+   *  leading bytes are the parent's own, not a recomputation. */
+  stableHeadSnapshot(): { text: string; sig: string } | null {
+    if (!this.lastHeadText) return null;
+    return { text: this.lastHeadText, sig: this.lastHeadSig };
+  }
+
+  /** Accept a parent's stable head. It is used verbatim only when this
+   *  engine's own head signature (project root, tool set, root-rules
+   *  fingerprint, repo info) matches — a worktree child or a pruned-tool
+   *  child renders its own head instead of inheriting a wrong one. */
+  inheritStableHead(text: string, sig: string): void {
+    this.inheritedHead = { text, sig };
+  }
   /** Complexity of the ACTIVE task (set per-run by the loop). When 'complex',
    *  every context-destroying path in this engine (ingestion folding, in-place
    *  tool-output shrinking, compaction cut point, eviction rescue) relaxes its
@@ -426,9 +554,51 @@ export class ContextEngine {
    *  token profile are unchanged. */
   private complexPreserve = false;
 
+  /** S4: the active task's open obligations — the discipline contract's
+   *  evidence checklist plus the task's acceptance criteria. They are NOT
+   *  re-rendered per turn (the pinned contract message carries them), so
+   *  compaction is the one place they can silently die: compact() carries
+   *  them in the ledger AND probes them as must-survive facts (see
+   *  verified-compaction's 'obligation' kind). Set once per run by the
+   *  loop; bounded so the ledger line stays small. */
+  private obligations: string[] = [];
+
+  setObligations(list: readonly string[]): void {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const raw of list) {
+      const clean = String(raw ?? '').trim().replace(/\s+/g, ' ').slice(0, 240);
+      if (clean.length < 8 || seen.has(clean)) continue;
+      seen.add(clean);
+      out.push(clean);
+      if (out.length >= 8) break;
+    }
+    this.obligations = out;
+  }
+
+  getObligations(): readonly string[] {
+    return this.obligations;
+  }
+
   /** Called by the agent loop once per task, before any message is ingested. */
   setTaskComplexity(complexity: 'simple' | 'standard' | 'complex' | undefined): void {
     this.complexPreserve = complexity === 'complex';
+  }
+
+  /** Fast-lane memory gate (struggle-gated recall): while false, the
+   *  volatile memory block is NOT injected — a fast-lane run starts from a
+   *  minimal brief and the loop releases recall only on a struggle signal
+   *  (verify failure / repeated tool errors) or on escalation out of the
+   *  lane. Default true = the standard profile's always-on injection, so
+   *  behavior is unchanged unless the loop explicitly gates it. */
+  private memoryInjectionEnabled = true;
+
+  setMemoryInjectionEnabled(enabled: boolean): void {
+    this.memoryInjectionEnabled = enabled;
+  }
+
+  get memoryInjectionOn(): boolean {
+    return this.memoryInjectionEnabled;
   }
 
   /** True when this run is preserving working memory (complex task). */
@@ -586,9 +756,12 @@ export class ContextEngine {
    *  count to the Rust runtime over stdio (one round-trip instead of N
    *  FFI calls) and falls back to the sync TS walk when the native runtime
    *  is unavailable. Same ballpark answer either way — this feeds budget
-   *  checks, not exact billing. */
+   *  checks, not exact billing. EXCEPTION (audit L-04): the Rust batch
+   *  counts raw serialized JSON, so an image part's base64 payload would be
+   *  charged as text; histories containing image parts always take the TS
+   *  walk, which prices images per part (IMAGE_PART_TOKENS). */
   async estimateTokensAsync(): Promise<number> {
-    if (this.messages.length > 24) {
+    if (this.messages.length > 24 && !this.messages.some((m) => messageHasImageParts(m))) {
       const native = await nativeTokensCount(this.messages);
       if (native !== null) return native;
     }
@@ -627,6 +800,10 @@ export class ContextEngine {
   }
 
   private loadMemory(query = ''): string {
+    // Fast-lane gate: no injection while gated (see setMemoryInjectionEnabled).
+    // Returns before the cache so a gated run never primes the cache with a
+    // stale empty value — releasing the gate mid-run computes the real block.
+    if (!this.memoryInjectionEnabled) return '';
     const fp = this.memoryFilesFingerprint();
     // Re-select only when the underlying memory files or the query change; a
     // stable task keeps the same relevant subset without re-reading the disk.
@@ -670,8 +847,12 @@ export class ContextEngine {
     return this.memoryCache;
   }
 
-  private loadProjectRules(task?: Task): string {
-    const parts: string[] = [];
+  /** Root candidate rule file (MOCHI.md / AGENTS.md / …): task-INDEPENDENT,
+   *  part of the stable head. Split from the modular rules (P5) because the
+   *  old combined loader let task-text rule selection leak into what was
+   *  supposed to be the byte-stable prefix — a child's head then depended
+   *  on its subtask wording. */
+  private loadRootRules(): string {
     for (const f of CANDIDATE_RULES) {
       const path = resolve(this.projectRoot, f);
       const fp = fingerprint(path);
@@ -681,10 +862,24 @@ export class ContextEngine {
         this.rulesFingerprint = fp;
         this.rulesCache = rulesSource(path, f);
       }
-      if (this.rulesCache) parts.push(this.rulesCache);
-      break;
+      return this.rulesCache;
     }
+    return '';
+  }
 
+  /** Fingerprint of the root rule file ('' when none) — part of the
+   *  stable-head inheritance signature. */
+  private rootRulesFingerprint(): string {
+    for (const f of CANDIDATE_RULES) {
+      const fp = fingerprint(resolve(this.projectRoot, f));
+      if (fp !== '') return fp;
+    }
+    return '';
+  }
+
+  /** Modular rules selected by task text: task-DEPENDENT, session tail. */
+  private loadModularRules(task?: Task): string {
+    const parts: string[] = [];
     try {
       const allModularRules = loadRulesCached(this.projectRoot);
       const active = selectActiveRules(
@@ -700,9 +895,9 @@ export class ContextEngine {
     } catch {
       /* ignore rules loading errors */
     }
-
     return parts.join('\n\n');
   }
+
 
   /** Advertise project and bundled skills in the system prompt so the model knows to load
    *  them. Recomputes only when the skills dir fingerprint changes.
@@ -788,15 +983,24 @@ export class ContextEngine {
   }
 
     private buildSystemPrompt(tools: ToolDefinition[], repo?: RepoInfo, task?: Task): string {
-    const rules = this.loadProjectRules(task);
+    // P5: the prompt is composed from NAMED SEGMENTS (prompt/stable-
+    // prefix.ts). The stable head — core + root rules + repo info — is
+    // task-independent and deterministic (canonical ordering everywhere),
+    // so providers can prefix-cache it and forked children can inherit it
+    // byte-for-byte. Task/store-dependent segments (modular rules, skills,
+    // memory, feedback) form the session tail AFTER the head. NOTE: this
+    // moved modular rules to just after the repo block (they used to sit
+    // before it, fused with the root rules); content is unchanged.
+    const rootRules = this.loadRootRules();
+    const modularRules = this.loadModularRules(task);
     const repoInfo = repo ? `\nRepository Context:
 - Language: ${repo.language ?? 'unknown'} | Framework: ${repo.framework ?? 'unknown'}
 - Build: ${repo.buildCommand ?? 'unknown'} | Test: ${repo.testCommand ?? 'unknown'}
 - Lint: ${repo.lintCommand ?? 'unknown'} | Typecheck: ${repo.typecheckCommand ?? 'unknown'}
-- Entrypoints: ${repo.entrypoints?.join(', ') ?? 'unknown'}
-- Key Directories: ${repo.importantDirs?.join(', ') ?? 'unknown'}` : '';
+- Entrypoints: ${repo.entrypoints ? [...repo.entrypoints].sort().join(', ') : 'unknown'}
+- Key Directories: ${repo.importantDirs ? [...repo.importantDirs].sort().join(', ') : 'unknown'}` : '';
 
-    return `You are Mochi, an advanced agentic software engineering assistant. You pair-program with the user to solve engineering tasks with high precision, clear explanations, and rigorous verification.
+    const core = `You are Mochi, an advanced agentic software engineering assistant. You pair-program with the user to solve engineering tasks with high precision, clear explanations, and rigorous verification.
 
 ${machineAccessBlock(this.projectRoot)}
 
@@ -838,10 +1042,56 @@ ${this.toolGuidelines(tools)}
 # VI. Output Constraints (CRITICAL)
 - **Collaborative & Transparent**: Proactively guide the user through what you are doing. Explain your code changes, architectural decisions, and verification steps.
 - **Insightful & Professional**: Provide clear technical insights without unnecessary fluff, but always communicate your plans, findings, and outcomes.
-- **Clean Markdown Formatting**: Use concise GitHub-flavored markdown with code snippets, paths, and clear bullet points where helpful.
+- **Clean Markdown Formatting**: Use concise GitHub-flavored markdown with code snippets, paths, and clear bullet points where helpful.`;
 
-${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSection(this.projectRoot)}${memoryDigest(task ? `${task.title} ${task.description}` : undefined)}${feedbackDigest()}
-`.trim();
+    // ── P5 segment composition ─────────────────────────────────────────
+    const skillsText = this.skills(task, tools);
+    const contract = contractSection(this.projectRoot);
+    const memory = memoryDigest(task ? `${task.title} ${task.description}` : undefined);
+    const feedback = feedbackDigest();
+    const segments: PrefixSegment[] = [
+      { name: 'core', text: core },
+      { name: 'rulesRoot', text: rootRules },
+      { name: 'repo', text: repoInfo },
+      { name: 'rulesModular', text: modularRules },
+      { name: 'skills', text: skillsText },
+      { name: 'contract', text: contract },
+      { name: 'memory', text: memory },
+      { name: 'feedback', text: feedback },
+    ];
+    // Stable head: contiguous leading bytes. The signature binds the head
+    // to exactly the inputs that determine it (project root, tool set,
+    // root-rules fingerprint, repo info) — a forked child inherits the
+    // head verbatim only when its own signature matches.
+    const ownHead = core + '\n\n' + (rootRules ? rootRules + '\n' : '') + repoInfo;
+    const headSig = sha256Hex(JSON.stringify([
+      this.projectRoot,
+      tools.map((t) => t.name).sort(),
+      this.rootRulesFingerprint(),
+      repoInfo,
+    ]));
+    const head = this.inheritedHead && this.inheritedHead.sig === headSig
+      ? this.inheritedHead.text
+      : ownHead;
+    const full = (head
+      + (modularRules ? modularRules + '\n' : '')
+      + skillsText + contract + memory + feedback).trim();
+    // Break attribution: a system-prompt change vs the previous packet is
+    // a guaranteed provider cache break — record it under the first
+    // segment whose content changed.
+    const segHashes = segments.map((s) => ({ name: s.name, hash: sha256Hex(s.text) }));
+    const systemHash = sha256Hex(full);
+    if (this.prevSystemHash !== null && this.prevSystemHash !== systemHash) {
+      const cause = (this.prevSegmentHashes && firstChangedSegment(this.prevSegmentHashes, segHashes)) ?? 'system';
+      this.prefixBreaks.push({ cause, packet: this.packetCount });
+    }
+    this.prevSegmentHashes = segHashes;
+    this.prevSystemHash = systemHash;
+    this.lastSystemHash = systemHash;
+    this.lastStableHash = sha256Hex(head);
+    this.lastHeadText = head;
+    this.lastHeadSig = headSig;
+    return full;
   }
 
 
@@ -992,6 +1242,12 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
     if (this.stuckSignal) lines.push(`WARNING (loop detected): ${this.stuckSignal}`);
     lines.push('## Current State');
     lines.push(`Workspace: ${this.projectRoot}`);
+    // P5: live free memory lives HERE (volatile tier, recomputed per
+    // packet) — it used to sit in the stable system prompt, where its
+    // constant drift broke the provider prefix cache on every run.
+    try {
+      lines.push(`Host free memory: ${(freemem() / 1073741824).toFixed(1)} GB`);
+    } catch { /* advisory only */ }
     const rootGoal = this.initialUserPrompt || this.state.goal;
     if (rootGoal) lines.push(`Primary Objective (North Star): ${rootGoal}`);
     if (this.state.goal && this.state.goal !== rootGoal) lines.push(`Goal: ${this.state.goal}`);
@@ -1044,6 +1300,7 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
   }
 
   buildPacket(tools: ToolDefinition[], task?: Task, repo?: RepoInfo): ContextPacket {
+    this.packetCount++;
     // STABLE tier: identity + rules + skills + repo info. Kept byte-identical
     // across turns so providers with prefix caching (DeepSeek, Anthropic,
     // OpenAI cached_tokens, Gemini cached_content) hit on the whole leading
@@ -1068,13 +1325,13 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
     // shrinking HISTORY (below) is always preferable to amputating the
     // directives. If a real provider window ever rejects the prompt, the
     // provider error surfaces and the loop's retry handles it. Reverted.
-    let sysTokens = approxTokens(baseSystemPrompt);
+    let sysTokens = this.tokenCountOf(baseSystemPrompt);
     const effectiveSystem = baseSystemPrompt;
 
     // Reserve the trailing state message's tokens up front: it is appended
     // AFTER the history walk but is part of the wire size, so the walk must
     // not spend its tokens.
-    const stateTokens = statePrompt ? approxTokens(statePrompt) : 0;
+    const stateTokens = statePrompt ? this.tokenCountOf(statePrompt) : 0;
     let remaining = this.budget - sysTokens - stateTokens;
 
     // Add recent messages until budget exhausted; prefer latest. Always retain
@@ -1296,6 +1553,7 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
     let realSize = 0;
     for (const m of messages) realSize += cachedMessageTokens(m);
     let guard = 0;
+    let backstopCut = false;
     while (realSize > this.budget && guard++ < 64) {
       let biggest = -1;
       let biggestTokens = 0;
@@ -1324,6 +1582,9 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
       // AUTONOMY PROTOCOL' header line (~120-168) after the veto preamble.
       const keptLen = Math.max(200, target.content.length - cutChars - 120);
       target.content = target.content.slice(0, keptLen) + '\n[...truncated to fit context budget...]\n' + target.content.slice(-120);
+      // P5: `target` aliases the stored history message — this cut
+      // rewrites the wire prefix in place. Label it once per packet.
+      if (!backstopCut) { backstopCut = true; this.notePrefixBreak('budget-truncation'); }
       invalidateMessageTokens(target);
       realSize -= biggestTokens - cachedMessageTokens(target);
     }
@@ -1349,6 +1610,27 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
       this.state.knownErrors.push(error);
       if (this.state.knownErrors.length > 20) this.state.knownErrors.splice(0, this.state.knownErrors.length - 20);
     }
+  }
+
+  /** S4: upsert a system message identified by a marker substring. If a
+   *  message carrying the marker exists, its content is replaced IN PLACE
+   *  (one live copy, refreshed — never a growing stack of stale copies);
+   *  otherwise a new system message is appended. Used by the loop for the
+   *  pinned verifier objection: exactly one current objection exists at
+   *  any time, and re-upserting after compaction restores it if the cut
+   *  dropped it. Returns true when an existing message was replaced. */
+  upsertMarkedSystemMessage(marker: string, content: string): boolean {
+    for (const m of this.messages) {
+      if (m.role === 'system' && typeof m.content === 'string' && m.content.includes(marker)) {
+        if (m.content !== content) {
+          m.content = content;
+          invalidateMessageTokens(m);
+        }
+        return true;
+      }
+    }
+    this.addMessage({ role: 'system', content });
+    return false;
   }
 
   addModifiedFile(path: string) {
@@ -1481,6 +1763,7 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
     const MARK = '\n[…earlier tool output truncated in place to save context; re-run the tool if you need the full text…]';
 
     let saved = 0;
+    let rewrote = false;
     const end = Math.max(0, this.messages.length - RECENT_WINDOW);
     for (let i = 0; i < end; i++) {
       const m = this.messages[i];
@@ -1498,9 +1781,13 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
       // estimator used everywhere else (3.8 vs the native-calibrated port).
       const beforeTokens = cachedMessageTokens(m);
       m.content = shrunk;
+      rewrote = true;
       invalidateMessageTokens(m); // content mutated: drop cached token count
       saved += Math.max(0, beforeTokens - cachedMessageTokens(m));
     }
+    // P5: an in-place history rewrite is a provider prefix break (labeled
+    // 'tool-output-shrink') — record it so the metric sees every break.
+    if (rewrote) this.notePrefixBreak('tool-output-shrink');
     return saved;
   }
 
@@ -1516,6 +1803,9 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
     if (s.constraints.length) parts.push(`Constraints: ${s.constraints.join('; ')}`);
     if (s.knownErrors.length) parts.push(`Known errors: ${s.knownErrors.join('; ')}`);
     if (s.importantDecisions.length) parts.push(`Decisions: ${s.importantDecisions.join('; ')}`);
+    // S4: open obligations ride the ledger too (the probe verifies them
+    // independently — the ledger is the carry, the probe is the check).
+    if (this.obligations.length) parts.push(`Open obligations (what "done" still requires): ${this.obligations.join('; ')}`);
     return parts.join('\n');
   }
 
@@ -1529,7 +1819,12 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
   private async planCutIndex(keepFloor = this.complexPreserve ? 24 : 12): Promise<number | null> {
     const keep = keepFloor;
     if (this.messages.length <= keep) return null;
-    const native = await nativePlanCompaction(this.messages as PlanRequestMessage[], keep);
+    // The Rust planner sizes messages by their serialized JSON; with image
+    // parts in the history that pricing is meaningless (audit L-04), so
+    // image-bearing histories plan their cut with the TS walk below.
+    const native = this.messages.some((m) => messageHasImageParts(m))
+      ? null
+      : await nativePlanCompaction(this.messages as PlanRequestMessage[], keep);
     if (typeof native?.cut === 'number' && native.cut > 0 && native.cut < this.messages.length) {
       return native.cut;
     }
@@ -1576,6 +1871,10 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
     if (cutIndex === null) return;
     const dropped = this.messages.slice(0, cutIndex);
     this.messages = this.messages.slice(cutIndex);
+    // P5: compaction rewrites the history under the stable head — an
+    // EXPECTED prefix break (the cache must re-warm), recorded with its
+    // cause rather than left invisible.
+    this.notePrefixBreak('compaction');
 
     // MCH-219 (lineage compression): a PRIOR compaction's ledger is a dropped
     // system message. Losing it silently orphans earlier sessions' memory —
@@ -1606,6 +1905,7 @@ ${rules ? rules + '\n' : ''}${repoInfo}${this.skills(task, tools)}${contractSect
         decisions: this.state.importantDecisions,
         errors: this.state.knownErrors,
         filesModified: this.state.filesModified,
+        obligations: this.obligations,
       }),
       ...extractProbeFacts(dropped),
     ]);

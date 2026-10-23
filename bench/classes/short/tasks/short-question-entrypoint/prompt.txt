@@ -1,0 +1,11 @@
+This workdir holds a small Node app: main.js, app.js, util.js, worker.js and
+a package.json. Read the code and answer two questions:
+
+1. Which file is the app's entry point - the file Node executes first when
+   the app is started the way package.json says to start it?
+2. In util.js, which exported function converts a millisecond count into a
+   human string such as "2m 5s"?
+
+Write your answers into a new file answer.txt as exactly two lines:
+  entry=<filename>
+  formatter=<functionName>

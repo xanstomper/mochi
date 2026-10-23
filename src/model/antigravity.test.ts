@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { createAntigravityProvider, computeAntigravityCost, ANTIGRAVITY_PRICING_TABLE } from './antigravity.js';
+import { createAntigravityProvider, computeAntigravityCost } from './antigravity.js';
+import { estimateCostUsd } from '../pricing.js';
 import type { ChatMessage, StreamChunk } from '../types.js';
 
 function sseBody(frames: unknown[]): string {
@@ -363,14 +364,35 @@ describe('antigravity provider', () => {
     expect(genHigh.thinkingConfig.thinkingLevel).toBe('HIGH');
   });
 
-  it('computes accurate pricing matching omp rates for all available models', () => {
-    expect(ANTIGRAVITY_PRICING_TABLE['gemini-3.8-flash']).toEqual({ in: 0.75, out: 3.75, cache: 0.075 });
-    expect(computeAntigravityCost('gemini-3.8-flash', 1000, 100)).toBeCloseTo(0.001125);
-
-    expect(ANTIGRAVITY_PRICING_TABLE['claude-sonnet-4-6']).toEqual({ in: 3.00, out: 15.00, cache: 0.30 });
+  it('prices known models through pricing.ts (the table of record)', () => {
+    // Same numbers the old shadow table carried for the Claude ids — they
+    // are pricing.ts list rates, so the totals are unchanged.
     expect(computeAntigravityCost('claude-sonnet-4-6', 1000, 100)).toBeCloseTo(0.0045);
-
-    expect(ANTIGRAVITY_PRICING_TABLE['claude-opus-4-6']).toEqual({ in: 5.00, out: 25.00, cache: 0.50 });
     expect(computeAntigravityCost('claude-opus-4-6', 1000, 100)).toBeCloseTo(0.0075);
+    // Parity with pricing.ts itself, token for token, incl. cache reads.
+    for (const model of ['claude-sonnet-4-5', 'claude-opus-4-5', 'gemini-2.5-flash', 'gemini-2.5-flash-lite']) {
+      const viaProvider = computeAntigravityCost(model, 1_000_000, 250_000, 500_000);
+      const viaTable = estimateCostUsd(model, {
+        inputTokens: 1_000_000, outputTokens: 250_000, cacheReadTokens: 500_000,
+      });
+      expect(viaTable).not.toBeNull();
+      expect(viaProvider).toBeCloseTo(viaTable!.costUsd, 10);
+    }
+    // Cache reads bill at the cache rate, not the input rate:
+    // 500k fresh @ $0.30/1M + 500k cached @ $0.03/1M = $0.165.
+    expect(computeAntigravityCost('gemini-2.5-flash', 1_000_000, 0, 500_000)).toBeCloseTo(0.165);
+  });
+
+  it('returns null (unknown) for unpriced models instead of fabricating a cost (audit L-03)', () => {
+    // Gemini 3.x ids are deliberately untabled in pricing.ts (host-dependent
+    // rates); the old shadow table priced them — and anything else — anyway.
+    expect(computeAntigravityCost('gemini-3.8-flash', 1000, 100)).toBeNull();
+    expect(computeAntigravityCost('gemini-3.5-flash', 1000, 100)).toBeNull();
+    expect(computeAntigravityCost('acme-9000-turbo', 1000, 100)).toBeNull();
+    expect(computeAntigravityCost('some-future-opus', 1000, 100)).toBeNull();
+    // The old $0 junk entries are unknown too, not free.
+    expect(computeAntigravityCost('tab_flash_lite_preview', 1000, 100)).toBeNull();
+    // No usage at all is unpriceable rather than $0.
+    expect(computeAntigravityCost('claude-sonnet-4-6', 0, 0)).toBeNull();
   });
 });

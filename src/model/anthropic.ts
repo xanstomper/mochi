@@ -66,11 +66,18 @@ export function createAnthropicProvider(config: ProviderConfig) {
   // prefix block. Without this Anthropic bills every turn at full input price
   // (~5KB system prompt × every iteration). String form when empty preserves
   // the old wire shape exactly.
-  const sysText = (msgs: ChatMessage[]) => msgs.filter((m) => m.role === 'system').map((m) => contentText(m)).join('\n');
   const sysMsg = (msgs: ChatMessage[]) => {
-    const text = sysText(msgs);
-    if (!text) return undefined;
-    return [{ type: 'text', text, cache_control: { type: 'ephemeral' } }];
+    const parts = msgs.filter((m) => m.role === 'system').map((m) => contentText(m)).filter(Boolean);
+    if (parts.length === 0) return undefined;
+    // P5: cache breakpoint on the FIRST system message only — that is the
+    // stable prompt. Later system messages are the volatile state prompt
+    // and one-shot nudges: they change every turn, and gluing them into
+    // the cached block (the old join-everything behavior) invalidated the
+    // system cache on every single turn. They still go out as system
+    // blocks, verbatim and in order — just outside the cache breakpoint.
+    return parts.map((text, i) => (i === 0
+      ? { type: 'text', text, cache_control: { type: 'ephemeral' as const } }
+      : { type: 'text', text }));
   };
   const bodyMsg = (m: ChatMessage) => {
     if (m.role === 'system') return null;

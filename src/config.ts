@@ -76,6 +76,8 @@ function envModelConfig(): Partial<MochiConfig['model']> {
     ...(baseUrl ? { baseUrl } : {}),
     ...(apiKey ? { apiKey } : {}),
     ...(model ? { model } : {}),
+    // MOCHI_MODEL is an explicit operator choice — a pin, like --model.
+    ...(model ? { modelPinned: true } : {}),
     ...(Object.keys(profiles).length ? { profiles: profiles as Record<ModelProfile, string> } : {}),
   };
 }
@@ -285,6 +287,9 @@ if (!cfg.model.failover || cfg.model.failover.length === 0) {
     cfg.safety.sandbox = process.env.MOCHI_SANDBOX;
   } else if (process.env.MOCHI_SANDBOX !== undefined && !process.env.VITEST) {
     console.error(`Unknown MOCHI_SANDBOX "${process.env.MOCHI_SANDBOX}" — must be off|auto|bubblewrap|unshare. Ignoring.`);
+  }
+  if (process.env.MOCHI_SANDBOX_NETWORK !== undefined) {
+    cfg.safety.sandboxNetwork = /^(1|true|yes)$/i.test(process.env.MOCHI_SANDBOX_NETWORK.trim());
   }
   if (process.env.MOCHI_PERMISSION_READ) cfg.permissions.read = /^(1|true|yes)$/i.test(process.env.MOCHI_PERMISSION_READ.trim());
   if (process.env.MOCHI_PERMISSION_WRITE) cfg.permissions.write = /^(1|true|yes)$/i.test(process.env.MOCHI_PERMISSION_WRITE.trim());

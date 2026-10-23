@@ -1,0 +1,10 @@
+groupby.js exports groupBy(items, keyFn): it returns an object mapping each
+key to the array of items with that key, preserving encounter order. EVERY
+item belongs to exactly one group - including items whose key is 0, the
+empty string, or false.
+
+Bug report: items silently vanish from the output whenever their group key
+happens to be falsy. A parity grouping (even/odd via x % 2) loses every even
+number.
+
+Fix groupBy so no item is dropped for having a falsy key.

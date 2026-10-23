@@ -26,6 +26,16 @@ export interface TraceCostSummary {
   pricedCalls: number;
   unpricedCalls: number;
   complete: boolean;
+  /** P5: provider-reported cached-input tokens summed across records. */
+  cacheReadTokens: number;
+  /** P5: total input tokens (fresh + cached) across records. */
+  inputTokens: number;
+  /** P5: cacheReadTokens / inputTokens over MEASURED records only.
+   *  Null = UNMEASURED (no record carried a provider cache figure) —
+   *  never a fabricated 0. */
+  cacheHitRatio: number | null;
+  /** P5: true when at least one usage record carried a cache figure. */
+  cacheMeasured: boolean;
 }
 
 interface FlatEntry { [key: string]: unknown }
@@ -43,13 +53,31 @@ export function costFromTraceEntries(entries: readonly FlatEntry[], overrides?: 
   let unpriced = 0;
   let usedProvider = false;
   let usedEstimate = false;
+  let cacheReadTokens = 0;
+  let inputTokensTotal = 0;
+  let measuredInput = 0;
+  let measuredCache = 0;
+  let measuredCalls = 0;
 
   const fold = (rec: {
     model?: string; providerCost?: number;
     inputTokens?: number; outputTokens?: number; cacheTokens?: number; totalTokens?: number;
     inputIncludesCache: boolean;
+    cacheMeasured?: boolean;
   }): void => {
     sawUsage = true;
+    // P5 cache accounting: inputTokens here is the NON-cached count for
+    // flat records and the cache-INCLUSIVE count for nested ones.
+    const totalInput = rec.inputIncludesCache
+      ? (rec.inputTokens ?? 0)
+      : (rec.inputTokens ?? 0) + (rec.cacheTokens ?? 0);
+    inputTokensTotal += totalInput;
+    cacheReadTokens += rec.cacheTokens ?? 0;
+    if (rec.cacheMeasured) {
+      measuredCalls++;
+      measuredInput += totalInput;
+      measuredCache += rec.cacheTokens ?? 0;
+    }
     if (rec.totalTokens !== undefined) tokens += rec.totalTokens;
     else if (rec.inputTokens !== undefined || rec.outputTokens !== undefined) {
       tokens += (rec.inputTokens ?? 0) + (rec.outputTokens ?? 0);
@@ -85,14 +113,19 @@ export function costFromTraceEntries(entries: readonly FlatEntry[], overrides?: 
 
   for (const e of entries) {
     if (e.kind === 'usage:updated') {
+      const ct = num(e.cacheTokens);
       fold({
         model: typeof e.model === 'string' ? e.model : undefined,
         providerCost: num(e.costUsd),
         inputTokens: num(e.inputTokens),
         outputTokens: num(e.outputTokens),
-        cacheTokens: num(e.cacheTokens),
+        cacheTokens: ct,
         totalTokens: num(e.totalTokens),
         inputIncludesCache: false,
+        // P5: the loop now stamps cacheMeasured explicitly. Older traces
+        // lack it — there, a positive cache figure is the only proof the
+        // provider reported cache data at all.
+        cacheMeasured: typeof e.cacheMeasured === 'boolean' ? e.cacheMeasured : (ct ?? 0) > 0,
       });
     }
     const nested = e.usage;
@@ -106,6 +139,9 @@ export function costFromTraceEntries(entries: readonly FlatEntry[], overrides?: 
         cacheTokens: num(u.cachedTokens) ?? num(u.cacheTokens),
         totalTokens: num(u.totalTokens),
         inputIncludesCache: true,
+        // Nested usage objects carry the provider's cachedTokens key only
+        // when the provider reported one (parsers leave it undefined).
+        cacheMeasured: num(u.cachedTokens) !== undefined || num(u.cacheTokens) !== undefined,
       });
     }
   }
@@ -120,6 +156,10 @@ export function costFromTraceEntries(entries: readonly FlatEntry[], overrides?: 
     pricedCalls: priced,
     unpricedCalls: unpriced,
     complete,
+    cacheReadTokens,
+    inputTokens: inputTokensTotal,
+    cacheHitRatio: measuredCalls > 0 && measuredInput > 0 ? measuredCache / measuredInput : null,
+    cacheMeasured: measuredCalls > 0,
   };
 }
 

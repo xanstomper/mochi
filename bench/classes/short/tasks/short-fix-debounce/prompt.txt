@@ -1,0 +1,10 @@
+debounce.js exports debounce(fn, wait, scheduler): a trailing-edge debounce.
+The scheduler parameter ({ setTimeout, clearTimeout }) is injectable so tests
+can drive a fake clock; it defaults to the global timers. Each call resets
+the timer; fn runs exactly once, `wait` ms after the LAST call, with the
+last call's arguments.
+
+Bug report: the debounced function never runs at all. Calls are accepted,
+no error is raised, and then nothing ever happens.
+
+Fix debounce.js.

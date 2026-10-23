@@ -1,0 +1,10 @@
+The utility in clamp.js exports clamp(value, min, max), which should constrain
+a value to the inclusive range [min, max]: below the range returns min, inside
+returns the value, above returns max.
+
+Bug report: clamping a value ABOVE the range returns the range minimum
+instead of the maximum - for example `node run.js` prints 0 where it should
+print 10.
+
+Fix clamp.js (do not change run.js). The verifier checks the full contract,
+including negative ranges and fractional values, not just the run.js example.

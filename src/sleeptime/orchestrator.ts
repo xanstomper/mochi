@@ -7,12 +7,13 @@
 //
 // Steps (in order):
 //   1. repair     — demoted skills get a repair attempt and ALWAYS re-enter
-//                   via the probation path. The patcher itself is D8
-//                   (skill-repair, building in parallel); until it lands,
-//                   the default port is a clearly-labelled STUB against the
-//                   current curator/probation APIs (stampSkillBirth) — see
-//                   createCuratorStubRepairPort. Inject a real SkillRepairPort
-//                   to replace it without touching the orchestrator.
+//                   via the probation path. The default port is the real D8
+//                   adapter (createSkillRepairPort over skills/skill-repair):
+//                   a deterministic, model-free patch compiled from the
+//                   skill's recorded failure trajectories — the step
+//                   reserves $0 against the cap. (A labelled stub,
+//                   createCuratorStubRepairPort, remains for tests that pin
+//                   the probation-re-entry mechanics; it is NOT a default.)
 //   2. curator    — the existing skill curator pass (lifecycle transitions,
 //                   lesson promotion, dedup, age archival). Model-free, $0.
 //   3. gate       — the frozen regression gate's trust anchor: the frozen
@@ -23,9 +24,12 @@
 //   4. health     — proactive repo health scan (Wave O3): read-only checks
 //                   (tests on HEAD, deps, TODOs, dead code, hotspots) whose
 //                   ranked digest rides in this report. Model-free, $0.
-//   5. curriculum — failure-curriculum practice tasks (D10, also building in
-//                   parallel). Default port plans nothing and says so;
-//                   inject a CurriculumPort when D10 lands.
+//   5. curriculum — failure-curriculum practice tasks (D10). The default
+//                   port is the real adapter (createCurriculumPort over
+//                   curriculum/curriculum): it plans tasks for the source
+//                   files implicated by failed runs and generates VALIDATED
+//                   bug-injection tasks inside scratch copies — model-free,
+//                   and the user's tree is never mutated.
 //
 // HARD spend cap: every unit of work declares an estimated usage up front.
 // The estimate is priced through the Phase C price table (pricing.ts),
@@ -58,7 +62,16 @@ import { atomicWriteFileSync } from '../core/atomic-fs.js';
 import { loadSkillUsage } from '../skills/skills.js';
 import { stampSkillBirth } from '../skills/skill-manager.js';
 import { defaultCuratorConfig, runCurator } from '../skills/skill-curator.js';
+import {
+  attemptSkillRepair, loadExportedTrajectories, type RepairTrajectoryInput,
+} from '../skills/skill-repair.js';
+import {
+  generateCurriculum, saveCurriculumTask, enumerateMutationCandidates,
+  isFrozenPath, isTestPath,
+} from '../curriculum/curriculum.js';
+import { detectRepo } from '../repo/repo.js';
 import { loadFrozenSet } from '../evals/regression-gate.js';
+import { isProvenCell, refreshRoutingTable } from '../observability/routing-table.js';
 import { createHealthScanStep } from '../health/health-step.js';
 
 export class SleeptimeError extends Error {
@@ -325,32 +338,47 @@ export interface SkillRepairPort {
     candidate: RepairCandidate,
     ctx: SleeptimeStepContext,
   ): Promise<UnitOutcome> | UnitOutcome;
+  /** Declared per-repair usage, committed against the hard cap when a
+   *  repair unit starts. Omit = the repair step reserves
+   *  DEFAULT_REPAIR_ESTIMATE (the safe default for a port whose cost shape
+   *  is unknown — e.g. an injected model-calling patcher). `null` = the
+   *  port is model-free and its units declare no usage at all: nothing is
+   *  reserved, so a $0 cap still lets the repairs run. The bundled D8
+   *  adapter declares null — D8 repair is deterministic and calls no
+   *  model, and reserving a model budget for it would crowd out real
+   *  spend (audit L-01). */
+  estimateUsage?: SleeptimeUsage | null;
 }
 
-/** STUB repair port against the CURRENT curator/probation APIs, used until
- *  D8's skill-repair module lands. Candidates are registry records in the
- *  'demoted' state (the curator's evidence-based demotion). The stub applies
- *  NO body patch — D8 owns patching from failure trajectories — it only
- *  re-enters the skill via the existing probation path (stampSkillBirth),
- *  which is the safety-critical half of the D8 contract: a repaired skill is
- *  NEVER returned straight to active; promotion still requires 3 verified
- *  gate passes plus the doctor replay, enforced by the curator. Every
- *  outcome detail is labelled STUB so the morning report never presents
- *  this as a real patch. */
+/** Repair candidates from the skill registry: records in the 'demoted'
+ *  state (the curator's evidence-based demotion), with the recorded
+ *  demotion reason. Shared by the stub and the real D8 adapter so both
+ *  plan over exactly the same pool. */
+export function demotedRepairCandidates(projectDir: string): RepairCandidate[] {
+  const out: RepairCandidate[] = [];
+  for (const [name, rec] of loadSkillUsage(projectDir)) {
+    if (rec.state !== 'demoted') continue;
+    out.push({
+      name,
+      reason: rec.lastDemotionReason ?? 'demoted by curator evidence (no reason recorded)',
+      ...(rec.stateAt !== undefined ? { stateAt: rec.stateAt } : {}),
+    });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** LEGACY stub repair port — retained for tests that pin the
+ *  probation-re-entry mechanics in isolation; it is NOT used by any
+ *  default pipeline (the D8 adapter below is). The stub applies NO body
+ *  patch — it only re-enters the skill via the existing probation path
+ *  (stampSkillBirth), which is the safety-critical half of the D8
+ *  contract: a repaired skill is NEVER returned straight to active;
+ *  promotion still requires 3 verified gate passes plus the doctor
+ *  replay, enforced by the curator. Every outcome detail is labelled
+ *  STUB so a report never presents this as a real patch. */
 export function createCuratorStubRepairPort(): SkillRepairPort {
   return {
-    listCandidates(projectDir: string): RepairCandidate[] {
-      const out: RepairCandidate[] = [];
-      for (const [name, rec] of loadSkillUsage(projectDir)) {
-        if (rec.state !== 'demoted') continue;
-        out.push({
-          name,
-          reason: rec.lastDemotionReason ?? 'demoted by curator evidence (no reason recorded)',
-          ...(rec.stateAt !== undefined ? { stateAt: rec.stateAt } : {}),
-        });
-      }
-      return out.sort((a, b) => a.name.localeCompare(b.name));
-    },
+    listCandidates: demotedRepairCandidates,
     repairOne(projectDir: string, candidate: RepairCandidate): UnitOutcome {
       const state = stampSkillBirth(projectDir, candidate.name, 'probation');
       if (state !== 'probation') {
@@ -358,10 +386,46 @@ export function createCuratorStubRepairPort(): SkillRepairPort {
       }
       return {
         detail:
-          `STUB repair (D8 patcher not yet integrated): no skill-body patch applied. ` +
+          `STUB repair (legacy test double): no skill-body patch applied. ` +
           `'${candidate.name}' re-entered PROBATION via stampSkillBirth — it must re-earn activation ` +
           `with verified gate passes. Demotion evidence was: ${candidate.reason}`,
       };
+    },
+  };
+}
+
+/** The REAL repair port (audit L-01): an adapter over D8's skill-repair
+ *  module. repairOne runs attemptSkillRepair — a deterministic patch
+ *  compiled from the failure trajectories of runs that loaded the skill,
+ *  written back through the probation path (never straight to active),
+ *  capped at MAX_SKILL_REPAIR_ATTEMPTS per skill. Refusals (not demoted /
+ *  attempts exhausted / no failure evidence) are normal outcomes: the unit
+ *  completes with the refusal in its detail and the skill stays demoted.
+ *  Hard failures (the patch could not be written) throw, so the unit is
+ *  reported failed and retried on a later night. Model-free: the port
+ *  declares estimateUsage null and no cap budget is reserved. */
+export function createSkillRepairPort(): SkillRepairPort {
+  const corpusByProject = new Map<string, RepairTrajectoryInput[]>();
+  const corpusFor = (projectDir: string): RepairTrajectoryInput[] => {
+    let corpus = corpusByProject.get(projectDir);
+    if (!corpus) {
+      corpus = loadExportedTrajectories(projectDir);
+      corpusByProject.set(projectDir, corpus);
+    }
+    return corpus;
+  };
+  return {
+    estimateUsage: null,
+    listCandidates: demotedRepairCandidates,
+    repairOne(projectDir: string, candidate: RepairCandidate, ctx: SleeptimeStepContext): UnitOutcome {
+      const r = attemptSkillRepair(projectDir, candidate.name, corpusFor(projectDir), { now: ctx.now.getTime() });
+      if (r.status === 'failed') {
+        throw new Error(`D8 repair failed for '${candidate.name}': ${r.reason}`);
+      }
+      if (r.status === 'refused') {
+        return { detail: `repair refused — '${candidate.name}' stays demoted: ${r.reason}` };
+      }
+      return { detail: `D8 repair applied: ${r.reason}` };
     },
   };
 }
@@ -406,33 +470,201 @@ export interface CurriculumPort {
   ): Promise<UnitOutcome> | UnitOutcome;
 }
 
-/** Default curriculum port until D10 lands: plans nothing, and the step
- *  note in the morning report says exactly that. */
+/** LEGACY unavailable curriculum port — plans nothing by design. Retained
+ *  so tests can pin the unavailable behavior; it is NOT used by any
+ *  default pipeline (the D10 adapter below is). */
 export function createUnavailableCurriculumPort(): CurriculumPort {
   return {
     planTasks(): CurriculumTaskSpec[] {
       return [];
     },
     generateOne(): UnitOutcome {
-      throw new Error('curriculum port unavailable (D10 not integrated)');
+      throw new Error('curriculum port unavailable (explicit legacy double — the production adapter is createCurriculumPort)');
+    },
+  };
+}
+
+// ─── D10 curriculum adapter ──────────────────────────────────────────────
+
+const CURRICULUM_FAILING_VERDICTS: ReadonlySet<string> = new Set(['fail', 'partial', 'blocked']);
+const CURRICULUM_SOURCE_EXTS = [
+  '.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs',
+  '.py', '.go', '.rs', '.java', '.rb', '.php', '.cs', '.cpp', '.cc', '.cxx', '.h', '.hpp',
+] as const;
+/** Planning never scans more source than this per file — a curriculum
+ *  candidate is a module, not a bundle. */
+const CURRICULUM_MAX_SOURCE_BYTES = 512_000;
+/** Upper bound on tasks one plan offers; the step slices to its own cap. */
+const CURRICULUM_MAX_PLANNED = 8;
+
+/** Pull candidate file paths out of recorded tool-call args: walk strings
+ *  (and string tokens inside command strings) and keep anything shaped
+ *  like a source-file path. Trace args are already redacted; this only
+ *  reads path-shaped values, never contents. */
+function extractArgPaths(args: unknown, out: Set<string>, depth = 0): void {
+  if (depth > 6 || args === null || args === undefined) return;
+  if (typeof args === 'string') {
+    for (const tok of args.split(/[\s'"`,;()[\]{}<>]+/)) {
+      const t = tok.replace(/^\.\//, '');
+      if (t && !t.startsWith('http') && CURRICULUM_SOURCE_EXTS.some((e) => t.endsWith(e))) out.add(t);
+    }
+    return;
+  }
+  if (Array.isArray(args)) {
+    for (const v of args) extractArgPaths(v, out, depth + 1);
+    return;
+  }
+  if (typeof args === 'object') {
+    for (const v of Object.values(args as Record<string, unknown>)) extractArgPaths(v, out, depth + 1);
+  }
+}
+
+/** Normalize an implicated path to a repo-relative posix path the
+ *  curriculum guards will accept, or null when it is not a plausible
+ *  in-tree source file. The D10 module re-checks every guard at
+ *  generation time (frozen set, eval blocklist, test files) — this filter
+ *  only keeps planning cheap and honest. */
+function normalizeImplicatedPath(raw: string, projectDir: string): string | null {
+  let rel = raw.replace(/\\/g, '/');
+  if (rel.startsWith('/')) {
+    const root = projectDir.replace(/\\/g, '/');
+    if (!rel.startsWith(`${root}/`)) return null;
+    rel = rel.slice(root.length + 1);
+  }
+  rel = rel.replace(/^\.\//, '');
+  if (!rel || rel.startsWith('../') || rel.includes('/../')) return null;
+  if (rel.split('/').some((s) => s === 'node_modules' || s === '.git' || s === '.mochi')) return null;
+  if (isFrozenPath(rel) || isTestPath(rel)) return null;
+  return rel;
+}
+
+/** The REAL curriculum port (audit L-01): an adapter over D10's
+ *  curriculum module. Planning is failure-driven and read-only: a source
+ *  file becomes a candidate when a FAILED run's tool calls touched it
+ *  (verdict fail/partial/blocked, or any failed step), it exists in the
+ *  tree, it is not a test/frozen file, and it has at least one flippable
+ *  operator to mutate. Without a detectable test command there is no
+ *  exact verifier, so nothing is planned. Generation delegates to
+ *  generateCurriculum, which validates the injected bug in a scratch
+ *  copy (baseline green → mutation flips a test → restore green) and
+ *  never touches the user's tree; the validated task is saved under
+ *  .mochi/curriculum/. Generation is model-free — tasks cost tokens only
+ *  when an agent later practises them. */
+export function createCurriculumPort(): CurriculumPort {
+  const corpusByProject = new Map<string, RepairTrajectoryInput[]>();
+  const planById = new Map<string, { sourceFile: string; testCommand: string }>();
+  const corpusFor = (projectDir: string): RepairTrajectoryInput[] => {
+    let corpus = corpusByProject.get(projectDir);
+    if (!corpus) {
+      corpus = loadExportedTrajectories(projectDir);
+      corpusByProject.set(projectDir, corpus);
+    }
+    return corpus;
+  };
+  return {
+    planTasks(projectDir: string): CurriculumTaskSpec[] {
+      const testCommand = detectRepo(projectDir).testCommand;
+      if (!testCommand) return [];
+      const corpus = corpusFor(projectDir);
+      if (corpus.length === 0) return [];
+      // Score implicated files: failed-step touches outweigh mere presence
+      // in a failed run; order is fully deterministic for stable unit keys.
+      const scores = new Map<string, { failed: number; total: number }>();
+      for (const rec of corpus) {
+        const runFailed = CURRICULUM_FAILING_VERDICTS.has(rec.verification?.verdict ?? '')
+          || (rec.steps ?? []).some((s) => !s.ok);
+        if (!runFailed) continue;
+        for (const step of rec.steps ?? []) {
+          const paths = new Set<string>();
+          extractArgPaths(step.args, paths);
+          for (const raw of paths) {
+            const rel = normalizeImplicatedPath(raw, projectDir);
+            if (!rel) continue;
+            const cur = scores.get(rel) ?? { failed: 0, total: 0 };
+            cur.total += 1;
+            if (!step.ok) cur.failed += 1;
+            scores.set(rel, cur);
+          }
+        }
+      }
+      const ranked = [...scores.entries()].sort((a, b) =>
+        b[1].failed - a[1].failed || b[1].total - a[1].total || a[0].localeCompare(b[0]));
+      const specs: CurriculumTaskSpec[] = [];
+      for (const [rel] of ranked) {
+        if (specs.length >= CURRICULUM_MAX_PLANNED) break;
+        const abs = join(projectDir, rel);
+        if (!existsSync(abs)) continue;
+        let source: string;
+        try {
+          source = readFileSync(abs, 'utf8');
+        } catch {
+          continue;
+        }
+        if (source.length > CURRICULUM_MAX_SOURCE_BYTES) continue;
+        if (enumerateMutationCandidates(source, 1).length === 0) continue;
+        const id = `curr-${rel.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-${createHash('sha256').update(rel).digest('hex').slice(0, 8)}`;
+        planById.set(id, { sourceFile: rel, testCommand });
+        specs.push({ id, title: `Failure-curriculum practice: repair a validated regression in ${rel}` });
+      }
+      return specs;
+    },
+    async generateOne(projectDir: string, task: CurriculumTaskSpec): Promise<UnitOutcome> {
+      const planned = planById.get(task.id);
+      if (!planned) {
+        throw new Error(`curriculum adapter has no plan for task '${task.id}' — planTasks must run on the same port instance first`);
+      }
+      const { tasks, skipped } = await generateCurriculum({
+        repoRoot: projectDir,
+        sourceFiles: [planned.sourceFile],
+        testCommand: planned.testCommand,
+        maxTasks: 1,
+      });
+      const generated = tasks[0];
+      if (!generated) {
+        const skip = skipped[0];
+        return {
+          detail:
+            `no validated task from ${planned.sourceFile}: ${skip?.reason ?? 'no mutation flipped a test'} ` +
+            `— the module was left untouched and nothing was saved`,
+        };
+      }
+      const savedTo = saveCurriculumTask(generated, join(mochiStateDir(projectDir), 'curriculum'));
+      return {
+        detail:
+          `generated validated practice task ${generated.id} from ${generated.sourceFile} ` +
+          `(mutation ${generated.mutation.from} → ${generated.mutation.to}, ${generated.mutation.difficulty}; ` +
+          `FAIL_TO_PASS: ${generated.failToPass.join(', ')}); saved to ${savedTo}. ` +
+          `Generation is model-free and the source tree was never modified.`,
+      };
     },
   };
 }
 
 // ─── Default steps ───────────────────────────────────────────────────────
 
-/** Model + token reservation for one D8 repair attempt, priced from the
- *  Phase C table (sonnet: 8k in + 2k out ≈ $0.054). The stub makes no model
- *  calls, but the reservation is still committed when the unit runs — it is
- *  labelled ESTIMATED in the report's spend split, and it is the budget a
- *  real D8 patcher will actually consume when the port is swapped. */
+/** Fallback reservation for a repair port that does not declare its own
+ *  cost shape: one model-calling repair attempt (sonnet: 8k in + 2k out ≈
+ *  $0.054), priced from the Phase C table, committed when the unit runs
+ *  and labelled ESTIMATED in the report's spend split. The bundled D8
+ *  adapter is model-free and declares estimateUsage: null, so the
+ *  production pipeline reserves $0 for repairs — this constant only
+ *  prices INJECTED ports that stay silent about their cost, where
+ *  reserving is the safe default under a hard cap (audit L-01). */
 export const DEFAULT_REPAIR_ESTIMATE: SleeptimeUsage = {
   model: 'claude-sonnet-4-5',
   inputTokens: 8_000,
   outputTokens: 2_000,
 };
 
-export function createRepairStep(port: SkillRepairPort = createCuratorStubRepairPort(), estimate: SleeptimeUsage = DEFAULT_REPAIR_ESTIMATE): SleeptimeStep {
+export function createRepairStep(port: SkillRepairPort = createSkillRepairPort(), estimate?: SleeptimeUsage): SleeptimeStep {
+  // Reservation resolution: an explicit step-level estimate wins; else the
+  // port's own declaration (null = model-free, declare nothing); else the
+  // DEFAULT_REPAIR_ESTIMATE fallback for silent ports.
+  const resolvedEstimate: SleeptimeUsage | null = estimate !== undefined
+    ? estimate
+    : port.estimateUsage !== undefined
+      ? port.estimateUsage
+      : DEFAULT_REPAIR_ESTIMATE;
   return {
     id: 'repair',
     title: 'Skill repair (demoted → probation)',
@@ -443,7 +675,7 @@ export function createRepairStep(port: SkillRepairPort = createCuratorStubRepair
         return {
           key: `repair:${c.name}:${c.stateAt ?? 'nostate'}:${reasonHash}`,
           title: `Repair demoted skill '${c.name}'`,
-          estimatedUsage: estimate,
+          ...(resolvedEstimate ? { estimatedUsage: resolvedEstimate } : {}),
           payload: { name: c.name, reason: c.reason, ...(c.stateAt !== undefined ? { stateAt: c.stateAt } : {}) },
         };
       });
@@ -506,7 +738,7 @@ export function createGateStep(port: GatePort = createFrozenIntegrityGatePort())
   };
 }
 
-export function createCurriculumStep(port: CurriculumPort = createUnavailableCurriculumPort(), maxTasks = 3): SleeptimeStep {
+export function createCurriculumStep(port: CurriculumPort = createCurriculumPort(), maxTasks = 3): SleeptimeStep {
   return {
     id: 'curriculum',
     title: 'Failure curriculum generation',
@@ -523,7 +755,7 @@ export function createCurriculumStep(port: CurriculumPort = createUnavailableCur
         units,
         note: tasks.length
           ? `${tasks.length} practice task(s) planned`
-          : 'no curriculum tasks planned (D10 curriculum module not integrated — default port is a no-op)',
+          : 'no curriculum tasks planned — no failed run implicates a mutable source file with a detectable test command',
       };
     },
     async execute(unit: PlannedUnit, ctx: SleeptimeStepContext): Promise<UnitOutcome> {
@@ -546,6 +778,30 @@ export interface SleeptimePorts {
   curriculum?: CurriculumPort;
 }
 
+/** Routing-stats step (B22): re-derive the cost-per-solve routing table
+ *  from the workspace's recorded run traces, so tomorrow's runs start on
+ *  the cheapest PROVEN model per task kind. Pure local accounting — no
+ *  model calls, no spend reservation; it reads traces and writes one JSON
+ *  state file. Runs last: the night's own gate/curriculum runs are not in
+ *  this project's traces (they execute in task workdirs), so ordering is
+ *  about report readability, not data dependencies. */
+export function createRoutingStatsStep(): SleeptimeStep {
+  return {
+    id: 'routing-stats',
+    title: 'Cost-per-solve routing table refresh',
+    plan(): PlannedStep {
+      return { units: [{ key: 'routing-stats:refresh', title: 'Re-derive routing table from run traces' }] };
+    },
+    execute(_unit: PlannedUnit, ctx: SleeptimeStepContext): UnitOutcome {
+      const table = refreshRoutingTable(mochiStateDir(ctx.projectDir));
+      const proven = table.cells.filter(isProvenCell).length;
+      return {
+        detail: `routing table re-derived: ${table.runsConsidered} runs (${table.runsSkipped} skipped), ${table.cells.length} (kind × model) cells, ${proven} proven. Stored at state/routing-table.json.`,
+      };
+    },
+  };
+}
+
 export function defaultSleeptimeSteps(opts: SleeptimeOptions = {}): SleeptimeStep[] {
   return [
     createRepairStep(opts.ports?.repair),
@@ -553,6 +809,7 @@ export function defaultSleeptimeSteps(opts: SleeptimeOptions = {}): SleeptimeSte
     createGateStep(opts.ports?.gate),
     createHealthScanStep(),
     createCurriculumStep(opts.ports?.curriculum, opts.maxCurriculumTasks ?? 3),
+    createRoutingStatsStep(),
   ];
 }
 

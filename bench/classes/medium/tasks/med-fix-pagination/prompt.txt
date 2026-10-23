@@ -1,0 +1,13 @@
+A small items API lives in api/: data.js (25 items), config.js (the
+documented page size), query.js (a pagination helper) and server.js (a
+request handler for paths like "/items?page=2").
+
+Bug report: API consumers say pagination is broken end-to-end. Page 1 comes
+back with 20 items although the documented page size is 10, and a client
+that walks pages expecting 10 items each ends up with a hole in the middle
+of the catalogue. The pagination helper's own unit checks pass - slicing a
+list with an explicit size works fine.
+
+Find the fault and fix it so the documented page-size contract holds
+through the handler: page 1 -> items 1-10, page 2 -> 11-20, page 3 -> 21-25,
+page 4 -> empty, with no duplicates or gaps across pages.
