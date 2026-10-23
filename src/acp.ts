@@ -74,10 +74,107 @@ export interface RpcResponse {
 }
 
 /** Host hooks for the RPC core. `clientRequest` lets the agent send a request
- *  TO the client and await its answer (used for real permission gating). When
- *  absent (headless/tests), the agent runs under mochi's own policy. */
+ *  TO the client and await its answer (used for real permission gating and
+ *  elicitation). `state` carries per-connection state the initialize handler
+ *  fills in (the client's advertised capabilities) so later calls can gate
+ *  client-dependent behaviour. When absent (headless/tests), the agent runs
+ *  under mochi's own policy and never contacts the client. */
 export interface AcpRpcOptions {
   clientRequest?: (method: string, params: Record<string, unknown>) => Promise<unknown>;
+  state?: AcpConnectionState;
+}
+
+/** The client capabilities ACP v1 lets us act on. Everything defaults to
+ *  false ("unsupported") when initialize arrives without capabilities. */
+export interface AcpClientCapabilities {
+  /** clientCapabilities.elicitation.form — agent may send elicitation/create
+   *  (form mode) and the client will render it to the user. */
+  elicitationForm: boolean;
+  fsReadTextFile: boolean;
+  fsWriteTextFile: boolean;
+  terminal: boolean;
+  /** Verbatim capability object, for diagnostics and future gates. */
+  raw: Record<string, unknown>;
+}
+
+export interface AcpConnectionState {
+  clientCapabilities: AcpClientCapabilities;
+}
+
+function truthy(v: unknown): boolean {
+  return v === true || (v !== null && typeof v === 'object');
+}
+
+/** Parse the initialize params' clientCapabilities into the gates we use.
+ *  Lenient by design: an absent/unknown shape means "unsupported defaults". */
+export function parseClientCapabilities(raw: unknown): AcpClientCapabilities {
+  const r = (raw !== null && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const fs = (r.fs !== null && typeof r.fs === 'object' ? r.fs : {}) as Record<string, unknown>;
+  const el = (r.elicitation !== null && typeof r.elicitation === 'object' ? r.elicitation : {}) as Record<string, unknown>;
+  return {
+    elicitationForm: truthy(r.elicitation) && truthy(el.form),
+    fsReadTextFile: fs.readTextFile === true,
+    fsWriteTextFile: fs.writeTextFile === true,
+    terminal: r.terminal === true,
+    raw: r,
+  };
+}
+
+/** Bridge one ask_question round to the client via elicitation/create (form
+ *  mode). Accept → the answered labels (or free text); decline/cancel → a
+ *  skipped answer; client error → skipped (fail-closed, never hang). */
+async function elicitAnswer(
+  clientRequest: (method: string, params: Record<string, unknown>) => Promise<unknown>,
+  sessionId: string,
+  q: import('./tools/user-prompt.js').UserPromptQuestion,
+): Promise<import('./tools/user-prompt.js').UserPromptAnswer> {
+  const base = { question: q.question, header: q.header };
+  try {
+    const res = await clientRequest('elicitation/create', {
+      sessionId,
+      mode: 'form',
+      message: q.question,
+      fields: [{
+        type: 'option',
+        name: q.header || 'answer',
+        options: q.options.map((o) => ({ label: o.label, description: o.description })),
+        multiSelect: q.multiSelect === true,
+      }],
+    });
+    const r = (res !== null && typeof res === 'object' ? res : {}) as Record<string, unknown>;
+    const action = typeof r.action === 'string' ? r.action : 'cancel';
+    if (action !== 'accept') return { ...base, selected: [], skipped: true };
+    const labels = q.options.map((o) => o.label);
+    const picked: string[] = [];
+    let freeText: string | undefined;
+    const take = (v: unknown) => {
+      const s = String(v ?? '').trim();
+      if (!s) return;
+      if (labels.includes(s)) picked.push(s);
+      else freeText = s;
+    };
+    if (Array.isArray(r.content)) r.content.forEach(take);
+    else take(r.content);
+    return { ...base, selected: picked, freeText };
+  } catch {
+    return { ...base, selected: [], skipped: true };
+  }
+}
+
+/** PromptUserFn over the ACP client: each question becomes one
+ *  elicitation/create (form mode) round-trip. Installed on the session
+ *  runtime only when the client advertised elicitation.form. */
+export function elicitationPromptUser(
+  clientRequest: (method: string, params: Record<string, unknown>) => Promise<unknown>,
+  sessionId: string,
+): import('./tools/user-prompt.js').PromptUserFn {
+  return async (req) => {
+    const answers = [];
+    for (const q of req.questions) {
+      answers.push(await elicitAnswer(clientRequest, sessionId, q));
+    }
+    return { answers };
+  };
 }
 
 /** Extract user text from a spec-valid prompt payload (ContentBlock[] array
@@ -127,6 +224,12 @@ export async function handleRpc(
   try {
     switch (method) {
       case 'initialize':
+        // Record what the client can do; later calls gate on it (parse is
+        // lenient — omitted/unknown shapes store "unsupported" defaults).
+        // v1-clean negotiation: whatever version the client asks for, we
+        // answer with OUR protocol version (ACP v2 is DRAFT and is neither
+        // implemented nor advertised).
+        if (opts.state) opts.state.clientCapabilities = parseClientCapabilities(params.clientCapabilities);
         return {
           id,
           result: {
@@ -135,7 +238,8 @@ export async function handleRpc(
               loadSession: true,
               sessionCapabilities: { list: {}, delete: {}, additionalDirectories: {}, resume: {}, close: {} },
               promptCapabilities: { image: false, audio: false, embeddedContext: true },
-              mcpCapabilities: { http: true, sse: true },
+              // mcpCapabilities deliberately omitted: params.mcpServers is
+              // not wired yet, and we advertise only what works.
               authMethods: [
                 { id: 'agent', name: 'Agent', description: 'Agent handles authentication internally (no external auth)' }
               ],
@@ -147,7 +251,7 @@ export async function handleRpc(
         const sid = randomUUID();
         const sessionCwd = typeof params.cwd === 'string' && params.cwd ? resolve(params.cwd) : cwd;
         const additionalDirectories = Array.isArray(params.additionalDirectories)
-          ? params.additionalDirectories.map((d: unknown) => String(d))
+          ? params.additionalDirectories.map((d: unknown) => resolve(String(d)))
           : [];
         const runtime = Runtime.create({ cwd: sessionCwd });
         sessions.set(sid, { id: sid, cwd: sessionCwd, runtime, additionalDirectories });
@@ -235,6 +339,16 @@ export async function handleRpc(
           });
           setGate = true;
         }
+        // Elicitation bridge (ACP v1): when the client advertises
+        // elicitation.form, route the agent's ask_question prompts to the
+        // editor as elicitation/create (form mode) instead of falling back
+        // to headless defaults. Without the capability nothing is sent —
+        // the run stays headless-deterministic.
+        let setPromptUser = false;
+        if (opts.clientRequest && opts.state?.clientCapabilities.elicitationForm) {
+          session.runtime.setPromptUser(elicitationPromptUser(opts.clientRequest, sid));
+          setPromptUser = true;
+        }
         let stopReason = 'end_turn';
         try {
           if (session.loadedGoal) {
@@ -257,6 +371,7 @@ export async function handleRpc(
         } finally {
           off();
           if (setGate) session.runtime.setApprovalHandler(undefined);
+          if (setPromptUser) session.runtime.setPromptUser(undefined);
         }
         return { id, result: { stopReason } };
       }
@@ -271,6 +386,12 @@ export async function handleRpc(
         const sid = String(params.sessionId ?? '');
         const session = sessions.get(sid);
         if (!session) return { id, error: { code: -32602, message: `Unknown session ${sid}` } };
+        // additionalDirectories is supported on all session-setup requests
+        // (new/load/resume); v1 spec carries absolute paths — resolve() keeps
+        // us honest if a client sends a relative one.
+        if (Array.isArray(params.additionalDirectories)) {
+          session.additionalDirectories = params.additionalDirectories.map((d: unknown) => resolve(String(d)));
+        }
         const goalId = String(params.goalId ?? '');
         if (goalId) {
           const goal = session.runtime.workspace.loadGoal(goalId);
@@ -330,9 +451,16 @@ export async function handleRpc(
       case 'session/resume': {
         const sid = String(params.sessionId ?? '');
         const sessionCwd = typeof params.cwd === 'string' && params.cwd ? resolve(params.cwd) : cwd;
-        if (sessions.has(sid)) return { id, result: {} };
+        const additionalDirectories = Array.isArray(params.additionalDirectories)
+          ? params.additionalDirectories.map((d: unknown) => resolve(String(d)))
+          : undefined;
+        if (sessions.has(sid)) {
+          // Resume of a live session also refreshes its extra workspace roots.
+          if (additionalDirectories) sessions.get(sid)!.additionalDirectories = additionalDirectories;
+          return { id, result: {} };
+        }
         const runtime = Runtime.create({ cwd: sessionCwd });
-        const session: AcpSession = { id: sid, cwd: sessionCwd, runtime };
+        const session: AcpSession = { id: sid, cwd: sessionCwd, runtime, additionalDirectories };
         // Reconnect to a persisted goal (not a blank runtime): the next
         // session/prompt then continues the goal's task decomposition instead
         // of silently restarting from scratch, which is what resume means.
@@ -425,6 +553,9 @@ export async function handleRpc(
 /** Run the ACP server until stdin closes. `cwd` is where sessions default. */
 export async function serverLoop(cwd: string): Promise<void> {
   const sessions = new Map<string, AcpSession>();
+  // Per-connection state: initialize records the client's advertised
+  // capabilities here; session/prompt gates elicitation on it.
+  const state: AcpConnectionState = { clientCapabilities: parseClientCapabilities(undefined) };
   // Per-session prompt queue: ACP clients (VS Code, JetBrains) send
   // session/prompt while a previous prompt is still streaming. Overlapping
   // Runtime.goals runs on one session corrupt abort state + transcript, so
@@ -481,7 +612,7 @@ export async function serverLoop(cwd: string): Promise<void> {
       const run = prev.catch(() => {}).then(async () => {
         const res = await handleRpc(msg, sessions, cwd, (sessionId, update) => {
           send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update } });
-        }, { clientRequest });
+        }, { clientRequest, state });
         if (!isNotification) send({ jsonrpc: '2.0', ...res });
         if (msg.method === 'shutdown') process.exit(0);
       });
@@ -494,7 +625,7 @@ export async function serverLoop(cwd: string): Promise<void> {
     void (async () => {
       const res = await handleRpc(msg, sessions, cwd, (sessionId, update) => {
         send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update } });
-      }, { clientRequest });
+      }, { clientRequest, state });
       if (!isNotification) send({ jsonrpc: '2.0', ...res });
       if (msg.method === 'shutdown') process.exit(0);
     })();

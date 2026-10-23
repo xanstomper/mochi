@@ -1,6 +1,6 @@
 // ACP protocol core: in-process unit tests (no spawn, no dist dependency).
 import { describe, it, expect } from 'vitest';
-import { handleRpc, type AcpSession } from './acp.js';
+import { handleRpc, parseClientCapabilities, elicitationPromptUser, type AcpSession, type AcpConnectionState } from './acp.js';
 
 function freshSessions(): Map<string, AcpSession> {
   return new Map();
@@ -456,5 +456,113 @@ describe('ACP prompt text extraction + tool kinds', () => {
     for (const s of sessions.values()) { try { s.runtime.close(); } catch { /* best-effort */ } }
     rmSync(dir, { recursive: true, force: true });
   }, 120_000);
+});
+
+describe('ACP v1 completeness (W3-2)', () => {
+  it('parseClientCapabilities: full shape parses; omission stores unsupported defaults', () => {
+    const full = parseClientCapabilities({
+      fs: { readTextFile: true, writeTextFile: true },
+      terminal: true,
+      elicitation: { form: {} },
+    });
+    expect(full.elicitationForm).toBe(true);
+    expect(full.fsReadTextFile).toBe(true);
+    expect(full.fsWriteTextFile).toBe(true);
+    expect(full.terminal).toBe(true);
+    const bare = parseClientCapabilities(undefined);
+    expect(bare.elicitationForm).toBe(false);
+    expect(bare.fsReadTextFile).toBe(false);
+    expect(bare.fsWriteTextFile).toBe(false);
+    expect(bare.terminal).toBe(false);
+    // elicitation:true without a form object does not unlock form elicitation
+    expect(parseClientCapabilities({ elicitation: true }).elicitationForm).toBe(false);
+  });
+
+  it('initialize records the client capabilities into the connection state (observable by the next call)', async () => {
+    const state: AcpConnectionState = { clientCapabilities: parseClientCapabilities(undefined) };
+    const sessions = freshSessions();
+    await handleRpc(
+      { id: 1, method: 'initialize', params: { clientCapabilities: { elicitation: { form: {} }, fs: { readTextFile: true } } } },
+      sessions, process.cwd(), () => {}, { state },
+    );
+    expect(state.clientCapabilities.elicitationForm).toBe(true);
+    expect(state.clientCapabilities.fsReadTextFile).toBe(true);
+    expect(state.clientCapabilities.terminal).toBe(false);
+    // A second initialize (re-negotiation) overwrites, not merges.
+    await handleRpc({ id: 2, method: 'initialize', params: {} }, sessions, process.cwd(), () => {}, { state });
+    expect(state.clientCapabilities.elicitationForm).toBe(false);
+  });
+
+  it('additionalDirectories is honored on session/load and surfaced in session/list', async () => {
+    const sessions = freshSessions();
+    const created = await handleRpc({ id: 1, method: 'session/new', params: { cwd: process.cwd() } }, sessions, process.cwd());
+    const sid = (created.result as any).sessionId;
+    const loaded = await handleRpc(
+      { id: 2, method: 'session/load', params: { sessionId: sid, additionalDirectories: ['/tmp/r1', 'relative/dir'] } },
+      sessions, process.cwd(),
+    );
+    expect(loaded.error).toBeUndefined();
+    const listed = await handleRpc({ id: 3, method: 'session/list', params: {} }, sessions, process.cwd());
+    const entry = (listed.result as any).sessions.find((s: any) => s.sessionId === sid);
+    expect(entry.additionalDirectories).toContain('/tmp/r1');
+    // Relative input was resolved to an absolute path (v1 spec requirement).
+    expect(entry.additionalDirectories.every((d: string) => d.startsWith('/'))).toBe(true);
+    for (const s of sessions.values()) { try { s.runtime.close(); } catch { /* best-effort */ } }
+  });
+
+  it('additionalDirectories is honored on session/resume (create + refresh of a live session)', async () => {
+    const sessions = freshSessions();
+    const created = await handleRpc({ id: 1, method: 'session/new', params: { cwd: process.cwd() } }, sessions, process.cwd());
+    const sid = (created.result as any).sessionId;
+    await handleRpc({ id: 2, method: 'session/close', params: { sessionId: sid } }, sessions, process.cwd());
+    const resumed = await handleRpc(
+      { id: 3, method: 'session/resume', params: { sessionId: sid, additionalDirectories: ['/tmp/r2'] } },
+      sessions, process.cwd(),
+    );
+    expect(resumed.error).toBeUndefined();
+    // Resume of a LIVE session refreshes the roots too.
+    const r2 = await handleRpc(
+      { id: 4, method: 'session/resume', params: { sessionId: sid, additionalDirectories: ['/tmp/r3'] } },
+      sessions, process.cwd(),
+    );
+    expect(r2.error).toBeUndefined();
+    const listed = await handleRpc({ id: 5, method: 'session/list', params: {} }, sessions, process.cwd());
+    const entry = (listed.result as any).sessions.find((s: any) => s.sessionId === sid);
+    expect(entry.additionalDirectories).toEqual(['/tmp/r3']);
+    for (const s of sessions.values()) { try { s.runtime.close(); } catch { /* best-effort */ } }
+  });
+
+  it('elicitation bridge: accept returns the picked labels; decline skips; client error skips', async () => {
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const accept: Record<string, unknown> = { action: 'accept', content: ['oauth'] };
+    const fn = elicitationPromptUser(async (method, params) => {
+      calls.push({ method, params });
+      if (calls.length === 2) throw new Error('client broke');
+      return accept;
+    }, 's-elic');
+    const res = await fn({
+      questions: [
+        { question: 'Which auth?', options: [{ label: 'oauth' }, { label: 'token' }] },
+        { question: 'Deadline?', options: [{ label: 'today' }] },
+      ],
+    });
+    expect(calls.length).toBe(2);
+    expect(calls[0].method).toBe('elicitation/create');
+    expect(calls[0].params.sessionId).toBe('s-elic');
+    expect(calls[0].params.mode).toBe('form');
+    expect((calls[0].params as any).message).toBe('Which auth?');
+    expect(res.answers[0].selected).toEqual(['oauth']);
+    // Second question: the client threw → skipped, never a hang.
+    expect(res.answers[1].selected).toEqual([]);
+    expect(res.answers[1].skipped).toBe(true);
+    // Free text passes through as freeText; decline → skipped.
+    const decline = await elicitationPromptUser(async () => ({ action: 'decline' }), 's');
+    const dres = await decline({ questions: [{ question: 'q', options: [{ label: 'a' }] }] });
+    expect(dres.answers[0].skipped).toBe(true);
+    const freetext = await elicitationPromptUser(async () => ({ action: 'accept', content: ['something custom'] }), 's');
+    const fres = await freetext({ questions: [{ question: 'q', options: [{ label: 'a' }] }] });
+    expect(fres.answers[0].selected).toEqual([]);
+    expect(fres.answers[0].freeText).toBe('something custom');
+  });
 });
 

@@ -217,14 +217,14 @@ export interface MochiConfig {
   skills?: SkillsConfig;
   /** Cost-per-solve routing (see RoutingConfig). Default on, data-gated. */
   routing?: RoutingConfig;
-  /** Semantic code retrieval (Wave J, src/repo/semantic-index.ts). When an
-   *  embedding model is configured here (or the configured provider is a
-   *  known embedding-capable one), the .mochi/index semantic index embeds
-   *  chunks with that provider model; otherwise it uses a deterministic
-   *  local LEXICAL-fallback embedder — never true semantics, and labelled
-   *  as such everywhere. semanticIndex:false disables the index entirely.
-   *  Env overrides: MOCHI_EMBEDDING_MODEL / MOCHI_EMBEDDING_PROVIDER /
-   *  MOCHI_SEMANTIC_INDEX=0. */
+  /** Semantic code retrieval (Wave J, src/repo/semantic-index.ts). Provider
+   *  embeddings are OPT-IN (W3-1 gate): set embeddingProvider/embeddingModel
+   *  here (or env MOCHI_EMBEDDING_PROVIDER / MOCHI_EMBEDDING_MODEL) to embed
+   *  chunks with that provider model. With no explicit embedding config the
+   *  index uses a deterministic local LEXICAL-fallback embedder — never true
+   *  semantics, and labelled as such everywhere; the configured CHAT
+   *  provider is deliberately not reused implicitly. semanticIndex:false
+   *  disables the index entirely. */
   retrieval?: { embeddingProvider?: string; embeddingModel?: string; semanticIndex?: boolean };
   telemetry: boolean;
   projectDir: string;
