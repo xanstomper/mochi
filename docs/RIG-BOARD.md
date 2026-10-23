@@ -54,3 +54,9 @@ Coding run gated on OpenCode free-tier quota (still capped at staging time).
 - W3-4 TUI: evidence status line, subagent panel, per-hunk edit review.
 - W3-5 environment: sandbox preflight, exec ceilings, subagent worktree isolation.
 Meanwhile: vermes is running the W3-2 ACP audit (read-only) -> ~/campaign/wave3-acp-audit.md.
+
+## Coder slot changed (2026-10-23, Ben's order): OpenCode OUT, Hermes "coder" profile IN
+- New Hermes profile `coder` on the VM (alias `coder`), verified live 2026-10-23 (one-shot probe answered OK).
+- Brain: freeinference / glm-5.3-flash (same provider as vermes; key already on the box, wired via key_env). API door: http://100.101.205.88:8377/p/coder/v1 through the default-profile multiplexer.
+- Vyce detour (closed): a vyceai provider block (https://vyceai.com/v1, model claude-sonnet-4-6) is configured in the coder profile and the wiring was verified end-to-end (Vyce answered 401 — correct pipe, no key). The VYCEAI_API_KEY value exists nowhere on this VM (checked by WooWop and vermes). If home ever pushes it into ~/.hermes/profiles/coder/.env, flipping model.provider back to vyceai takes one line.
+- Wave 3 now runs on coder (brief: ~/campaign/wave3-brief.txt). Vermes still verifies independently. OpenCode/mimo remains installed as an unused fallback.
