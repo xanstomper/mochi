@@ -47,6 +47,7 @@ export function salientFailureLines(summary: string): string[] {
   const salient: string[] = [];
   const seen = new Set<string>();
   for (const line of lines) {
+    if (line.startsWith('Check failed (fast lane):')) continue; // captured as a check, not evidence
     if (line.startsWith('Check failed:')) continue; // captured as a check, not evidence
     if (!SALIENT_RE.test(line)) continue;
     const capped = capLine(line);
@@ -75,7 +76,9 @@ export function salientFailureLines(summary: string): string[] {
 export function buildObjection(input: { status: string; summary: string; attempt: number }): VerifierObjection {
   const { status, summary, attempt } = input;
   const failedChecks: string[] = [];
-  for (const m of summary.matchAll(/^Check failed: (.+)$/gm)) {
+  // The fast lane's failure line is `Check failed (fast lane): <cmd>` — the
+  // `(fast lane)` infix must not hide the failing command from the objection.
+  for (const m of summary.matchAll(/^Check failed(?: \(fast lane\))?: (.+)$/gm)) {
     const cmd = m[1].trim();
     if (cmd && !failedChecks.includes(cmd)) failedChecks.push(cmd);
   }

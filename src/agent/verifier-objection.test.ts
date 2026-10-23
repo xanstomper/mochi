@@ -34,6 +34,17 @@ describe('buildObjection', () => {
     expect(o.remedy).toMatch(/edit or write a file/);
   });
 
+  it('fast-lane failure lines name the failing check', () => {
+    const o = buildObjection({
+      status: 'FAIL',
+      summary: 'Check failed (fast lane): npm test\nFAIL src/a.test.ts > adds',
+      attempt: 1,
+    });
+    expect(o.failedChecks).toEqual(['npm test']);
+    expect(o.remedy).toContain('npm test');
+    expect(o.salientLines.some((l) => l.includes('FAIL src/a.test.ts'))).toBe(true);
+  });
+
   it('falls back to the output head when nothing pattern-matches', () => {
     const o = buildObjection({ status: 'FAIL', summary: 'Check failed: make check\nline one\nline two', attempt: 1 });
     expect(o.salientLines).toEqual(['line one', 'line two']);
