@@ -23,7 +23,7 @@
 //
 // Kill-switch: MOCHI_EFFORT_CALIBRATION=0.
 
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { mochiStateDir } from '../core/mochi-dir.js';
 
@@ -82,23 +82,17 @@ function parseStats(raw: string): EffortStats {
   }
 }
 
-const readCache = new Map<string, { mtimeNs: bigint; stats: EffortStats }>();
-
-/** Load the outcome table (mtime-cached; corrupt/missing -> empty).
- *  Cache key uses NANOSECOND mtime (bigint stat): tests and fast writers
- *  rewrite the file within the same millisecond, and an ms-resolution key
- *  served stale stats (calibration silently ignored a fresh seed). ns
- *  precision makes same-ms rewrites a cache miss, not a stale hit. */
+/** Load the outcome table (corrupt/missing -> empty). Read fresh on every
+ *  call: the file is <1KB and calibration runs once per kickoff, so the
+ *  parse is microseconds. An mtime-keyed cache was tried and REMOVED —
+ *  kernel timestamp granularity (ms on some fs, coarse ns buckets on XFS)
+ *  lets back-to-back rewrites land on the same stamp, and the stale entry
+ *  then silently ignored fresh calibration data (effort ran one tier off). */
 export function loadEffortStats(workspaceDir: string): EffortStats {
   const path = effortStatsPath(workspaceDir);
   try {
     if (!existsSync(path)) return emptyStats();
-    const mtimeNs = statSync(path, { bigint: true }).mtimeNs;
-    const cached = readCache.get(path);
-    if (cached && cached.mtimeNs === mtimeNs) return cached.stats;
-    const stats = parseStats(readFileSync(path, 'utf8'));
-    readCache.set(path, { mtimeNs, stats });
-    return stats;
+    return parseStats(readFileSync(path, 'utf8'));
   } catch {
     return emptyStats();
   }
@@ -123,9 +117,6 @@ export function recordEffortOutcome(workspaceDir: string, kind: string, tier: st
     }
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, JSON.stringify(stats, null, 2));
-    try {
-      readCache.set(path, { mtimeNs: statSync(path, { bigint: true }).mtimeNs, stats });
-    } catch { /* cache refresh is best-effort */ }
   } catch { /* calibration data must never affect a run */ }
 }
 
