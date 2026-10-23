@@ -69,3 +69,14 @@ Three-system workflow (Ben): SYS-1 WooWop (plan/verify) | SYS-2 home Hermes (iss
 - P3 smoking guns (VM lead): ISSUES.md burn-down to 0-or-deferred, fabricated-metrics class grep, config.json plaintext keys -> keyring, node<22 hard preflight, dead-code sweep 2.
 - P4 smarts (split): hybrid tuning (embedded 0.833 beat hybrid 0.792 @recall10 — fix pool/RRF; grow query set 24->60), G8/G10 (home), capabilities catalog, post_compaction hook (home), edit-apply corpus expansion.
 - P5 first LIVE scorecard cell (VM runs, WooWop verifies): swe class k=1 on freeinference glm-5.3-flash, serial (account concurrency = 2, shared with home), full caveats published.
+
+## Wave 3 run 1 — WooWop independent verification (2026-10-23)
+Fresh worktree at 08ed9f5, Node 26.12.1, run by WooWop directly (no model in the loop):
+tsc --noEmit CLEAN; full suite **3,285 passed / 0 failed / 14 skipped** (3,299 total; files 415 passed / 4 skipped).
+Vs the campaign-1 verified tip (3,271 passed): **+14 net new tests, zero regressions.**
+Per-item verdicts: leftover listDir PASS, leftover L-14 PASS, W3-1 embedder gate + recall harness PASS
+(measurement: recall@10 lexical 0.708 / embedded 0.833 / hybrid 0.792 — ship condition met, opt-in stays),
+W3-2 ACP v1 completeness PASS. Run 1 CLOSED.
+Note: origin/main advanced today (home: e4f255f verifySummaryEvidenced first-line hardening — complementary
+to the rig's cfcba5f, no collision — and 0d0442c wip tidy). Rig branch remains based on b499831; merge is home's call.
+W3-3 + W3-5 in flight on coder/wave3-rest (~/mochi-w3b).
