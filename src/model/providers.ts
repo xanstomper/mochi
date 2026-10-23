@@ -66,6 +66,11 @@ export const PROVIDERS: Provider[] = [
   { id: 'openai-codex', name: 'OpenAI Codex (ChatGPT Plus/Pro)', kind: 'openai', baseUrl: 'https://chatgpt.com/backend-api', envKey: 'OPENAI_CODEX_OAUTH_TOKEN', models: ['gpt-5.5', 'gpt-5.6-sol', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-5.4', 'gpt-5.4-nano', 'gpt-5', 'o3', 'o4-mini'], defaultModel: 'gpt-5.5', consoleUrl: 'https://chatgpt.com' },
   { id: 'cline', name: 'ClinePass', kind: 'openai', baseUrl: 'https://api.cline.bot/api/v1', envKey: 'CLINE_API_KEY', models: ['kimi-k3', 'z-ai/glm-5.3-flash', 'claude-3-5-sonnet', 'deepseek-chat'], defaultModel: 'kimi-k3', consoleUrl: 'https://app.cline.bot' },
   { id: 'kilo', name: 'Kilo Code (Gateway)', kind: 'openai', baseUrl: 'https://api.kilo.ai/api/gateway', envKey: 'KILO_API_KEY', models: ['claude-sonnet-4-6', 'anthropic/claude-opus-5', 'openai/gpt-5.1-codex', 'deepseek/deepseek-r1'], defaultModel: 'claude-sonnet-4-6', consoleUrl: 'https://kilo.ai' },
+  // ── Ecosystem breadth wave (2026-10) ───────────────────────────────────────
+  { id: 'vyceai', name: 'Vyce AI (free gateway)', kind: 'openai', baseUrl: 'https://vyceai.com/v1', envKey: 'VYCEAI_API_KEY', models: ['deepseek-v4-flash', 'glm-5.3-flash', 'claude-sonnet-4-6', 'agnes'], defaultModel: 'deepseek-v4-flash', consoleUrl: 'https://vyceai.com' },
+  { id: 'pollinations', name: 'Pollinations (keyless)', kind: 'openai', baseUrl: 'https://text.pollinations.ai/openai/v1', envKey: '', models: ['openai', 'openai-fast', 'mistral'], defaultModel: 'openai', keyHelp: 'No API key required — keyless free tier. Optional: referrer param for higher limits.' },
+  { id: 'chutes', name: 'Chutes (free tier)', kind: 'openai', baseUrl: 'https://api.chutes.ai/app/v1', envKey: 'CHUTES_API_KEY', models: ['deepseek-ai/DeepSeek-V3', 'zai-org/GLM-4.5-Air', 'Qwen/Qwen3-Coder-30B-A3B-Instruct'], defaultModel: 'zai-org/GLM-4.5-Air', consoleUrl: 'https://chutes.ai' },
+  { id: 'wenxin', name: 'Baidu Wenxin (ERNIE)', kind: 'openai', baseUrl: 'https://qianfan.baidubce.com/v2', envKey: 'WENXIN_API_KEY', models: ['ernie-4.5-turbo-128k', 'ernie-speed-128k'], defaultModel: 'ernie-4.5-turbo-128k', consoleUrl: 'https://console.bce.baidu.com/iam/#/iam/apikey/list' },
 ];
 
 export const providerById = (id: string): Provider | undefined => {

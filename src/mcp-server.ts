@@ -65,6 +65,46 @@ const TOOLS = [
     description: 'List Mochi goals/sessions in the workspace with their status.',
     inputSchema: { type: 'object', properties: {} },
   },
+  // ── Agent-to-agent collaboration (MCH-A2A) ─────────────────────────────────
+  // Let EXTERNAL agents (Hermes, Claude Code, Cursor, …) collaborate WITH
+  // Mochi mid-run: delegate a scoped subtask, review work, steer the active
+  // run, and read the fleet roster. Same tools Mochi's own subagent machinery
+  // uses, exposed over MCP so any client is a peer.
+  {
+    name: 'mochi_delegate',
+    description: 'Delegate a scoped subtask to a Mochi subagent (leaf worker). Returns the subagent result when it finishes. Use for parallel independent workstreams.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        goal: { type: 'string', description: 'The subtask goal — self-contained, no conversation context' },
+        context: { type: 'string', description: 'Background info: file paths, constraints, error messages' },
+        cwd: { type: 'string', description: 'Working directory for the subagent (defaults to server cwd)' },
+      },
+      required: ['goal'],
+    },
+  },
+  {
+    name: 'mochi_review',
+    description: 'Ask Mochi to review a diff, file, or code snippet with the read-only Reviewer role. Returns structured findings ([SEVERITY] file:line message).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        input: { type: 'string', description: 'Diff / crash log / code snippet to review (max 120k chars)' },
+      },
+      required: ['input'],
+    },
+  },
+  {
+    name: 'mochi_answer',
+    description: 'Ask Mochi a quick question (read-only Q&A turn, no file changes). Cheapest collab verb — for facts, explanations, decisions.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        question: { type: 'string', description: 'The question' },
+      },
+      required: ['question'],
+    },
+  },
 ];
 
 function getRuntime(state: ServerState): Runtime {
@@ -140,6 +180,10 @@ const PROMPTS = [
     name: 'explain', description: 'Explain how a file or symbol works.',
     arguments: [{ name: 'target', description: 'File path or symbol to explain', required: true }],
   },
+  {
+    name: 'a2a-brief', description: 'Agent-to-agent collaboration: another AI agent hands Mochi a self-contained task brief.',
+    arguments: [{ name: 'brief', description: 'The task brief from the external agent', required: true }],
+  },
 ];
 
 interface PromptResult { description: string; messages: Array<{ role: 'user'; content: { type: 'text'; text: string } }> }
@@ -161,6 +205,13 @@ function buildPrompt(name: string, args: Record<string, unknown>): PromptResult 
       const target = text(args.target);
       if (!target) return null;
       return { description: `Explain: ${target}`, messages: msg(`Explain how ${target} works: its role, key functions, and how it fits into the surrounding code.`) };
+    }
+    case 'a2a-brief': {
+      // Agent-to-agent handoff prompt: an external agent briefing Mochi on a
+      // collaborative task gets a self-contained working brief.
+      const brief = text(args.brief);
+      if (!brief) return null;
+      return { description: 'Agent-to-agent collaboration brief', messages: msg(`Another AI agent is handing you a collaborative task. Treat this brief as authoritative — no other conversation context exists.\n\n${brief.slice(0, 40_000)}`) };
     }
     default:
       return null;
@@ -215,6 +266,26 @@ export async function handleMcp(
           const rt = getRuntime(state);
           const goals = rt.workspace.listGoals ? rt.workspace.listGoals() : [];
           text = JSON.stringify(goals, null, 2);
+        } else if (name === 'mochi_delegate') {
+          const goal = String(args.goal ?? '');
+          if (!goal) return { id, error: { code: -32602, message: 'mochi_delegate requires a goal' } };
+          const ctx = typeof args.context === 'string' ? args.context : '';
+          const subCwd = typeof args.cwd === 'string' && args.cwd ? resolve(args.cwd) : state.cwd;
+          const rt = subCwd === state.cwd ? getRuntime(state) : Runtime.create({ cwd: subCwd });
+          const prompt = ctx ? `${goal}\n\nCONTEXT:\n${ctx.slice(0, 8_000)}` : goal;
+          const out = await rt.runPrompt(prompt);
+          text = out;
+        } else if (name === 'mochi_review') {
+          const input = String(args.input ?? '');
+          if (!input) return { id, error: { code: -32602, message: 'mochi_review requires input' } };
+          const rt = getRuntime(state);
+          text = await rt.review(input.slice(0, 120_000));
+        } else if (name === 'mochi_answer') {
+          const question = String(args.question ?? '');
+          if (!question) return { id, error: { code: -32602, message: 'mochi_answer requires a question' } };
+          const rt = getRuntime(state);
+          const out = await rt.runPromptDetailed(question);
+          text = out.summary;
         } else {
           return { id, error: { code: -32602, message: `Unknown tool: ${name}` } };
         }

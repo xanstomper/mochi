@@ -183,16 +183,13 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   // Background update check — never blocks or delays startup. When a new
   // GitHub release exists, drop a notice into the transcript suggesting
   // /update. Cached 24h; silent on any failure (offline, rate-limit).
-  {
-    const { checkForUpdate, updateNoticeText } = await import('../update-check.js');
-    void checkForUpdate(pkg.version).then((info) => {
-      const notice = updateNoticeText(info);
-      if (notice) {
-        push('system', notice + (info.url ? `\n${info.url}` : ''));
-        scheduleRender();
-      }
-    }).catch(() => { /* silent — update check must never disturb a session */ });
-  }
+  // MCH-TDZ: scheduleRender is declared further down (line ~661) — resolving
+  // this promise before init completes threw "Cannot access 'scheduleRender'
+  // before initialization" (crash.log, repeated). Defer via setTimeout(0) so
+  // the callback runs after the constructor body finishes.
+  // MCH-TDZ: the update-check block MOVED below scheduleRender's declaration
+  // (line ~679) — a setTimeout(0) deferral still left `push`/`scheduleRender`
+  // statically used-before-declared (TS2448) and could fire mid-init.
 
   // Paint the saved theme immediately on launch. NOTE: never persist here —
   // persisting a fallback-resolved theme would CLOBBER the user's files when
@@ -200,6 +197,18 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
   // happens only on explicit user action (/theme, theme menu).
   const savedTheme = getCurrentTheme();
   setTheme(savedTheme.id);
+
+  // First-message latency: the prompt path cold-imports a cascade of modules
+  // (goals/task, context, security/sandbox, observability/trace, repo/repo,
+  // node:child_process). Each costs 20-230ms cold — summed, that was the
+  // ~1s "mochi freezes for a second when I send the first message" jank.
+  // Pre-warm them NOW in the background so the first message hits warm cache.
+  for (const mod of [
+    '../goals/task.js', '../context.js', '../security/sandbox.js',
+    '../observability/trace.js', '../repo/repo.js', '../core/taskkind.js',
+  ]) {
+    void import(mod).catch(() => { /* best-effort warmup */ });
+  }
 
   // Tab bar occupies the top rows (row 0: tabs, row 1: breathing margin).
   const TAB_BAR_ROWS = 2;
@@ -669,6 +678,24 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       render();
     }, delay);
   };
+
+  // Background update check — never blocks or delays startup. When a new
+  // GitHub release exists, drop a notice into the transcript suggesting
+  // /update. Cached 24h; silent on any failure (offline, rate-limit).
+  // MCH-TDZ: this block lives AFTER push/scheduleRender declarations — it
+  // previously sat above them and a fast fetch threw "Cannot access
+  // 'scheduleRender' before initialization" (crash.log, repeated).
+  {
+    void (async () => {
+      const { checkForUpdate, updateNoticeText } = await import('../update-check.js');
+      const info = await checkForUpdate(pkg.version);
+      const notice = updateNoticeText(info);
+      if (notice) {
+        push('system', notice + (info.url ? `\n${info.url}` : ''));
+        scheduleRender();
+      }
+    })().catch(() => { /* silent — update check must never disturb a session */ });
+  }
 
   const startSpinner = () => {
     if (spinnerTimer) return;

@@ -1235,16 +1235,21 @@ function renderMarkdownInternal(text: string, width: string | number | undefined
       const headingText = hMatch[2];
       out.push(`${R.mdHeading}${T.bold}${headingText}${T.reset}`);
       if (hMatch[1].length <= 3) {
-        out.push(`${R.mdHeading}${'─'.repeat(Math.max(8, Math.min(40, visibleLen(headingText))))}${T.reset}`);
+        // Format consistency (user report: "some underlines long, some short").
+        // Every hairline — heading underline AND horizontal divider — spans
+        // the SAME full content width (W - 4), so the card reads uniform
+        // instead of ragged. (Was: underline capped at heading text length
+        // while dividers ran full width.)
+        out.push(`${R.mdHeading}${'─'.repeat(Math.max(8, W - 4))}${T.reset}`);
       }
       continue;
     }
 
-    // Horizontal divider.
+    // Horizontal divider (same width as heading hairlines — uniform card).
     if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
       flushParagraph();
       bulletStack.length = 0;
-      out.push(`${T.grayDark}${'─'.repeat(Math.min(40, W - 4))}${T.reset}`);
+      out.push(`${T.grayDark}${'─'.repeat(Math.max(8, W - 4))}${T.reset}`);
       continue;
     }
 

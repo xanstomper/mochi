@@ -9470,7 +9470,13 @@ Continue from 'Next:', do not redo completed progress.`,
     // truthfully be "completed" — downgrade and surface the real error, so the
     // user sees the failure instead of a false "done". Runs that RECOVERED from
     // earlier errors (last tool succeeded) still finish as completed.
-    if (success && this.lastToolError) {
+    // MCH-26 (false-"Task Failed" fix): a run whose own verification gate
+    // PASSED is complete by definition — the gate's structured verdict is the
+    // completion evidence. A stale lastToolError from an earlier tangential
+    // failed work call (a failed `git commit` probe, a verify retry, a deny
+    // veto recorded as error) must NOT downgrade a gate-passed run. Downgrade
+    // only when there is no explicit gate verdict, or the gate FAILED.
+    if (success && this.lastToolError && this.skillRunVerdict() !== 'pass') {
       success = false;
       if (stopReason === 'completed') {
         stopReason = 'verification_failed';

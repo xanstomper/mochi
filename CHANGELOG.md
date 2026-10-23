@@ -1,3 +1,13 @@
+#### Added (0.31.0 — freeze fix, false-fail fix, format polish, A2A collab, ecosystem wave)
+
+- **First-message freeze FIXED (root-caused)**: the TUI's first prompt paid a ~1s cold-import cascade (goals/task, context, security/sandbox, observability/trace, repo/repo — 20-230ms each). All heavy modules are now pre-warmed in the background at TUI startup. Separate TDZ crash eliminated: the background update-check ran before `push`/`scheduleRender` were declared and threw "Cannot access 'scheduleRender' before initialization" (repeated in crash.log) — the block now lives after those declarations.
+- **False "Task Failed" FIXED**: finish() downgraded any run whose last work-tool call errored — even when the run's own verification gate PASSED afterwards (a stale `lastToolError` from a failed git probe/verify retry overrode gate evidence). The completion gate now consults the verification verdict directly: a gate-passed run completes; only unverified or gate-FAILED runs get downgraded.
+- **Format polish**: heading underlines were capped at 40 chars while horizontal dividers ran full width — ragged, inconsistent cards. Every hairline (heading underline AND divider) now spans the same content width.
+- **Agent-to-agent collaboration (A2A) over MCP**: `mochi mcp-serve` now exposes `mochi_delegate` (scoped subtask to a Mochi subagent), `mochi_review` (read-only reviewer), and `mochi_answer` (read-only Q&A) — plus the new `a2a-brief` prompt template. Any MCP client (Hermes, Claude Code, Cursor) can now collaborate WITH Mochi as a peer, not just drive it.
+- **Ecosystem breadth — 7 new MCP servers**: Notion, Linear, Sentry, Cloudflare, Obsidian, keyless DuckDuckGo, and Mochi-itself (built-in A2A entry) — 35 builtin servers total via `mcp_manage`.
+- **Ecosystem breadth — 4 new providers**: Vyce AI, keyless Pollinations, Chutes free tier, Baidu Wenxin (ERNIE) — 45 providers total.
+- **Verified**: tsc clean; full suite 3251 passed / 9 failed (all 9 flaky/network upstream; baseline HEAD fails 14 — no regression); builds green; binary 0.31.0.
+
 # Mochi Changelog
 
 #### Added (muse merge — 73 commits, mch/selfconfig)
