@@ -169,6 +169,4 @@ describe('bubblewrap sandbox', () => {
     });
     expect(r.stdout).toContain('exit=1');
   });
-
-  );
 });

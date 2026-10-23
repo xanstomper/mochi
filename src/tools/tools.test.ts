@@ -92,9 +92,11 @@ describe('read cache', () => {
     expect(first).toContain('v1');
     expect(cache.size).toBe(1);
 
-    // Second read of the same unchanged file hits the cache.
+    // Second read of the same unchanged file hits the cache. S4 (run-scoped
+    // stub) condenses the repeat to a one-line cache-hit stub — the full
+    // behavior is pinned in read-run-stub.test.ts.
     const again = await readTool.execute({ path: p }, c);
-    expect(again).toContain('v1');
+    expect(again).toContain('[mochi:cache-hit]');
 
     // Mutate the file with a distinct content/length; the signature changes and
     // the cache must reflect the new content even with the same cache instance.
