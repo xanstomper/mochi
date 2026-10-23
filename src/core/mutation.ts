@@ -331,9 +331,11 @@ export async function runMutationCheck(
       const t = l.trim();
       // Non-observable: blanks, package-manager banner/echo ('>' lines),
       // shell framing ('$ cmd', 'exit_code:', the shell tool's
-      // 'stdout:'/'stderr:'/'(empty)' scaffold), and the command echo.
+      // 'stdout:'/'stderr:'/'(empty)' scaffold and its '[sandbox: …]'
+      // footer — harness framing, never test output), and the command echo.
       return t !== '' && !t.startsWith('>') && !t.startsWith('$') && !/^exit_code:/.test(t)
-        && t !== 'stdout:' && t !== 'stderr:' && t !== '(empty)' && t !== testCommand;
+        && t !== 'stdout:' && t !== 'stderr:' && t !== '(empty)' && t !== testCommand
+        && !t.startsWith('[sandbox:');
     });
     if (observable.length === 0) {
       return { applied: false, note: `Mutation check skipped: "${testCommand}" produced no observable output on a green run, so a surviving mutant would prove nothing.` };
