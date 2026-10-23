@@ -14,7 +14,7 @@
  * agent self-corrects.
  */
 
-import { existsSync, readFileSync, appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, appendFileSync, mkdirSync, writeFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { redact } from '../security/security.js';
@@ -84,10 +84,38 @@ export function recentBad(n = 5): FeedbackEntry[] {
   return loadAllFeedback().filter((e) => e.verdict === 'bad').slice(-n);
 }
 
+/** Memo for feedbackDigest: it is rendered into the system prompt on EVERY
+ *  turn and the uncached render re-read + re-parsed the whole feedback file
+ *  per call. The digest is a pure function of the file contents, so cache it
+ *  behind the file's size:mtimeMs:ino fingerprint (recordFeedback appends →
+ *  size grows; any rewrite changes mtime/ino). */
+let digestMemo: { key: string; text: string } | null = null;
+
+function feedbackFileFingerprint(file: string): string {
+  try {
+    const st = statSync(file);
+    return `${st.size}:${st.mtimeMs}:${st.ino}`;
+  } catch {
+    return '';
+  }
+}
+
 /** Summary injected into the system prompt when feedback exists. The
  *  agent uses this to self-correct within the session: don't repeat the
  *  pattern that was just marked bad. */
 export function feedbackDigest(): string {
+  const file = getFeedbackFile();
+  const key = `${file}|${feedbackFileFingerprint(file)}`;
+  if (digestMemo && digestMemo.key === key) return digestMemo.text;
+  const text = renderFeedbackDigest();
+  // Re-key after the render: loadAllFeedback's ensureFile may have created
+  // the file during this call, so the fingerprint must describe the state
+  // the text was rendered from as it now stands on disk.
+  digestMemo = { key: `${file}|${feedbackFileFingerprint(file)}`, text };
+  return text;
+}
+
+function renderFeedbackDigest(): string {
   const recent = recentFeedback(8);
   if (recent.length === 0) return '';
   const bad = recent.filter((e) => e.verdict === 'bad');
