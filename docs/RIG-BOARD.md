@@ -161,3 +161,11 @@ measured first-turn schema bill 2,643 -> 1,453 est. tokens, -45%, real-loop fixt
 W3-4 (TUI) then landed on coder/wave3-rest: be3fdbc status line + routing badge, 2f44231 subagent
 panel, 70dbee8 per-hunk edit review (coder's final gate was cut by a 429 after the commits;
 WooWop verification of 70dbee8 running). P3 smoking-gun sweep launched on the same branch.
+
+## New tool queued (Ben, 2026-10-23): CDP-native headless browser
+Brief: ~/campaign/cdp-browser-brief.txt. Raw CDP over WebSocket to chrome-headless-shell —
+no puppeteer/playwright, no full-browser process tree. AX-tree snapshots with ref ids,
+one action-discriminated tool, binary resolution + pinned download, sandbox-aware.
+Ships behind a measurement gate vs the existing browser path (cold start, RSS,
+time-to-snapshot/screenshot on local fixtures) — the 10x target gets tested, not asserted.
+Starts on branch feat/cdp-browser the moment P3 closes. Owner: VM coder; vermes/WooWop verify.
