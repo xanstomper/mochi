@@ -470,19 +470,10 @@ export interface CurriculumPort {
   ): Promise<UnitOutcome> | UnitOutcome;
 }
 
-/** LEGACY unavailable curriculum port — plans nothing by design. Retained
- *  so tests can pin the unavailable behavior; it is NOT used by any
- *  default pipeline (the D10 adapter below is). */
-export function createUnavailableCurriculumPort(): CurriculumPort {
-  return {
-    planTasks(): CurriculumTaskSpec[] {
-      return [];
-    },
-    generateOne(): UnitOutcome {
-      throw new Error('curriculum port unavailable (explicit legacy double — the production adapter is createCurriculumPort)');
-    },
-  };
-}
+// (createUnavailableCurriculumPort removed — sweep 2: the labelled legacy
+// double had zero callers repo-wide, tests included; the production default
+// is createCurriculumPort. createCuratorStubRepairPort stays — tests pin the
+// probation-re-entry mechanics through it.)
 
 // ─── D10 curriculum adapter ──────────────────────────────────────────────
 

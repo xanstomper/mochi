@@ -281,13 +281,9 @@ export function forgeLogPath(projectDir: string): string {
   return join(forgeToolsRoot(projectDir), 'forge-log.jsonl');
 }
 
-/** True when a tool directory in the authored-tools store belongs to the
- *  forge (carries a forge.json provenance snapshot). The authored loader
- *  skips these: forged tools load through loadForgedTools, which enforces
- *  lifecycle state and logs invocations. */
-export function isForgedToolDir(dir: string): boolean {
-  return existsSync(join(dir, 'forge.json'));
-}
+// (isForgedToolDir removed — sweep 2: zero callers repo-wide; the authored
+// loader's forged-dir detection lives elsewhere and loadForgedTools enforces
+// lifecycle itself.)
 
 // ─── Registry + log ───────────────────────────────────────────────────────
 

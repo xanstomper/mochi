@@ -987,55 +987,6 @@ function dirsMtimeMax(dirs: string[]): number {
   return max;
 }
 
-/** Filter skills relevant to the task using the TF-IDF index when available,
- *  falling back to the provided linear fallback function if the index is absent.
- *
- *  MCH-202: this is the indexed fast path replacing the O(N·M) scan in
- *  selectRelevantSkills(). Called from context.ts after discovery. */
-export function filterRelevantSkillsIndexed(
-  skills: Skill[],
-  taskText: string,
-  max: number,
-  projectDir: string,
-  minScore = 0.05,
-  fallback?: (skills: Skill[], taskText: string, max: number) => Skill[],
-): Skill[] {
-  if (!taskText.trim()) return [];
-  try {
-    const indexPath = join(projectDir, '.mochi', 'skill-index.json');
-    const skillDirs = [
-      join(projectDir, '.mochi', 'skills'),
-      defaultUserSkillsDir(),
-    ].filter(Boolean);
-    const mtime = dirsMtimeMax(skillDirs);
-    let idx = loadSkillIndex(indexPath, mtime);
-    if (!idx) {
-      buildSkillIndex(skills, indexPath, mtime);
-      idx = loadSkillIndex(indexPath, mtime);
-    }
-    if (!idx) {
-      return fallback ? fallback(skills, taskText, max) : [];
-    }
-    const scored = skills
-      .map((s) => ({ s, score: indexedRelevanceScore(taskText, s.name, idx!) }))
-      .filter((e) => e.score >= minScore)
-      .sort((a, b) => b.score - a.score || skills.indexOf(a.s) - skills.indexOf(b.s));
-    if (scored.length === 0) return [];
-    // False-positive gate: TF-IDF alone can't tell "write isValidIpv4" from
-    // "code-readability" — every query shares generic tokens (write, code,
-    // function). When the runner-up is nearly as good as the leader, the whole
-    // result set is noise: no skill is actually relevant. Require the leader
-    // to clear the floor AND lead the pack by a real margin (1.4×) before
-    // advertising anything; otherwise advertise nothing, like the linear gate.
-    const leader = scored[0];
-    const runnerUp = scored[1]?.score ?? 0;
-    if (leader.score < runnerUp * 1.4) return [];
-    return scored.slice(0, max).map((e) => e.s);
-  } catch {
-    return fallback ? fallback(skills, taskText, max) : [];
-  }
-}
-
 /** Match a skill to an error string using the TF-IDF index. Returns the best
  *  matching skill name + its raw SKILL.md body (truncated to 2000 chars), or
  *  null when no skill scores above the quality threshold. MCH-203 support. */

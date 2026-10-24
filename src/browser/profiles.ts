@@ -30,7 +30,7 @@
 // MOCHI_BROWSER_PROFILES_DIR (tests, sandboxes).
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { resolve, sep } from 'node:path';
+import { resolve } from 'node:path';
 import { atomicWriteFileSync } from '../core/atomic-fs.js';
 
 export interface BrowserProfileEntry {
@@ -218,10 +218,3 @@ export function forgetProfile(name: string): boolean {
   return true;
 }
 
-/** True when `dir` is inside the managed profiles root (defense-in-depth
- *  for call sites that resolved a directory some other way). */
-export function isManagedProfileDir(dir: string): boolean {
-  const root = profilesRoot();
-  const abs = resolve(dir);
-  return abs === root || abs.startsWith(root.endsWith(sep) ? root : root + sep) || abs === legacyDefaultProfileDir();
-}
