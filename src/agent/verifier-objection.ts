@@ -47,7 +47,11 @@ export function salientFailureLines(summary: string): string[] {
   const salient: string[] = [];
   const seen = new Set<string>();
   for (const line of lines) {
-    if (line.startsWith('Check failed:')) continue; // captured as a check, not evidence
+    // 'Check failed:' and 'Check failed (fast lane):' headers are harness
+    // framing — captured as a check below, never evidence. Left in, the
+    // lane-marked header matches SALIENT_RE ('fail') and Mochi's own
+    // annotation enters the evidence channel ahead of the real output.
+    if (/^Check failed\b/.test(line)) continue;
     if (!SALIENT_RE.test(line)) continue;
     const capped = capLine(line);
     if (seen.has(capped)) continue;
@@ -75,8 +79,15 @@ export function salientFailureLines(summary: string): string[] {
 export function buildObjection(input: { status: string; summary: string; attempt: number }): VerifierObjection {
   const { status, summary, attempt } = input;
   const failedChecks: string[] = [];
-  for (const m of summary.matchAll(/^Check failed: (.+)$/gm)) {
-    const cmd = m[1].trim();
+  // Two harness shapes name the failing check: 'Check failed: <cmd>' and the
+  // fast lane's 'Check failed (fast lane): <cmd>'. Miss the lane-marked form
+  // and failedChecks comes back empty for every fast-lane rejection — the
+  // remedy loses the failing command it exists to name. The PARTIAL
+  // targeted pre-check annotation ('Check failed: <cmd> (PARTIAL targeted
+  // pre-check: <reason>)') is harness framing too — strip it so the remedy
+  // names the COMMAND, not the annotation.
+  for (const m of summary.matchAll(/^Check failed(?: \([^)]*\))?: (.+)$/gm)) {
+    const cmd = m[1].replace(/\s*\(PARTIAL targeted pre-check:[^)]*\)\s*$/, '').trim();
     if (cmd && !failedChecks.includes(cmd)) failedChecks.push(cmd);
   }
   const salientLines = salientFailureLines(summary);
