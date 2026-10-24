@@ -162,7 +162,7 @@ import { classifyOneShot } from '../core/one-shot.js';
 import { classifyContentOnly } from '../core/one-shot.js';
 import { workspaceListMessage } from '../core/workspace-list.js';
 import { issuesContextBlock, classifyHarnessFailure, recordHarnessIssue } from '../core/harness-issues.js';
-import { buildMcpTools } from '../mcp/tools.js';
+import { buildMcpTools, inflateMcpToolSchemas, mcpLazySchemasEnabled } from '../mcp/tools.js';
 import { preEditSnapshot as gitPreEditSnapshot, rollbackToSnapshot as gitRollback, type CheckpointResult } from '../repo/git.js';
 import { applyToolOutputPolicy } from '../core/tool-output.js';
 import { scrubAnsiFragments } from '../tui/ansi-hygiene.js';
@@ -2476,11 +2476,22 @@ Continue from 'Next:', do not redo completed progress.`,
         this.events.emit({ type: 'agent:log', agentId: this.id, message: m });
         return undefined;
       };
-      const connected = await buildMcpTools(this.config.mcpServers, log);
+      const lazySchemas = mcpLazySchemasEnabled(this.config);
+      const connected = await buildMcpTools(this.config.mcpServers, log, { lazySchemas });
       for (const [name, tool] of connected.tools) {
         if (!this.tools.has(name)) this.tools.set(name, tool);
       }
       for (const err of connected.errors) log(err);
+      if (lazySchemas && connected.tools.size > 0) {
+        // Lazy schemas: task-named MCP tools get their full input schemas
+        // up front — the measured-exposure rule ("a tool the task names is
+        // never dropped") applied to schemas. Everything else is exposed
+        // thin and inflated on demand via load_tools.
+        const taskText = task ? `${task.title} ${task.description ?? ''}` : '';
+        const named = [...connected.tools.keys()].filter((n) => taskText.includes(n));
+        const inflated = inflateMcpToolSchemas(this.tools, named);
+        if (inflated.length > 0) log(`[mcp] full schemas injected for task-named tool(s): ${inflated.join(', ')}`);
+      }
       if (connected.tools.size > 0) {
         this.toolDefs = [...this.tools.values()].map((t) => t.def);
       }

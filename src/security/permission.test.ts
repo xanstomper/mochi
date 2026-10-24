@@ -98,6 +98,17 @@ describe('PermissionManager', () => {
     expect(m.badge()).toBe('[AUTO]');
   });
 
+  it('load_tools is auto-allowed under every policy (zero-side-effect meta-tool, W3-3)', () => {
+    // The deferred-tools note the harness injects tells the model to call
+    // load_tools; denying it headless broke the restore path (and lazy MCP
+    // schemas). It only mutates which schemas are advertised — never files,
+    // shell, or network — so it sits in the read floor with read/glob/search.
+    for (const policy of ['strict', 'workspace-safe', 'yolo'] as const) {
+      const m = new PermissionManager(policy);
+      expect(m.autoAllow(req('load_tools', { names: ['browser'] }))).toBe(true);
+    }
+  });
+
   it('setPolicy switches the active mode', () => {
     const m = new PermissionManager('strict');
     expect(m.currentPolicy).toBe('strict');

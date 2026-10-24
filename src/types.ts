@@ -184,6 +184,12 @@ export interface MochiConfig {
   safety: SafetyConfig;
   permissions: PermissionConfig;
   mcpServers?: Record<string, { command?: string; args?: string[]; url?: string; headers?: Record<string, string>; env?: Record<string, string> }>;
+  /** Lazy MCP tool-schema loading (W3-3): advertise connected MCP tools as
+   *  thin defs (name + description, no input schema) and inject the full
+   *  schema on demand — via load_tools or when the task text names the tool.
+   *  Every connected server's schemas otherwise ride EVERY prompt. Default
+   *  OFF; env MOCHI_MCP_LAZY_SCHEMAS=1 overrides. See mcp/tools.ts. */
+  mcpLazySchemas?: boolean;
   /** Plan-then-act: in plan mode the agent produces a plan instead of editing. */
   planMode?: boolean;
   /** Tool exposure policy (P1.3): 'measured' (default) advertises a

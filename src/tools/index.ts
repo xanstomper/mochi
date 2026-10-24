@@ -1,6 +1,7 @@
 import type {MochiConfig} from '../types.js';
 import type { ToolContext, Tool } from './types.js';
 import { clipToolOutput } from './output-budget.js';
+import { inflateMcpToolSchemas } from '../mcp/tools.js';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { readTool } from './read.js';
@@ -237,16 +238,29 @@ export function loadToolsTool(getTools: () => Map<string, Tool>): Tool {
       const tools = getTools();
       const loaded: string[] = [];
       const unknown: string[] = [];
-      for (const raw of args.names ?? []) {
+      const requested = args.names ?? [];
+      for (const raw of requested) {
         const name = TOOL_ALIASES[raw] ?? raw;
         const tool = ALL_TOOLS_MAP.get(name);
         if (!tool) { unknown.push(raw); continue; }
         if (!tools.has(name)) tools.set(name, tool);
         loaded.push(name);
       }
+      // W3-3 lazy MCP schemas: requested names that are connected MCP tools
+      // with thin defs get their full input schemas injected here (the loop
+      // re-advertises defs after load_tools). A thin MCP tool is already in
+      // the live toolset (it stays callable without its schema), so this is a
+      // def swap, not a map insert — and it must not be reported "unknown".
+      const inflated = inflateMcpToolSchemas(tools, requested);
+      for (const name of inflated) {
+        loaded.push(name);
+        const ui = unknown.indexOf(name);
+        if (ui >= 0) unknown.splice(ui, 1);
+      }
       const parts: string[] = [];
       if (loaded.length) parts.push(`Loaded: ${loaded.join(', ')} — available on your next turn.`);
       if (unknown.length) parts.push(`Unknown tools (ignored): ${unknown.join(', ')}.`);
+      if (inflated.length) parts.push(`MCP input schemas exposed for: ${inflated.join(', ')}.`);
       return parts.join(' ') || 'No tool names provided.';
     },
   };

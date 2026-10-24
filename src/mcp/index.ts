@@ -26,6 +26,11 @@ export interface McpServerConfig {
   headers?: Record<string, string>;
   /** OAuth client configuration for HTTP servers needing bearer tokens. */
   oauth?: import('./oauth.js').McpOAuthConfig;
+  /** Reconnect policy for the stdio transport when the server process dies
+   *  mid-connection. Default: 3 attempts with exponential backoff (250ms
+   *  initial, 4s cap). `false` disables reconnecting. HTTP transports are
+   *  stateless (per-request failures) and never reconnect. */
+  reconnect?: { attempts?: number; initialDelayMs?: number; maxDelayMs?: number } | false;
 }
 
 export interface McpToolInput {
@@ -54,9 +59,25 @@ export interface McpPromptMessage {
 
 interface JsonRpcResponse {
   jsonrpc: '2.0';
-  id: number;
+  id?: number;
+  method?: string;
   result?: unknown;
   error?: { code: number; message: string };
+}
+
+/** Cache metadata a server may attach to a list response (2026-07-28
+ *  cacheable-list revision; honored here as an additive field regardless of
+ *  the negotiated revision, so servers that provide it benefit early).
+ *  `cacheScope` semantics implemented by McpClient:
+ *   - 'connection' (default): the cache lives on this client instance and
+ *     dies with the connection (close, reconnect).
+ *   - 'process': the cache is keyed by server identity and shared across
+ *     every client this process opens to the same server — reconnects and
+ *     new connections within ttlMs skip the tools/list round trip. Servers
+ *     that serve per-auth tool lists must not send 'process'. */
+export interface McpListCacheMeta {
+  ttlMs?: number;
+  cacheScope?: 'connection' | 'process';
 }
 
 /** Transport seam: newline-delimited JSON-RPC frames out, parsed lines back.
@@ -76,11 +97,13 @@ export class StdioTransport implements McpTransport {
   private rl: ReadlineInterface;
   private msgCb: (line: string) => void = () => {};
   private fatalCb: (err: Error) => void = () => {};
+  private readonly label: string;
 
   constructor(config: McpServerConfig, label = 'mcp') {
     if (!config.command) {
       throw new Error(`mcp:${label} stdio transport needs config.command (or use url for HTTP)`);
     }
+    this.label = label;
     this.child = spawn(config.command, config.args ?? [], {
       env: { ...process.env, ...config.env },
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -98,6 +121,14 @@ export class StdioTransport implements McpTransport {
   }
 
   send(frame: string): void {
+    // Health check: a dead server must fail its callers FAST, not after the
+    // 10s request timeout — write() into a dead child's stdin buffers
+    // silently and the request would hang until the timeout. exitCode is
+    // set on normal/exit-event reaping, signalCode on signal kills; either
+    // means the server is gone.
+    if (this.child.exitCode !== null || this.child.signalCode !== null) {
+      throw new Error(`mcp:${this.label} server is not running (already exited)`);
+    }
     this.child.stdin.write(frame + '\n');
   }
 
@@ -206,6 +237,44 @@ export class HttpTransport implements McpTransport {
   }
 }
 
+/** Connection state, for health surfaces (TUI, doctor). */
+export type McpConnectionState = 'connecting' | 'ready' | 'reconnecting' | 'failed' | 'closed';
+
+interface ToolsCacheEntry {
+  tools: McpToolInput[];
+  expiresAt: number;
+}
+
+/** cacheScope 'process' cache: keyed by server identity, shared across every
+ *  McpClient this process opens to the same server. Entries are removed on
+ *  notifications/tools/list_changed and expire by ttlMs. */
+const processToolsCache = new Map<string, ToolsCacheEntry>();
+
+/** Stable-ish server identity for the process cache: label + transport
+ *  endpoint + negotiated version. `env` is deliberately excluded (it can
+ *  carry secrets; it also rarely changes a tool list). */
+function serverIdentityKey(label: string, config: McpServerConfig): string {
+  const endpoint = config.url
+    ? `url=${config.url}`
+    : `cmd=${config.command ?? ''} args=${JSON.stringify(config.args ?? [])}`;
+  return `${label}::${endpoint}::v=${config.version ?? '2024-11-05'}`;
+}
+
+/** Extract cache hints from a list result: top-level `ttlMs`/`cacheScope`
+ *  (2026-07-28 shape) or the same fields under `_meta` (older _meta
+ *  convention). Unknown scopes degrade to 'connection'. */
+function parseListCacheMeta(result: unknown): McpListCacheMeta {
+  const r = result as { ttlMs?: unknown; cacheScope?: unknown; _meta?: { ttlMs?: unknown; cacheScope?: unknown } } | null | undefined;
+  if (!r || typeof r !== 'object') return {};
+  const ttl = typeof r.ttlMs === 'number' ? r.ttlMs : typeof r._meta?.ttlMs === 'number' ? r._meta.ttlMs : undefined;
+  const rawScope = r.cacheScope ?? r._meta?.cacheScope;
+  const scope = rawScope === 'process' ? 'process' : 'connection';
+  const meta: McpListCacheMeta = {};
+  if (typeof ttl === 'number' && Number.isFinite(ttl) && ttl > 0) meta.ttlMs = ttl;
+  if (rawScope === 'process' || rawScope === 'connection') meta.cacheScope = scope;
+  return meta;
+}
+
 export class McpClient {
   private transport: McpTransport;
   private requests = new Map<number, { resolve: (r: unknown) => void; reject: (e: Error) => void }>();
@@ -213,6 +282,22 @@ export class McpClient {
   private initialized = false;
   private label: string;
   private version: string;
+  private config: McpServerConfig;
+  /** True when WE spawned the transport from config (stdio) — only then can
+   *  a respawn reconnect. Injected/HTTP transports never reconnect. */
+  private readonly ownsStdio: boolean;
+  private reconnectPolicy: { attempts: number; initialDelayMs: number; maxDelayMs: number } | null;
+  private state_: McpConnectionState = 'connecting';
+  private reconnectCycle: Promise<void> | null = null;
+  private reconnectFailures = 0;
+  private lastFatal: Error | null = null;
+  /** Guard so the reconnect cycle's own initialize() does not await the
+   *  cycle it is running (request() awaits the cycle otherwise). */
+  private internalReconnecting = false;
+  // tools/list cache (connection-scope) + invalidation listeners.
+  private toolsCache: ToolsCacheEntry | null = null;
+  private readonly identityKey: string;
+  private toolsListChangedCbs = new Set<() => void>();
 
   constructor(
     config: McpServerConfig,
@@ -220,10 +305,26 @@ export class McpClient {
     transport?: McpTransport,
   ) {
     this.label = label;
+    this.config = config;
     this.version = config.version ?? '2024-11-05';
-    this.transport = transport ?? new StdioTransport(config, label);
+    this.identityKey = serverIdentityKey(label, config);
+    const policy = config.reconnect === false
+      ? null
+      : {
+          attempts: Math.max(0, Math.floor(config.reconnect?.attempts ?? 3)),
+          initialDelayMs: Math.max(0, config.reconnect?.initialDelayMs ?? 250),
+          maxDelayMs: Math.max(0, config.reconnect?.maxDelayMs ?? 4_000),
+        };
+    if (transport) {
+      this.transport = transport;
+      this.ownsStdio = false;
+    } else {
+      this.transport = new StdioTransport(config, label);
+      this.ownsStdio = true;
+    }
+    this.reconnectPolicy = policy;
     this.transport.onMessage((line) => this.handleLine(line));
-    this.transport.onFatal((err) => this.rejectAll(err));
+    this.transport.onFatal((err) => this.onFatal(err));
   }
 
   /** Build a client for either transport: `url` selects Streamable-HTTP,
@@ -231,6 +332,81 @@ export class McpClient {
   static forConfig(config: McpServerConfig, label: string = 'mcp'): McpClient {
     if (config.url) return new McpClient(config, label, new HttpTransport(config.url, config.headers ?? {}, label));
     return new McpClient(config, label);
+  }
+
+  /** Connection health (TUI/doctor surfaces + tests). */
+  get state(): McpConnectionState {
+    return this.state_;
+  }
+
+  /** Register a callback fired when the server reports its tool list changed
+   *  (notifications/tools/list_changed). Returns an unsubscribe function. */
+  onToolsListChanged(cb: () => void): () => void {
+    this.toolsListChangedCbs.add(cb);
+    return () => this.toolsListChangedCbs.delete(cb);
+  }
+
+  private attachTransport(t: McpTransport): void {
+    t.onMessage((line) => this.handleLine(line));
+    t.onFatal((err) => this.onFatal(err));
+  }
+
+  private onFatal(err: Error): void {
+    this.lastFatal = err;
+    this.rejectAll(err);
+    if (this.state_ === 'closed') return;
+    this.startReconnectCycle();
+  }
+
+  private startReconnectCycle(): void {
+    if (this.state_ === 'closed') return;
+    if (!this.reconnectPolicy || !this.ownsStdio) {
+      // No reconnecting (disabled, or a transport we did not spawn): the
+      // connection is dead and stays dead — reflect that in the state.
+      this.state_ = 'failed';
+      return;
+    }
+    if (this.reconnectCycle) return; // a cycle is already running
+    if (this.reconnectFailures >= this.reconnectPolicy.attempts) {
+      this.state_ = 'failed';
+      return;
+    }
+    this.state_ = 'reconnecting';
+    this.reconnectCycle = this.runReconnectCycle().then((ok) => {
+      this.reconnectCycle = null;
+      if (this.state_ === 'closed') return;
+      if (ok) {
+        this.reconnectFailures = 0;
+        this.state_ = 'ready';
+      } else {
+        this.state_ = 'failed';
+      }
+    });
+  }
+
+  private async runReconnectCycle(): Promise<boolean> {
+    const policy = this.reconnectPolicy!;
+    let ok = false;
+    for (let attempt = this.reconnectFailures; attempt < policy.attempts && !ok; attempt++) {
+      const delay = Math.min(policy.maxDelayMs, policy.initialDelayMs * 2 ** this.reconnectFailures);
+      await new Promise((r) => setTimeout(r, delay));
+      if (this.state_ === 'closed') return false;
+      this.reconnectFailures += 1;
+      try {
+        this.transport.close(); // the dead transport (best-effort)
+        this.transport = new StdioTransport(this.config, this.label);
+        this.attachTransport(this.transport);
+        this.initialized = false;
+        this.internalReconnecting = true;
+        try {
+          await this.initialize();
+        } finally {
+          this.internalReconnecting = false;
+        }
+        ok = true;
+      } catch { /* respawn/initialize failed — back off and retry */ }
+    }
+    return ok;
   }
 
   private handleLine(line: string): void {
@@ -248,7 +424,26 @@ export class McpClient {
       this.requests.delete(msg.id);
       if (msg.error) pending.reject(new Error(`${msg.error.code}: ${msg.error.message}`));
       else pending.resolve(msg.result);
+      return;
     }
+    // Server-initiated notification (no id). The one the client MUST honor:
+    // notifications/tools/list_changed invalidates cached tools/list results.
+    if (typeof msg.method === 'string') this.handleNotification(msg.method);
+  }
+
+  private handleNotification(method: string): void {
+    if (method !== 'notifications/tools/list_changed') return;
+    this.toolsCache = null;
+    processToolsCache.delete(this.identityKey);
+    for (const cb of this.toolsListChangedCbs) {
+      try { cb(); } catch { /* listener failures never break the client */ }
+    }
+  }
+
+  /** Drop any cached tools/list results (connection + process scope). */
+  invalidateToolsCache(): void {
+    this.toolsCache = null;
+    processToolsCache.delete(this.identityKey);
   }
 
   private rejectAll(err: Error): void {
@@ -256,7 +451,35 @@ export class McpClient {
     this.requests.clear();
   }
 
-  private request(method: string, params: unknown): Promise<unknown> {
+  /** Wait for a running reconnect cycle, bounded: a caller must not hang on
+   *  a cycle that keeps failing (the cycle itself retries with backoff). */
+  private async awaitReconnectCycle(): Promise<void> {
+    if (!this.reconnectCycle) return;
+    const cap = new Promise<never>((_, reject) => {
+      const t = setTimeout(() => reject(new Error(`mcp:${this.label} reconnect still in progress after 15s`)), 15_000);
+      (t as unknown as { unref?: () => void }).unref?.();
+    });
+    await Promise.race([this.reconnectCycle, cap]);
+  }
+
+  private async request(method: string, params: unknown): Promise<unknown> {
+    // Requests issued while a reconnect cycle runs wait for it to settle
+    // (ready → proceed on the fresh transport; failed → clear fast error).
+    if (this.state_ === 'reconnecting' && this.reconnectCycle && !this.internalReconnecting) {
+      await this.awaitReconnectCycle();
+      const st = this.state_ as McpConnectionState; // state changes across the await
+      if (st === 'closed') throw new Error(`mcp:${this.label} closed while reconnecting`);
+      if (st === 'failed') throw new Error(`mcp:${this.label} reconnect failed: ${this.lastFatal?.message ?? 'server unreachable'}`);
+    } else if (this.state_ === 'failed' && this.reconnectPolicy && this.ownsStdio && !this.internalReconnecting) {
+      // Exhausted earlier: budget ONE fresh cycle per request so a server
+      // that came back (or was restarted) heals without a client rebuild.
+      this.reconnectFailures = 0;
+      this.startReconnectCycle();
+      await this.awaitReconnectCycle();
+      if ((this.state_ as McpConnectionState) !== 'ready') {
+        throw new Error(`mcp:${this.label} reconnect failed: ${this.lastFatal?.message ?? 'server unreachable'}`);
+      }
+    }
     return new Promise((resolve, reject) => {
       const id = this.nextId++;
       // A server that silently ignores a method (not an error response — just
@@ -299,12 +522,30 @@ export class McpClient {
     });
     this.notify('notifications/initialized', {});
     this.initialized = true;
+    if (this.state_ !== 'closed') this.state_ = 'ready';
   }
 
   async listTools(): Promise<McpToolInput[]> {
+    // Cacheable list responses: when the server provides ttlMs/cacheScope we
+    // serve the cached list until expiry (process scope is shared across
+    // clients of the same server), and drop it on list_changed notifications.
+    const cached = this.toolsCache ?? processToolsCache.get(this.identityKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.tools;
     if (!this.initialized) await this.initialize();
-    const result = (await this.request('tools/list', {})) as { tools?: McpToolInput[] };
-    return result?.tools ?? [];
+    const result = (await this.request('tools/list', {})) as {
+      tools?: McpToolInput[];
+      ttlMs?: unknown;
+      cacheScope?: unknown;
+      _meta?: { ttlMs?: unknown; cacheScope?: unknown };
+    };
+    const tools = result?.tools ?? [];
+    const meta = parseListCacheMeta(result);
+    if (meta.ttlMs) {
+      const entry: ToolsCacheEntry = { tools, expiresAt: Date.now() + meta.ttlMs };
+      if (meta.cacheScope === 'process') processToolsCache.set(this.identityKey, entry);
+      else this.toolsCache = entry;
+    }
+    return tools;
   }
 
   /** List resources the server exposes (optional capability). Servers that do
@@ -358,6 +599,11 @@ export class McpClient {
   }
 
   close(): void {
+    // Mark closed BEFORE killing the transport: the child 'exit' event fires
+    // into onFatal, which must release pending requests but never schedule a
+    // reconnect for an intentionally closed client.
+    this.state_ = 'closed';
+    this.toolsCache = null; // connection-scope cache dies with the connection
     try {
       this.transport.close();
     } catch {
