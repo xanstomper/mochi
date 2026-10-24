@@ -23,6 +23,7 @@
 // taskRepoMap's ordering. The default path deliberately makes NO model call:
 // deterministic scoring is free, sub-millisecond-to-milliseconds, and keeps
 // task start latency and prompt construction cache-friendly.
+import { isAbsolute, relative } from 'node:path';
 import { hasSqlite, querySymbolGraphSync } from './codegraph.js';
 import { tokenize } from '../memory/relevance.js';
 
@@ -42,6 +43,8 @@ const W_NEIGHBOR = 0.5;
 const NEIGHBOR_DECAY = 0.6;
 const SEED_COUNT = 10;
 const MAX_SIGNATURES = 3;
+/** Aider repomap.py:519 — PageRank multiplier for files in the chat. */
+const CHAT_FILE_MULT = 50;
 /** Hard char budget for the rendered task-conditioned section. The old
  *  names-only section ran ~0.6–0.9K chars on real repos; this caps the
  *  richer section at roughly 2x that, and the renderer never exceeds it. */
@@ -100,6 +103,12 @@ function loadFileGraph(cwd: string): FileGraph | null {
     m.set(calleeFile, (m.get(calleeFile) ?? 0) + 1);
   }
   if (files.size === 0) return null;
+
+  // Aider repomap.py:512 — scale repeated-reference counts down with sqrt so
+  // high-frequency (low-value) mentions don't dominate the edge weights.
+  for (const dsts of Array.from(out.values())) {
+    for (const [dst, w] of Array.from(dsts.entries())) dsts.set(dst, Math.sqrt(w));
+  }
 
   // PageRank.
   const ids = Array.from(files);
@@ -206,6 +215,10 @@ export interface TaskRepoMapOptions {
    *  test-file tilt on test tasks. */
   kind?: string;
   topK?: number;
+  /** Aider repomap.py:374/519 — files already in the working set (read or
+   *  edited this session) get a ×50 PageRank personalization multiplier so
+   *  the map anchors on what the agent is actively touching. */
+  chatFiles?: string[];
 }
 
 interface SymbolLite { name: string; kind: string; rel: string; line: number }
@@ -309,6 +322,12 @@ export function taskRepoMap(cwd: string, opts: TaskRepoMapOptions): TaskRepoMapE
   const topK = opts.topK ?? TOP_K;
   const graph = loadFileGraph(cwd);
   if (!graph) return [];
+  const chatSet = new Set((opts.chatFiles ?? []).map((p) => {
+    const n = normRel(p);
+    // Accept absolute paths (ReadCache keys) by relativizing against cwd.
+    if (isAbsolute(n)) return relative(cwd, n);
+    return n;
+  }).filter((p) => p && !p.startsWith('..')));
 
   const symbols = loadSymbolsLite(cwd);
   const symbolsByFile = new Map<string, SymbolLite[]>();
@@ -367,6 +386,11 @@ export function taskRepoMap(cwd: string, opts: TaskRepoMapOptions): TaskRepoMapE
     const pr = graph.ranks.get(file) ?? 0;
     const lex = lexical.get(file) ?? 0;
     let combined = W_PAGERANK * pr + W_LEXICAL * lex + W_NEIGHBOR * (neighborBoost.get(file) ?? 0);
+    // Aider personalization: files the agent has already touched anchor the
+    // map. Applied as a multiplier on the PageRank component (rank is
+    // normalized 0..1, so ×50 dominates every structural hub but still
+    // yields to a perfect lexical hit when W_LEXICAL leads).
+    if (chatSet.has(file)) combined += W_PAGERANK * pr * CHAT_FILE_MULT;
     if (opts.kind === 'test' && TEST_FILE_RE.test(file)) combined += 0.08;
     if (combined <= 0) continue;
     scored.push({ file, rank: pr, score: combined, lexical: lex, symbols: [] });

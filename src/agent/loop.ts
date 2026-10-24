@@ -1962,6 +1962,10 @@ export class Agent {
       const mapText = taskRepoMapText(this.workspace.dir, {
         task: `${task.title}\n${task.description ?? ''}`,
         kind: this.taskKind ?? classifyTaskKind(task),
+        // Aider chat-files personalization: everything already read (abs
+        // paths; taskRepoMap normalizes) anchors the map on the live
+        // working set.
+        chatFiles: [...this.readCache.keys()],
       });
       if (mapText) {
         this.context.addMessage({ role: 'system', content: mapText });
