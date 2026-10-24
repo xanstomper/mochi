@@ -10,7 +10,25 @@ import { createServer, type Server, type IncomingMessage, type ServerResponse } 
 import { randomUUID } from 'node:crypto';
 import { runArgv, runShellString } from '../exec.js';
 
-// Antigravity OAuth client registered application identity
+// Antigravity OAuth client registered application identity.
+//
+// Deliberate-exposure decision (ISSUES L-17) — recorded, not silent:
+//  * ANTIGRAVITY_CLIENT_ID / ANTIGRAVITY_CLIENT_SECRET come from the
+//    environment first (like every other credential — see
+//    model/credential-pool.ts); the shipped fallback exists so
+//    `mochi login antigravity` works with zero configuration.
+//  * The fallback is a XOR-42 byte array, NOT encryption — anyone can
+//    extract it, and this tree is published. For Google's INSTALLED-APP
+//    flow the client secret is quasi-public by design (it ships in every
+//    native client; Google binds access to the account, not the secret).
+//    The parity target is omp's google-antigravity client identity.
+//  * If this id/secret pair is another client's identity rather than one
+//    registered for Mochi, that is a TERMS problem, not a style problem —
+//    held to the standard stated in src/model/oauth-device.ts:7
+//    ("shipping a login that points at someone else's client_id… would be
+//    exactly the fake this file exists to prevent"). Rotating/revoking is
+//    an account action for the credential's owner, deliberately not done
+//    by a code wave.
 export const ANTIGRAVITY_CLIENT_ID = process.env.ANTIGRAVITY_CLIENT_ID ||
   String.fromCharCode(...[27,26,29,27,26,26,28,26,28,26,31,19,27,7,94,71,66,89,89,67,68,24,66,24,27,70,73,88,79,24,25,31,92,94,69,70,69,64,66,30,77,30,26,25,79,90,4,75,90,90,89,4,77,69,69,77,70,79,95,89,79,88,73,69,68,94,79,68,94,4,73,69,71].map((c) => c ^ 42));
 

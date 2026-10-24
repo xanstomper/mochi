@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   generateAuthUrl,
   ANTIGRAVITY_CLIENT_ID,
@@ -204,5 +204,24 @@ describe('antigravity-oauth', () => {
 
     expect(res.access_token).toBe('ya29.new-access');
     expect(res.expiresAtMs).toBe(1_000_000 + 3600 * 1000);
+  });
+});
+
+// ISSUES L-17: the client identity is env-overridable — like every other
+// credential, the environment wins over the shipped fallback constant.
+describe('antigravity-oauth env-overridable client identity', () => {
+  it('ANTIGRAVITY_CLIENT_SECRET/ID env vars override the shipped fallback', async () => {
+    vi.resetModules();
+    process.env.ANTIGRAVITY_CLIENT_SECRET = 'env-fixture-secret';
+    process.env.ANTIGRAVITY_CLIENT_ID = 'env-fixture-id.apps.googleusercontent.com';
+    try {
+      const mod = await import('./antigravity-oauth.js?envtest=1');
+      expect(mod.ANTIGRAVITY_CLIENT_SECRET).toBe('env-fixture-secret');
+      expect(mod.ANTIGRAVITY_CLIENT_ID).toBe('env-fixture-id.apps.googleusercontent.com');
+    } finally {
+      delete process.env.ANTIGRAVITY_CLIENT_SECRET;
+      delete process.env.ANTIGRAVITY_CLIENT_ID;
+      vi.resetModules();
+    }
   });
 });
