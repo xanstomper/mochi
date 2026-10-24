@@ -866,7 +866,10 @@ export interface AggregateHitsOptions {
  *  votes at half weight):
  *
  *  - provider embedder (a trained semantic ranker is present): file-level
- *    RRF over the file's best chunk PER SIGNAL. The old formula (best
+ *    RRF over the file's best chunk PER SIGNAL, lexical vote at HALF
+ *    weight — with a trained ranker present the exact-token vote is the
+ *    weak one (the mirror of the chunk-level VECTOR_WEIGHT_FALLBACK
+ *    discount). The old formula (best
  *    chunk + 0.25 x the rest of the file's pooled chunk scores) is
  *    dominated by how many of a file's chunks made the fused chunk pool —
  *    vocabulary-rich multi-chunk files (CHANGELOG.md, agent loop,
@@ -886,7 +889,7 @@ export interface AggregateHitsOptions {
  *    spread-evidence there, not noise.
  */
 const FILE_RRF_K = 60;
-const FILE_LEX_WEIGHT_PROVIDER = 1.0;
+const FILE_LEX_WEIGHT_PROVIDER = 0.5;
 const FILE_VEC_WEIGHT = 1.0;
 export function aggregateHitsToFiles(hits: SemanticHit[], limit = 10, opts: AggregateHitsOptions = {}): FileHit[] {
   const byFile = new Map<string, SemanticHit[]>();

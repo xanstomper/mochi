@@ -230,6 +230,50 @@ describe('aggregateHitsToFiles file-level RRF (P4, provider embedder)', () => {
     ], 5, { embedderKind: 'lexical-fallback' });
     expect(fallbackTen[0].fileScore).toBeGreaterThan(one[0].fileScore);
   });
+
+  it('provider: the lexical file vote counts at half weight (mirror of the fallback vector discount)', () => {
+    // Exact fileScore pins: file-level RRF with vec weight 1.0 and lex
+    // weight 0.5 — file i with vec rank vr and lex rank lr scores
+    // 1/(60+vr) + 0.5/(60+lr). (The fallback branch is the legacy
+    // best + 0.25xrest formula, pinned in the test above.)
+    const three = [
+      hit({ rel: 'alpha.ts', score: 0.02, fusedScore: 0.02, vectorScore: 0.9, lexicalScore: 0.8 }),
+      hit({ rel: 'beta.ts', score: 0.015, fusedScore: 0.015, vectorScore: 0.5, lexicalScore: 0.4 }),
+      hit({ rel: 'gamma.ts', score: 0.01, fusedScore: 0.01, vectorScore: 0.3, lexicalScore: 0.2 }),
+    ];
+    const asProvider = aggregateHitsToFiles(three, 3, { embedderKind: 'provider' });
+    expect(asProvider[0].rel).toBe('alpha.ts');
+    expect(asProvider[0].fileScore).toBeCloseTo(1 / 61 + 0.5 / 61, 12);
+    expect(asProvider[1].fileScore).toBeCloseTo(1 / 62 + 0.5 / 62, 12);
+    expect(asProvider[2].fileScore).toBeCloseTo(1 / 63 + 0.5 / 63, 12);
+  });
+
+  it('provider: a vector-first file beats a lexical-rich one; fallback policy keeps the lexicalist first', () => {
+    // vectorFirst.ts holds the best vector chunk (rank 1 of 28) with the
+    // WEAKEST lexical evidence (lex rank 20 of 20 — every other file has
+    // some); lexicalRich.md holds the best lexical chunk (rank 1) with
+    // vector rank 10. The 8 vector-only and 18 lexical-only fillers are
+    // single-signal, so no balanced contender muddies the pair. At the
+    // provider policy (lex 0.5) the vector-first file wins; at weight 1/1
+    // (the fallback policy would be, had it used RRF) and under the real
+    // legacy formula the lexical-rich file wins.
+    const hits = [
+      hit({ rel: 'vector-first.ts', score: 0.025, fusedScore: 0.025, vectorScore: 0.62, lexicalScore: 0.05 }),
+      ...Array.from({ length: 8 }, (_, i) => hit({
+        rel: `vec-only${String(i).padStart(2, '0')}.ts`, score: 0.020, fusedScore: 0.020,
+        vectorScore: 0.60 - i * 0.02, lexicalScore: 0,
+      })),
+      hit({ rel: 'lexical-rich.md', score: 0.030, fusedScore: 0.030, vectorScore: 0.45, lexicalScore: 0.40 }),
+      ...Array.from({ length: 18 }, (_, i) => hit({
+        rel: `lex-only${String(i).padStart(2, '0')}.ts`, score: 0.010, fusedScore: 0.010,
+        vectorScore: 0, lexicalScore: 0.35 - i * 0.01,
+      })),
+    ];
+    const asProvider = aggregateHitsToFiles(hits, 3, { embedderKind: 'provider' });
+    expect(asProvider[0].rel).toBe('vector-first.ts');
+    const asFallback = aggregateHitsToFiles(hits, 3, { embedderKind: 'lexical-fallback' });
+    expect(asFallback[0].rel).toBe('lexical-rich.md');
+  });
 });
 
 describe('fixture integrity', () => {
