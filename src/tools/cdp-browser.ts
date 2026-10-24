@@ -33,7 +33,7 @@ import {
   resolveProfileDir,
 } from '../browser/profiles.js';
 import { resolveCdpBrowserBinary } from '../browser/cdp/manager.js';
-import { getCdpSession, closeAllCdpSessions } from '../browser/cdp/manager.js';
+import { getCdpSession, closeAllCdpSessions, type CdpEngine } from '../browser/cdp/manager.js';
 import type { PageSnapshot } from '../browser/cdp/page.js';
 import type { Tool, ToolContext } from './types.js';
 
@@ -72,6 +72,39 @@ export function evalGateError(ctx: Pick<ToolContext, 'config'>): string | undefi
   );
 }
 
+/** ENGINE SELECTION — explicit, and chromium stays the DEFAULT: config
+ *  browser.cdpEngine -> env MOCHI_CDP_ENGINE -> chromium (the same
+ *  config-then-env order as the binary resolution chain). Throws on an
+ *  unknown value: a typo silently meaning "the other engine" is worse than
+ *  a refusal. */
+export function resolveCdpEngine(config?: Pick<ToolContext, 'config'>['config']): CdpEngine {
+  const cfg = (config as { browser?: { cdpEngine?: string } } | undefined)?.browser?.cdpEngine;
+  const raw = String(cfg ?? process.env.MOCHI_CDP_ENGINE ?? 'chromium').trim().toLowerCase();
+  if (raw === 'chromium') return 'chromium';
+  if (raw === 'lightpanda') return 'lightpanda';
+  throw new Error(`unknown CDP engine "${raw}" — use chromium|lightpanda (config browser.cdpEngine or env MOCHI_CDP_ENGINE)`);
+}
+
+/** Lightpanda cannot render: Page.captureScreenshot returns a PLACEHOLDER
+ *  image ("No screenshot available…"), never the page. Saving that as a
+ *  screenshot would fabricate evidence — the action refuses instead.
+ *  Returns the refusal string for lightpanda, undefined for chromium. */
+export function screenshotUnsupportedError(engine: CdpEngine): string | undefined {
+  if (engine !== 'lightpanda') return undefined;
+  return (
+    'UNSUPPORTED on the lightpanda engine: Lightpanda has no rendering engine — ' +
+    'its Page.captureScreenshot returns a placeholder image, NOT the page (measured on 0.3.7). ' +
+    'Use action=snapshot for page state, or run on the chromium engine (the default) for screenshots.'
+  );
+}
+
+/** Labeled engine block on results: when the opt-in engine served the call,
+ *  its scope limits are stated ON the result (never silently degraded). */
+function engineBlock(mgr: { engine: CdpEngine }): string[] {
+  if (mgr.engine !== 'lightpanda') return [];
+  return ['[engine] lightpanda (opt-in fast path) — single page per process: tabs actions refuse; screenshots are UNSUPPORTED (no rendering engine).'];
+}
+
 interface SessionSetup {
   workspaceDir: string;
   profileDir: string;
@@ -79,11 +112,15 @@ interface SessionSetup {
   stateDir: string;
 }
 
-function sessionSetup(ctx: ToolContext, profileName: string): SessionSetup {
+function sessionSetup(ctx: ToolContext, profileName: string, engine: CdpEngine): SessionSetup {
   const workspaceDir = ctx.cwd;
   const stateDir = mochiStateDir(workspaceDir);
   const resolved = resolveProfileDir(profileName); // throws on revoked/invalid
-  const cfgExecutable = (ctx.config as unknown as { browser?: { cdpExecutable?: string } } | undefined)?.browser?.cdpExecutable;
+  // browser.cdpExecutable is a CHROMIUM override — it must not leak into the
+  // lightpanda engine's resolution (its own env/pinned chain resolves that).
+  const cfgExecutable = engine === 'chromium'
+    ? (ctx.config as unknown as { browser?: { cdpExecutable?: string } } | undefined)?.browser?.cdpExecutable
+    : undefined;
   return {
     workspaceDir,
     profileDir: resolved.entry.dir,
@@ -109,7 +146,7 @@ function sandboxBlock(mgr: ReturnType<typeof getCdpSession>): string[] {
  *  discipline it attaches to the NEXT SNAPSHOT (the page observation the
  *  model reasons over), where it is shown once and cleared. */
 async function actionResult(mgr: ReturnType<typeof getCdpSession>, header: string): Promise<string> {
-  return [header, ...restartBlock(mgr), ...sandboxBlock(mgr)].filter(Boolean).join('\n');
+  return [header, ...engineBlock(mgr), ...restartBlock(mgr), ...sandboxBlock(mgr)].filter(Boolean).join('\n');
 }
 
 export const cdpBrowserTool: Tool = {
@@ -125,7 +162,9 @@ export const cdpBrowserTool: Tool = {
       'tabs [switch=<index>] [url=<new-tab-url>]; close([tab=<index>]) — closing the LAST tab shuts the browser down. ' +
       'State: cookies/logins persist under a NAMED profile shared with the browser tool (profile=<name>, never a path). ' +
       'Dialogs (alert/confirm) are auto-dismissed and reported; console/network errors attach to the next result as an [evidence] block. ' +
-      'Binary: config browser.cdpExecutable → MOCHI_CDP_BROWSER → pinned cache install (mochi browser fetch-cdp-shell) → system chromium.',
+      'Binary: config browser.cdpExecutable → MOCHI_CDP_BROWSER → pinned cache install (mochi browser fetch-cdp-shell) → system chromium. ' +
+      'Engine: chrome-headless-shell is the DEFAULT; opt-in Lightpanda fast path via browser.cdpEngine=lightpanda or MOCHI_CDP_ENGINE=lightpanda ' +
+      '(binary: mochi browser fetch-lightpanda) — Lightpanda serves ONE page per process (tabs refuse) and cannot screenshot (no rendering engine).',
     parameters: [
       { name: 'action', type: 'string', description: 'open|snapshot|click|type|key|scroll|eval|screenshot|wait|tabs|close', required: true },
       { name: 'url', type: 'string', description: 'URL for open (or a new tab via tabs action)', required: false },
@@ -160,9 +199,17 @@ export const cdpBrowserTool: Tool = {
     if (looksLikePath(profileName) || !isProfileName(profileName)) {
       return `cdp_browser: profile must be a NAME (got "${profileName}"). Profiles are named credential stores — list them via the browser tool's profiles command.`;
     }
+    // Engine selection happens BEFORE any launch: an unknown value is a
+    // refusal, never a silent chromium session.
+    let engine: CdpEngine;
+    try {
+      engine = resolveCdpEngine(ctx.config);
+    } catch (e) {
+      return `cdp_browser: ${(e as Error).message}`;
+    }
     let setup: SessionSetup;
     try {
-      setup = sessionSetup(ctx, profileName);
+      setup = sessionSetup(ctx, profileName, engine);
     } catch (e) {
       return `cdp_browser: ${(e as Error).message}`;
     }
@@ -170,6 +217,7 @@ export const cdpBrowserTool: Tool = {
     const mgr = getCdpSession({
       workspaceDir: setup.workspaceDir,
       profileDir: setup.profileDir,
+      engine,
       ...(setup.executablePath ? { executablePath: setup.executablePath } : {}),
     });
 
@@ -195,6 +243,7 @@ export const cdpBrowserTool: Tool = {
           const snap = await target.snapshot();
           return [
             `[cdp_browser open] ` + buildSnapshotText(snap, target.drainEvidence()),
+            ...engineBlock(mgr),
             ...restartBlock(mgr),
             ...sandboxBlock(mgr),
           ].filter(Boolean).join('\n');
@@ -203,6 +252,7 @@ export const cdpBrowserTool: Tool = {
           const snap = await page.snapshot();
           return [
             `[cdp_browser snapshot]`,
+            ...engineBlock(mgr),
             ...restartBlock(mgr),
             ...sandboxBlock(mgr),
             buildSnapshotText(snap, page.drainEvidence()),
@@ -248,6 +298,8 @@ export const cdpBrowserTool: Tool = {
           return await actionResult(mgr, `[cdp_browser eval] result: ${rendered?.slice(0, 4000) ?? 'undefined'}`);
         }
         case 'screenshot': {
+          const unsupported = screenshotUnsupportedError(mgr.engine);
+          if (unsupported) return await actionResult(mgr, `[cdp_browser screenshot] ${unsupported}`);
           const ts = new Date().toISOString().replace(/[:.]/g, '-');
           const path = args.path ? String(args.path) : `${setup.stateDir}/cdp/screenshots/screenshot-${ts}.png`;
           const shot = await page.screenshot({ path, fullPage: args.fullPage === true });

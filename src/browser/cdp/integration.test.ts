@@ -8,7 +8,7 @@
 // Hermes-bundled chromium via MOCHI_CDP_BROWSER) serves the runs.
 
 import { createServer, type Server } from 'node:http';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -273,5 +273,118 @@ describe.skipIf(!binaryAvailable)('cdp integration: real headless shell, local f
     const profiles = listProfiles().filter((p) => !p.revoked);
     expect(profiles.length).toBeGreaterThan(0);
     expect(profiles.find((p) => p.name === 'default')).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// INTEGRATION: the OPT-IN Lightpanda engine over real CDP. SKIP-LABELED when
+// no Lightpanda binary is installed (`mochi browser fetch-lightpanda`).
+// These cover ONLY the engine-divergent behaviors: the labeled engine block,
+// the single-page scope (tabs refuse), the screenshot UNSUPPORTED refusal,
+// and the same snapshot/type/click evidence flow working end to end.
+
+let lpBinaryAvailable = false;
+let lpBinaryDetail = '';
+try {
+  const { resolveCdpBrowserBinary } = await import('./manager.js');
+  const r = resolveCdpBrowserBinary(undefined, 'lightpanda');
+  lpBinaryAvailable = true;
+  lpBinaryDetail = `${r.path} [${r.source}]`;
+} catch (err) {
+  lpBinaryDetail = (err as Error).message;
+}
+
+describe.skipIf(!lpBinaryAvailable)('cdp integration: lightpanda opt-in engine, local fixtures', () => {
+  let lpServer: Server | undefined;
+  let lpBase = '';
+  let lpWorkRoot = '';
+  let lpProfilesDir = '';
+  let savedEngine: string | undefined;
+
+  beforeAll(async () => {
+    console.log(`[cdp-integration-lightpanda] binary: ${lpBinaryDetail}`);
+    lpServer = createServer((req, res) => {
+      const url = req.url ?? '/';
+      const ok = (body: string): void => { res.writeHead(200, { 'content-type': 'text/html' }); res.end(body); };
+      if (url === '/') ok(PAGE_STATIC);
+      else if (url === '/form') ok(PAGE_FORM);
+      else if (url === '/app') ok(PAGE_APP);
+      else if (url === '/api/data') ok(JSON.stringify({ items: ['alpha', 'beta'] }), 'application/json');
+      else { res.writeHead(404); res.end('not found'); }
+    });
+    await new Promise<void>((r) => lpServer!.listen(0, '127.0.0.1', r));
+    lpBase = `http://127.0.0.1:${(lpServer.address() as { port: number }).port}`;
+    lpWorkRoot = mkdtempSync(join(tmpdir(), 'mochi-cdp-lp-int-'));
+    lpProfilesDir = mkdtempSync(join(tmpdir(), 'mochi-cdp-lp-int-profiles-'));
+    process.env.MOCHI_BROWSER_PROFILES_DIR = lpProfilesDir;
+    savedEngine = process.env.MOCHI_CDP_ENGINE;
+    process.env.MOCHI_CDP_ENGINE = 'lightpanda';
+  });
+  afterAll(async () => {
+    closeAllCdpSessions();
+    if (savedEngine === undefined) delete process.env.MOCHI_CDP_ENGINE;
+    else process.env.MOCHI_CDP_ENGINE = savedEngine;
+    delete process.env.MOCHI_BROWSER_PROFILES_DIR;
+    if (lpServer) await new Promise<void>((r) => lpServer!.close(() => r()));
+    if (lpWorkRoot) rmSync(lpWorkRoot, { recursive: true, force: true });
+    if (lpProfilesDir) rmSync(lpProfilesDir, { recursive: true, force: true });
+  });
+
+  let lpWsCounter = 0;
+  const lpRun = async (args: Record<string, unknown>, workspace?: string): Promise<string> => {
+    const ws = workspace ?? join(lpWorkRoot, `ws-${++lpWsCounter}`);
+    mkdirSync(ws, { recursive: true });
+    return await cdpBrowserTool.execute(args, toolCtx(ws));
+  };
+
+  it('open works end to end and carries the labeled [engine] block', async () => {
+    const out = await lpRun({ action: 'open', url: `${lpBase}/` });
+    expect(out).toContain('[cdp_browser open]');
+    expect(out).toContain('heading "Static Fixture"');
+    expect(out).toMatch(/e\d+ link "to the form"/);
+    expect(out).toMatch(/\[engine\] lightpanda \(opt-in fast path\)/);
+  });
+
+  it('type + click drive the form end to end (AX refs resolve through the DOM domain)', async () => {
+    const ws = join(lpWorkRoot, 'ws-form');
+    mkdirSync(ws, { recursive: true });
+    const out1 = await lpRun({ action: 'open', url: `${lpBase}/form` }, ws);
+    const userRef = /e\d+ textbox "User"/.exec(out1)?.[0].split(' ')[0];
+    expect(userRef).toMatch(/^e\d+$/);
+    await lpRun({ action: 'type', ref: userRef, text: 'alice', clear: false }, ws);
+    await lpRun({ action: 'click', ref: /e\d+ button "Go"/.exec(out1)![0].split(' ')[0] }, ws);
+    const snap = await lpRun({ action: 'snapshot' }, ws);
+    expect(snap).toContain('submitted alice');
+  });
+
+  it('tabs refuse with the labeled single-page limit (scoped, not degraded)', async () => {
+    const ws = join(lpWorkRoot, 'ws-tabs');
+    mkdirSync(ws, { recursive: true });
+    await cdpBrowserTool.execute({ action: 'open', url: `${lpBase}/` }, toolCtx(ws));
+    const listed = await cdpBrowserTool.execute({ action: 'tabs' }, toolCtx(ws));
+    expect(listed).toMatch(/1 open:/); // listing the single page works
+    const opened = await cdpBrowserTool.execute({ action: 'tabs', url: `${lpBase}/form` }, toolCtx(ws));
+    expect(opened).toMatch(/ONE page per process/);
+    const switched = await cdpBrowserTool.execute({ action: 'tabs', switch: 0 }, toolCtx(ws));
+    expect(switched).toMatch(/ONE page per process/);
+  });
+
+  it('screenshot is an UNSUPPORTED refusal — the placeholder PNG is never saved', async () => {
+    const ws = join(lpWorkRoot, 'ws-shot');
+    mkdirSync(ws, { recursive: true });
+    await cdpBrowserTool.execute({ action: 'open', url: `${lpBase}/` }, toolCtx(ws));
+    const out = await cdpBrowserTool.execute({ action: 'screenshot' }, toolCtx(ws));
+    expect(out).toMatch(/\[cdp_browser screenshot\] UNSUPPORTED on the lightpanda engine/);
+    expect(out).toMatch(/placeholder/);
+    expect(out).not.toMatch(/saved:/);
+  });
+
+  it('dialogs are auto-dismissed and recorded; close shuts the single page + process down', async () => {
+    const ws = join(lpWorkRoot, 'ws-close');
+    mkdirSync(ws, { recursive: true });
+    const ctx = toolCtx(ws);
+    await cdpBrowserTool.execute({ action: 'open', url: `${lpBase}/app` }, ctx);
+    const out = await cdpBrowserTool.execute({ action: 'close' }, ctx);
+    expect(out).toMatch(/last page, browser shut down/);
   });
 });

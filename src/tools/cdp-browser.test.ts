@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { buildSnapshotText, cdpBrowserTool, evalGateError, type CdpBrowserAction } from './cdp-browser.js';
+import { buildSnapshotText, cdpBrowserTool, evalGateError, resolveCdpEngine, screenshotUnsupportedError, type CdpBrowserAction } from './cdp-browser.js';
 import type { PageSnapshot } from '../browser/cdp/page.js';
 import type { ToolContext } from './types.js';
 
@@ -102,6 +102,69 @@ describe('cdp_browser tool — action discrimination and arg validation (no brow
   it('eval is denied BEFORE any browser launch when unpermitted', async () => {
     const out = await cdpBrowserTool.execute({ action: 'eval', js: '1+1' }, ctx);
     expect(out).toMatch(/permission-gated/);
+  });
+
+  it('an unknown engine value is refused, never silently chromium', async () => {
+    const saved = process.env.MOCHI_CDP_ENGINE;
+    process.env.MOCHI_CDP_ENGINE = 'panda';
+    try {
+      const out = await cdpBrowserTool.execute({ action: 'snapshot' }, ctx);
+      expect(out).toMatch(/unknown CDP engine "panda"/);
+      expect(out).toMatch(/chromium\|lightpanda/);
+    } finally {
+      if (saved === undefined) delete process.env.MOCHI_CDP_ENGINE;
+      else process.env.MOCHI_CDP_ENGINE = saved;
+    }
+  });
+});
+
+describe('resolveCdpEngine — explicit selection, chromium default', () => {
+  const cfg = (browser: unknown): ToolContext['config'] => ({ browser }) as unknown as ToolContext['config'];
+
+  it('defaults to chromium when neither config nor env speak', () => {
+    const saved = process.env.MOCHI_CDP_ENGINE;
+    delete process.env.MOCHI_CDP_ENGINE;
+    try {
+      expect(resolveCdpEngine(undefined)).toBe('chromium');
+      expect(resolveCdpEngine(cfg({}))).toBe('chromium');
+    } finally {
+      if (saved !== undefined) process.env.MOCHI_CDP_ENGINE = saved;
+    }
+  });
+
+  it('config browser.cdpEngine wins over env MOCHI_CDP_ENGINE (same order as binary resolution)', () => {
+    const saved = process.env.MOCHI_CDP_ENGINE;
+    process.env.MOCHI_CDP_ENGINE = 'chromium';
+    try {
+      expect(resolveCdpEngine(cfg({ cdpEngine: 'lightpanda' }))).toBe('lightpanda');
+      expect(resolveCdpEngine(cfg({ cdpEngine: 'chromium' }))).toBe('chromium');
+    } finally {
+      if (saved === undefined) delete process.env.MOCHI_CDP_ENGINE;
+      else process.env.MOCHI_CDP_ENGINE = saved;
+    }
+  });
+
+  it('env MOCHI_CDP_ENGINE selects the opt-in engine; values are normalized', () => {
+    const saved = process.env.MOCHI_CDP_ENGINE;
+    try {
+      process.env.MOCHI_CDP_ENGINE = 'Lightpanda';
+      expect(resolveCdpEngine(undefined)).toBe('lightpanda');
+      process.env.MOCHI_CDP_ENGINE = ' CHROMIUM ';
+      expect(resolveCdpEngine(undefined)).toBe('chromium');
+      process.env.MOCHI_CDP_ENGINE = 'panda';
+      expect(() => resolveCdpEngine(undefined)).toThrow(/unknown CDP engine "panda"/);
+    } finally {
+      if (saved === undefined) delete process.env.MOCHI_CDP_ENGINE;
+      else process.env.MOCHI_CDP_ENGINE = saved;
+    }
+  });
+});
+
+describe('screenshotUnsupportedError — never fabricate a screenshot', () => {
+  it('chromium screenshots are supported; lightpanda gets the labeled UNSUPPORTED refusal', () => {
+    expect(screenshotUnsupportedError('chromium')).toBeUndefined();
+    expect(screenshotUnsupportedError('lightpanda')).toMatch(/UNSUPPORTED/);
+    expect(screenshotUnsupportedError('lightpanda')).toMatch(/placeholder/);
   });
 });
 
