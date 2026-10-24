@@ -79,6 +79,11 @@ describe('verifySummaryEvidenced', () => {
 
   it('vacuous passes are not evidence', () => {
     expect(verifySummaryEvidenced('All checks passed: true')).toBe(false);
+    // Fabricated manual-check prefix with a trivial command: not evidenced
+    // (the summary text is model-written; only a real check command counts).
+    expect(verifySummaryEvidenced('Manual check passed: `echo ok` (exit 0)')).toBe(false);
+    expect(verifySummaryEvidenced('Manual check passed: `true` (exit 0)')).toBe(false);
+    expect(verifySummaryEvidenced('Manual check passed (exit 0)')).toBe(false);
     expect(verifySummaryEvidenced('No verification configured.')).toBe(false);
     expect(verifySummaryEvidenced('No changes made to verify.')).toBe(false);
     expect(verifySummaryEvidenced('Greenfield build: files created, no repo suite applicable (skipped by design).')).toBe(false);

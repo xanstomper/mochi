@@ -204,7 +204,18 @@ const TRIVIAL_VERIFY_COMMANDS = new Set(['true', ':', 'exit 0', 'echo', 'echo pa
  *  exactly the case self-review exists for (e.g. a wrong constant no test
  *  can see). */
 export function verifySummaryEvidenced(summary: string): boolean {
-  if (summary.startsWith('Manual check passed')) return true;
+  // Manual-check recognition (loop.ts isManualCheckPass) can only mint this
+  // prefix for a check-looking command, but the summary text itself is
+  // model-written — apply the same trivial-command filter so a fabricated
+  // `Manual check passed: \`echo ok\` (exit 0)` is not evidenced. Only the
+  // backticked command segment is the evidence, same first-line rule as the
+  // 'All checks passed:' shape.
+  if (summary.startsWith('Manual check passed')) {
+    const m = summary.split('\n')[0].match(/`([^`]+)`/);
+    if (!m) return false;
+    const c = m[1].trim().toLowerCase();
+    return !TRIVIAL_VERIFY_COMMANDS.has(c) && !c.startsWith('echo ');
+  }
   if (!summary.startsWith('All checks passed:')) return false;
   // Only the first line is the command list — FLAKY-PASS appends a flaky
   // report on subsequent lines; without this, `All checks passed: true\nFlaky: …`
