@@ -217,3 +217,13 @@ needs: a real dataset source + an egress-approval path Ben can answer, plus
 runner backoff and per-task turns/token capture. This is a Ben decision, not
 a coder task. Falsification head-to-head (Mochi vs Hermes, same model, fresh
 tasks, no dataset needed) launched to vermes instead — it sidesteps both stops.
+
+## Hybrid tuning — WooWop independent verification (2026-10-24)
+Fresh worktree at f9861d9, Node 26.12.1: tsc CLEAN; full suite **3,450 passed /
+0 failed / 12 skipped** — exactly matching the coder's gate. Tuned hybrid
+(file-level RRF + lexical vote at half weight) SHIPS as the production
+file-aggregation path: 60-query set lexical 0.800/0.867, embedded 0.833/0.883,
+hybrid 0.883/0.900. Hybrid CLOSED. Verified chain: 3,269/2 -> 3,271 -> 3,285 ->
+3,328 -> 3,384 -> 3,401 -> 3,445 -> 3,450, zero failures throughout.
+Open from the run: q23 ground-truth ambiguity (session-store.ts vs
+state-store.ts) — needs a human call, recorded not decided.
