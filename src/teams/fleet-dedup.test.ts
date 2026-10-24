@@ -32,3 +32,38 @@ describe('fleet dedup line bucketing', () => {
     expect(agg.duplicatesMerged).toBe(0);
   });
 });
+
+describe('failed reviewer demotion', () => {
+  it('a failed lens blocks the approve verdict — partial review is never a pass', () => {
+    const agg = aggregateReviews(
+      [
+        { lens: 'correctness', result: reviewResult({ verdict: 'approve' }) },
+        { lens: 'tests', result: reviewResult({ verdict: 'approve' }) },
+      ],
+      { failedLenses: ['security'] },
+    );
+    expect(agg.verdict).toBe('comment');
+    expect(agg.failedLenses).toEqual(['security']);
+  });
+
+  it('request-changes still wins even when a lens failed', () => {
+    const agg = aggregateReviews(
+      [
+        { lens: 'correctness', result: reviewResult({ verdict: 'request-changes' }) },
+      ],
+      { failedLenses: ['security', 'tests'] },
+    );
+    expect(agg.verdict).toBe('request-changes');
+  });
+
+  it('a full fleet with no failures approves as before', () => {
+    const agg = aggregateReviews(
+      [
+        { lens: 'correctness', result: reviewResult({ verdict: 'approve' }) },
+        { lens: 'security', result: reviewResult({ verdict: 'approve' }) },
+      ],
+    );
+    expect(agg.verdict).toBe('approve');
+    expect(agg.failedLenses).toEqual([]);
+  });
+});

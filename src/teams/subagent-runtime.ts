@@ -257,14 +257,19 @@ export interface AggregatedReview {
   findings: ChildFinding[];
   /** How many duplicate findings were merged away. */
   duplicatesMerged: number;
+  /** Lenses whose reviewer produced no result — non-empty demotes the
+   *  verdict to at most comment (a partial review is never an approve). */
+  failedLenses: string[];
   summaries: { lens: string; status: ChildOutcomeStatus; summary: string }[];
 }
 
 /** Merge N reviewer results over the SAME diff: dedupe findings that point
  *  at the same file+line+issue, sort by severity, and merge verdicts —
- *  any request-changes wins; approve requires every reviewer to approve. */
+ *  any request-changes wins; approve requires every reviewer to approve
+ *  AND no reviewer to have failed. */
 export function aggregateReviews(
   results: { lens: string; result: ChildRunResult }[],
+  opts?: { failedLenses?: string[] },
 ): AggregatedReview {
   const byKey = new Map<string, ChildFinding>();
   let duplicatesMerged = 0;
@@ -287,15 +292,21 @@ export function aggregateReviews(
     (a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity],
   );
   const verdicts = results.map((r) => r.result.verdict);
+  // A crashed reviewer is not a pass: lenses that produced no result are
+  // passed in via failedLenses and demote the verdict to comment — a partial
+  // review must never read as APPROVE (mirrors parseChildResult's rule that
+  // the harness outcome is ground truth).
+  const failedLenses = opts?.failedLenses ?? [];
   const verdict: ChildVerdict = verdicts.includes('request-changes')
     ? 'request-changes'
-    : verdicts.length > 0 && verdicts.every((v) => v === 'approve')
+    : failedLenses.length === 0 && verdicts.length > 0 && verdicts.every((v) => v === 'approve')
       ? 'approve'
       : 'comment';
   return {
     verdict,
     findings,
     duplicatesMerged,
+    failedLenses,
     summaries: results.map((r) => ({
       lens: r.lens,
       status: r.result.status,
@@ -368,7 +379,7 @@ export function formatFleetReport(
   meta: { target: string; reviewers: number },
 ): string {
   const lines: string[] = [
-    `Review fleet over ${meta.target}: ${meta.reviewers} reviewer(s) · verdict: ${agg.verdict.toUpperCase()} · ${agg.findings.length} unique finding(s)${agg.duplicatesMerged ? ` (${agg.duplicatesMerged} duplicate(s) merged)` : ''}`,
+    `Review fleet over ${meta.target}: ${meta.reviewers} reviewer(s) · verdict: ${agg.verdict.toUpperCase()} · ${agg.findings.length} unique finding(s)${agg.duplicatesMerged ? ` (${agg.duplicatesMerged} duplicate(s) merged)` : ''}${agg.failedLenses.length ? ` · ⚠ ${agg.failedLenses.length} lens(es) FAILED, no result: ${agg.failedLenses.join(', ')} — this is a PARTIAL review` : ''}`,
   ];
   for (const s of agg.summaries) {
     lines.push(`- [${s.lens}] ${s.status}: ${s.summary.slice(0, 300)}`);

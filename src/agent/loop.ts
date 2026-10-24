@@ -6504,6 +6504,8 @@ Continue from 'Next:', do not redo completed progress.`,
       }),
     );
     await Promise.all(lives.map((l) => l.promise));
+    const failedLenses: string[] = [];
+    lives.forEach((l, i) => { if (!l.record.result) failedLenses.push(lenses[i]); });
     const reviewed = lives
       .map((l, i) => ({ lens: lenses[i], result: l.record.result }))
       .filter((r): r is { lens: string; result: NonNullable<ChildRunRecord['result']> } => !!r.result);
@@ -6511,7 +6513,7 @@ Continue from 'Next:', do not redo completed progress.`,
       const errors = lives.map((l) => l.record.error).filter(Boolean).join('; ');
       return `Review fleet over ${label}: every reviewer failed${errors ? ` (${errors})` : ''}.`;
     }
-    const agg = aggregateReviews(reviewed);
+    const agg = aggregateReviews(reviewed, { failedLenses });
     return formatFleetReport(agg, { target: label, reviewers: reviewed.length });
   }
 
