@@ -129,12 +129,16 @@ export class FakeCdpEndpoint {
     this.buffers.set(socket, buf);
   }
 
-  /** url like ws://127.0.0.1:PORT — the shape the DevTools stderr line has. */
+  /** Set by listen(): the endpoint url, ws://127.0.0.1:PORT — the shape the
+   *  DevTools stderr line has. */
+  url = '';
+
   async listen(): Promise<string> {
     this.server.listen(0, '127.0.0.1');
     await once(this.server, 'listening');
     const { port } = this.server.address() as AddressInfo;
-    return `ws://127.0.0.1:${port}`;
+    this.url = `ws://127.0.0.1:${port}`;
+    return this.url;
   }
 
   /** Reply to a client command id (the fake's own bookkeeping). */
