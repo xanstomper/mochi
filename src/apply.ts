@@ -105,7 +105,7 @@ export function parseUnifiedDiff(diffText: string, root?: string): FileOp[] {
 export function applyHunks(content: string, hunks: string[]): string | null {
   const src = content.length ? content.split('\n') : [];
   // Pre-compute hunk ranges: @@ -oldStart,oldCount +newStart,newCount @@
-  type H = { oldStart: number; oldLines: string[]; newLines: string[] };
+  type H = { oldStart: number; oldLines: string[]; newLines: string[]; applied?: boolean };
   const parsed: H[] = [];
   let cur: H | null = null;
   for (const l of hunks) {
@@ -120,15 +120,36 @@ export function applyHunks(content: string, hunks: string[]): string | null {
     else if (l.startsWith('-')) cur.oldLines.push(l.slice(1));
     else if (l.startsWith(' ')) { cur.oldLines.push(l.slice(1)); cur.newLines.push(l.slice(1)); }
   }
-  // Apply bottom-up so earlier offsets stay valid.
+  // Apply bottom-up so earlier offsets stay valid. Aider's apply ladder:
+  // exact line match first; on drift, retry the hunk whitespace-flexible
+  // (trim-end per line) before giving up — minor indent/trailing-space drift
+  // between the model's remembered context and the file no longer fails.
   for (const h of parsed.reverse()) {
     const idx = h.oldStart - 1;
     const slice = src.slice(idx, idx + h.oldLines.length);
-    const matches = h.oldLines.length === 0
+    const exact = h.oldLines.length === 0
       ? true
       : slice.length === h.oldLines.length && slice.every((s, k) => s === h.oldLines[k]);
-    if (!matches) return null;
-    src.splice(idx, h.oldLines.length, ...h.newLines);
+    if (exact) {
+      src.splice(idx, h.oldLines.length, ...h.newLines);
+      continue;
+    }
+    // Whitespace-flexible retry: locate the old block anywhere in the file by
+    // trim-end comparison, then splice at the found offset (line numbers in
+    // the diff are stale once the file drifted, so re-locate).
+    const norm = (s: string) => s.replace(/\s+$/, '');
+    if (h.oldLines.length > 0) {
+      for (let i = 0; i + h.oldLines.length <= src.length; i++) {
+        if (h.oldLines.every((o, k) => norm(src[i + k]) === norm(o))) {
+          src.splice(i, h.oldLines.length, ...h.newLines);
+          h.oldStart = i + 1;
+          h.applied = true;
+          break;
+        }
+      }
+      if (h.applied) continue;
+    }
+    return null;
   }
   return src.join('\n');
 }
