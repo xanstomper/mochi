@@ -40,7 +40,11 @@ const defaultConfig = (): MochiConfig => ({
     gitDestructive: true,
     admin: true,
   },
-  telemetry: false,
+  // P3 (ISSUES L-06): the dead `telemetry` knob is REMOVED from the schema.
+  // It was parsed, persisted, env-settable (MOCHI_TELEMETRY) — and read by
+  // nothing anywhere in src/ or native/: MOCHI_TELEMETRY=1 was a silent
+  // no-op. Config files carrying `telemetry: false` still load (unknown-key
+  // merge tolerates it); the knob just no longer pretends to exist.
   // Balanced default: "max" over-specifies heavy compute for the free/low-tier
   // flash models (making them slow/stall/thin on trivial work). medium keeps
   // correctness while responding fast; users can raise via MOCHI_REASONING or
@@ -271,7 +275,7 @@ if (!cfg.model.failover || cfg.model.failover.length === 0) {
   merge(cfg as unknown as Record<string, unknown>, { model: envModelConfig() });
   if (process.env.MOCHI_PROJECT_DIR) cfg.projectDir = process.env.MOCHI_PROJECT_DIR;
   if (process.env.MOCHI_CONFIG_DIR) cfg.configDir = process.env.MOCHI_CONFIG_DIR;
-  if (process.env.MOCHI_TELEMETRY) cfg.telemetry = /^(1|true|yes)$/i.test(process.env.MOCHI_TELEMETRY.trim());
+  // (ISSUES L-06) MOCHI_TELEMETRY was removed: it set a field nothing read.
   if (process.env.MOCHI_UNCENSORED === '1') {
     cfg.safety.mode = 'uncensored';
     cfg.permissions = {

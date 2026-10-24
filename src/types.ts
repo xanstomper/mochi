@@ -240,7 +240,6 @@ export interface MochiConfig {
    *  provider is deliberately not reused implicitly. semanticIndex:false
    *  disables the index entirely. */
   retrieval?: { embeddingProvider?: string; embeddingModel?: string; semanticIndex?: boolean };
-  telemetry: boolean;
   projectDir: string;
   configDir: string;
   quiet: boolean;

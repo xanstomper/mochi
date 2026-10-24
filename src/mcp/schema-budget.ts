@@ -377,7 +377,6 @@ async function runFixtureAgent(lazy: boolean, turns: Array<Record<string, unknow
         contextBudgetTokens: 100_000,
       },
       permissions: { read: true, write: true, shell: true, network: true, gitDestructive: true },
-      telemetry: false,
       projectDir: '.mochi',
       configDir: dir,
       quiet: true,

@@ -35,7 +35,7 @@ describe('loadProjectConfigFragments (B26 restructure)', () => {
 
     const f = loadProjectConfigFragments(dir);
     expect(f.model?.model).toBe('from-mochi-json'); // mochi.json preferred
-    expect(f.telemetry).toBe(true); // non-model keys from .mochi/config.json survive
+    expect((f as unknown as Record<string, unknown>).telemetry).toBe(true); // non-model keys from .mochi/config.json survive
     expect(f.mcpServers?.a).toEqual({ command: 'cursor-a' }); // later file wins
     expect(f.mcpServers?.b).toEqual({ command: 'b-cmd' });
   });
