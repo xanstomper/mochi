@@ -143,9 +143,6 @@ export class CdpClient {
   }
 
   private onEvent(msg: CdpEventMessage): void {
-    if (process.env.MOCHI_CDP_DEBUG_EVENTS && typeof msg.method === 'string') {
-      console.error(`[events-debug] ${msg.method} sid=${msg.sessionId ?? '-'} ${JSON.stringify(msg.params ?? {}).slice(0, 140)}`);
-    }
     for (const l of [...this.listeners]) {
       // Method + session routing: session-scoped listeners see only their
       // method on their session; unscoped listeners see only browser-level
