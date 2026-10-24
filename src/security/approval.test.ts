@@ -1,6 +1,6 @@
 // Approval gate: policy tiers finally enforced on the execution path.
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { Agent } from '../agent/loop.js';
@@ -47,6 +47,78 @@ describe('describeApproval + normalizePolicy (pure)', () => {
 });
 
 describe('approval gate on the execution path', () => {
+  it('W3-4: a hunk-subset decision applies ONLY the accepted hunks of a file edit', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-approve-hunks-'));
+    // Two changed regions (first + last line) separated by 10 unchanged
+    // lines: the review must decompose into 2 hunks.
+    const OLD = ['orig-1', ...Array.from({ length: 10 }, (_, i) => `same-${i + 2}`), 'orig-12'].join('\n');
+    const NEW = ['NEW-1', ...Array.from({ length: 10 }, (_, i) => `same-${i + 2}`), 'NEW-12'].join('\n');
+    writeFileSync(resolve(dir, 'note.txt'), OLD);
+    const fake = await startFakeOpenAI([
+      { content: 'Writing.', toolCalls: [{ id: 'w1', type: 'function', function: { name: 'write', arguments: JSON.stringify({ path: 'note.txt', content: NEW }) } }], finishReason: 'tool_calls' },
+      { content: 'Done.', finishReason: 'stop' },
+    ]);
+    try {
+      const config = makeConfig(dir, fake.url);
+      const workspace = new Workspace(dir, '.mochi');
+      workspace.ensure();
+      const context = new ContextEngine(config, dir);
+      context.setGoal('edit note');
+      const reviews: Array<Record<string, unknown> | undefined> = [];
+      const agent = new Agent({
+        role: 'coder', config, workspace, events: new EventBus(), cwd: dir, context,
+        permPolicy: 'strict',
+        approvalHandler: async (req) => {
+          reviews.push((req as { edit?: Record<string, unknown> }).edit);
+          return { decision: 'allow-once', acceptedHunks: [1] }; // keep only the last-line change
+        },
+      });
+      const result = await agent.run(createTask('Edit the note', 'Rewrite note.txt as provided.'));
+      expect(result.success).toBe(true);
+      expect(reviews).toHaveLength(1);
+      const review = reviews[0] as { path?: string; hunks?: string[] } | undefined;
+      expect(review).toBeDefined();
+      expect(review!.path).toBe('note.txt');
+      expect(review!.hunks).toHaveLength(2);
+      const after = readFileSync(resolve(dir, 'note.txt'), 'utf8');
+      const lines = after.split('\n');
+      expect(lines[0]).toBe('orig-1'); // rejected hunk did NOT land
+      expect(lines[lines.length - 1]).toBe('NEW-12'); // accepted hunk landed
+      // The allow was audited (the subset decision is an allow).
+      expect(auditLines(dir).some((l) => l.includes('"tool":"write"') && l.includes('"decision":"allow"'))).toBe(true);
+    } finally {
+      await fake.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('W3-4: accepting zero hunks denies the edit and the file is untouched', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-approve-hunks-none-'));
+    const fake = await startFakeOpenAI([
+      { content: 'Writing.', toolCalls: [{ id: 'w1', type: 'function', function: { name: 'write', arguments: JSON.stringify({ path: 'note.txt', content: 'NEW-1' }) } }], finishReason: 'tool_calls' },
+      { content: 'Fine, skipping it.', finishReason: 'stop' },
+    ]);
+    writeFileSync(resolve(dir, 'note.txt'), 'orig\n');
+    try {
+      const config = makeConfig(dir, fake.url);
+      const workspace = new Workspace(dir, '.mochi');
+      workspace.ensure();
+      const context = new ContextEngine(config, dir);
+      context.setGoal('edit note');
+      const agent = new Agent({
+        role: 'coder', config, workspace, events: new EventBus(), cwd: dir, context,
+        permPolicy: 'strict',
+        approvalHandler: async () => ({ decision: 'allow-once', acceptedHunks: [] }),
+      });
+      await agent.run(createTask('Edit the note', 'Rewrite note.txt as provided.'));
+      expect(readFileSync(resolve(dir, 'note.txt'), 'utf8')).toBe('orig\n');
+      expect(auditLines(dir).some((l) => l.includes('"tool":"write"') && l.includes('"decision":"deny"'))).toBe(true);
+    } finally {
+      await fake.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it('deny vetoes the call, audits it, and the run still completes on prose', async () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-approve-deny-'));
     const fake = await startFakeOpenAI([

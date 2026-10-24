@@ -26,8 +26,30 @@
 import { classifyCommand } from './security.js';
 import { isFetchMutationRequest } from '../tools/fetch-methods.js';
 import type { PermissionPolicy } from './permission.js';
+import type { EditReview } from './edit-review.js';
 
 export type ApprovalDecision = 'allow-once' | 'allow-always' | 'deny';
+
+/** W3-4 per-hunk review: a host UI may accept a SUBSET of the proposed
+ *  hunks. Carried as an object decision; the loop rewrites the call args to
+ *  the accepted subset before execution. */
+export interface HunkApprovalDecision {
+  decision: 'allow-once';
+  /** Indices into ApprovalRequest.edit.hunks. Empty = nothing accepted. */
+  acceptedHunks: number[];
+}
+
+/** What an approval handler may return: a plain decision or a hunk subset. */
+export type ApprovalDecisionEx = ApprovalDecision | HunkApprovalDecision;
+
+/** Fold an extended decision into the plain shape the gate consumes. */
+export function normalizeApprovalDecision(d: ApprovalDecisionEx): { decision: ApprovalDecision; acceptedHunks?: number[] } {
+  if (typeof d === 'string') return { decision: d };
+  if (d && typeof d === 'object' && d.decision === 'allow-once' && Array.isArray(d.acceptedHunks)) {
+    return { decision: 'allow-once', acceptedHunks: [...d.acceptedHunks] };
+  }
+  return { decision: 'deny' }; // malformed objects fail closed
+}
 
 /** What the loop asks the host to resolve. */
 export interface ApprovalRequest {
@@ -38,10 +60,15 @@ export interface ApprovalRequest {
   risk?: string;
   /** Active policy (for menu subtitles / logging). */
   policy: PermissionPolicy;
+  /** W3-4 per-hunk review payload: present for file-edit calls (edit/write/
+   *  patch) whose proposed change could be decomposed into hunks. Absent
+   *  when decomposition was impossible or the tool is not an edit. */
+  edit?: EditReview;
 }
 
-/** Host-provided resolver. Set by the TUI; absent headless. */
-export type ApprovalHandler = (req: ApprovalRequest) => Promise<ApprovalDecision>;
+/** Host-provided resolver. Set by the TUI; absent headless. May return a
+ *  plain decision or (when req.edit was offered) a hunk subset. */
+export type ApprovalHandler = (req: ApprovalRequest) => Promise<ApprovalDecisionEx>;
 
 /** One-line human summary of a tool call for menus and audit lines. */
 export function describeApproval(tool: string, args: Record<string, unknown>): { summary: string; risk?: string } {

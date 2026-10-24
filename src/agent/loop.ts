@@ -67,7 +67,8 @@ import type { AgentProfile } from '../types.js';
 import type { PromptUserFn } from '../tools/user-prompt.js';
 import { PermissionManager } from '../security/permission.js';
 import type { PermissionPolicy } from '../security/permission.js';
-import { describeApproval, normalizePolicy } from '../security/approval.js';
+import { describeApproval, normalizePolicy, normalizeApprovalDecision } from '../security/approval.js';
+import { buildEditReview, applyAcceptedHunks } from '../security/edit-review.js';
 import { matchHardline } from '../security/hardline.js';
 import { classifyCommand, redact } from '../security/security.js';
 import { snapshotTree, rollbackTracked, resolveVerifyCommand, type PlanVerifySnapshot } from './plan-verify.js';
@@ -6823,17 +6824,38 @@ Continue from 'Next:', do not redo completed progress.`,
           }
         } else {
           const { summary, risk } = describeApproval(toolName, parsedArgs);
-          let decision: 'allow-once' | 'allow-always' | 'deny' = 'deny';
+          // W3-4 per-hunk edit review: best-effort hunk decomposition for
+          // file-edit calls (edit/write/patch). Undefined → the host UI
+          // falls back to the plain allow/deny menu.
+          const editReview = buildEditReview(toolName, parsedArgs, this.cwd);
+          let norm: { decision: 'allow-once' | 'allow-always' | 'deny'; acceptedHunks?: number[] } = { decision: 'deny' };
           try {
-            decision = await this.approvalHandler({ tool: toolName, summary, risk, policy });
+            norm = normalizeApprovalDecision(await this.approvalHandler({
+              tool: toolName,
+              summary,
+              risk,
+              policy,
+              ...(editReview ? { edit: editReview } : {}),
+            }));
           } catch {
-            decision = 'deny'; // a broken prompt UI fails closed, never hangs
+            norm = { decision: 'deny' }; // a broken prompt UI fails closed, never hangs
           }
-          if (decision === 'allow-always') {
+          if (norm.decision === 'allow-once' && norm.acceptedHunks && norm.acceptedHunks.length === 0) {
+            norm = { decision: 'deny' }; // reviewed every hunk away = nothing to apply
+          }
+          if (norm.decision === 'allow-always') {
             if (this.approvedAlways.size < 200) this.approvedAlways.add(alwaysKey);
             this.permMgr.mgr.audit({ ...auditBase, decision: 'allow' });
-          } else if (decision === 'allow-once') {
+          } else if (norm.decision === 'allow-once') {
             this.permMgr.mgr.audit({ ...auditBase, decision: 'allow' });
+            // Revise the call args to the accepted hunk subset. A full set
+            // (or an unrevisable call) applies the original args verbatim.
+            if (norm.acceptedHunks && editReview && norm.acceptedHunks.length < editReview.hunks.length) {
+              const revised = applyAcceptedHunks(toolName, parsedArgs, editReview, norm.acceptedHunks, this.cwd);
+              if (revised) {
+                try { tc.function.arguments = JSON.stringify(revised); } catch { /* keep original args */ }
+              }
+            }
           } else {
             this.permMgr.mgr.audit({ ...auditBase, decision: 'deny' });
             this.vetoToolCall(tc, `User denied ${summary}. Proceed WITHOUT it: work around it with allowed tools, explain what you need and why, or ask a narrower question via ask_question — do not just retry the same call.`);

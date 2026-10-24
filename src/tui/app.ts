@@ -3089,9 +3089,10 @@ if (line === '/branch' || line.startsWith('/branch ')) {
   }
 
   /** Interactive approval gate (Claude Code parity): allow once / allow
-   *  always this session / deny. Esc denies. Same active-tab caveat as
-   *  tuiPromptUser above; unit in ./prompt-menus.js. */
-  async function tuiRequestApproval(req: import('../security/approval.js').ApprovalRequest): Promise<import('../security/approval.js').ApprovalDecision> {
+   *  always this session / deny — plus the W3-4 per-hunk subset decision
+   *  when the request carries an edit review. Esc denies. Same active-tab
+   *  caveat as tuiPromptUser above; unit in ./prompt-menus.js. */
+  async function tuiRequestApproval(req: import('../security/approval.js').ApprovalRequest): Promise<import('../security/approval.js').ApprovalDecisionEx> {
     const { tuiRequestApproval } = await import('./prompt-menus.js');
     const detail = req.summary || req.tool || 'Approval Needed';
     sendSystemNotification('Approval Required', detail.slice(0, 100), 'normal');

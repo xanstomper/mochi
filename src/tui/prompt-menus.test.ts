@@ -120,4 +120,92 @@ describe('tuiRequestApproval', () => {
     await tuiRequestApproval(d, { tool: 'shell', summary: '$ ls', risk: 'low', policy: 'workspace-safe' });
     expect(lines[0].text).not.toContain('[risk:');
   });
+
+  // ── W3-4: per-hunk edit review ──────────────────────────────────────────
+  const multiHunkEdit = {
+    tool: 'write',
+    summary: 'write: notes.md',
+    policy: 'strict' as const,
+    edit: {
+      path: 'notes.md',
+      diff: [
+        'diff --git a/notes.md b/notes.md',
+        '--- a/notes.md',
+        '+++ b/notes.md',
+        '@@ -1,2 +1,2 @@',
+        ' top',
+        '-old one',
+        '+new one',
+        '@@ -8,2 +8,2 @@',
+        ' bottom top',
+        '-old two',
+        '+new two',
+      ].join('\n'),
+      hunks: [
+        '@@ -1,2 +1,2 @@\n top\n-old one\n+new one',
+        '@@ -8,2 +8,2 @@\n bottom top\n-old two\n+new two',
+      ],
+    },
+  };
+
+  it('multi-hunk edits show a diff preview then a hunk-review menu', async () => {
+    const seq = [2]; // Apply accepted (default: every hunk accepted)
+    const { d, lines, menus } = deps({ openMenu: async (title: string) => { menus.push(title); return seq.shift() ?? -1; } });
+    const res = await tuiRequestApproval(d, multiHunkEdit);
+    expect(res).toEqual({ decision: 'allow-once', acceptedHunks: [0, 1] });
+    expect(lines.some((l) => l.text.includes('-old one'))).toBe(true); // diff preview shown
+    expect(menus[0]).toContain('pick hunks');
+    expect(lines.some((l) => l.text.includes('applying 2/2 hunks to notes.md'))).toBe(true);
+  });
+
+  it('toggling a hunk rejects it; apply-all memorizes allow-always', async () => {
+    const seq = [0, 0, 3]; // reject hunk 0, re-accept hunk 0, then Apply all
+    const { d, lines, menus } = deps({ openMenu: async (title: string) => { menus.push(title); return seq.shift() ?? -1; } });
+    const res = await tuiRequestApproval(d, multiHunkEdit);
+    expect(res).toBe('allow-always');
+    expect(lines.some((l) => l.text.includes('allowed always this session: all 2 hunks'))).toBe(true);
+  });
+
+  it('Esc and Deny all refuse the whole edit', async () => {
+    const { d, lines, menus } = deps({ openMenu: async (title: string) => { menus.push(title); return -1; } });
+    expect(await tuiRequestApproval(d, multiHunkEdit)).toBe('deny');
+    expect(lines.some((l) => l.text.includes('denied: write: notes.md'))).toBe(true);
+    const { d: d2 } = deps({ openMenu: async (title: string, _items?: string[]) => { menus.push(title); return 4; } }); // ✗ Deny all row
+    expect(await tuiRequestApproval(d2, multiHunkEdit)).toBe('deny');
+  });
+
+  it('applying with zero accepted hunks re-prompts instead of applying', async () => {
+    const seq = [0, 1, 2, 4]; // reject both hunks, blocked apply (re-prompts), then Deny all
+    const calls: string[] = [];
+    const { d } = deps({ openMenu: async (title: string) => { calls.push(title); return seq.shift() ?? -1; } });
+    const res = await tuiRequestApproval(d, multiHunkEdit);
+    expect(res).toBe('deny');
+    // openMenu: reject, reject, blocked apply → re-open, deny = 4 menus, all
+    // the hunk-review menu.
+    expect(calls.length).toBe(4);
+    expect(calls.every((c) => c.includes('pick hunks'))).toBe(true);
+  });
+
+  it('single-hunk edits keep the plain allow menu but still preview the diff', async () => {
+    const single = {
+      tool: 'edit',
+      summary: 'edit: one.txt',
+      policy: 'strict' as const,
+      edit: {
+        path: 'one.txt',
+        diff: 'diff --git a/one.txt b/one.txt\n--- a/one.txt\n+++ b/one.txt\n@@ -1,1 +1,1 @@\n-a\n+b',
+        hunks: ['@@ -1,1 +1,1 @@\n-a\n+b'],
+      },
+    };
+    const { d, lines, menus } = deps({ openMenu: async (title: string) => { menus.push(title); return 0; } });
+    expect(await tuiRequestApproval(d, single)).toBe('allow-once');
+    expect(menus[0]).toContain('Allow edit?');
+    expect(lines.some((l) => l.text.includes('-a'))).toBe(true);
+  });
+
+  it('non-edit requests render no review block', async () => {
+    const { d, lines } = deps({ openMenu: async () => 0 });
+    await tuiRequestApproval(d, { tool: 'shell', summary: '$ ls', risk: 'low', policy: 'strict' });
+    expect(lines.some((l) => l.text.includes('reviewing '))).toBe(false);
+  });
 });
