@@ -170,3 +170,61 @@ describe('bubblewrap sandbox', () => {
     expect(r.stdout).toContain('exit=1');
   });
 });
+
+describe('exec ceilings (W3-5, prlimit-backed)', () => {
+  it('CPU ceiling kills a busy loop with a labeled result (signal kill, not a timeout)', async () => {
+    // Live evidence for detectCeilingHit's attribution: prlimit --cpu=1s
+    // (soft==hard) ends the busy child with SIGKILL. `sh -c` execs a single
+    // simple command in-place, so the close event carries the SIGNAL
+    // (code=null, signal SIGKILL) — the ceiling label is the visible truth.
+    const r = await runShellString('node -e "const t=Date.now(); while(Date.now()-t<20000){}"', {
+      cpuLimitSeconds: 1,
+      timeoutMs: 30_000,
+    });
+    expect(r.ceilings?.applied).toBe(true);
+    expect(r.ceilings?.ceilingHit).toBe('cpu');
+    expect(r.timedOut).toBe(false);
+    expect(r.code).toBeNull(); // killed by signal (RLIMIT_CPU), not exited
+  }, 30_000);
+
+  it('memory ceiling kills a big allocator with a labeled result', async () => {
+    const r = await runShellString('node -e "const a=[];for(let i=0;i<400;i++)a.push(new Array(64*1024*1024).fill(1))"', {
+      memoryLimitMb: 256,
+      timeoutMs: 30_000,
+    });
+    expect(r.ceilings?.applied).toBe(true);
+    expect(r.ceilings?.ceilingHit).toBe('memory');
+    expect(r.timedOut).toBe(false);
+  }, 30_000);
+
+  it('a command within the ceilings runs normally and stays unlabeled', async () => {
+    const r = await runArgv('echo', ['ok'], { cpuLimitSeconds: 10, memoryLimitMb: 1024 });
+    expect(r.code).toBe(0);
+    expect(r.stdout.trim()).toBe('ok');
+    expect(r.ceilings?.applied).toBe(true);
+    expect(r.ceilings?.ceilingHit).toBeUndefined();
+  });
+
+  it('no ceilings requested: result shape unchanged (no ceilings field)', async () => {
+    const r = await runShellString('echo plain');
+    expect(r.stdout.trim()).toBe('plain');
+    expect(r.ceilings).toBeUndefined();
+  });
+
+  it('prlimit unavailable: ceilings reported NOT applied (never silent)', async () => {
+    const { runArgv: argvExec, _resetExecCeilingProbeForTests } = await import('./exec.js');
+    _resetExecCeilingProbeForTests();
+    const origPath = process.env.PATH;
+    process.env.PATH = '/nonexistent-mochi-probe-dir';
+    try {
+      // Absolute cmd so the spawn itself works despite the neutered PATH.
+      const r = await argvExec('/bin/echo', ['hi'], { cpuLimitSeconds: 5 });
+      expect(r.stdout.trim()).toBe('hi');
+      expect(r.ceilings?.applied).toBe(false);
+      expect(r.ceilings?.ceilingHit).toBeUndefined();
+    } finally {
+      process.env.PATH = origPath;
+      _resetExecCeilingProbeForTests();
+    }
+  });
+});

@@ -8,6 +8,7 @@
 import { matchHardline } from './security/hardline.js';
 import { wrapWithSandbox, type SandboxMode, type WrappedCommand } from './security/sandbox.js';
 import { spawn, spawnSync, execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 
 export interface SandboxOptions {
   /** 'off' (default) runs directly. 'bubblewrap'/'unshare' force that OS
@@ -41,6 +42,15 @@ export interface ExecOptions {
   signal?: AbortSignal;
   /** Grace period between SIGTERM and SIGKILL. Default 1500ms. */
   killGraceMs?: number;
+  /** Per-exec CPU-time ceiling in seconds (RLIMIT_CPU). Opt-in; applied via
+   *  `prlimit` (util-linux) on Linux — the whole child TREE inherits the
+   *  rlimit. When prlimit is unavailable the result reports ceilings NOT
+   *  applied (never silent). A limit kill is clean (process-tree SIGKILL
+   *  sweep) and LABELED in the result (ceilings.ceilingHit) — see exec.test. */
+  cpuLimitSeconds?: number;
+  /** Per-exec address-space ceiling in MB (RLIMIT_AS). Same semantics as
+   *  cpuLimitSeconds. */
+  memoryLimitMb?: number;
   /** Called once with the outcome for audit/risk logging. Never throws. */
   onAudit?: (info: { cmd: string; code: number | null; timedOut: boolean; durationMs: number }) => void;
   /** OS-level sandbox (bubblewrap). Default off — opt in per call or via
@@ -55,6 +65,18 @@ export interface ExecResult {
   timedOut: boolean;
   cancelled: boolean;
   durationMs: number;
+  /** Resource ceilings requested for this exec and their outcome. Present
+   *  only when at least one ceiling was requested. `applied: false` means
+   *  the host cannot enforce them (no prlimit / not Linux) — callers must
+   *  surface that, never let a requested ceiling silently vanish.
+   *  `ceilingHit` names the ceiling that KILLED the child (SIGXCPU/SIGKILL
+   *  under RLIMIT_CPU, or an allocation abort under RLIMIT_AS). */
+  ceilings?: {
+    cpuLimitSeconds?: number;
+    memoryLimitMb?: number;
+    applied: boolean;
+    ceilingHit?: 'cpu' | 'memory';
+  };
   /** Sandbox actually applied, when a sandbox was requested: level 'os'
    *  (real namespace confinement) or 'soft' (env scrub + cwd clamp ONLY —
    *  not OS confinement). Absent when no sandbox was requested. */
@@ -110,6 +132,94 @@ function streamText(acc: StreamAcc): string {
   return `${acc.head}\n... [truncated] (${dropped} bytes in the middle elided — output ends below) ...\n${acc.tail}`;
 }
 
+// ------------------------------------------------------------- ceilings -----
+// W3-5 exec ceilings: per-exec CPU (RLIMIT_CPU) and address-space (RLIMIT_AS)
+// limits, applied by prefixing the command with `prlimit` (util-linux) on
+// Linux. The rlimits are INHERITED by the whole child tree, so a ceiling
+// bounds descendants too. A limit kill is (a) CLEAN — finishSpawn sweeps the
+// process group on a ceiling death — and (b) LABELED — the result carries
+// `ceilings.ceilingHit` and the shell tool appends a visible label; output is
+// never silently truncated by a ceiling.
+
+interface CeilingRequest { cpuLimitSeconds?: number; memoryLimitMb?: number }
+
+interface CeilingWrap {
+  cmd: string;
+  args: string[];
+  /** false = the host cannot enforce ceilings (no prlimit / not Linux) —
+   *  the result must say so (never silent). */
+  applied: boolean;
+}
+
+let prlimitCache: { pathEnv: string; value: string | null } | undefined;
+
+function detectPrlimit(): string | null {
+  const pathEnv = process.env.PATH ?? '';
+  if (prlimitCache && prlimitCache.pathEnv === pathEnv) return prlimitCache.value;
+  let value: string | null = null;
+  if (process.platform === 'linux') {
+    for (const dir of pathEnv.split(':')) {
+      if (!dir) continue;
+      const candidate = `${dir}/prlimit`;
+      try {
+        if (existsSync(candidate)) { value = candidate; break; }
+      } catch { /* unreadable PATH entry: skip */ }
+    }
+  }
+  if (pathEnv === (process.env.PATH ?? '')) prlimitCache = { pathEnv, value };
+  return value;
+}
+
+/** Test hook: forget the cached prlimit probe (PATH mutated in tests). */
+export function _resetExecCeilingProbeForTests(): void {
+  prlimitCache = undefined;
+}
+
+/** Prefix [cmd, args] with prlimit when ceilings are requested. Zero/negative
+ *  ceilings are treated as absent (no wrap). */
+function wrapWithCeilings(cmd: string, args: readonly string[], req: CeilingRequest): CeilingWrap {
+  const cpu = req.cpuLimitSeconds && req.cpuLimitSeconds > 0 ? Math.floor(req.cpuLimitSeconds) : 0;
+  const mem = req.memoryLimitMb && req.memoryLimitMb > 0 ? Math.floor(req.memoryLimitMb) : 0;
+  if (!cpu && !mem) return { cmd, args: [...args], applied: false };
+  const prlimit = detectPrlimit();
+  if (!prlimit) return { cmd, args: [...args], applied: false };
+  // prlimit's limit options take OPTIONAL arguments — only the `--opt=value`
+  // form binds the value; `--opt value` makes value the COMMAND (measured:
+  // "prlimit: failed to execute 10").
+  const argv = [prlimit];
+  if (cpu) argv.push(`--cpu=${cpu}`);
+  if (mem) argv.push(`--as=${mem * 1024 * 1024}`);
+  argv.push('--', cmd, ...args);
+  return { cmd: argv[0], args: argv.slice(1), applied: true };
+}
+
+/** Attribute a child death to a requested ceiling. Evidence (pinned by
+ *  exec.test.ts against prlimit 2.37.4):
+ *  - RLIMIT_CPU with soft==hard: SIGKILL (shell exit 137); when the kernel
+ *    sends SIGXCPU first (soft<hard configs), signal SIGXCPU.
+ *  - RLIMIT_AS: allocation failures abort the runtime — SIGTRAP (V8 OOM,
+ *    exit 133), SIGABRT (glibc, exit 134), SIGSEGV (exit 139), or a nonzero
+ *    exit with an ENOMEM-flavored message.
+ *  Our OWN kills are excluded: timeouts/cancels are flagged before this runs.
+ *  With BOTH ceilings set, the signals disambiguate (RLIMIT_AS never
+ *  produces SIGKILL/137 — malloc fails instead). */
+function detectCeilingHit(
+  code: number | null,
+  signal: NodeJS.Signals | null | undefined,
+  timedOut: boolean,
+  cancelled: boolean,
+  req: CeilingRequest,
+): 'cpu' | 'memory' | undefined {
+  if (timedOut || cancelled) return undefined; // our own kills, not the ceiling
+  if (signal === 'SIGXCPU' && req.cpuLimitSeconds) return 'cpu';
+  if ((code === 137 || signal === 'SIGKILL') && req.cpuLimitSeconds) return 'cpu';
+  if (req.memoryLimitMb) {
+    if (signal === 'SIGTRAP' || signal === 'SIGABRT' || signal === 'SIGSEGV') return 'memory';
+    if (code === 133 || code === 134 || code === 139) return 'memory';
+  }
+  return undefined;
+}
+
 function finishSpawn(
   child: ReturnType<typeof spawn>,
   cmd: string,
@@ -117,6 +227,7 @@ function finishSpawn(
   stdoutAcc: StreamAcc,
   stderrAcc: StreamAcc,
   startedAt: number,
+  ceilings?: { cpuLimitSeconds?: number; memoryLimitMb?: number; applied: boolean },
 ): Promise<ExecResult> {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const killGraceMs = opts.killGraceMs ?? 1500;
@@ -131,7 +242,7 @@ function finishSpawn(
     let settled = false;
     let timedOut = false;
     let cancelled = false;
-    const done = (code: number | null, extra?: { timedOut?: boolean; cancelled?: boolean }) => {
+    const done = (code: number | null, extra?: { timedOut?: boolean; cancelled?: boolean; signal?: NodeJS.Signals | null }) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -144,8 +255,19 @@ function finishSpawn(
       // the timeout/cancel truth.
       const wasTimedOut = extra?.timedOut ?? timedOut;
       const wasCancelled = extra?.cancelled ?? cancelled;
+      // W3-5 exec ceilings: attribute a death caused by a requested rlimit.
+      // Never silent — the result carries the label, callers surface it.
+      const ceilingHit = ceilings?.applied
+        ? detectCeilingHit(code, extra?.signal ?? null, wasTimedOut, wasCancelled, ceilings)
+        : undefined;
+      if (ceilingHit) {
+        // Clean kill: the rlimit terminated (at least) the main process;
+        // sweep the whole tree so no descendant outlives the ceiling.
+        // (killTree is defined below; done() only ever runs after it exists.)
+        killTree('SIGKILL');
+      }
       if (process.env.MOCHI_EXEC_TRACE === '1') {
-        console.warn(`[exec] done  :: ${Math.round(durationMs)}ms code=${code}${wasTimedOut ? ' TIMEOUT' : ''}${wasCancelled ? ' CANCELLED' : ''} :: ${cmd.slice(0, 160)}`);
+        console.warn(`[exec] done  :: ${Math.round(durationMs)}ms code=${code}${wasTimedOut ? ' TIMEOUT' : ''}${wasCancelled ? ' CANCELLED' : ''}${ceilingHit ? ` CEILING=${ceilingHit}` : ''} :: ${cmd.slice(0, 160)}`);
       }
       try {
         opts.onAudit?.({ cmd: cmd.slice(0, 200), code, timedOut: wasTimedOut, durationMs });
@@ -157,6 +279,7 @@ function finishSpawn(
         timedOut: wasTimedOut,
         cancelled: wasCancelled,
         durationMs,
+        ...(ceilings ? { ceilings: { ...ceilings, ceilingHit } } : {}),
       });
     };
     // Kill the WHOLE process tree, not just the direct child. A shell command
@@ -223,7 +346,7 @@ function finishSpawn(
       opts.signal?.removeEventListener('abort', onAbort);
       reject(err);
     });
-    child.on('close', (code) => done(code));
+    child.on('close', (code, signal) => done(code, { signal }));
     // Already-aborted: run the abort path AFTER the listeners exist. The old
     // early-return skipped 'error'/'close' attachment — a spawn that fails
     // while already aborted (nonexistent cwd, deleted shell) then emitted
@@ -234,12 +357,33 @@ function finishSpawn(
   });
 }
 
+/** Ceiling wrap shared by runArgv/runShellString: sandbox first (the sandbox
+ *  executable becomes the command), then prlimit around it — rlimits are
+ *  inherited, so the sandboxed tree is bounded too. `info` is undefined when
+ *  no ceiling was requested (result shape unchanged), else carries the
+ *  request + whether the host could enforce it. */
+function prepareCeilings(
+  opts: ExecOptions,
+  wrapped: WrappedCommand,
+): { spawnCmd: string; spawnArgs: string[]; info?: { cpuLimitSeconds?: number; memoryLimitMb?: number; applied: boolean } } {
+  const requested = (opts.cpuLimitSeconds ?? 0) > 0 || (opts.memoryLimitMb ?? 0) > 0;
+  const wrap = wrapWithCeilings(wrapped.cmd, wrapped.args, opts);
+  return {
+    spawnCmd: wrap.cmd,
+    spawnArgs: wrap.args,
+    info: requested
+      ? { cpuLimitSeconds: opts.cpuLimitSeconds, memoryLimitMb: opts.memoryLimitMb, applied: wrap.applied }
+      : undefined,
+  };
+}
+
 /** Run a command WITHOUT a shell: argv array only, no interpolation.
  *  Prefer this for every harness-internal invocation (git, probes, notify). */
 export function runArgv(cmd: string, args: readonly string[], opts: ExecOptions = {}): Promise<ExecResult> {
   const startedAt = Date.now();
   const wrapped = wrapForExec(cmd, args, opts);
-  const child = spawn(wrapped.cmd, wrapped.args, {
+  const ceilings = prepareCeilings(opts, wrapped);
+  const child = spawn(ceilings.spawnCmd, ceilings.spawnArgs, {
     cwd: wrapped.cwd ?? opts.cwd,
     env: wrapped.env ?? opts.env ?? process.env,
     stdio: 'pipe',
@@ -248,7 +392,7 @@ export function runArgv(cmd: string, args: readonly string[], opts: ExecOptions 
     // signal the entire tree (see killTree). No-op on Windows.
     detached: process.platform !== 'win32',
   });
-  return withSandboxInfo(finishSpawn(child, [cmd, ...args].join(' '), opts, newStreamAcc(), newStreamAcc(), startedAt), wrapped);
+  return withSandboxInfo(finishSpawn(child, [cmd, ...args].join(' '), opts, newStreamAcc(), newStreamAcc(), startedAt, ceilings.info), wrapped);
 }
 
 /** Run a shell string (`sh -c`-class) under policy. Reserved for the agent's
@@ -284,7 +428,8 @@ export function runShellString(command: string, opts: ExecOptions & { shellBin?:
   // Node from re-quoting the already-quoted command.
   const shellArgs = isWin ? ['/d', '/s', '/c', `"${command}"`] : ['-c', command];
   const wrapped = wrapForExec(shellBin, shellArgs, opts);
-  const child = spawn(wrapped.cmd, wrapped.args, {
+  const ceilings = prepareCeilings(opts, wrapped);
+  const child = spawn(ceilings.spawnCmd, ceilings.spawnArgs, {
     cwd: wrapped.cwd ?? opts.cwd,
     env: wrapped.env ?? opts.env ?? process.env,
     stdio: 'pipe',
@@ -293,7 +438,7 @@ export function runShellString(command: string, opts: ExecOptions & { shellBin?:
     detached: process.platform !== 'win32',
     ...(isWin ? { windowsVerbatimArguments: true } : {}),
   });
-  return withSandboxInfo(finishSpawn(child, command, opts, newStreamAcc(), newStreamAcc(), startedAt), wrapped);
+  return withSandboxInfo(finishSpawn(child, command, opts, newStreamAcc(), newStreamAcc(), startedAt, ceilings.info), wrapped);
 }
 
 /** execFile-style convenience for short harness probes with a string result.

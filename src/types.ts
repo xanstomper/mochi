@@ -97,6 +97,14 @@ export interface SafetyConfig {
   /** Extra writable paths inside the sandbox, beyond the workspace, the
    *  OS tmpdir, and dev-tool caches. */
   sandboxWritablePaths?: string[];
+  /** Per-exec CPU-time ceiling in seconds for shell commands (RLIMIT_CPU
+   *  via prlimit; Linux only, unset = no ceiling). A ceiling kill is clean
+   *  (process-tree sweep) and LABELED in the tool output — never silent.
+   *  See exec.ts. */
+  execCpuLimitSeconds?: number;
+  /** Per-exec address-space ceiling in MB for shell commands (RLIMIT_AS;
+   *  same semantics as execCpuLimitSeconds, unset = none). */
+  execMemoryLimitMb?: number;
   maxVerifyRetries?: number;
   /** B27 restructure: hostnames whose POST/PUT/PATCH/DELETE endpoints are
    *  OPERATOR-DECLARED read-only (GraphQL query endpoints, search APIs that

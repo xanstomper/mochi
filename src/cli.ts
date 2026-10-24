@@ -347,6 +347,15 @@ async function main() {
     process.env.MOCHI_UNCENSORED === '1';
   runtime.setPermPolicy((isUncensored || isYolo) ? 'yolo'
     : (configOverrides.safety?.mode === 'auto' ? 'workspace-safe' : 'strict'));
+
+  // W3-5 sandbox preflight: at startup, detect whether the shell sandbox will
+  // be degraded and say so PRECISELY ONCE (which backend, what's missing)
+  // instead of the run discovering it mid-task. Quiet when an OS backend is
+  // available or the operator opted out (safety.sandbox = 'off').
+  try {
+    const { maybeSandboxPreflightNotice } = await import('./security/sandbox-preflight.js');
+    maybeSandboxPreflightNotice(runtime.config);
+  } catch { /* preflight must never block startup */ }
   // Announce elevated mode ONLY when explicitly requested on THIS command
   // line. Reading it from config/env printed the banner on every run — noise,
   // not an announcement (the TUI badge still reflects the active policy).
