@@ -1,5 +1,8 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 function run(cwd: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -14,6 +17,21 @@ function run(cwd: string, args: string[]): Promise<string> {
       resolve(out.trim());
     });
   });
+}
+
+/** Commit with a multi-line message via `-F <file>` instead of `-m`.
+ *  Persistent-PTY runs garble embedded newlines in argv (OpenHands' own
+ *  AGENTS.md lesson); a message file is byte-exact regardless of shell
+ *  layer. Caller cleans up the temp file. */
+export async function commitWithMessageFile(cwd: string, message: string, extraArgs: string[] = []): Promise<void> {
+  const dir = await mkdtemp(join(tmpdir(), 'mochi-cmsg-'));
+  const file = join(dir, 'msg.txt');
+  try {
+    await writeFile(file, message, 'utf8');
+    await run(cwd, ['commit', ...extraArgs, '-F', file]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 }
 
 export async function isRepo(cwd: string): Promise<boolean> {
@@ -66,7 +84,7 @@ export async function checkpoint(cwd: string, message = 'mochi checkpoint'): Pro
     // Already clean; create an empty commit to mark point.
     const ref = randomUUID().slice(0, 8);
     const fullMessage = `${message} [${ref}]`;
-    await run(cwd, ['commit', '--allow-empty', '-m', fullMessage]);
+    await commitWithMessageFile(cwd, fullMessage, ['--allow-empty']);
     const head = (await run(cwd, ['rev-parse', 'HEAD'])).split('\n')[0];
     return { ref: head, type: 'commit', message: fullMessage };
   }
@@ -108,7 +126,7 @@ export async function preEditSnapshot(cwd: string, message = 'mochi pre-edit', s
   if (dirty.length > 0) return null; // dirty: refuse rather than stash user work
   const ref = randomUUID().slice(0, 8);
   const fullMessage = `${message} [${ref}]`;
-  await run(cwd, ['commit', '--allow-empty', '-m', fullMessage]);
+  await commitWithMessageFile(cwd, fullMessage, ['--allow-empty']);
   const head = (await run(cwd, ['rev-parse', 'HEAD'])).split('\n')[0];
   return { ref: head, type: 'commit', message: fullMessage };
 }

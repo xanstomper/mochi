@@ -444,6 +444,9 @@ export class ContextEngine {
   private messages: ChatMessage[] = [];
   state: ContextState;
   private budget: number;
+  /** SWE-agent polling elision: counts shrinkOldToolOutputs invocations so the
+   *  elision boundary only advances every ELIDE_POLL calls (prefix stability). */
+  private shrinkPollCount = 0;
   private projectRoot: string;
   private rulesCache = '';
   private rulesFingerprint = '';
@@ -1761,6 +1764,22 @@ ${this.toolGuidelines(tools)}
     const KEEP_HEAD = preserve ? 2000 : 240;
     const KEEP_TAIL = preserve ? 1200 : 160;
     const MARK = '\n[…earlier tool output truncated in place to save context; re-run the tool if you need the full text…]';
+
+    // SWE-agent 'polling' elision: only advance the elision boundary every
+    // ELIDE_POLL turns. Rewriting one newly-aged output per turn breaks the
+    // provider prefix EVERY turn (full cache re-warm each call); holding the
+    // boundary keeps the prefix byte-stable between polls at the cost of a
+    // slightly larger in-window tail. An over-budget packet polls immediately.
+    const ELIDE_POLL = 4;
+    if (
+      this.shrinkPollCount > 0 &&
+      this.shrinkPollCount % ELIDE_POLL !== 0 &&
+      this.effectiveContextTokens() <= this.budget * 0.8
+    ) {
+      this.shrinkPollCount++;
+      return 0;
+    }
+    this.shrinkPollCount++;
 
     let saved = 0;
     let rewrote = false;
