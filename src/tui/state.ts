@@ -36,6 +36,39 @@ export interface ActiveSubagentInfo {
   startedAt: number;
 }
 
+/** One row of the TUI spawn ledger (W3-4): every child agent this tab has
+ *  SEEN — running or finished — with its live token spend. Fed by the same
+ *  events the agent-forge ledger records from: subagent:started/completed
+ *  plus the child's own usage:updated events (children share the parent's
+ *  event bus, so their per-call usage rides the same stream, tagged with
+ *  the child's agentId). */
+export interface SpawnLedgerEntry {
+  id: string;
+  role: string;
+  prompt: string;
+  startedAt: number;
+  endedAt?: number;
+  status: 'running' | 'done' | 'failed';
+  /** Token spend: summed per-call totals while running; replaced by the
+   *  child's authoritative tokensUsed when subagent:completed carries it. */
+  tokens: number;
+}
+
+/** Cap on ledger entries kept in memory: past this, oldest FINISHED entries
+ *  are evicted first (running children are never evicted). */
+export const SPAWN_LEDGER_MAX = 64;
+
+/** Evict the oldest finished entries past the cap. Running entries are
+ *  never dropped — a panel that forgets a live child would lie. */
+function evictSpawnLedger(ledger: Map<string, SpawnLedgerEntry>): void {
+  if (ledger.size <= SPAWN_LEDGER_MAX) return;
+  const finished = [...ledger.values()]
+    .filter((e) => e.status !== 'running')
+    .sort((a, b) => (a.endedAt ?? a.startedAt) - (b.endedAt ?? b.startedAt));
+  const evict = ledger.size - SPAWN_LEDGER_MAX;
+  for (let i = 0; i < evict && i < finished.length; i++) ledger.delete(finished[i].id);
+}
+
 export interface TuiState {
   lines: TuiLine[];
   tasks: Map<string, TuiTask>;
@@ -74,6 +107,8 @@ export interface TuiState {
   /** Why the current model is active — the cost-per-solve routing evidence
    *  (routing:decision / escalated / blocked) compacted for the status bar. */
   routingReason?: string;
+  /** Spawn ledger: per-child status + token spend for the subagent panel. */
+  spawnLedger: Map<string, SpawnLedgerEntry>;
   /** Most recent SummaryDocument, kept so a terminal resize can re-render
    *  summary cards at the new width (windowed↔fullscreen transitions). */
   lastSummaryDoc?: SummaryDocument;
@@ -103,6 +138,7 @@ export function createTuiState(limit = 500): TuiState {
     trimmed: 0,
     limit,
     turns: 0,
+    spawnLedger: new Map(),
   };
 }
 
@@ -525,6 +561,10 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
       const role = String(event.role ?? 'subagent');
       const prompt = String(event.prompt ?? '').slice(0, 80);
       state.activeSubagents.set(subId, { id: subId, role, prompt, startedAt: Date.now() });
+      // Spawn ledger: the panel keeps FINISHED children too (per-child status
+      // + token spend is the point), unlike activeSubagents which forgets.
+      state.spawnLedger.set(subId, { id: subId, role, prompt, startedAt: Date.now(), status: 'running', tokens: 0 });
+      evictSpawnLedger(state.spawnLedger);
       pushLine(state, 'system', `◇ subagent  [${role}] ${prompt}`);
       return true;
     }
@@ -533,6 +573,15 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
       if (subId) state.activeSubagents.delete(subId);
       const role = String(event.role ?? 'subagent');
       const summary = String(event.summary ?? '').slice(0, 100);
+      // Ledger: record the outcome. The child's tokensUsed is authoritative
+      // when present; the accumulated per-call estimate stands otherwise.
+      const entry = subId ? state.spawnLedger.get(subId) : undefined;
+      if (entry) {
+        entry.status = event.success ? 'done' : 'failed';
+        entry.endedAt = Date.now();
+        const finalTokens = Number(event.tokensUsed ?? 0);
+        if (finalTokens > 0) entry.tokens = finalTokens;
+      }
       pushLine(state, event.success ? 'system' : 'error', `${event.success ? '✓' : '×'} subagent  ${role}: ${summary}`);
       return true;
     }
@@ -541,6 +590,13 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
       const now = Date.now();
       state.turns++;
       if (event.model) state.activeModel = String(event.model);
+      // Child token spend: usage tagged with a ledger child's agentId bills
+      // THAT child (per-call total; summed = the child's spend so far).
+      const spendChild = String(event.agentId ?? '');
+      const spendEntry = spendChild ? state.spawnLedger.get(spendChild) : undefined;
+      if (spendEntry && spendEntry.status === 'running') {
+        spendEntry.tokens += Number(event.totalTokens ?? 0);
+      }
       const currentTotal = Number(event.totalTokens ?? 0);
       if (state.lastUsageAt && state.lastTokens && now > state.lastUsageAt) {
         const elapsedSec = (now - state.lastUsageAt) / 1000;

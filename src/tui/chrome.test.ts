@@ -33,4 +33,19 @@ describe('chromeLayout', () => {
     expect(l.availableH).toBeGreaterThanOrEqual(1);
     expect(l.chatMw).toBeGreaterThanOrEqual(24);
   });
+
+  it('subagent panel rows carve out of the transcript, not the chrome (W3-4)', () => {
+    const plain = chromeLayout({ w: 100, h: 34, inputText: '', busy: false, topRows: 1 });
+    const withPanel = chromeLayout({ w: 100, h: 34, inputText: '', busy: false, topRows: 1, panelRows: 3 });
+    expect(withPanel.contentH).toBe(plain.contentH - 3);
+    expect(withPanel.bottomRows).toBe(plain.bottomRows);
+    // Full accounting now includes the panel: top + content + panel + bottom = height.
+    expect(withPanel.topRows + withPanel.contentH + 3 + withPanel.bottomRows).toBe(34);
+  });
+
+  it('zero panel rows is the identity (default omitted)', () => {
+    const a = chromeLayout({ w: 100, h: 34, inputText: '', busy: false, topRows: 1 });
+    const b = chromeLayout({ w: 100, h: 34, inputText: '', busy: false, topRows: 1, panelRows: 0 });
+    expect(b.contentH).toBe(a.contentH);
+  });
 });

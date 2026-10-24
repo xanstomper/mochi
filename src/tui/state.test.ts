@@ -592,3 +592,64 @@ describe('status line live stats (W3-4)', () => {
     expect(formatRoutingReason(ev({ type: 'message', role: 'assistant', content: 'x' }))).toBeUndefined();
   });
 });
+
+describe('spawn ledger (W3-4 subagent panel feed)', () => {
+  it('subagent:started opens a running ledger entry', () => {
+    const s = createTuiState();
+    reduceEvent(s, ev({ type: 'subagent:started', agentId: 'a-sub-1', parentId: 'root', role: 'coder', prompt: 'fix it' }));
+    const e = s.spawnLedger.get('a-sub-1');
+    expect(e).toBeDefined();
+    expect(e!.status).toBe('running');
+    expect(e!.role).toBe('coder');
+    expect(e!.tokens).toBe(0);
+    // activeSubagents still tracks live children for the transcript lines.
+    expect(s.activeSubagents.has('a-sub-1')).toBe(true);
+  });
+
+  it('child usage:updated accumulates token spend while running', () => {
+    const s = createTuiState();
+    reduceEvent(s, ev({ type: 'subagent:started', agentId: 'a-sub-1', parentId: 'root', role: 'coder', prompt: 'fix it' }));
+    reduceEvent(s, ev({ type: 'usage:updated', agentId: 'a-sub-1', inputTokens: 100, outputTokens: 20, cacheTokens: 0, totalTokens: 120 }));
+    reduceEvent(s, ev({ type: 'usage:updated', agentId: 'a-sub-1', inputTokens: 100, outputTokens: 30, cacheTokens: 0, totalTokens: 130 }));
+    expect(s.spawnLedger.get('a-sub-1')!.tokens).toBe(250);
+    // The ROOT's own usage does not bill any child.
+    reduceEvent(s, ev({ type: 'usage:updated', agentId: 'root', inputTokens: 1, outputTokens: 1, cacheTokens: 0, totalTokens: 2 }));
+    expect(s.spawnLedger.get('a-sub-1')!.tokens).toBe(250);
+  });
+
+  it('subagent:completed closes the entry with outcome + authoritative tokens', () => {
+    const s = createTuiState();
+    reduceEvent(s, ev({ type: 'subagent:started', agentId: 'a-sub-1', parentId: 'root', role: 'coder', prompt: 'fix it' }));
+    reduceEvent(s, ev({ type: 'usage:updated', agentId: 'a-sub-1', inputTokens: 100, outputTokens: 20, cacheTokens: 0, totalTokens: 120 }));
+    reduceEvent(s, ev({ type: 'subagent:completed', agentId: 'a-sub-1', parentId: 'root', role: 'coder', success: true, summary: 'done', tokensUsed: 300 }));
+    const e = s.spawnLedger.get('a-sub-1');
+    expect(e!.status).toBe('done');
+    expect(e!.endedAt).toBeDefined();
+    expect(e!.tokens).toBe(300); // tokensUsed replaces the running estimate
+    expect(s.activeSubagents.has('a-sub-1')).toBe(false);
+  });
+
+  it('failed children keep their status and accumulated tokens when no final count arrives', () => {
+    const s = createTuiState();
+    reduceEvent(s, ev({ type: 'subagent:started', agentId: 'a-sub-1', parentId: 'root', role: 'reviewer', prompt: 'review' }));
+    reduceEvent(s, ev({ type: 'usage:updated', agentId: 'a-sub-1', inputTokens: 50, outputTokens: 10, cacheTokens: 0, totalTokens: 60 }));
+    reduceEvent(s, ev({ type: 'subagent:completed', agentId: 'a-sub-1', parentId: 'root', role: 'reviewer', success: false, summary: 'boom', tokensUsed: 0 }));
+    const e = s.spawnLedger.get('a-sub-1');
+    expect(e!.status).toBe('failed');
+    expect(e!.tokens).toBe(60);
+  });
+
+  it('evicts the oldest finished entries past the cap but never a running child', () => {
+    const s = createTuiState(500);
+    for (let i = 0; i < 70; i++) {
+      reduceEvent(s, ev({ type: 'subagent:started', agentId: `child-${i}`, parentId: 'root', role: 'coder', prompt: 'p' }));
+      reduceEvent(s, ev({ type: 'subagent:completed', agentId: `child-${i}`, parentId: 'root', role: 'coder', success: true, summary: 'ok', tokensUsed: i }));
+    }
+    // One live child that must survive.
+    reduceEvent(s, ev({ type: 'subagent:started', agentId: 'child-live', parentId: 'root', role: 'coder', prompt: 'p' }));
+    expect(s.spawnLedger.size).toBe(64);
+    expect(s.spawnLedger.has('child-live')).toBe(true);
+    expect(s.spawnLedger.has('child-0')).toBe(false); // oldest finished evicted
+    expect(s.spawnLedger.has('child-69')).toBe(true); // newest kept
+  });
+});

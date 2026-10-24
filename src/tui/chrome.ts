@@ -26,9 +26,13 @@ export function chromeLayout(opts: {
   busy: boolean;
   topRows?: number;
   indent?: number;
+  /** Rows reserved for the subagent panel ABOVE the status bar (0 when no
+   *  children in the spawn ledger). Transcript height shrinks by this. */
+  panelRows?: number;
 }): ChromeLayout {
   const { w, h, inputText, busy } = opts;
   const topRows = opts.topRows ?? 0;
+  const panelRows = opts.panelRows ?? 0;
   // Sleek, minimal status bar: 2 rows on normal terminals (>= 24), 1 row on compact/short windowed mode.
   const statusRows = h >= 24 ? 2 : 1;
   const innerW = Math.max(1, w - 6);
@@ -39,7 +43,8 @@ export function chromeLayout(opts: {
   const composerRows = Math.min(Math.max(minComposer, Math.floor(h / 3)), rawRows.length + 2);
   // Bottom consists of composer and status bar(s) — clean, un-bunched, professional.
   const bottomRows = composerRows + statusRows;
-  const contentH = Math.max(1, h - bottomRows - topRows);
+  // The subagent panel (when live) carves its rows out of the transcript.
+  const contentH = Math.max(1, h - bottomRows - topRows - panelRows);
   const indent = opts.indent ?? 2;
   const chatMw = Math.min(w - indent * 2, Math.max(24, w - 4));
   const availableH = busy ? Math.max(1, contentH - 1) : contentH;

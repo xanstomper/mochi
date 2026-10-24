@@ -6,7 +6,8 @@ import { Runtime } from '../runtime.js';
 import type { MochiEvent } from '../types.js';
 import { PROVIDERS, providerById } from '../model/providers.js';
 import { loadKeyring, storedKeyForProvider, deleteKeyringKey, accountsFor as accountsForKr, activeAccountName as activeAccountForKr, switchAccount as switchAccountKr, deleteAccount as deleteAccountKr } from '../model/keyring.js';
-import { reduceEvent, trimTranscript, rewrapSummaries, resolveCommandPrefix, type TuiLine } from './state.js';
+import { reduceEvent, trimTranscript, rewrapSummaries, resolveCommandPrefix, type TuiLine, type SpawnLedgerEntry } from './state.js';
+import { renderSubagentPanel, subagentPanelRowCount } from './subagent-panel.js';
 import { describeProviderFailure } from '../model/provider-failure.js';
 import { wrap, visibleLen, cellColToIndex, indexToCellCol } from './wrap.js';
 import { terminateRow, paintCanvasBg } from './ansi-hygiene.js';
@@ -238,6 +239,8 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     currentTool: '' as string,
     currentTask: '' as string,
     activeSubagents: new Map<string, { id: string; role: string; prompt: string; startedAt: number }>(),
+    /** Spawn ledger (W3-4): per-child status + token spend for the panel. */
+    spawnLedger: new Map<string, SpawnLedgerEntry>(),
     /** Args of in-flight tool calls, keyed by tool_call_id (or tool name).
      *  Stored at tool:called time so the matching tool:completed can render
      *  the full card showing the call AND the result in one frame. */
@@ -525,6 +528,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       currentTool: '',
       currentTask: '',
       activeSubagents: new Map(),
+      spawnLedger: new Map(),
       activeToolArgs: new Map(),
       activeToolLine: new Map(),
       tokenVelocity: 0,
@@ -1032,7 +1036,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
    *  shared chromeLayout (single source of truth — see chrome.ts). */
   function transcriptGeometry(w: number): { chatMw: number; availableH: number; contentH: number } {
     const h = height();
-    const { chatMw, availableH, contentH } = chromeLayout({ w, h, inputText: state.input, busy: state.busy, topRows: TAB_BAR_ROWS, indent: transcriptIndent(w) });
+    const { chatMw, availableH, contentH } = chromeLayout({ w, h, inputText: state.input, busy: state.busy, topRows: TAB_BAR_ROWS, indent: transcriptIndent(w), panelRows: subagentPanelRowCount(state.spawnLedger.size) });
     return { chatMw, availableH, contentH };
   }
 
@@ -1331,8 +1335,13 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     // Single source of truth for chrome geometry (see chrome.ts): tab bar on
     // top, transcript in the middle, composer + status + approve at bottom.
     const indent = transcriptIndent(w);
+    // Subagent panel (W3-4): ledger entries reserve rows directly above the
+    // status bar; the transcript shrinks so geometry stays single-sourced.
+    const ledgerEntries = state.spawnLedger ? [...state.spawnLedger.values()] : [];
+    const panelRowsCount = subagentPanelRowCount(ledgerEntries.length);
     const { statusRows, composerRows, bottomRows, contentH, chatMw, availableH } = chromeLayout({
       w, h, inputText: state.input, busy: state.busy, topRows: TAB_BAR_ROWS, indent,
+      panelRows: panelRowsCount,
     });
 
     const chatLines = transcriptLines(chatMw);
@@ -1425,11 +1434,8 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     if (pfBadgeCache.text) extra.push(pfBadgeCache.text);
     const queued = [...state.tasks.values()].filter((t) => t.status === 'pending').length;
     if (queued) extra.push(`${queued} queued`);
-    const activeSubs = state.activeSubagents ? [...state.activeSubagents.values()] : [];
-    if (activeSubs.length > 0) {
-      const roles = activeSubs.map((s) => `#${s.role}`).join(', ');
-      extra.push(`◆ ${activeSubs.length} subagents (${roles})`);
-    }
+    // Subagent badge superseded by the spawn-ledger panel (W3-4): the panel
+    // shows per-child status + token spend, not just a count.
     if (runtime.config.model.provider === 'antigravity') {
       const activeAcct = activeAccountForKr('antigravity');
       if (activeAcct && activeAcct !== 'default') {
@@ -1457,6 +1463,15 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
 
     const s1 = h - bottomRows;
     const sbW = Math.max(20, w - indent);
+    // Subagent panel rows sit directly above the status bar (the layout
+    // already shrank the transcript by exactly this many rows).
+    if (panelRowsCount > 0) {
+      const panel = renderSubagentPanel(ledgerEntries, sbW, { now: Date.now() });
+      for (let i = 0; i < panelRowsCount && i < panel.length; i++) {
+        const r = s1 - panelRowsCount + i;
+        if (r >= 0 && r < h) rows[r] = lead + panel[i];
+      }
+    }
     const r1 = statusBarRow1(statusModel, sbW);
     rows[s1] = lead + (visibleLen(r1) > sbW ? ellipsize(r1, sbW) : r1);
     let cTop = s1 + 1;
@@ -2394,6 +2409,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         state.turns = 0;
         state.activeModel = undefined;
         state.routingReason = undefined;
+        state.spawnLedger.clear();
         state.chatVer++;
         try { tabs.rename(activeTabId, 'Session 1'); } catch {}
         tabs.setStatus(activeTabId, 'idle');
@@ -2416,6 +2432,7 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       state.turns = 0;
       state.activeModel = undefined;
       state.routingReason = undefined;
+      state.spawnLedger.clear();
       state.chatVer++;
       push('system', 'Cleared all session context.');
       scheduleRender();
