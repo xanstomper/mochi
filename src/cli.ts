@@ -5,6 +5,7 @@ import { dirname, resolve, join as pathJoin } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { parseArgs, configFromFlags } from './cli-flags.js';
+import { nodeEngineProblem } from './node-engine.js';
 import * as nodeModule from 'node:module';
 // V8 compile cache: persist compiled module bytecode under ~/.cache/mochi so
 // subsequent invocations skip re-parsing (~16% faster cold start, 109ms ->
@@ -229,6 +230,15 @@ function srcFileNewer(dir: string, mtime: number): boolean {
 }
 
 async function main() {
+  // Engine preflight (P3 gun 4) — the FIRST action, before any dispatch:
+  // Node < 22 boots and then fails weirdly mid-run (auto-rebuild hangs,
+  // node:sqlite missing), so refuse here with one precise message.
+  const engineProblem = nodeEngineProblem();
+  if (engineProblem) {
+    console.error(engineProblem);
+    process.exit(1);
+  }
+
   const { flags, positional } = parseArgs(process.argv.slice(2));
 
   // Ultra-fast path for info queries (version, help): exit immediately in <3ms
