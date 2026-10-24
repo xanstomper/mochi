@@ -812,6 +812,12 @@ export class Agent {
   private surfacedLessonIds = new Set<string>();
   private anchor = new AnchorEngine();
   private fileChanged = false;
+  /** SWE-agent action-sampler lesson (dataset #4): the run's FIRST successful
+   *  mutation flips it into the high-stakes phase — errors now cost rework.
+   *  One discipline hard signal (effort +1 rung, capped, decays on clean
+   *  turns) fires exactly once, mirroring SWE-agent widening the sample
+   *  count when an EDIT action is detected. */
+  private mutationHardSignaled = false;
   /** Shell mutations (`sed -i`, `npm create`, `git apply`, `> file`, …) never
    *  set fileChanged — only write/edit/delete/patch do — so verify()'s
    *  "No changes made to verify" short-circuit and shouldSelfReview()'s gate
@@ -5343,6 +5349,13 @@ Continue from 'Next:', do not redo completed progress.`,
       }
       this.fileChanged = true;
       this.consecutiveToolErrorsCount = 0;
+      // Dataset #4 (SWE-agent action_sampler): a landed EDIT is itself the
+      // high-stakes signal — errors past this point cost rework. One effort
+      // rung up (capped, decays on clean turns), exactly once per run.
+      if (!this.mutationHardSignaled && this.discipline) {
+        this.mutationHardSignaled = true;
+        this.discipline.noteHardSignal();
+      }
       this.cycleNudges = 0;
       this.nudgeInjections = 0;
       // Real progress invalidates read-veto memory: re-reading a file the
