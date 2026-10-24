@@ -142,11 +142,22 @@ W3-3 + W3-5 in flight on coder/wave3-rest (~/mochi-w3b).
 Welcome to Hermes Agent! Type your message or /help for commands.
 ✦ Tip: /verbose cycles tool progress display: off → new → all → verbose.
 
-[?12l[?25h[?2004h[?1l[?25l[0m[?7l[0m[J[0;38;5;102m───────────────────────────────────────────────────────────────────────────────[79C─[0m
+[?12l[?25h[?2004h[?1l[?25l[0m[?7l[0m[J[0;38;5;102m───────────────────────────────────────────────────────────────────────────────
+[79C─[0m
 [0;38;5;230mcoder ❯ [0;38;5;136;3mPlan a feature, then build it step by step[0m
-[0;38;5;102m───────────────────────────────────────────────────────────────────────────────[79C─[0m
+[0;38;5;102m───────────────────────────────────────────────────────────────────────────────
+[79C─[0m
 [0;38;5;250m ☤ [0;38;5;220;1mclaude-sonnet-4-6[0;38;5;101m · ctx -- · [░░░░░░░░░░] -- · 1s · ⏲ 0s[59D[2A[8C[?7h[0m[?12l[?25h[2 q[8D[A[J[0m[?7h[?2004l[0 q[2;3mShutting down… (finalizing session)[0m
 
 Goodbye! ☤ on the VM: provider vyceai (https://vyceai.com/v1), model claude-sonnet-4-6. API via multiplexer: http://100.101.205.88:8377/p/coder/v1 (profile key in ~/.hermes/profiles/coder/.env).
 - Wiring VERIFIED: one-shot probe reached Vyce and got HTTP 401 Invalid API key — the pipe is correct; the key VALUE is not on the VM yet (checked by WooWop + vermes: no VYCEAI_API_KEY anywhere on this box; only the provider registration in Mochi code names it).
 - ACTION FOR HOME: push the key — append  to ~/.hermes/profiles/coder/.env on the VM (via vermes' API/terminal), then the coder answers and Wave 3 starts with coder in the opencode slot. Wave 3 brief unchanged (~/campaign/wave3-brief.txt); vermes still verifies.
+
+## Wave 3 run 2 (W3-3 MCP + W3-5 env) — WooWop independent verification (2026-10-23)
+Fresh worktree at bf4a5b0, Node 26.12.1: tsc CLEAN; full suite **3,328 passed / 0 failed / 14 skipped** —
+exactly matching the coder's own gate. W3-3 PASS (tools/list cache, reconnect/backoff, lazy schemas;
+measured first-turn schema bill 2,643 -> 1,453 est. tokens, -45%, real-loop fixture). W3-5 PASS
+(sandbox preflight, exec ceilings, scoped worktree helper).
+W3-4 (TUI) then landed on coder/wave3-rest: be3fdbc status line + routing badge, 2f44231 subagent
+panel, 70dbee8 per-hunk edit review (coder's final gate was cut by a 429 after the commits;
+WooWop verification of 70dbee8 running). P3 smoking-gun sweep launched on the same branch.
