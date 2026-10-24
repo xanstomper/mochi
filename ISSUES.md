@@ -360,3 +360,78 @@ references outside its defining file, tests included as references):
   helpers, update-check, token counting), not an all-pairs clone analysis.
 - Bench/scripts were checked for dangling imports (all resolve), not audited
   line-by-line.
+
+---
+
+## P3 disposition (Wave P3, 2026-10-24 — every open L-item worked; zero silently-untouched)
+
+Verified-then-fixed or verified-already-fixed this wave. Evidence and commit SHAs in
+`~/campaign/p3-report.md`.
+
+- **L-01 — FIXED (already, in this tree).** The real D8/D10 adapters
+  (`createSkillRepairPort` / `createCurriculumPort`) are the orchestrator DEFAULTs,
+  `sleeptime/cli.ts` passes them explicitly, the stale STUB header text is gone, the
+  repair step reserves model-free estimates, and `sleeptime/cli.test.ts` ("runs the real
+  D8 repair and D10 curriculum adapters — never the stub/no-op ports") pins it. The
+  stub repair port survives only as a labelled test double.
+- **L-02 — FIXED (already).** README states 18 detected ecosystems / 10 parsed
+  languages (both runtime-verified) and documents tree-sitter as the default with
+  `MOCHI_CPG_BACKEND=tsc` as the opt-out, matching `repo/codegraph.ts`.
+- **L-03 — FIXED (already).** `ANTIGRAVITY_PRICING_TABLE` no longer exists;
+  `computeAntigravityCost` routes through `pricing.ts` and returns null for unpriced
+  models (no fabricated costUsd). Covered by `model/antigravity.test.ts`.
+- **L-04 — FIXED (already).** `cachedMessageTokens` prices image parts per-part
+  (`IMAGE_PART_TOKENS`), never by serialized payload; `estimateTokensAsync()` gates the
+  Rust batch counter on image-free histories. `context.images.test.ts` green.
+- **L-05 — DEFERRED (tracking note).** Deleting whole feature modules
+  (branch-racer, capability stack, dox→docs-index module, workflow-induction,
+  cost-per-solve, clarify.ts, codemode, oauth-device) is product-level removal, not a
+  fix wave. Two rows resolved by L-01's wiring: `curriculum/curriculum.ts` and
+  `skills/skill-repair.ts` are now reachable from production (sleeptime defaults).
+  `native/core.ts nativeEstimateCostUsd` stays: parity-tested (tests count as
+  references), production costing goes through pricing.ts.
+- **L-06 — FIXED** (`refactor(config): remove the dead telemetry knob`). Schema field,
+  default, and MOCHI_TELEMETRY env knob removed; legacy configs still load; removal
+  pinned by test.
+- **L-07 — FIXED** (`docs(pricing): per-entry provenance tags`). [vendor-list] /
+  [estimate] / [unverified] on all 28 entries + override-path legend. No URLs invented.
+- **L-08 — FIXED** (in the audit wave itself; `src/ops/` gone, verified still gone).
+- **L-09 — FIXED** (`docs: live-measured counts`). Docs counts re-measured at runtime
+  (89 tools / 22 roles / 45 providers / 150 skills — the audit's verified numbers had
+  drifted as Wave 3 landed surface); CAPABILITIES role table gains the 6 missing roles.
+- **L-10 — FIXED** (`refactor(antigravity): use the canonical contentText/splitContent`).
+  Divergent private copies deleted; regression test pins the converged mapping.
+- **L-11 — RESOLVED (verified).** The three registries match the audit's resolution:
+  18 detected (repo.ts LANG_SPECS), 10 parsed (codegraph LANGUAGES/GRAMMAR_SPECS),
+  mutation.ts regex conventions; docs now state which is which.
+- **L-12 — FIXED** (`refactor(docs): rename src/dox.ts -> src/docs-index.ts`).
+- **L-13 — sweep 2 run; one part DEFERRED (tracking note below).** The 3
+  dead-outright exports from the audit were already removed (listDir 33380f8;
+  resetDisplayBackend/formatFlakyReport 3ab1b49). Sweep 2 re-ran the same method over
+  the current tree and deleted 9 new dead-outright exports (zero callers repo-wide,
+  dynamic/string references checked). DEFERRED: the vestigial-export un-export pass —
+  217 function/class/const exports today have zero external references but are used in
+  their own file (was 149 at the audit; Wave 3 grew the surface). No behavior change,
+  pure API-surface churn: one deliberate integrator pass, not a riding-along sweep.
+- **L-14 — FIXED (already: 01add8b) and now total.** The SDK re-exports were dropped in
+  01add8b; sweep 2 deleted the remaining dead stub factory
+  (`createUnavailableCurriculumPort`) outright.
+- **L-15 — FIXED** (`docs: live-measured counts + canonical pointers`). Root
+  ARCHITECTURE.md is stamped (in the docgen generator itself, so it survives
+  regeneration) as the auto-generated dump with docs/ARCHITECTURE.md canonical; both
+  master prompts cross-reference each other; README's docgen misattribution fixed.
+- **L-16 — FIXED** (same docs commit). The irreproducible "17 destructive + 16 network
+  patterns" claim replaced with the count that reproduces from source: 22 destructive +
+  13 network regex elements (one per top-level entry in security.ts).
+- **L-17 — FIXED (code-side).** The client identity is env-overridable
+  (ANTIGRAVITY_CLIENT_ID/SECRET; pinned by test) and the constant now records the
+  deliberate-exposure decision, the installed-app quasi-public rationale, the omp
+  parity provenance, and the oauth-device.ts standard. Rotation/revocation stays an
+  account action for the credential owner.
+
+**Deferred-item tracking (the two open tails):**
+1. L-05 module removals — product decision, owner's call; not deferred work, a
+   decision request. Evidence table preserved in the P3 report.
+2. L-13 un-export pass (217 vestigial exports) — one deliberate integrator pass;
+   mechanical (tsc-verifiable), zero behavior change; not bundled into a sweep wave
+   that also deletes code.
