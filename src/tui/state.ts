@@ -63,6 +63,17 @@ export interface TuiState {
   tokenVelocity?: number;
   lastUsageAt?: number;
   lastTokens?: number;
+  /** Live model-turn count: one per usage:updated event on this tab's bus
+   *  (every provider call is one turn; children share the bus, so their
+   *  rounds count too — this is the run's total turn meter). */
+  turns: number;
+  /** Last model actually reported by usage:updated — the LIVE active model.
+   *  Routing may switch the model mid-run away from the config default, so
+   *  the status bar prefers this over the static config label. */
+  activeModel?: string;
+  /** Why the current model is active — the cost-per-solve routing evidence
+   *  (routing:decision / escalated / blocked) compacted for the status bar. */
+  routingReason?: string;
   /** Most recent SummaryDocument, kept so a terminal resize can re-render
    *  summary cards at the new width (windowed↔fullscreen transitions). */
   lastSummaryDoc?: SummaryDocument;
@@ -86,11 +97,12 @@ export function createTuiState(limit = 500): TuiState {
     activeSubagents: new Map(),
     activeToolArgs: new Map(),
     activeToolLine: new Map(),
-    currentTask: '',
     currentTool: '',
+    currentTask: '',
     chatVer: 0,
     trimmed: 0,
     limit,
+    turns: 0,
   };
 }
 
@@ -248,6 +260,38 @@ function safeArgsSig(args: unknown): string {
   } catch {
     return String(args);
   }
+}
+
+/** Compact status-bar text for WHY the current model is active — the
+ *  cost-per-solve routing evidence trail (W3-4). One line per event kind:
+ *  routing:decision (pinned / insufficient-data / already-optimal / routed),
+ *  routing:escalated (the trigger that bought the move up the measured
+ *  ladder), routing:escalation-blocked (evidence said yes, budget said no).
+ *  Undefined for every other event type. */
+export function formatRoutingReason(event: Record<string, unknown>): string | undefined {
+  const type = String(event.type);
+  if (type === 'routing:escalated') {
+    const bits: string[] = [String(event.trigger ?? '')];
+    if (typeof event.solveRate === 'number') bits.push(`${Math.round(event.solveRate * 100)}%`);
+    return `↑ ${String(event.toModel ?? '')} (${bits.join(' · ')})`;
+  }
+  if (type === 'routing:escalation-blocked') {
+    return `↑ blocked: ${String(event.reason ?? '')}`;
+  }
+  if (type !== 'routing:decision') return undefined;
+  const source = String(event.source ?? '');
+  if (source === 'pinned') return 'pinned';
+  if (source === 'insufficient-data') return 'no routing data';
+  const bits: string[] = [];
+  if (typeof event.costPerSolveUsd === 'number') bits.push(`cps $${event.costPerSolveUsd.toFixed(4)}`);
+  if (typeof event.solveRate === 'number') bits.push(`${Math.round(event.solveRate * 100)}% solve`);
+  if (typeof event.samples === 'number') bits.push(`${event.samples} runs`);
+  const evidence = bits.join(' · ');
+  if (source === 'routed') {
+    const from = event.fromModel ? `←${String(event.fromModel)}` : '';
+    return `routed ${String(event.model ?? '')}${from}: ${evidence}`;
+  }
+  return `optimal: ${evidence}`;
 }
 
 /** Apply one runtime event to the TUI state. Returns true when a re-render
@@ -493,7 +537,10 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
       return true;
     }
     case 'usage:updated': {
+      // Live turn meter: every usage:updated is ONE provider call = one turn.
       const now = Date.now();
+      state.turns++;
+      if (event.model) state.activeModel = String(event.model);
       const currentTotal = Number(event.totalTokens ?? 0);
       if (state.lastUsageAt && state.lastTokens && now > state.lastUsageAt) {
         const elapsedSec = (now - state.lastUsageAt) / 1000;
@@ -554,6 +601,19 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
         summary: String(event.summary ?? ''),
       });
       pushLine(state, 'tool', summary);
+      return true;
+    }
+    case 'routing:decision':
+    case 'routing:escalated':
+    case 'routing:escalation-blocked': {
+      // The routing evidence trail is visible state: the status bar shows WHY
+      // the current model is active (W3-4). `routed`/escalated decisions also
+      // tell us the live active model before the next usage:updated arrives.
+      const reason = formatRoutingReason(event);
+      if (reason === undefined) return false;
+      state.routingReason = reason;
+      const routedModel = event.type === 'routing:decision' && event.source === 'routed' ? event.model : undefined;
+      if (routedModel) state.activeModel = String(routedModel);
       return true;
     }
     default:

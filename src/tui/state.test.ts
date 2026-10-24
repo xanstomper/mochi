@@ -11,6 +11,7 @@ import {
   rewrapSummaries,
   toAbsLine,
   toRelLine,
+  formatRoutingReason,
 } from './state.js';
 import { STREAM_LINE_CAP } from './state.js';
 
@@ -535,5 +536,59 @@ describe('summary:rendered fallback + rewrap', () => {
     for (let i = 0; i < 600; i++) pushLine(s, 'system', `filler-${i}`);
     expect(s.lines.some((l) => l.kind === 'summary')).toBe(false);
     expect(rewrapSummaries(s, w)).toBe(false);
+  });
+});
+
+describe('status line live stats (W3-4)', () => {
+  it('usage:updated counts a live turn and records the active model', () => {
+    const s = createTuiState();
+    expect(s.turns).toBe(0);
+    reduceEvent(s, ev({ type: 'usage:updated', agentId: 'root', inputTokens: 10, outputTokens: 5, cacheTokens: 0, totalTokens: 15, model: 'gpt-5.1' }));
+    expect(s.turns).toBe(1);
+    expect(s.activeModel).toBe('gpt-5.1');
+    // A second call increments; an event WITHOUT a model label keeps the
+    // previous active model (failover endpoints stop sending usage metadata).
+    reduceEvent(s, ev({ type: 'usage:updated', agentId: 'root', inputTokens: 10, outputTokens: 5, cacheTokens: 0, totalTokens: 15 }));
+    expect(s.turns).toBe(2);
+    expect(s.activeModel).toBe('gpt-5.1');
+  });
+
+  it('routing:decision records the compact evidence reason and re-renders', () => {
+    const s = createTuiState();
+    expect(reduceEvent(s, ev({
+      type: 'routing:decision', agentId: 'root', taskKind: 'bugfix', model: 'gpt-5.1-mini',
+      source: 'routed', fromModel: 'deepseek-v4', costPerSolveUsd: 0.0021, solveRate: 0.91, samples: 14,
+    }))).toBe(true);
+    expect(s.routingReason).toBe('routed gpt-5.1-mini←deepseek-v4: cps $0.0021 · 91% solve · 14 runs');
+    // A routed decision IS the live active model, before the next usage event.
+    expect(s.activeModel).toBe('gpt-5.1-mini');
+  });
+
+  it('routing:decision covers every source kind', () => {
+    const mk = (source: string, extra: Record<string, unknown> = {}) => {
+      const s = createTuiState();
+      reduceEvent(s, ev({ type: 'routing:decision', agentId: 'root', taskKind: 'k', model: 'm', source, ...extra }));
+      return s.routingReason;
+    };
+    expect(mk('pinned')).toBe('pinned');
+    expect(mk('insufficient-data')).toBe('no routing data');
+    expect(mk('already-optimal', { costPerSolveUsd: 0.5, solveRate: 1, samples: 3 })).toBe('optimal: cps $0.5000 · 100% solve · 3 runs');
+    expect(mk('routed')).toBe('routed m: '); // no measured evidence in the cell yet
+  });
+
+  it('routing:escalated and -blocked record trigger/block reasons', () => {
+    const s = createTuiState();
+    reduceEvent(s, ev({ type: 'routing:escalated', agentId: 'root', taskKind: 'k', fromModel: 'a', toModel: 'b', trigger: 'verify_failures', solveRate: 0.5 }));
+    expect(s.routingReason).toBe('↑ b (verify_failures · 50%)');
+    // An escalation does not change what the run is running on its own — the
+    // loop's setActiveModel does; the badge only reports the trigger.
+    const s2 = createTuiState();
+    reduceEvent(s2, ev({ type: 'routing:escalation-blocked', agentId: 'root', taskKind: 'k', fromModel: 'a', toModel: 'b', trigger: 'same_failure', reason: 'budget exhausted' }));
+    expect(s2.routingReason).toBe('↑ blocked: budget exhausted');
+  });
+
+  it('formatRoutingReason is undefined for non-routing events', () => {
+    expect(formatRoutingReason(ev({ type: 'usage:updated' }))).toBeUndefined();
+    expect(formatRoutingReason(ev({ type: 'message', role: 'assistant', content: 'x' }))).toBeUndefined();
   });
 });

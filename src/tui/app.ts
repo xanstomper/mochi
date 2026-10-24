@@ -268,6 +268,10 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
     inTokens: 0,
     outTokens: 0,
     cacheTokens: 0,
+    /** live model-turn count + routing evidence for the status bar (W3-4) */
+    turns: 0 as number,
+    activeModel: undefined as string | undefined,
+    routingReason: undefined as string | undefined,
     /** splash animation tick + real startup progress (0..1) */
     splashTick: 0,
     splashProgress: 0,
@@ -535,6 +539,9 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       inTokens: 0,
       outTokens: 0,
       cacheTokens: 0,
+      turns: 0,
+      activeModel: undefined,
+      routingReason: undefined,
       splashTick: 0,
       splashProgress: 0,
       splashBurst: 0,
@@ -1429,8 +1436,9 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         extra.push(`account: ${activeAcct}`);
       }
     }
+    const activeModelLabel = (state.activeModel ?? modelShort).split('/').pop() ?? (state.activeModel ?? modelShort);
     const statusModel = {
-      modelId: modelShort,
+      modelId: activeModelLabel,
       totalTokens: state.inTokens + state.outTokens + state.cacheTokens,
       totalCost: state.totalCost,
       maxInputTokens: runtime.config.safety.contextBudgetTokens,
@@ -1443,6 +1451,8 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       autoApprove: state.autoApprove,
       extra,
       tokenVelocity: state.tokenVelocity,
+      turns: state.turns,
+      routingReason: state.routingReason,
     };
 
     const s1 = h - bottomRows;
@@ -2381,6 +2391,9 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         state.inTokens = 0;
         state.outTokens = 0;
         state.cacheTokens = 0;
+        state.turns = 0;
+        state.activeModel = undefined;
+        state.routingReason = undefined;
         state.chatVer++;
         try { tabs.rename(activeTabId, 'Session 1'); } catch {}
         tabs.setStatus(activeTabId, 'idle');
@@ -2400,6 +2413,9 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
       state.inTokens = 0;
       state.outTokens = 0;
       state.cacheTokens = 0;
+      state.turns = 0;
+      state.activeModel = undefined;
+      state.routingReason = undefined;
       state.chatVer++;
       push('system', 'Cleared all session context.');
       scheduleRender();
