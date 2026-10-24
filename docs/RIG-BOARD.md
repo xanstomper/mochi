@@ -178,3 +178,16 @@ objection/evidence channel), plaintext-key hygiene warning, node<22 preflight,
 doc-sprawl/price/oauth fixes. Wave 3 + P3 CLOSED; verified chain since b499831:
 3,269/2 failed -> 3,271 -> 3,285 -> 3,328 -> 3,384 -> 3,401, zero failures throughout.
 CDP-native headless browser tool now building on feat/cdp-browser (brief gated).
+
+## Endless workflow (Ben, 2026-10-24): the loop is ON
+Standing order: work everything on the Wave 4 chart + the fresh-gap list,
+continuously, across SYS-1 WooWop / SYS-2 home / SYS-3 VM (vermes + coder).
+Queue: ~/workspace/vps-setup/hermes/queue.md (VM copy: ~/campaign/queue.md).
+Loop rules: one coder run + one vermes run at a time (freeinference concurrency
+= 2, shared with home); every landing gets a fresh-suite verification before it
+counts; never push to origin (home merges); never relaunch promo; never touch
+Ben's keys. Coordinator cron (mochi-endless-loop, ~every 3h) checks state and
+advances the queue; it reports completions/blockers only. Loop stops ONLY when
+Ben says stop.
+Running at loop start: P5 live scorecard (vermes), hybrid tuning (coder),
+CDP verification (WooWop).
