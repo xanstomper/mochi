@@ -208,6 +208,12 @@ export interface MochiConfig {
   /** Total serialized schema-char budget for measured tool exposure.
    *  Env MOCHI_TOOL_SCHEMA_BUDGET overrides. Default 24,000 (≈ 6K tokens). */
   toolSchemaBudgetChars?: number;
+  /** Per-tool paths (config-file way to point a tool at a binary).
+   *  browser.cdpExecutable: the CDP-native browser stack resolves its
+   *  chromium in the order config path -> MOCHI_CDP_BROWSER env -> pinned
+   *  cache install -> system fallback; this is the config slot of that
+   *  chain. See src/browser/cdp/manager.ts. */
+  browser?: { cdpExecutable?: string };
   /** Self-repair: when the agent detects a harness-attributable failure, run an
    *  automatic repair pass after the main task. Defaults to on inside Mochi's
    *  own source repo, off elsewhere ( repairs must not surprise users). */
