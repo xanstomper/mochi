@@ -5,6 +5,7 @@
 // The Agent loop owns the live machinery (spawn/collect/cancel); everything
 // here is pure or file/git IO so it can be unit-tested without a model.
 import { execFile } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 import { existsSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { MochiConfig } from '../types.js';
@@ -241,7 +242,14 @@ const SEVERITY_RANK: Record<ChildFindingSeverity, number> = {
 
 function findingKey(f: ChildFinding): string {
   const msg = f.message.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
-  return `${f.file ?? ''}|${f.line ?? ''}|${msg.slice(0, 80)}`;
+  // Line bucketing: two reviewers of the SAME lens-free diff often cite the
+  // same defect a few lines apart (88 vs 91) and the aggregate double-reports
+  // it. Bucket the line to the nearest multiple of 5 when a file is given —
+  // same file + same message + nearby line merges (exact-line findings in
+  // files-less messages are unaffected).
+  let lineBucket: ChildFinding['line'];
+  if (f.file && typeof f.line === 'number') lineBucket = Math.round(f.line / 5);
+  return `${f.file ?? ''}|${lineBucket ?? f.line ?? ''}|${msg.slice(0, 80)}`;
 }
 
 export interface AggregatedReview {
@@ -463,7 +471,25 @@ export async function captureReviewDiff(
     diff = await gitOut(cwd, ['diff', 'HEAD']).catch(() => '');
     const untracked = await gitOut(cwd, ['ls-files', '--others', '--exclude-standard']).catch(() => '');
     if (untracked) {
-      diff += `\n\n[Untracked files]\n${untracked.split('\n').slice(0, 50).join('\n')}`;
+      const files = untracked.split('\n').filter(Boolean).slice(0, 50);
+      diff += `\n\n[Untracked files]\n${files.join('\n')}`;
+      // A filename list is not reviewable: new files (tests, modules) carry
+      // the change under review, yet reviewers only got names. Inline a
+      // capped content snippet per file so a fleet review of a mostly-new
+      // change has something to judge.
+      let snippetBudget = 20_000;
+      const snippets: string[] = [];
+      for (const f of files) {
+        if (snippetBudget <= 0) break;
+        const body = await readFile(resolve(cwd, f), 'utf8')
+          .then((r) => r.slice(0, 4_000))
+          .catch(() => '');
+        if (!body) continue;
+        const piece = `\n[Untracked file: ${f}]\n${body}${body.length >= 4_000 ? '\n… [truncated]' : ''}`;
+        snippets.push(piece);
+        snippetBudget -= piece.length;
+      }
+      if (snippets.length) diff += snippets.join('');
     }
   } else {
     label = target;

@@ -4976,8 +4976,13 @@ Continue from 'Next:', do not redo completed progress.`,
       this.config.safety.contextBudgetTokens < 10000
     );
     if (!skipModelCheckpoint) {
+      // Goose summarize.rs lesson: a summarizer failure should retry with a
+      // SMALLER input (its REMOVAL_PERCENTAGES ladder) before giving up on
+      // semantic continuity — an oversized 12K slice is a different failure
+      // than a broken model. Ladder: 12K -> 6K -> 2.5K chars.
+      for (const budget of [12_000, 6_000, 2_500]) {
       try {
-        const input = buildDigestInput(dropped, 12_000);
+        const input = buildDigestInput(dropped, budget);
         const prompt: ChatMessage[] = [
           { role: 'system', content: 'You maintain a session checkpoint for a coding agent. Summarize the conversation excerpt below in at most 150 words using exactly this format:\nGoal: <what the user ultimately wants>\nProgress: <what has been done, files touched>\nDecisions: <key choices made, max 3>\nNext: <immediate next step>\nBe specific (file paths, commands). No preamble.' },
           { role: 'user', content: input },
@@ -4994,9 +4999,8 @@ Continue from 'Next:', do not redo completed progress.`,
         if (raced === 'timeout') throw new Error('checkpoint timeout');
         const text = parts.join('').trim();
         // Sanity: a usable checkpoint mentions at least Goal or Progress.
-        if (text.length > 40 && /(goal|progress)/i.test(text)) checkpoint = text;
-      } catch {
-        checkpoint = undefined;
+        if (text.length > 40 && /(goal|progress)/i.test(text)) { checkpoint = text; break; }
+      } catch { /* next ladder rung (smaller input); heuristic after last */ }
       }
     }
     if (!checkpoint) {
