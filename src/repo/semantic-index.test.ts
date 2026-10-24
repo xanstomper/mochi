@@ -14,6 +14,7 @@ import {
   semanticContextText,
   semanticSearch,
   SEMANTIC_CONTEXT_MAX_CHARS,
+  type SemanticHit,
 } from './semantic-index.js';
 import { LocalFallbackEmbedder, contentHash, type Embedder } from './embeddings.js';
 import { generateMonorepoFixture, FIXTURE_FORBIDDEN_WORDS } from './semantic-fixture.js';
@@ -160,6 +161,74 @@ describe('semantic search + surfaces', () => {
     expect(warm!).toContain('lexical-fallback');
     expect(warm!).toContain('lease.ts');
     expect(warm!.length).toBeLessThanOrEqual(SEMANTIC_CONTEXT_MAX_CHARS);
+  });
+});
+
+describe('aggregateHitsToFiles file-level RRF (P4, provider embedder)', () => {
+  const hit = (over: Partial<SemanticHit>): SemanticHit => ({
+    rel: 'x.ts', symbol: '', kind: 'block', startLine: 1, endLine: 2,
+    score: 0, fusedScore: 0, vectorScore: 0, lexicalScore: 0, snippet: '',
+    ...over,
+  });
+
+  it('provider: file score does not scale with chunk count (per-signal bests, not sums)', () => {
+    // One chunk vs ten chunks, identical per-signal bests. The old
+    // best + 0.25 x rest formula scored the ten-chunk file ~3x higher;
+    // the file-level RRF must score them identically.
+    const one = aggregateHitsToFiles([
+      hit({ rel: 'a.ts', score: 0.012, fusedScore: 0.012, vectorScore: 0.5, lexicalScore: 0.3 }),
+    ], 5, { embedderKind: 'provider' });
+    const ten = aggregateHitsToFiles([
+      hit({ rel: 'b.ts', score: 0.012, fusedScore: 0.012, vectorScore: 0.5, lexicalScore: 0.3 }),
+      ...Array.from({ length: 9 }, (_, i) => hit({
+        rel: 'b.ts', score: 0.011 - i * 0.0005, fusedScore: 0.011 - i * 0.0005,
+        vectorScore: 0.5, lexicalScore: 0.3,
+      })),
+    ], 5, { embedderKind: 'provider' });
+    expect(one).toHaveLength(1);
+    expect(ten[0].chunkCount).toBe(10);
+    expect(ten[0].fileScore).toBeCloseTo(one[0].fileScore, 10);
+  });
+
+  it('provider: a many-chunk decoy with weaker per-signal bests cannot out-rank the target', () => {
+    // Chunk-level fused scores are near-identical (RRF is flat), but the
+    // decoy places TEN chunks in the pool. Under best + 0.25 x rest its
+    // fileScore would be 0.0323 + 0.25x9x0.0323 = 0.105 — first by chunk
+    // count. Under file-level RRF the target's (vec rank 1, lex rank 2)
+    // beats the decoy's (vec rank 3, lex rank 1).
+    const decoyChunks = Array.from({ length: 10 }, () => hit({
+      rel: 'decoy.log', score: 0.032266, fusedScore: 0.032266, vectorScore: 0.4, lexicalScore: 0.3,
+    }));
+    const files = aggregateHitsToFiles([
+      hit({ rel: 'target.ts', score: 0.032519, fusedScore: 0.032519, vectorScore: 0.62, lexicalScore: 0.2 }),
+      hit({ rel: 'other.ts', score: 0.031765, fusedScore: 0.031765, vectorScore: 0.55, lexicalScore: 0.1 }),
+      ...decoyChunks,
+    ], 3, { embedderKind: 'provider' });
+    expect(files[0].rel).toBe('target.ts');
+    expect(files[0].best.vectorScore).toBe(0.62);
+  });
+
+  it('lexical fallback: the legacy count-voting formula is kept (spread evidence)', () => {
+    // With the fallback embedder there is no strong ranker to swarm: a
+    // file whose evidence spreads over ten pooled chunks MUST out-rank a
+    // one-chunk file with the same per-signal bests (measured on the
+    // 2048-file fixture: file-level RRF there loses 0.698 -> 0.594 vs
+    // pure lexical). Omitted kind = the fallback policy (historical
+    // default), so the two calls must agree.
+    const tenHits = [
+      hit({ rel: 'b.ts', score: 0.012, fusedScore: 0.012, vectorScore: 0.5, lexicalScore: 0.3 }),
+      ...Array.from({ length: 9 }, (_, i) => hit({
+        rel: 'b.ts', score: 0.011 - i * 0.0005, fusedScore: 0.011 - i * 0.0005,
+        vectorScore: 0.5, lexicalScore: 0.3,
+      })),
+    ];
+    const fallbackTen = aggregateHitsToFiles(tenHits, 5, { embedderKind: 'lexical-fallback' });
+    const defaultTen = aggregateHitsToFiles(tenHits, 5);
+    expect(fallbackTen[0].fileScore).toBeCloseTo(defaultTen[0].fileScore, 10);
+    const one = aggregateHitsToFiles([
+      hit({ rel: 'a.ts', score: 0.012, fusedScore: 0.012, vectorScore: 0.5, lexicalScore: 0.3 }),
+    ], 5, { embedderKind: 'lexical-fallback' });
+    expect(fallbackTen[0].fileScore).toBeGreaterThan(one[0].fileScore);
   });
 });
 
