@@ -116,7 +116,8 @@ export function generateProjectDocs(cwd: string, opts: { title?: string } = {}):
   const mdLines = [
     `# 🍡 ${title}`,
     '',
-    `> Automatically generated architecture graph and API specification.`,
+    `> Automatically generated architecture graph and API specification (\`mochi docgen --write\` — regenerate, never hand-edit).`,
+    `> The **canonical curated architecture doc is \`docs/ARCHITECTURE.md\`** — this dump will drift from it by design.`,
     `> **Modules**: ${modules.length} | **Total Symbols**: ${totalSymbols}`,
     '',
     '## 🏗️ Architecture Diagram',

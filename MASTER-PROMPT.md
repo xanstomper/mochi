@@ -1,5 +1,12 @@
 # MOCHI MASTER PROMPT — Full-Harness Audit & Next-Gen Upgrade
 
+> Disambiguation (Wave P3, L-15): this hyphenated file is the **phase spec the test
+> suite cites** (`src/agent/chaos.test.ts`, `src/context-compaction-fidelity.test.ts`
+> reference "MASTER-PROMPT" phases). The underscore sibling `MASTER_PROMPT.md`
+> ("Operation Frontier v1") is the separate iteration-laws dogfooding contract
+> (TECHMAP.md). Neither supersedes the other.
+
+
 > Feed this entire document to the agent (Mochi, Claude Code, Codex, Hermes, or any CLI agent)
 > as a single task. It is self-contained. The goal: turn Mochi into a harness that is measurably
 > better than Hermes, Claude Code, Codex, J-Code, and OpenCode at real coding work — with a

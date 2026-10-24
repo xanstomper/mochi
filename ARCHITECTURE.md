@@ -1,5 +1,8 @@
 # 🍡 Project Architecture & API Reference
 
+> **Auto-generated** module/symbol graph and API specification (`mochi docgen --write` — regenerate, never hand-edit; see `TECHMAP.md`).
+> The **canonical curated architecture doc is [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** — this dump will drift from it by design.
+
 > Automatically generated architecture graph and API specification.
 > **Modules**: 331 | **Total Symbols**: 6429
 
