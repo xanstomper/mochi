@@ -10,13 +10,13 @@
 // dependency added to Mochi).
 
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { createWriteStream } from 'node:fs';
 import { runArgv } from '../../exec.js';
-import { PINNED_SHELL, cdpCacheRoot, type ResolvedBrowser } from './manager.js';
+import { PINNED_SHELL, PINNED_LIGHTPANDA, lightpandaAssetKey, cdpCacheRoot, type ResolvedBrowser, type LightpandaAssetKey } from './manager.js';
 
 export interface FetchResult {
   path: string;
@@ -124,6 +124,83 @@ export function shellInstallInfo(): { version: string; fetchedAt: string } | und
     const marker = join(installDir(PINNED_SHELL.version), 'INSTALLATION_COMPLETE');
     if (!existsSync(marker)) return undefined;
     return JSON.parse(readFileSync(marker, 'utf8')) as { version: string; fetchedAt: string };
+  } catch {
+    return undefined;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Lightpanda (OPT-IN engine): same explicit-fetch discipline as the pinned
+// shell. Raw binary (no zip), sha256-verified against the upstream GitHub
+// release digest BEFORE it is moved into the cache install dir. Never called
+// from a tool path: `mochi browser fetch-lightpanda` is the explicit step.
+
+export interface LightpandaFetchResult {
+  path: string;
+  version: string;
+  bytes: number;
+  sha256: string;
+  alreadyInstalled: boolean;
+  asset: LightpandaAssetKey;
+}
+
+function lightpandaInstallDir(version: string): string {
+  return join(cdpCacheRoot(), `lightpanda-${version}`);
+}
+
+export function installedLightpandaPath(version = PINNED_LIGHTPANDA.version): string | undefined {
+  const bin = join(lightpandaInstallDir(version), 'lightpanda');
+  return existsSync(bin) ? bin : undefined;
+}
+
+/**
+ * Download + verify + install the pinned Lightpanda binary. Idempotent: an
+ * existing verified install is returned as-is unless `force` re-fetches.
+ */
+export async function fetchLightpanda(opts: { force?: boolean; onProgress?: (received: number) => void } = {}): Promise<LightpandaFetchResult> {
+  const asset = lightpandaAssetKey(); // throws on win32/unsupported with the gap named
+  const { version } = PINNED_LIGHTPANDA;
+  const { url, sha256: expectedSha } = PINNED_LIGHTPANDA.assets[asset];
+  const dir = lightpandaInstallDir(version);
+  const bin = join(dir, 'lightpanda');
+  const marker = join(dir, 'INSTALLATION_COMPLETE');
+
+  if (!opts.force && existsSync(bin) && existsSync(marker)) {
+    return { path: bin, version, bytes: statSync(bin).size, sha256: expectedSha, alreadyInstalled: true, asset };
+  }
+
+  mkdirSync(join(cdpCacheRoot(), 'downloads'), { recursive: true });
+  const dlPath = join(cdpCacheRoot(), 'downloads', `lightpanda-${version}-${asset}`);
+  try {
+    const { bytes, sha256 } = await downloadAndHash(url, dlPath, opts.onProgress);
+    if (sha256 !== expectedSha) {
+      rmSync(dlPath, { force: true });
+      throw new Error(
+        `checksum MISMATCH for lightpanda ${version} (${asset}): got ${sha256}, expected ${expectedSha}. ` +
+        'The download was deleted — do not use this artifact.',
+      );
+    }
+    // Verified only now: move it into place as the install.
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+    renameSync(dlPath, bin);
+    chmodSync(bin, 0o755);
+    writeFileSync(marker, JSON.stringify({ version, asset, sha256, fetchedAt: new Date().toISOString() }, null, 2) + '\n');
+    return { path: bin, version, bytes, sha256, alreadyInstalled: false, asset };
+  } finally {
+    // A stale (unverified or unpacked) download never lingers once the
+    // install exists; on failure the zip-equivalent stays for manual checks
+    // only when the install did not materialize.
+    if (existsSync(bin)) rmSync(dlPath, { force: true });
+  }
+}
+
+/** Marker content readback for the Lightpanda install (status surface). */
+export function lightpandaInstallInfo(): { version: string; asset: string; fetchedAt: string } | undefined {
+  try {
+    const marker = join(lightpandaInstallDir(PINNED_LIGHTPANDA.version), 'INSTALLATION_COMPLETE');
+    if (!existsSync(marker)) return undefined;
+    return JSON.parse(readFileSync(marker, 'utf8')) as { version: string; asset: string; fetchedAt: string };
   } catch {
     return undefined;
   }
