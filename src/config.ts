@@ -1,8 +1,9 @@
 import { homedir } from 'node:os';
 import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { resolve, dirname } from 'node:path';
 import type { MochiConfig, ModelProfile } from './types.js';
 import { PROVIDERS } from './model/providers.js';
+import { warnPlaintextKeysOnce } from './config-plaintext-keys.js';
 import { normalizeModelName } from './model/router.js';
 
 const defaultConfig = (): MochiConfig => ({
@@ -124,8 +125,15 @@ export function loadConfig(overrides: Partial<MochiConfig> = {}, configPath?: st
   // ignored. The later assignment stays: it keeps the env var winning when
   // the user config file itself carries a configDir key.
   if (process.env.MOCHI_CONFIG_DIR) cfg.configDir = process.env.MOCHI_CONFIG_DIR;
-  const user = readJsonFile(configPath ?? process.env.MOCHI_CONFIG_PATH ?? resolve(cfg.configDir, 'config.json'));
-  if (user) merge(cfg as unknown as Record<string, unknown>, user);
+  const userConfigPath = configPath ?? process.env.MOCHI_CONFIG_PATH ?? resolve(cfg.configDir, 'config.json');
+  const user = readJsonFile(userConfigPath);
+  if (user) {
+    merge(cfg as unknown as Record<string, unknown>, user);
+    // P3 gun 3 (config-side only): one warning per process when the config
+    // file carries raw key material — names the field paths, never the
+    // values, and documents the keyring that should hold them instead.
+    warnPlaintextKeysOnce(user, userConfigPath, resolve(dirname(userConfigPath), 'auth.json'));
+  }
 
   // Project-level configurations (mochi.json, .mochi/config.json, .mcp.json).
   // B26: resolve against the RUNTIME'S directory, not blindly process.cwd() —
