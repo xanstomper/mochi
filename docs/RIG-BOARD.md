@@ -169,3 +169,12 @@ one action-discriminated tool, binary resolution + pinned download, sandbox-awar
 Ships behind a measurement gate vs the existing browser path (cold start, RSS,
 time-to-snapshot/screenshot on local fixtures) — the 10x target gets tested, not asserted.
 Starts on branch feat/cdp-browser the moment P3 closes. Owner: VM coder; vermes/WooWop verify.
+
+## P3 smoking-gun sweep — WooWop independent verification (2026-10-24)
+Fresh worktree at 6b10f23, Node 26.12.1: tsc CLEAN; full suite **3,401 passed / 0 failed / 14 skipped** —
+exactly matching the coder's gate. All 11 P3 commits PASS: ISSUES.md dispositioned,
+9 dead exports deleted, self-poisoning class fixed (annotations cannot enter the
+objection/evidence channel), plaintext-key hygiene warning, node<22 preflight,
+doc-sprawl/price/oauth fixes. Wave 3 + P3 CLOSED; verified chain since b499831:
+3,269/2 failed -> 3,271 -> 3,285 -> 3,328 -> 3,384 -> 3,401, zero failures throughout.
+CDP-native headless browser tool now building on feat/cdp-browser (brief gated).
