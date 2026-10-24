@@ -49,41 +49,54 @@ export const PRICE_TABLE_AS_OF = '2026-10-22';
 
 /** Built-in list prices, USD per 1M tokens. Deliberately conservative scope:
  *  flagship/coding models Mochi actually routes to, at the vendor's own list
- *  rate. Resold/open-weight endpoints vary too much per host to table. */
+ *  rate. Resold/open-weight endpoints vary too much per host to table.
+ *
+ * Per-entry provenance (ISSUES L-07 — a table without provenance is a rumor):
+ * every entry carries a trailing tag —
+ *   [vendor-list]  vendor's own list rate, cross-checked against the
+ *                  vendor's published cache multipliers (Anthropic rows:
+ *                  cacheWrite = 1.25× input, cacheRead = 0.1× input).
+ *   [estimate]     per project history an ESTIMATE, not a confirmed list
+ *                  price — treat with suspicion; override via
+ *                  `safety.pricing.overrides` when you know the real rate.
+ *   [unverified]   no project-history confirmation either way — same
+ *                  override path applies.
+ * No tag invents a URL: provenance this wave cannot re-verify 2026 vendor
+ * pages, so it records confidence honestly instead of manufacturing it. */
 export const DEFAULT_PRICE_TABLE: Readonly<Record<string, ModelPrice>> = {
   // Anthropic (cache write = 1.25x input, cache read = 0.1x input)
-  'claude-opus-4-6': { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-  'claude-opus-4-5': { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-  'claude-opus-4-1': { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
-  'claude-opus-4': { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
-  'claude-sonnet-4-6': { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-  'claude-sonnet-4-5': { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-  'claude-sonnet-4': { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-  'claude-haiku-4-5': { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
-  'claude-haiku-3-5': { input: 0.8, output: 4, cacheRead: 0.08, cacheWrite: 1 },
+  'claude-opus-4-6': { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }, // [vendor-list]
+  'claude-opus-4-5': { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }, // [vendor-list]
+  'claude-opus-4-1': { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 }, // [vendor-list]
+  'claude-opus-4': { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 }, // [vendor-list]
+  'claude-sonnet-4-6': { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }, // [vendor-list]
+  'claude-sonnet-4-5': { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }, // [vendor-list]
+  'claude-sonnet-4': { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }, // [vendor-list]
+  'claude-haiku-4-5': { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 }, // [vendor-list]
+  'claude-haiku-3-5': { input: 0.8, output: 4, cacheRead: 0.08, cacheWrite: 1 }, // [vendor-list]
   // OpenAI
-  'gpt-5': { input: 1.25, output: 10, cacheRead: 0.125 },
-  'gpt-5-mini': { input: 0.25, output: 2, cacheRead: 0.025 },
-  'gpt-5-nano': { input: 0.05, output: 0.4, cacheRead: 0.005 },
-  'gpt-4.1': { input: 2, output: 8, cacheRead: 0.5 },
-  'gpt-4.1-mini': { input: 0.4, output: 1.6, cacheRead: 0.1 },
-  'gpt-4.1-nano': { input: 0.1, output: 0.4, cacheRead: 0.025 },
-  'gpt-4o': { input: 2.5, output: 10, cacheRead: 1.25 },
-  'gpt-4o-mini': { input: 0.15, output: 0.6, cacheRead: 0.075 },
-  'o3': { input: 2, output: 8, cacheRead: 0.5 },
-  'o4-mini': { input: 1.1, output: 4.4, cacheRead: 0.275 },
+  'gpt-5': { input: 1.25, output: 10, cacheRead: 0.125 }, // [estimate]
+  'gpt-5-mini': { input: 0.25, output: 2, cacheRead: 0.025 }, // [estimate]
+  'gpt-5-nano': { input: 0.05, output: 0.4, cacheRead: 0.005 }, // [estimate]
+  'gpt-4.1': { input: 2, output: 8, cacheRead: 0.5 }, // [unverified]
+  'gpt-4.1-mini': { input: 0.4, output: 1.6, cacheRead: 0.1 }, // [unverified]
+  'gpt-4.1-nano': { input: 0.1, output: 0.4, cacheRead: 0.025 }, // [unverified]
+  'gpt-4o': { input: 2.5, output: 10, cacheRead: 1.25 }, // [unverified]
+  'gpt-4o-mini': { input: 0.15, output: 0.6, cacheRead: 0.075 }, // [unverified]
+  'o3': { input: 2, output: 8, cacheRead: 0.5 }, // [unverified]
+  'o4-mini': { input: 1.1, output: 4.4, cacheRead: 0.275 }, // [unverified]
   // Google
-  'gemini-2.5-pro': { input: 1.25, output: 10, cacheRead: 0.31 },
-  'gemini-2.5-flash': { input: 0.3, output: 2.5, cacheRead: 0.03 },
-  'gemini-2.5-flash-lite': { input: 0.1, output: 0.4, cacheRead: 0.01 },
-  'gemini-2.0-flash': { input: 0.1, output: 0.4, cacheRead: 0.025 },
+  'gemini-2.5-pro': { input: 1.25, output: 10, cacheRead: 0.31 }, // [unverified]
+  'gemini-2.5-flash': { input: 0.3, output: 2.5, cacheRead: 0.03 }, // [unverified]
+  'gemini-2.5-flash-lite': { input: 0.1, output: 0.4, cacheRead: 0.01 }, // [unverified]
+  'gemini-2.0-flash': { input: 0.1, output: 0.4, cacheRead: 0.025 }, // [unverified]
   // DeepSeek (cache read = prompt-cache-hit rate)
-  'deepseek-chat': { input: 0.27, output: 1.1, cacheRead: 0.07 },
-  'deepseek-reasoner': { input: 0.55, output: 2.19, cacheRead: 0.14 },
+  'deepseek-chat': { input: 0.27, output: 1.1, cacheRead: 0.07 }, // [estimate: cache rate]
+  'deepseek-reasoner': { input: 0.55, output: 2.19, cacheRead: 0.14 }, // [estimate: cache rate]
   // xAI / Mistral
-  'grok-4': { input: 3, output: 15, cacheRead: 0.75 },
-  'mistral-large': { input: 2, output: 6 },
-  'codestral': { input: 0.3, output: 0.9 },
+  'grok-4': { input: 3, output: 15, cacheRead: 0.75 }, // [estimate]
+  'mistral-large': { input: 2, output: 6 }, // [unverified]
+  'codestral': { input: 0.3, output: 0.9 }, // [unverified]
 };
 
 const ZERO_PRICE: ModelPrice = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
