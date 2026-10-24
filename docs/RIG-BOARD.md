@@ -191,3 +191,29 @@ advances the queue; it reports completions/blockers only. Loop stops ONLY when
 Ben says stop.
 Running at loop start: P5 live scorecard (vermes), hybrid tuning (coder),
 CDP verification (WooWop).
+
+## CDP browser tool — WooWop independent verification (2026-10-24)
+Fresh worktree at a9efc8f, Node 26.12.1: tsc CLEAN; full suite **3,445 passed /
+0 failed / 12 skipped** (+44 vs P3's 3,401 — the 42 CDP tests + pins).
+Coder's measurement gate stands: cold-start 1.13x (not 10x — chromium startup
+dominates), RSS -105 MB (-17%), warm click 24x, screenshot 1.5x, snapshots tie.
+CDP CLOSED and verified. Verified chain: 3,269/2 -> 3,271 -> 3,285 -> 3,328 ->
+3,384 -> 3,401 -> 3,445, zero failures throughout.
+
+## Hybrid tuning — coder COMPLETE, WooWop verification running
+feat/hybrid-tuning (300eb87 file-level RRF, d06a37b lexical vote at half
+weight, f9861d9 frozen set 24 -> 60). 60-query set, real production path:
+lexical 0.800/0.867, embedded 0.833/0.883, tuned hybrid 0.883/0.900 — ship rule
+PASSES both legs. Coder's gate: tsc clean, 3,450/0. 4 every-signal misses
+diagnosed (q10/q12/q21 corpus gaps; q23 ground-truth ambiguity — needs a human
+call on whether session-store.ts joins the target list).
+
+## P5 first live cell — BLOCKED, not failed
+swe cell remains UNMEASURED: zero live tasks. Two concrete stops: (1) no real
+SWE-bench Pro V2 dataset exists on the VM (only the 4-instance synthetic
+fixture); (2) the vermes session's permission gate withheld network consent
+for every repo-fetch probe (5-min approval timeouts, unanswered). Next run
+needs: a real dataset source + an egress-approval path Ben can answer, plus
+runner backoff and per-task turns/token capture. This is a Ben decision, not
+a coder task. Falsification head-to-head (Mochi vs Hermes, same model, fresh
+tasks, no dataset needed) launched to vermes instead — it sidesteps both stops.
