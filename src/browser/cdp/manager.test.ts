@@ -5,9 +5,13 @@ import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import {
   CdpBrowserManager,
   buildCdpArgs,
+  buildLightpandaArgs,
   cdpCacheRoot,
+  cdpEndpointFromLog,
   cachedShellInstalls,
+  getCdpSession,
   launchCdpBrowser,
+  lightpandaAssetKey,
   resolveCdpBrowserBinary,
   type LaunchOptions,
   type LaunchResult,
@@ -242,5 +246,165 @@ describe('cache install discovery', () => {
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Lightpanda: the OPT-IN second engine. Same lifecycle rules, different
+// argv + endpoint format, and a HARD single-page scope (tabs refuse — they
+// are never faked into a degraded multi-page story).
+
+describe('lightpanda engine — argv shape (pure)', () => {
+  it('is a CDP server invocation: serve + port, no chromium flags', () => {
+    expect(buildLightpandaArgs({})).toEqual(['serve', '--port', '0']);
+    expect(buildLightpandaArgs({ port: 9333 })).toEqual(['serve', '--port', '9333']);
+    const args = buildLightpandaArgs({});
+    expect(args).not.toContain('--headless=new');
+    expect(args.join(' ')).not.toMatch(/--user-data-dir/);
+    expect(args.join(' ')).not.toMatch(/sandbox/);
+  });
+
+  it('asset key covers the upstream matrix and refuses win32 with the gap named', () => {
+    expect(lightpandaAssetKey('linux', 'x64')).toBe('x86_64-linux');
+    expect(lightpandaAssetKey('linux', 'arm64')).toBe('aarch64-linux');
+    expect(lightpandaAssetKey('darwin', 'arm64')).toBe('aarch64-macos');
+    expect(lightpandaAssetKey('darwin', 'x64')).toBe('x86_64-macos');
+    expect(() => lightpandaAssetKey('win32', 'x64')).toThrow(/win32.*no prebuilt Lightpanda|no prebuilt Lightpanda.*win32/i);
+  });
+});
+
+describe('cdpEndpointFromLog — per-engine endpoint parsing (pure)', () => {
+  it('parses the chromium DevTools line', () => {
+    const line = '[123:456] DevTools listening on ws://127.0.0.1:9222/devtools/browser/x';
+    expect(cdpEndpointFromLog('chromium', line)).toBe('ws://127.0.0.1:9222/devtools/browser/x');
+  });
+
+  it('parses the lightpanda logfmt note line and roots the ws url', () => {
+    const line = '$time=1792854929945 $scope=app $level=note $msg="server running" address=127.0.0.1:40709';
+    expect(cdpEndpointFromLog('lightpanda', line)).toBe('ws://127.0.0.1:40709/');
+  });
+
+  it('returns undefined while the endpoint has not appeared', () => {
+    expect(cdpEndpointFromLog('chromium', 'starting up…')).toBeUndefined();
+    expect(cdpEndpointFromLog('lightpanda', 'starting up…')).toBeUndefined();
+  });
+});
+
+describe('lightpanda engine — binary resolution', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'mochi-cdp-lp-res-'));
+  const envBin = join(tmp, 'lp-env');
+  const envChromeBin = join(tmp, 'chrome-env');
+  const cacheBin = join(tmp, 'cache', 'lightpanda-0.3.7', 'lightpanda');
+  for (const p of [envBin, envChromeBin, cacheBin]) {
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, '#!/bin/sh\nexit 0\n');
+    chmodSync(p, 0o755);
+  }
+  afterAll(() => { rmSync(tmp, { recursive: true, force: true }); });
+
+  it('MOCHI_CDP_LIGHTPANDA wins, then the pinned cache install; both carry engine=lightpanda', () => {
+    withEnv({ MOCHI_CDP_LIGHTPANDA: envBin, MOCHI_CDP_CACHE_DIR: join(tmp, 'cache') }, () => {
+      expect(resolveCdpBrowserBinary(undefined, 'lightpanda')).toMatchObject({ path: envBin, source: 'env', engine: 'lightpanda' });
+    });
+    withEnv({ MOCHI_CDP_LIGHTPANDA: undefined, MOCHI_CDP_CACHE_DIR: join(tmp, 'cache') }, () => {
+      expect(resolveCdpBrowserBinary(undefined, 'lightpanda')).toMatchObject({ path: cacheBin, source: 'cache', engine: 'lightpanda' });
+    });
+  });
+
+  it('names the explicit fetch step when nothing is installed', () => {
+    withEnv({ MOCHI_CDP_LIGHTPANDA: undefined, MOCHI_CDP_CACHE_DIR: join(tmp, 'empty') }, () => {
+      expect(() => resolveCdpBrowserBinary(undefined, 'lightpanda')).toThrow(/fetch-lightpanda/);
+    });
+  });
+
+  it('the chromium chain is untouched by the lightpanda branch', () => {
+    withEnv({ MOCHI_CDP_LIGHTPANDA: envBin, MOCHI_CDP_BROWSER: envChromeBin, MOCHI_CDP_CACHE_DIR: join(tmp, 'cache') }, () => {
+      // engine defaults to chromium: the lightpanda env var must NOT leak in
+      const r = resolveCdpBrowserBinary();
+      expect(r.engine).toBe('chromium');
+      expect(r.path).toBe(envChromeBin);
+    });
+  });
+});
+
+describe('launchCdpBrowser — lightpanda endpoint from its own log line', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'mochi-cdp-lp-launch-'));
+  afterAll(() => { rmSync(tmp, { recursive: true, force: true }); });
+
+  const fakeLightpanda = (): string => {
+    const p = join(tmp, 'fake-lightpanda');
+    writeFileSync(p, [
+      '#!/bin/sh',
+      'echo \'$time=0 $scope=app $level=note $msg="server running" address=127.0.0.1:9444\' >&2',
+      'sleep 60',
+    ].join('\n'));
+    chmodSync(p, 0o755);
+    return p;
+  };
+
+  it('spawns `serve --port 0` and resolves the ws url from the address= log', async () => {
+    const res = await launchCdpBrowser({ engine: 'lightpanda', executablePath: fakeLightpanda(), profileDir: tmp, endpointTimeoutMs: 4000 });
+    expect(res.wsUrl).toBe('ws://127.0.0.1:9444/');
+    expect(res.args).toEqual(['serve', '--port', '0']);
+    expect(res.sandboxNote).toBeUndefined(); // no sandbox fallback exists for lightpanda
+    res.child.kill('SIGTERM');
+  });
+});
+
+describe('lightpanda engine — single-page scope in the manager', () => {
+  const endpoints: FakeCdpEndpoint[] = [];
+  afterEach(async () => {
+    for (const e of endpoints.splice(0)) await e.close();
+  });
+
+  function makeEndpoint(): Promise<FakeCdpEndpoint> {
+    const endpoint = new FakeCdpEndpoint();
+    endpoint.onMessage = (msg, reply) => {
+      switch (msg.method) {
+        case 'Target.getTargets':
+          reply({ targetInfos: [{ targetId: 't1', type: 'page', url: 'about:blank' }] });
+          break;
+        case 'Target.attachToTarget':
+          reply({ sessionId: 's1' });
+          break;
+        default:
+          reply({});
+      }
+    };
+    endpoints.push(endpoint);
+    return endpoint.listen().then(() => endpoint);
+  }
+
+  function manager(endpointUrl: string, engine: 'chromium' | 'lightpanda'): CdpBrowserManager {
+    return new CdpBrowserManager({
+      workspaceDir: '/tmp',
+      profileDir: '/tmp/profile',
+      engine,
+      idleMs: 60_000,
+      launchFn: async (): Promise<LaunchResult> =>
+        ({ child: { kill: (): void => {}, killed: false, exitCode: null } as never, wsUrl: endpointUrl, port: 0, args: [] }),
+    });
+  }
+
+  it('open/switch tabs refuse with the labeled single-page limit; close shuts down', async () => {
+    const endpoint = await makeEndpoint();
+    const m = manager(endpoint.url ?? 'ws://unset', 'lightpanda');
+    // single-page lifecycle works end to end
+    const page = await m.ensurePage();
+    expect(page.sessionId).toBe('s1');
+    await expect(m.openPage('http://x/')).rejects.toThrow(/ONE page per process/);
+    await expect(m.switchPage(0)).rejects.toThrow(/ONE page per process/);
+    const res = await m.closePage(page.targetId);
+    expect(res).toEqual({ closed: page.targetId, browserClosed: true });
+    expect(m.status).toBe('closed');
+  });
+
+  it('the same workspace+profile gets DIFFERENT sessions per engine', () => {
+    const a = getCdpSession({ workspaceDir: '/tmp/lp-key-ws', profileDir: '/tmp/lp-key-p', engine: 'chromium' });
+    const b = getCdpSession({ workspaceDir: '/tmp/lp-key-ws', profileDir: '/tmp/lp-key-p', engine: 'lightpanda' });
+    expect(b).not.toBe(a);
+    expect(b.engine).toBe('lightpanda');
+    void a.shutdown('test');
+    void b.shutdown('test');
   });
 });

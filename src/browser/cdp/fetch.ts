@@ -115,7 +115,7 @@ export async function ensurePinnedShellInstalled(): Promise<{ resolved: Resolved
   }
   const path = installedShellPath();
   if (!path) throw new Error('pinned chrome-headless-shell install did not materialize');
-  return { resolved: { path, source: 'cache', isHeadlessShell: true }, fetched, bytes };
+  return { resolved: { path, source: 'cache', isHeadlessShell: true, engine: 'chromium' }, fetched, bytes };
 }
 
 /** Marker content readback (used by `mochi browser status`). */
