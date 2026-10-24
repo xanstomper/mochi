@@ -413,9 +413,16 @@ export class CdpBrowserManager {
     else await (await this.connect()).send('Target.closeTarget', { targetId }, { timeoutMs: 10_000 }).catch(() => { /* gone */ });
     this.pages.delete(targetId);
     if (this.activeTargetId === targetId) this.activeTargetId = undefined;
+    // Target destruction is asynchronous — poll until the target is actually
+    // gone before deciding whether this was the last page.
+    const deadline = Date.now() + 2000;
+    let remaining = await this.listPages().catch(() => []);
+    while (remaining.some((p) => p.targetId === targetId) && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100));
+      remaining = await this.listPages().catch(() => []);
+    }
     // Closing the last page = closing the browser (a browser with no pages
     // is a zombie process tree — exactly what this stack exists to avoid).
-    const remaining = await this.listPages().catch(() => []);
     if (remaining.length === 0) {
       await this.shutdown('last page closed');
       return { closed: targetId, browserClosed: true };

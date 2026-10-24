@@ -34,7 +34,7 @@ import {
 } from '../browser/profiles.js';
 import { resolveCdpBrowserBinary } from '../browser/cdp/manager.js';
 import { getCdpSession, closeAllCdpSessions } from '../browser/cdp/manager.js';
-import type { CdpPage, PageSnapshot } from '../browser/cdp/page.js';
+import type { PageSnapshot } from '../browser/cdp/page.js';
 import type { Tool, ToolContext } from './types.js';
 
 export type CdpBrowserAction =
@@ -104,14 +104,12 @@ function sandboxBlock(mgr: ReturnType<typeof getCdpSession>): string[] {
   return [`[sandbox] ${mgr.sandboxNote}`];
 }
 
-async function drainAndFormat(mgr: ReturnType<typeof getCdpSession>, page: CdpPage, header: string): Promise<string> {
-  const evidence = page.drainEvidence();
-  const blocks = [header, ...restartBlock(mgr), ...sandboxBlock(mgr)];
-  if (evidence.length) {
-    blocks.push('[evidence — observed on this page since the last action]');
-    for (const e of evidence.slice(0, 20)) blocks.push(`  ${e}`);
-  }
-  return blocks.join('\n');
+/** Action results carry lifecycle blocks only; console/network/dialog
+ *  evidence is intentionally NOT drained here — per the verified-evidence
+ *  discipline it attaches to the NEXT SNAPSHOT (the page observation the
+ *  model reasons over), where it is shown once and cleared. */
+async function actionResult(mgr: ReturnType<typeof getCdpSession>, header: string): Promise<string> {
+  return [header, ...restartBlock(mgr), ...sandboxBlock(mgr)].filter(Boolean).join('\n');
 }
 
 export const cdpBrowserTool: Tool = {
@@ -195,31 +193,39 @@ export const cdpBrowserTool: Tool = {
           // snapshot reflects the loaded page, not a mid-load frame.
           await target.wait('network-idle', { timeoutMs: 5000 }).catch(() => { /* report what we have */ });
           const snap = await target.snapshot();
-          return buildSnapshotText(snap, target.drainEvidence()).replace(/^/, `[cdp_browser open] `) +
-            (mgr.sandboxNote ? `\n[sandbox] ${mgr.sandboxNote}` : '');
+          return [
+            `[cdp_browser open] ` + buildSnapshotText(snap, target.drainEvidence()),
+            ...restartBlock(mgr),
+            ...sandboxBlock(mgr),
+          ].filter(Boolean).join('\n');
         }
         case 'snapshot': {
           const snap = await page.snapshot();
-          return `[cdp_browser snapshot]\n` + buildSnapshotText(snap, page.drainEvidence());
+          return [
+            `[cdp_browser snapshot]`,
+            ...restartBlock(mgr),
+            ...sandboxBlock(mgr),
+            buildSnapshotText(snap, page.drainEvidence()),
+          ].filter(Boolean).join('\n');
         }
         case 'click': {
           const ref = String(args.ref ?? '');
           if (!ref) return 'cdp_browser: click needs a snapshot ref (take action=snapshot first)';
           const at = await page.click(ref, { double: args.double === true });
-          return await drainAndFormat(mgr, page, `[cdp_browser click] ok — ${ref} clicked at ${at.x},${at.y}`);
+          return await actionResult(mgr, `[cdp_browser click] ok — ${ref} clicked at ${at.x},${at.y}`);
         }
         case 'type': {
           const ref = String(args.ref ?? '');
           const text = String(args.text ?? '');
           if (!ref) return 'cdp_browser: type needs a snapshot ref (take action=snapshot first)';
           await page.type(ref, text, { clear: args.clear !== false });
-          return await drainAndFormat(mgr, page, `[cdp_browser type] ok — ${ref} ← "${text.slice(0, 200)}"`);
+          return await actionResult(mgr, `[cdp_browser type] ok — ${ref} ← "${text.slice(0, 200)}"`);
         }
         case 'key': {
           const name = String(args.key ?? args.text ?? '');
           if (!name) return 'cdp_browser: key needs a key name (e.g. Enter, Escape, Tab, Control+A)';
           await page.key(name);
-          return await drainAndFormat(mgr, page, `[cdp_browser key] ok — ${name}`);
+          return await actionResult(mgr, `[cdp_browser key] ok — ${name}`);
         }
         case 'scroll': {
           const res = await page.scroll({
@@ -227,7 +233,7 @@ export const cdpBrowserTool: Tool = {
             amount: args.amount !== undefined ? Number(args.amount) : undefined,
             ref: args.ref ? String(args.ref) : undefined,
           });
-          return await drainAndFormat(mgr, page, `[cdp_browser scroll] ok — ${res.deltaY || res.deltaX || 0}px at ${res.x},${res.y}`);
+          return await actionResult(mgr, `[cdp_browser scroll] ok — ${res.deltaY || res.deltaX || 0}px at ${res.x},${res.y}`);
         }
         case 'eval': {
           const js = String(args.js ?? args.text ?? '');
@@ -236,16 +242,16 @@ export const cdpBrowserTool: Tool = {
           try {
             value = await page.evalJs(js);
           } catch (err) {
-            return await drainAndFormat(mgr, page, `[cdp_browser eval] ERROR: ${(err as Error).message}`);
+            return await actionResult(mgr, `[cdp_browser eval] ERROR: ${(err as Error).message}`);
           }
           const rendered = typeof value === 'string' ? value : JSON.stringify(value);
-          return await drainAndFormat(mgr, page, `[cdp_browser eval] result: ${rendered?.slice(0, 4000) ?? 'undefined'}`);
+          return await actionResult(mgr, `[cdp_browser eval] result: ${rendered?.slice(0, 4000) ?? 'undefined'}`);
         }
         case 'screenshot': {
           const ts = new Date().toISOString().replace(/[:.]/g, '-');
           const path = args.path ? String(args.path) : `${setup.stateDir}/cdp/screenshots/screenshot-${ts}.png`;
           const shot = await page.screenshot({ path, fullPage: args.fullPage === true });
-          return await drainAndFormat(mgr, page, `[cdp_browser screenshot] saved: ${shot.path} (${shot.bytes} bytes${shot.fullPage ? ', full page' : ''})`);
+          return await actionResult(mgr, `[cdp_browser screenshot] saved: ${shot.path} (${shot.bytes} bytes${shot.fullPage ? ', full page' : ''})`);
         }
         case 'wait': {
           const kind = String(args.wait ?? 'ms') as 'network-idle' | 'selector' | 'text' | 'ms';
@@ -255,7 +261,7 @@ export const cdpBrowserTool: Tool = {
             text: args.text ? String(args.text) : undefined,
             ...(timeoutMs ? { timeoutMs } : {}),
           });
-          return await drainAndFormat(mgr, page, `[cdp_browser wait] ok — ${detail}`);
+          return await actionResult(mgr, `[cdp_browser wait] ok — ${detail}`);
         }
         case 'tabs': {
           if (args.url) {
@@ -270,7 +276,7 @@ export const cdpBrowserTool: Tool = {
           const pages = await mgr.listPages();
           const lines = [`[cdp_browser tabs] ${pages.length} open:`];
           pages.forEach((p, i) => lines.push(`  [${i}]${p.active ? ' *' : ''} ${p.url} (${p.targetId})`));
-          return await drainAndFormat(mgr, page, lines.join('\n'));
+          return await actionResult(mgr, lines.join('\n'));
         }
         case 'close': {
           if (args.tab !== undefined) {
@@ -287,13 +293,10 @@ export const cdpBrowserTool: Tool = {
       const msg = err instanceof Error ? err.message : String(err);
       // A transport drop mid-call usually means the browser crashed; the
       // manager records the crash and the NEXT call relaunches once.
-      const evidence = page.alive ? page.drainEvidence() : [];
-      const blocks = [`[cdp_browser ${action}] ERROR: ${msg}`, ...restartBlock(mgr), ...sandboxBlock(mgr)];
-      if (evidence.length) {
-        blocks.push('[evidence]');
-        for (const e of evidence.slice(0, 20)) blocks.push(`  ${e}`);
-      }
-      return blocks.join('\n');
+      // Buffered page evidence is NOT drained here — it rides the next
+      // snapshot (possibly after the restart).
+      return [`[cdp_browser ${action}] ERROR: ${msg}`, ...restartBlock(mgr), ...sandboxBlock(mgr)]
+        .filter(Boolean).join('\n');
     }
   },
 };

@@ -63,6 +63,9 @@ describe('CdpClient against a fake CDP endpoint (real WebSocket)', () => {
     client.on('Browser.downloadWillBegin', () => browserEvents.push('download'));
 
     endpoint.sendEvent('Page.javascriptDialogOpening', { message: 'alert!', type: 'alert' }, sessionId);
+    // A different method on the SAME session must NOT reach the dialog
+    // listener (method filter, not just session filter).
+    endpoint.sendEvent('Network.requestWillBeSent', { requestId: '1' }, sessionId);
     endpoint.sendEvent('Page.javascriptDialogOpening', { message: 'other tab' }, 'session-OTHER');
     endpoint.sendEvent('Browser.downloadWillBegin', {});
     await tick();

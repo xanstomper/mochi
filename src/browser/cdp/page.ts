@@ -171,7 +171,8 @@ export class CdpPage {
     const lines = [...this.evidence];
     this.evidence.length = 0;
     for (const d of this.dialogLog.splice(0)) {
-      lines.push(`dialog auto-dismissed (${d})`);
+      const [type, ...rest] = d.split(': ');
+      lines.push(`dialog auto-dismissed (${type}): ${rest.join(': ')}`);
     }
     return lines;
   }
