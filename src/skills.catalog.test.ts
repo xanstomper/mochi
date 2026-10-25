@@ -1,5 +1,5 @@
 // skills.ts: bundled catalog discovery + loadAllSkills shadowing.
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
@@ -26,6 +26,8 @@ describe('bundled skills catalog', () => {
     const dir2 = bundledSkillsDir();
     expect(dir2).toBeTruthy();
     const files = discoverSkills(dir2 as string).skills;
+    // Culled stubs (fullstack-dev, security-audit, devops-ci, reverse-engineering)
+    // replaced by procedure skills — assert on the new floor.
     expect(files.some((s) => s.name === 'native-core-port')).toBe(true);
     expect(files.some((s) => s.name === 'exec-policy')).toBe(true);
     expect(files.some((s) => s.name === 'database-optimizer')).toBe(true);
@@ -39,17 +41,17 @@ describe('bundled skills catalog', () => {
   });
 
   it('project skill shadows a bundled skill with the same name', () => {
-    // Create a project skill named fullstack-dev to verify shadowing order.
-    mkdirSync(join(dir, '.mochi', 'skills', 'fullstack-dev'), { recursive: true });
-    writeFileSync(join(dir, '.mochi', 'skills', 'fullstack-dev', 'SKILL.md'), [
+    // Create a project skill named exec-policy to verify shadowing order.
+    mkdirSync(join(dir, '.mochi', 'skills', 'exec-policy'), { recursive: true });
+    writeFileSync(join(dir, '.mochi', 'skills', 'exec-policy', 'SKILL.md'), [
       '---',
-      'name: fullstack-dev',
-      'description: MY fullstack override',
+      'name: exec-policy',
+      'description: MY exec override',
       '---',
       '# Override',
     ].join('\n'));
     const { skills } = loadAllSkills(dir);
-    const override = skills.find((s) => s.name === 'fullstack-dev');
-    expect(override?.description).toBe('MY fullstack override');
+    const override = skills.find((s) => s.name === 'exec-policy');
+    expect(override?.description).toBe('MY exec override');
   });
 });

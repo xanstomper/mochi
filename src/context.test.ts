@@ -102,7 +102,8 @@ describe('ContextEngine project-rule + memory caching', () => {
     const tddPacket = engine.buildPacket(NO_TOOLS, task('add tests for the login flow', 'establish a test suite and fix flaky specs'));
     expect(tddPacket.systemPrompt).toContain('tdd-workflow');
 
-    // Task relevant to git-wizard -> git-wizard advertised.
+    // Task relevant to git skills -> git-workflow advertised (git-wizard was
+    // culled as a stub; git-workflow is the surviving procedure skill).
     const gitPacket = engine.buildPacket(NO_TOOLS, task('resolve the merge conflict', 'rebase branch and restructure commits'));
     expect(gitPacket.systemPrompt).toContain('git-workflow');
 
