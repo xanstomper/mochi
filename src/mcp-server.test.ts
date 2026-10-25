@@ -86,3 +86,69 @@ describe('MCP server (editor ubiquity — stdio JSON-RPC core)', () => {
     expect((await handleMcp({ id: 16, method: 'prompts/get', params: { name: 'nope' } }, freshState())).error?.code).toBe(-32602);
   });
 });
+
+// ── P2 speed: MCP progress notifications (2024-11-05 utilities/progress) ────
+describe('MCP progress notifications (spec-verified 2024-11-05)', () => {
+  /** A controllable runtime double: goal() emits `nEvents` events then resolves. */
+  function mockRuntime(nEvents: number, eventGapMs = 0) {
+    const listeners: Array<(e: unknown) => void> = [];
+    const rt = {
+      events: { onAll: (h: (e: unknown) => void) => { listeners.push(h); return () => { const i = listeners.indexOf(h); if (i >= 0) listeners.splice(i, 1); }; } },
+      config: { planMode: false },
+      setPlanMode: () => {},
+      async goal() {
+        for (let i = 0; i < nEvents; i++) {
+          if (eventGapMs) await new Promise((r) => setTimeout(r, eventGapMs));
+          for (const h of listeners) h({ type: 'agent:log', agentId: 'x', message: `step ${i}` });
+        }
+        return 'goal done';
+      },
+    };
+    return rt as unknown as import('./runtime.js').Runtime;
+  }
+
+  it('no progressToken in the request -> NO notifications (tokens are never invented)', async () => {
+    const state: ServerState = { cwd: process.cwd(), runtime: mockRuntime(3) };
+    const notes: unknown[] = [];
+    const r = await handleMcp({ id: 20, method: 'tools/call', params: { name: 'mochi_run', arguments: { goal: 'x' } } }, state, {
+      notify: (n) => notes.push(n),
+    });
+    expect(r.error).toBeUndefined();
+    expect(notes).toEqual([]);
+  });
+
+  it('progressToken in _meta -> increasing notifications/progress, stopped after completion', async () => {
+    const state: ServerState = { cwd: process.cwd(), runtime: mockRuntime(20, 60) };
+    const notes: Array<{ method: string; params: { progressToken: string | number; progress: number } }> = [];
+    const r = await handleMcp(
+      { id: 21, method: 'tools/call', params: { name: 'mochi_run', arguments: { goal: 'x' }, _meta: { progressToken: 'tok-1' } } },
+      state,
+      { notify: (n) => notes.push(n), progressIntervalMs: 10 },
+    );
+    expect(r.error).toBeUndefined();
+    // Immediate first tick + rate-limited middle ticks + the final tick.
+    expect(notes.length).toBeGreaterThanOrEqual(2);
+    expect(notes.every((n) => n.method === 'notifications/progress')).toBe(true);
+    expect(notes.every((n) => n.params.progressToken === 'tok-1')).toBe(true);
+    // progress strictly increases (spec: progress MUST increase).
+    for (let i = 1; i < notes.length; i++) {
+      expect(notes[i].params.progress).toBeGreaterThan(notes[i - 1].params.progress);
+    }
+    // Notifications STOP after completion: the last emission is the final
+    // tick inside stop(); nothing arrives later (same array, awaited call).
+    expect(notes[notes.length - 1].params.progress).toBe(20);
+  });
+
+  it('integer progressToken and a failing tool both honor the contract', async () => {
+    const state: ServerState = { cwd: process.cwd(), runtime: mockRuntime(1) };
+    const notes: Array<{ params: { progressToken: string | number; progress: number } }> = [];
+    const r = await handleMcp(
+      { id: 22, method: 'tools/call', params: { name: 'mochi_run', arguments: { goal: 'x' }, _meta: { progressToken: 77 } } },
+      state,
+      { notify: (n) => notes.push(n), progressIntervalMs: 0 },
+    );
+    expect(r.error).toBeUndefined();
+    expect(notes.length).toBeGreaterThanOrEqual(2);
+    expect(notes.every((n) => n.params.progressToken === 77)).toBe(true);
+  });
+});

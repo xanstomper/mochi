@@ -309,13 +309,20 @@ export function createOpenAIProvider(config: ProviderConfig) {
         if (done) break;
         lastChunkAt = Date.now();
         buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
-      for (const line of lines) {
+      // P2 speed (streaming latency): scan lines in place instead of
+      // split('\n') — the per-read array allocation was per-chunk work on
+      // the inter-token hot path. JSON.parse tolerates trailing whitespace,
+      // so only the leading trim and the [DONE] comparison need care.
+      let lineStart = 0;
+      while (true) {
+        const nl = buffer.indexOf('\n', lineStart);
+        if (nl === -1) break;
+        let line = buffer.slice(lineStart, nl);
+        lineStart = nl + 1;
         const trimmed = line.trim();
         if (!trimmed.startsWith('data:')) continue;
-        const data = trimmed.slice(5).trim();
-        if (data === '[DONE]') return;
+        const data = trimmed.slice(5).trimStart();
+        if (data.charCodeAt(0) === 91 /* [ */ && data.trimEnd() === '[DONE]') return;
         if (!data) continue;
         try {
           const chunk = JSON.parse(data);
@@ -382,6 +389,8 @@ export function createOpenAIProvider(config: ProviderConfig) {
           // ignore malformed lines
         }
       }
+      // Keep only the partial trailing line (the split-and-pop this replaces).
+      if (lineStart > 0) buffer = buffer.slice(lineStart);
       }
     } finally {
       clearInterval(stallInterval);
