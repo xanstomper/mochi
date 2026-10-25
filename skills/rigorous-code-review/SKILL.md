@@ -1,7 +1,7 @@
 ---
 name: rigorous-code-review
 description: Exhaustive multi-pass code review focusing on race conditions, memory leaks, OWASP top 10, and architectural integrity. Use when asked for a deep audit, root-cause review, or security vetting of a change or codebase.
-tools: [read, diff, git, glob, search, verify, grep]
+allowed-tools: read diff git glob search verify grep
 ---
 
 # Rigorous Code Review & Security Audit

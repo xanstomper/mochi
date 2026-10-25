@@ -1,7 +1,7 @@
 ---
 name: code-review
 description: Comprehensive code review, pull request analysis, security vetting, cyclomatic complexity check, and architectural alignment.
-tools: [read, diff, git, glob, search, verify]
+allowed-tools: read diff git glob search verify
 ---
 
 # Code Review & Pull Request Vetting Skill

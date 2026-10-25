@@ -6,6 +6,9 @@ export interface SkillLintIssue {
   rule: string;
   severity: 'error' | 'warn';
   message: string;
+  /** 1-based line in the source document when the rule pins to a line
+   *  (pattern hits, over-long lines). Absent for whole-document rules. */
+  line?: number;
 }
 
 export interface SkillLintResult {
@@ -26,9 +29,12 @@ const MAX_BODY_CHARS = 40_000;
 export function lintSkillDoc(name: string, description: string, body: string): SkillLintResult {
   const issues: SkillLintIssue[] = [];
 
-  // R1: name must be a sane slug.
-  if (!/^[a-z0-9][a-z0-9-_]{2,63}$/.test(name)) {
-    issues.push({ rule: 'slug-format', severity: 'error', message: `name "${name}" is not a valid slug (lowercase, 3-64 chars, [a-z0-9-_])` });
+  // R1: name must be a sane slug — Agent Skills spec shape (lowercase a-z/0-9,
+  // hyphens only, no leading/trailing/consecutive hyphens) at the house length
+  // (3-64; the spec itself allows 1-64, the house bar keeps a floor of 3).
+  const nameLen = name.length;
+  if (nameLen < 3 || nameLen > 64 || !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) {
+    issues.push({ rule: 'slug-format', severity: 'error', message: `name "${name}" is not a valid Agent Skills slug (lowercase a-z/0-9 with single hyphens, 3-64 chars, no leading/trailing hyphen)` });
   }
 
   // R2: description must exist and be substantive.
@@ -63,22 +69,37 @@ export function lintSkillDoc(name: string, description: string, body: string): S
   // the implementation skill (which bans TODOs by name) passing without
   // letting an actual `// TODO: finish` through.
   const unquoted = trimmed.replace(/(["'`])[^"'`\n]*\1/g, '');
-  if (/\bTODO\b|\bTBD\b|\bFIXME\b|<placeholder>|\bXXX\b/.test(unquoted)) {
-    issues.push({ rule: 'no-placeholders', severity: 'error', message: 'placeholder marker (TODO/TBD/FIXME/XXX) in body — unfinished skills must not ship' });
+  const placeholderRe = /\bTODO\b|\bTBD\b|\bFIXME\b|<placeholder>|\bXXX\b/;
+  if (placeholderRe.test(unquoted)) {
+    issues.push({ rule: 'no-placeholders', severity: 'error', message: 'placeholder marker (TODO/TBD/FIXME/XXX) in body — unfinished skills must not ship', line: firstMatchingLine(body, (l) => placeholderRe.test(l.replace(/(["'`])[^"'`\n]*\1/g, ''))) });
   }
 
   // R6: avoid prompt-injection-looking lines.
-  if (/^\s*ignore (all )?(previous|prior) instructions/im.test(trimmed)) {
-    issues.push({ rule: 'no-injection', severity: 'error', message: 'body contains instruction-override language — possible prompt injection' });
+  const injectionRe = /^\s*ignore (all )?(previous|prior) instructions/im;
+  if (injectionRe.test(trimmed)) {
+    issues.push({ rule: 'no-injection', severity: 'error', message: 'body contains instruction-override language — possible prompt injection', line: firstMatchingLine(body, (l) => /^\s*ignore (all )?(previous|prior) instructions/i.test(l)) });
   }
 
   // R7: excessive length of a single line (likely pasted log dump).
-  const longestLine = trimmed.split('\n').reduce((m, l) => Math.max(m, l.length), 0);
+  const bodyLines = trimmed.split('\n');
+  let longestLine = 0;
+  let longestLineNo: number | undefined;
+  bodyLines.forEach((l, i) => {
+    if (l.length > longestLine) { longestLine = l.length; longestLineNo = i + 1; }
+  });
   if (longestLine > 2000) {
-    issues.push({ rule: 'line-length', severity: 'warn', message: `single line of ${longestLine} chars — likely pasted log output, extract to a reference file` });
+    issues.push({ rule: 'line-length', severity: 'warn', message: `single line of ${longestLine} chars — likely pasted log output, extract to a reference file`, line: longestLineNo });
   }
 
   return { ok: !issues.some((i) => i.severity === 'error'), issues };
+}
+
+/** 1-based line number of the first line of `text` for which `pred` holds
+ *  (0 when no line matches). Used to pin pattern-based lint rules to a line. */
+function firstMatchingLine(text: string, pred: (line: string) => boolean): number {
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) if (pred(lines[i])) return i + 1;
+  return 0;
 }
 
 export interface InjectionScanHit {
@@ -144,8 +165,9 @@ export function scanPromptInjection(text: string): InjectionScanHit | null {
   return null;
 }
 
-/** Render issues into a human-readable lint report. */
+/** Render issues into a human-readable lint report (rule + message, with the
+ *  1-based source line when the rule pins to one). */
 export function formatSkillLint(result: SkillLintResult): string {
   if (!result.issues.length) return 'skill lint: clean';
-  return result.issues.map((i) => `[${i.severity}] ${i.rule}: ${i.message}`).join('\n');
+  return result.issues.map((i) => `[${i.severity}] ${i.rule}${i.line ? `:L${i.line}` : ''}: ${i.message}`).join('\n');
 }
