@@ -348,6 +348,82 @@ references outside its defining file, tests included as references):
   clean window, they fail for reasons independent of these deletions (zero
   shared files).
 
+## FIXED 2026-10-22 — post-S4 reconstruction pass (this worktree)
+
+`8e4e806` (Wave S4) pushed `src/agent/loop.ts` + `src/context.ts` importing six modules
+that were **never committed anywhere** — `main` could not typecheck, so every CI job
+after `Typecheck` was unreachable. Those modules were reconstructed faithfully from
+their call sites (the wiring contract in `loop.ts`/`context.ts`/`cli.ts`) and covered
+with unit tests: `src/prompt/stable-prefix.ts`, `src/core/fastlane.ts`,
+`src/core/fastlane-stats.ts`, `src/observability/routing-table.ts`,
+`src/observability/repro-synth.ts`, `src/agent/milestones.ts` (40 tests).
+
+Also completed / fixed in this pass:
+
+1. **L-01 (+L-14) — sleeptime real ports.** `src/sleeptime/ports.ts` adapts the real
+   D8 skill repair (`attemptSkillRepair` over demoted skills) and D10 curriculum
+   (`generateCurriculumTask` from files touched by FAILING exported runs);
+   `src/sleeptime/cli.ts` injects both, so the nightly pipeline stops running a
+   labelled stub. The SDK now exports the real ports, not the stub factories.
+2. **Routing CLI.** `mochi routing [show|derive]` (+ completion entry) — the derived
+   table module had no surface at all; cold start stays a no-op and a pinned model is
+   never overridden.
+3. **L-03 — antigravity pricing.** Costing goes through `src/pricing.ts` (table of
+   record, overrides included) first, then an EXACT id match in the local 3.x table;
+   the substring fallback that billed any unknown model at Gemini-3.8 rates is gone
+   (unknown → `0`, never invented). Claude rows removed from the shadow table.
+4. **L-04 — already fixed by S4 in `context.ts`** (per-image constant + native batch
+   bypass). It was unverified: added tests pinning "data URI ≡ https URL ≡ payload size".
+5. **L-06 — telemetry.** Marked `@deprecated` no-op in the schema, the `MOCHI_TELEMETRY`
+   env knob (which changed nothing) is removed so there is no fake switch to flip;
+   `PRIVACY.md`'s "there is no telemetry flag" is now true.
+6. **L-07 — price provenance.** Every row in `DEFAULT_PRICE_TABLE` carries `// vendor`
+   or `// est`, with the convention documented at the table head.
+7. **L-02 / L-09 / L-11 / L-16 — docs.** Counts reconciled with source: 18 detected
+   ecosystems vs 10 tree-sitter-parsed languages (the old "15" was neither);
+   tree-sitter is the DEFAULT and `MOCHI_CPG_BACKEND=tsc` the opt-out; 17 roles;
+   81 tools; the unverifiable shell risk-pattern numbers are dropped rather than
+   restated.
+8. **L-13 — dead exports removed:** `resetDisplayBackend`, `formatFlakyReport`,
+   `listDir` (each repo-grep-verified as unreferenced; `doctor` already renders the
+   flaky section itself).
+9. **L-15 — root doc pointers** (generated `ARCHITECTURE.md` vs curated
+   `docs/ARCHITECTURE.md`; `MASTER_PROMPT.md` marked the stale sibling of
+   `MASTER-PROMPT.md`).
+10. **L-17 — OAuth client identity** is now an explicit, documented exposure decision
+    (Google installed-app client, non-confidential by construction, not rotatable
+    without breaking every existing sign-in) with `MOCHI_ANTIGRAVITY_CLIENT_ID` /
+    `MOCHI_ANTIGRAVITY_CLIENT_SECRET` override names alongside the legacy ones.
+11. **Sandbox `unshare` backend implemented.** S4's `types.ts` documented
+    `'auto' (bubblewrap, then unshare namespaces)` and `'unshare'` as a forced mode
+    that `exec.ts` never implemented. It now exists (probed user namespace, ordering
+    bwrap → unshare → direct, loud throw when forced and missing), config validation
+    accepts it, `mochi doctor` reports both backends.
+12. **S4 regressions the suite caught, fixed:**
+    - `normalizeForMutationDiff` only stripped the TAP footer form `duration_ms 5`;
+      `node --test` also emits `duration_ms: 1.029107` in its YAML diagnostics, so
+      every mutant was falsely KILLED and the verify gate's PARTIAL downgrade was a
+      silent no-op exactly on `node --test`. Regression test added.
+    - The repro-first gate vetoed ONE call of a multi-file batch and let the rest
+      run (live: `arith.py` write vetoed, `test_arith.py` applied → a tree importing
+      a symbol that never landed). Batches are now vetoed whole, and a VALIDATED
+      repro-synthesis (which really ran a failing command) satisfies the gate
+      instead of costing a turn.
+    - Polyglot e2e tests: scripted fake turns must map 1:1 onto the main loop, so
+      the test config disables the speculative preflight (3 extra model calls) and
+      the milestone planner; the Go fixture now uses table cases so the mutation
+      check has real signal.
+13. **Proc-sites ratchet** baseline 74 → 82: Wave S4 added 7 direct `child_process`
+    sites without moving it, plus 1 for the unshare capability probe in `exec.ts`
+    (the canonical exec boundary).
+
+Still open, deliberately (a wiring decision, not a defect to paper over):
+**L-05** (`branch-racer`, the `capability`/`tool-dispatcher` trio, `dox.ts`,
+`workflow-induction` are unreachable from the production roots) and **L-12** (the two
+`DOX` name spaces). Halving these — e.g. wiring the branch racer into `loop.ts` —
+would create a second execution path through the same tools with its own approval
+semantics; they are left unwired and documented until the loop picks one architecture.
+
 ## Honest limits of this audit
 - Static reachability can't see reflection, string-built import paths beyond
   literals, plugin/skill-driven loading (skills are Markdown, loaded by name at

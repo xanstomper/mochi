@@ -111,7 +111,8 @@ Usage:
   mochi inspect "<query>"
   mochi trace [<goalId>]             # replay the run trace for a goal
   mochi gate run|baseline|freeze|check  # frozen regression gate (bench/frozen/)
-  mochi sleeptime [--cap <usd>] [--dry-run]  # nightly consolidation pipeline (repair+curator+gate+health+curriculum, hard spend cap)
+  mochi sleeptime [--cap <usd>] [--dry-run]  # nightly consolidation pipeline (repair+curator+gate+health+induction+curriculum, hard spend cap)
+  mochi routing [show|derive]        # measured model routing table from exported runs (.mochi/state/routing-table.json)
   mochi tools forged [disable <name>|evaluate|run]  # Tool Forge audit view: self-synthesised tools, provenance + state
   mochi health [--force] [--offline]  # proactive repo health scan (tests/deps/TODOs/dead code/hotspots digest)
   mochi session list                 # list past sessions
@@ -2588,6 +2589,12 @@ async function main() {
   if (first === 'sleeptime') {
     const { handleSleeptimeCommand } = await import('./sleeptime/cli.js');
     await handleSleeptimeCommand({ positional, flags, cwd });
+    return;
+  }
+
+  if (first === 'routing') {
+    const { handleRoutingCommand } = await import('./observability/routing-cli.js');
+    await handleRoutingCommand({ positional, flags, cwd });
     return;
   }
 

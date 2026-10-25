@@ -1,8 +1,14 @@
-// DOX cognitive engine (spec section 4): documentation index + ADR generator.
+// Documentation index + ADR generator (spec section 4).
 //
-// dox.ts indexes local docs (Markdown/TSDoc/Rustdoc/Sphinx-ish) into chunked,
-// searchable entries without polluting the model transcript — `dox_query`
-// returns ranked hits, and `dox_generate_adr` writes a numbered Architecture
+// Renamed from `dox.ts` (audit L-12): the repo already had a LIVE, unrelated
+// `src/cognitive/dox.ts` (the AGENTS.md contract hierarchy), and the two shared
+// a three-letter name in adjacent domains — an invitation for the next wiring
+// mistake. This module is surfaced through the `docs_query` and `generate_adr`
+// tools (`src/tools/docs.ts`).
+//
+// It indexes local docs (Markdown/TSDoc/Rustdoc/Sphinx-ish) into chunked,
+// searchable entries without polluting the model transcript — `docs_query`
+// returns ranked hits, and `generate_adr` writes a numbered Architecture
 // Decision Record under docs/adr/. Both are pure file operations so they stay
 // fast and testable.
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, existsSync, statSync } from 'node:fs';

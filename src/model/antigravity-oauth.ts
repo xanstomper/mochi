@@ -10,12 +10,37 @@ import { createServer, type Server, type IncomingMessage, type ServerResponse } 
 import { randomUUID } from 'node:crypto';
 import { runArgv, runShellString } from '../exec.js';
 
-// Antigravity OAuth client registered application identity
-export const ANTIGRAVITY_CLIENT_ID = process.env.ANTIGRAVITY_CLIENT_ID ||
-  String.fromCharCode(...[27,26,29,27,26,26,28,26,28,26,31,19,27,7,94,71,66,89,89,67,68,24,66,24,27,70,73,88,79,24,25,31,92,94,69,70,69,64,66,30,77,30,26,25,79,90,4,75,90,90,89,4,77,69,69,77,70,79,95,89,79,88,73,69,68,94,79,68,94,4,73,69,71].map((c) => c ^ 42));
+// ── Antigravity OAuth client identity (audit L-17) ────────────────────────
+//
+// EXPOSURE DECISION, stated deliberately: this is a Google **installed-app**
+// OAuth client. Google's installed-app flow treats the client secret as
+// non-confidential — it ships inside every copy of the client and grants
+// nothing by itself; a token is still required, and the user still consents.
+// It is not a Mochi server credential and cannot be rotated without breaking
+// sign-in for every existing user, so it is treated as public and documented
+// here rather than pretending the obfuscation is secrecy.
+//
+// Operators with their own registered client MUST override BOTH values:
+//   MOCHI_ANTIGRAVITY_CLIENT_ID / MOCHI_ANTIGRAVITY_CLIENT_SECRET
+// (the older ANTIGRAVITY_CLIENT_ID/SECRET names stay supported). Overrides are
+// read at process start; never commit a real operator secret to a config file
+// that ships with the project.
+function decodeXor(codes: number[]): string {
+  return String.fromCharCode(...codes.map((c) => c ^ 42));
+}
 
-export const ANTIGRAVITY_CLIENT_SECRET = process.env.ANTIGRAVITY_CLIENT_SECRET ||
-  String.fromCharCode(...[109,101,105,121,122,114,7,97,31,18,108,125,120,30,18,28,102,78,102,96,27,71,102,104,18,89,114,105,30,80,28,91,110,107,76].map((c) => c ^ 42));
+const PACKAGED_CLIENT_ID = decodeXor([27,26,29,27,26,26,28,26,28,26,31,19,27,7,94,71,66,89,89,67,68,24,66,24,27,70,73,88,79,24,25,31,92,94,69,70,69,64,66,30,77,30,26,25,79,90,4,75,90,90,89,4,77,69,69,77,70,79,95,89,79,88,73,69,68,94,79,68,94,4,73,69,71]);
+const PACKAGED_CLIENT_SECRET = decodeXor([109,101,105,121,122,114,7,97,31,18,108,125,120,30,18,28,102,78,102,96,27,71,102,104,18,89,114,105,30,80,28,91,110,107,76]);
+
+export const ANTIGRAVITY_CLIENT_ID =
+  process.env.MOCHI_ANTIGRAVITY_CLIENT_ID ||
+  process.env.ANTIGRAVITY_CLIENT_ID ||
+  PACKAGED_CLIENT_ID;
+
+export const ANTIGRAVITY_CLIENT_SECRET =
+  process.env.MOCHI_ANTIGRAVITY_CLIENT_SECRET ||
+  process.env.ANTIGRAVITY_CLIENT_SECRET ||
+  PACKAGED_CLIENT_SECRET;
 
 export const ANTIGRAVITY_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 export const ANTIGRAVITY_TOKEN_URL = 'https://oauth2.googleapis.com/token';

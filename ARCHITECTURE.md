@@ -1,5 +1,10 @@
 # 🍡 Project Architecture & API Reference
 
+> **GENERATED FILE — do not hand-edit.** This is the machine-produced module/API
+> dump (`mochi docgen`). The curated, canonical architecture document is
+> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); this file answers "what exists
+> and where", that one answers "why it is shaped this way" (audit L-15).
+
 > Automatically generated architecture graph and API specification.
 > **Modules**: 331 | **Total Symbols**: 6429
 

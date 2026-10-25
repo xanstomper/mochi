@@ -39,7 +39,7 @@ mochi team "ship the payments refactor"          # role-diverse agent team
 mochi trace <goalId>                             # replay any run end to end
 ```
 
-Zero runtime JS dependencies. Runs under **Node 22** or **Bun**, and ships a standalone native binary (`npm run build:bin`) that needs no runtime at all. The performance core is a zero-dependency Rust crate (`native/mochi_core`): tokenization, budget math, context compaction planning, and agent-loop decisions run natively — every native path has a parity-tested TypeScript fallback, so nothing breaks when the Rust binary is absent (CI, cold installs). The harness is polyglot: a 15-language registry, tree-sitter codegraph, and native Rust/C++ accelerators in the `edit`/`patch` hot paths.
+Zero runtime JS dependencies. Runs under **Node 22** or **Bun**, and ships a standalone native binary (`npm run build:bin`) that needs no runtime at all. The performance core is a zero-dependency Rust crate (`native/mochi_core`): tokenization, budget math, context compaction planning, and agent-loop decisions run natively — every native path has a parity-tested TypeScript fallback, so nothing breaks when the Rust binary is absent (CI, cold installs). The harness is polyglot: an 18-ecosystem detector, a 10-language tree-sitter codegraph, and native Rust/C++ accelerators in the `edit`/`patch` hot paths.
 
 <div align="center">
 
@@ -346,7 +346,7 @@ The runtime loop is `preflight → model → tools → verify → recover → pu
 
 1. **Preflight** — context packet built in ~325 ms cold (batched binary probing, fingerprint-cached rules/memory so multi-hundred-iteration tasks don't re-read disk every call).
 2. **Model** — tiered tool advertising (21 lean tools / ~3K tokens on the first call, 7 for chat, 16 for research, 65 on demand via `load_tools` recovery), speculative preflight on hard tasks, streaming with mid-stream Ctrl-C abort on the wire.
-3. **Tools** — 81 tools through a permission-gated bus; every shell command risk-classified (17 destructive + 16 network patterns); output folded head/tail through the Rust core; secrets redacted on every output, trace line, and disk write.
+3. **Tools** — 81 tools through a permission-gated bus; every shell command risk-classified against destructive and network pattern tables; output folded head/tail through the Rust core; secrets redacted on every output, trace line, and disk write.
 4. **Verify** — baseline + proportionate verification (goal-engine tasks add the independent verifier and outcome judge with rule-based veto on contradictory PASSes).
 5. **Recover** — provider failover, key rotation, model auto-escalation, checkpoint/rollback, warm-start resume.
 6. **Pulse / Struggle injection** — consecutive tool errors, repeated identical tool results (3+ reads of the same content), empty responses, and verification loops are surfaced to the model as a STRUGGLE STATE system message plus an escape-plan directive, so a struggling model never starts its next turn blind to its own failure history. Healthy runs pay nothing (zero-cost no-op).
@@ -447,7 +447,7 @@ Global: `~/.config/mochi/config.json` · Project: `.mochi/config.json`
 | `MOCHI_REASONING=max` | Reasoning depth override |
 | `MOCHI_RATE_LIMIT_RPM=20` | Leaky-bucket request-rate cap |
 | `MOCHI_RATE_LIMIT_CONCURRENCY=3` | Concurrent in-flight request cap |
-| `MOCHI_CPG_BACKEND=tree-sitter` | Tree-sitter symbol-graph backend (falls back to TS-AST) |
+| `MOCHI_CPG_BACKEND=tsc` | Force the TypeScript-AST symbol-graph backend (tree-sitter WASM is the default) |
 | `MOCHI_LIGHT=1` | Disable embedded SQLite index + WASM parser |
 | `FREEINFERENCE_API_KEY=...` | Provider key (or any OpenAI-compatible env) |
 
@@ -679,16 +679,16 @@ mochi bluebubbles run       # iMessage via a BlueBubbles server (aliases: imessa
 
 ## Symbol Graph Backends
 
-`get_function` / `find_callers` / `type_hierarchy` index the repo into an in-memory SQLite code graph. Two parsers back the index, selectable by env, with backend-agnostic read paths:
+`get_function` / `find_callers` / `type_hierarchy` index the repo into an in-memory SQLite code graph. Two parsers back the index, with backend-agnostic read paths:
 
-- `tsc` (default): the TypeScript compiler AST, always available.
-- `tree-sitter`: a WASM CST walk for lower startup cost. Opt in with `npm i web-tree-sitter tree-sitter-typescript` and set `MOCHI_CPG_BACKEND=tree-sitter`; missing packages fall back automatically.
+- `tree-sitter` (default): a WASM CST walk, in-process and lazy — grammars load on first symbol-index use, and only for languages actually present. Packages ship as optional dependencies (installed by default); missing packages fall back automatically.
+- `tsc`: the TypeScript compiler AST, always available. Covers `.ts`/`.js` only, and is the opt-out: set `MOCHI_CPG_BACKEND=tsc` (or `MOCHI_LIGHT=1`, which forces it).
 
 ```bash
-MOCHI_CPG_BACKEND=tree-sitter mochi inspect "SessionManager"
+MOCHI_CPG_BACKEND=tsc mochi inspect "SessionManager"
 ```
 
-The registry covers **15 languages** (TypeScript, JavaScript, Python, Go, Rust, C, C++, Java, C#, Ruby, PHP, Kotlin, Swift, Zig, Lua — `_test.go` / `test_*.py` / `*Test.java` test-file matching included).
+Two counts, two different jobs: Mochi **detects 18 ecosystems** (`src/repo/repo.ts` — TypeScript, JavaScript, Python, Go, Rust, Java, C#, C++, Zig, Ruby, PHP, Swift, Kotlin, Elixir, Haskell, Scala, Dart, Lua: marker files, test/lint commands, hints), and **parses/indexes 10 languages** with tree-sitter (`src/repo/codegraph.ts` — TypeScript, JavaScript, Python, Go, Rust, Java, C++, Ruby, PHP, C#). Test-file matching (`_test.go`, `test_*.py`, `*Test.java`) is a third, separate regex convention in `src/core/mutation.ts`.
 
 ## Light Mode
 

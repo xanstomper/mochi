@@ -367,10 +367,22 @@ describe('antigravity provider', () => {
     expect(ANTIGRAVITY_PRICING_TABLE['gemini-3.8-flash']).toEqual({ in: 0.75, out: 3.75, cache: 0.075 });
     expect(computeAntigravityCost('gemini-3.8-flash', 1000, 100)).toBeCloseTo(0.001125);
 
-    expect(ANTIGRAVITY_PRICING_TABLE['claude-sonnet-4-6']).toEqual({ in: 3.00, out: 15.00, cache: 0.30 });
+    // L-03: Claude ids are priced by the shared table of record, never a
+    // shadow copy in this provider.
+    expect(ANTIGRAVITY_PRICING_TABLE['claude-sonnet-4-6']).toBeUndefined();
     expect(computeAntigravityCost('claude-sonnet-4-6', 1000, 100)).toBeCloseTo(0.0045);
-
-    expect(ANTIGRAVITY_PRICING_TABLE['claude-opus-4-6']).toEqual({ in: 5.00, out: 25.00, cache: 0.50 });
+    expect(ANTIGRAVITY_PRICING_TABLE['claude-opus-4-6']).toBeUndefined();
     expect(computeAntigravityCost('claude-opus-4-6', 1000, 100)).toBeCloseTo(0.0075);
+  });
+
+  it('never fabricates a price for an unknown model (L-03)', () => {
+    // The old substring fallback billed every unknown id at Gemini 3.8 rates.
+    expect(computeAntigravityCost('totally-unknown-model-9000', 1_000_000, 1_000_000)).toBe(0);
+    expect(computeAntigravityCost('my-custom-flash', 1_000_000, 1_000_000)).toBe(0);
+  });
+
+  it('prices cached input at the cache-read rate, not the fresh-input rate', () => {
+    // 1M input (all cached) + 0 output at Gemini 3.8: $0.075 cache read.
+    expect(computeAntigravityCost('gemini-3.8-flash', 1_000_000, 0, 1_000_000)).toBeCloseTo(0.075);
   });
 });

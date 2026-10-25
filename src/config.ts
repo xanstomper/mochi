@@ -259,9 +259,19 @@ if (!cfg.model.failover || cfg.model.failover.length === 0) {
 }
 
   merge(cfg as unknown as Record<string, unknown>, { model: envModelConfig() });
+  // Measured routing may only override a DEFAULT model choice. If any layer
+  // set the model explicitly — SDK overrides, user config, project config, or
+  // MOCHI_MODEL — the user has pinned it and routing must defer.
+  const userModel = (user as { model?: { model?: unknown } } | undefined)?.model;
+  const projectModel = (projectFragments as { model?: { model?: unknown } } | undefined)?.model;
+  cfg.model.modelPinned = [
+    overrides.model?.model,
+    userModel?.model,
+    projectModel?.model,
+    process.env.MOCHI_MODEL,
+  ].some((m) => typeof m === 'string' && m.trim() !== '');
   if (process.env.MOCHI_PROJECT_DIR) cfg.projectDir = process.env.MOCHI_PROJECT_DIR;
   if (process.env.MOCHI_CONFIG_DIR) cfg.configDir = process.env.MOCHI_CONFIG_DIR;
-  if (process.env.MOCHI_TELEMETRY) cfg.telemetry = /^(1|true|yes)$/i.test(process.env.MOCHI_TELEMETRY.trim());
   if (process.env.MOCHI_UNCENSORED === '1') {
     cfg.safety.mode = 'uncensored';
     cfg.permissions = {
@@ -474,8 +484,8 @@ export function validateConfig(config: MochiConfig): string[] {
   if (s.commandTimeoutSeconds < 5 || s.commandTimeoutSeconds > 600) {
     problems.push(`safety.commandTimeoutSeconds (${s.commandTimeoutSeconds}) is out of range 5–600`);
   }
-  if (s.sandbox !== undefined && s.sandbox !== 'off' && s.sandbox !== 'auto' && s.sandbox !== 'bubblewrap') {
-    problems.push(`safety.sandbox ("${s.sandbox}") is invalid — must be "off", "auto", or "bubblewrap"`);
+  if (s.sandbox !== undefined && s.sandbox !== 'off' && s.sandbox !== 'auto' && s.sandbox !== 'bubblewrap' && s.sandbox !== 'unshare') {
+    problems.push(`safety.sandbox ("${s.sandbox}") is invalid — must be "off", "auto", "bubblewrap", or "unshare"`);
   }
   if (s.maxConcurrentAgents < 1 || s.maxConcurrentAgents > 32) {
     problems.push(`safety.maxConcurrentAgents (${s.maxConcurrentAgents}) is out of range 1–32`);

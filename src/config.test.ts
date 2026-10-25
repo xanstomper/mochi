@@ -443,7 +443,10 @@ describe('provider-table consistency + env knobs', () => {
       const cfg = loadConfig({}, '/nonexistent/nowhere.json');
       expect(cfg.projectDir).toBe('.proj-env');
       expect(cfg.configDir).toBe('/tmp/cfg-env');
-      expect(cfg.telemetry).toBe(true);
+      // L-06: `telemetry` is a deprecated no-op (Mochi has no outbound
+      // telemetry). MOCHI_TELEMETRY no longer flips it; the key stays only
+      // for config-schema compatibility.
+      expect(cfg.telemetry).toBe(false);
       expect(cfg.safety.mode).toBe('auto');
       expect(cfg.safety.sandbox).toBe('bubblewrap');
       expect(cfg.permissions.read).toBe(false);

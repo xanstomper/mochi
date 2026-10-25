@@ -44,7 +44,7 @@ export interface DoctorReport {
   flaky: { tracked: number; quarantined: number; tests: Array<{ id: string; score: number; flakeEvents: number; lastSeenAt: number }> };
   theme: { id: string; name: string; stuck: boolean };
   diagnostics: { typescript: boolean; python: boolean };
-  sandbox: { bubblewrap: boolean };
+  sandbox: { bubblewrap: boolean; unshare: boolean };
   browser: { driver: boolean; browsers: string[] };
   skills: { total: number; healthy: number; degraded: SkillHealthEntry[] };
   acp?: { ok: boolean; detail: string };
@@ -81,9 +81,13 @@ export async function doctorReport(opts: {
   })();
   const pyAvailable = ['/usr/bin/python3', '/usr/bin/python', '/opt/homebrew/bin/python3'].some((p) => existsSync(p));
   let bubblewrap = false;
+  let unshare = false;
   try {
-    const { detectBubblewrap } = await import('./exec.js');
+    const { detectBubblewrap, detectUnshare } = await import('./exec.js');
     bubblewrap = detectBubblewrap() !== null;
+    // Second backend: Linux user namespaces. Weaker than bwrap (no read-only
+    // rootfs), but real isolation when bubblewrap is not installed.
+    unshare = detectUnshare() !== null;
   } catch { /* exec module unavailable: report unavailable */ }
   // Browser driver probe: playwright present + downloaded browser binaries.
   // Runs the driver's no-launch `probe` (never opens a window). The driver is
@@ -262,7 +266,7 @@ export async function doctorReport(opts: {
     flaky: flakySection,
   theme: currentThemeInfo(),
     diagnostics: { typescript: tsAvailable, python: pyAvailable },
-    sandbox: { bubblewrap },
+    sandbox: { bubblewrap, unshare },
     browser: { driver: browserDriver, browsers },
     skills: { total: totalSkills, healthy: healthySkills, degraded: degradedSkills },
     acp: await acpHealth(),
@@ -396,7 +400,7 @@ export function formatDoctor(r: DoctorReport): string {
     `  flaky tests   ${ok(r.flaky.quarantined === 0)} ${r.flaky.tracked === 0 ? 'none tracked' : `${r.flaky.tracked} tracked, ${r.flaky.quarantined} quarantined (still run; non-blocking)`}`,
     `  daemon        ${ok(r.daemon.running)} ${r.daemon.running ? `running on :${r.daemon.port}` : 'not running'}`,
     `  diagnostics   TS:${r.diagnostics.typescript ? 'yes' : 'no'} Python:${r.diagnostics.python ? 'yes' : 'no'}`,
-    `  sandbox       ${r.sandbox.bubblewrap ? 'ok    bubblewrap available (safety.sandbox / shell sandbox:true)' : 'MISS  no bwrap (sandbox unavailable)'}`,
+    `  sandbox       ${r.sandbox.bubblewrap ? 'ok    bubblewrap available (safety.sandbox / shell sandbox:true)' : r.sandbox.unshare ? 'ok    user namespaces (unshare) available — weaker than bubblewrap (no read-only rootfs)' : 'MISS  no sandbox backend (install bubblewrap or util-linux unshare)'}`,
     `  browser       ${r.browser.driver && r.browser.browsers.length > 0 ? `ok    playwright + ${r.browser.browsers.join(', ')}` : r.browser.driver ? 'MISS  playwright present but no browser binaries (npx playwright install)' : 'MISS  browser driver unavailable (npm i -g playwright)'}`,
     `  skills        ${ok(r.skills.degraded.length === 0)} ${skillLine}`,
     `  acp           ${r.acp ? (r.acp.ok ? 'ok    bridge verified (editors will work)' : `MISS  ${r.acp.detail.slice(0, 90)}`) : 'n/a'}`,

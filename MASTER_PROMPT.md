@@ -1,5 +1,9 @@
 # MOCHI MASTER PROMPT — Operation Frontier (v1, 2026-10-10)
 
+> **STALE SIBLING (audit L-15).** The spec that tests and phases cite is
+> [`MASTER-PROMPT.md`](MASTER-PROMPT.md) (hyphenated). This underscore file is
+> kept for history only; do not update it with new phases.
+
 **Read this at the top of EVERY iteration before touching code. Internalize, then act.**
 
 ## The Goal

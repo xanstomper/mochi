@@ -276,11 +276,11 @@ describe('gate step (default integrity port)', () => {
 });
 
 describe('default pipeline shape', () => {
-  it('runs repair → curator → gate → health → curriculum on an empty project without failing', async () => {
+  it('runs repair → curator → gate → health → induction → curriculum on an empty project without failing', async () => {
     const report = await runSleeptime({ projectDir: proj, spendCapUsd: 5, now: NOW, frozenDir: REAL_FROZEN });
-    expect(report.steps.map((s) => s.id)).toEqual(['repair', 'curator', 'gate', 'health', 'curriculum']);
-    expect(report.steps.map((s) => s.status)).toEqual(['skipped', 'completed', 'completed', 'completed', 'skipped']);
-    expect(report.steps[4].detail).toContain('not integrated');
+    expect(report.steps.map((s) => s.id)).toEqual(['repair', 'curator', 'gate', 'health', 'induction', 'curriculum']);
+    expect(report.steps.map((s) => s.status)).toEqual(['skipped', 'completed', 'completed', 'completed', 'skipped', 'skipped']);
+    expect(report.steps[5].detail).toContain('default port is a no-op');
     expect(report.spend.usedCostUsd).toBe(0);
   });
 });

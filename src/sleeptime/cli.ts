@@ -5,14 +5,16 @@
 //
 // Runs the D11 orchestrator (src/sleeptime/orchestrator.ts) over the current
 // workspace: skill repair → curator → frozen-gate integrity → repo health
-// scan → curriculum, under a HARD spend cap, idempotent per night, with the
-// structured morning report written to .mochi/reports/sleeptime-<night>.{md,json}.
+// scan → workflow induction (verified-run macros) → curriculum, under a HARD
+// spend cap, idempotent per night, with the structured morning report
+// written to .mochi/reports/sleeptime-<night>.{md,json}.
 //
 // The cap resolves as: --cap flag → MOCHI_SLEEPTIME_CAP_USD env →
 // DEFAULT_SLEEPTIME_CAP_USD. Exit codes: 0 = night completed (cap stops and
 // duplicates are normal outcomes, reported in the summary), 1 = a step
 // failed, 3 = bad arguments / orchestrator error.
 import { runSleeptime, DEFAULT_SLEEPTIME_CAP_USD, type SleeptimeReport } from './orchestrator.js';
+import { createRealCurriculumPort, createRealSkillRepairPort } from './ports.js';
 
 export interface SleeptimeCliArgs {
   positional: string[];
@@ -73,6 +75,12 @@ export async function handleSleeptimeCommand({ positional, flags, cwd }: Sleepti
       spendCapUsd: resolveCapUsd(flags),
       dryRun: !!flags['dry-run'],
       ...(typeof flags.night === 'string' ? { nightKey: flags.night } : {}),
+      // Real D8/D10 engines — without these the pipeline falls back to the
+      // labelled repair stub and a no-op curriculum step (audit L-01).
+      ports: {
+        repair: createRealSkillRepairPort(),
+        curriculum: createRealCurriculumPort(),
+      },
     });
     printSleeptimeReport(report, !!flags.json);
     const anyFailed = report.steps.some((s) => s.status === 'failed' || s.status === 'partial');

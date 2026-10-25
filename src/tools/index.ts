@@ -48,6 +48,7 @@ import { dbInspectTool } from './db-inspect.js';
 import { createPrTool } from './create-pr.js';
 import { reviewPrTool } from './review-pr.js';
 import { explainTool } from './explain.js';
+import { docsQueryTool, generateAdrTool } from './docs.js';
 import { thinkTool } from './think.js';
 import { renameSymbolTool } from './rename-symbol.js';
 import { replTool } from './repl.js';
@@ -105,6 +106,8 @@ export const ALL_TOOLS: Tool[] = [
   notebookTool,
   reviewPrTool,
   explainTool,
+  docsQueryTool,
+  generateAdrTool,
 ];
 
 export const ALL_TOOLS_MAP = new Map<string, Tool>(ALL_TOOLS.map((t) => [t.def.name, t]));
@@ -125,7 +128,7 @@ export const HEAVY_TOOL_NAMES = new Set([
   'browser', 'computer', 'db_inspect', 'deepwiki', 'sql_codebase_query', 'create_pr', 'review_pr', 'repl',
   'perf', 'clipboard', 'mcp_manage', 'lint', 'format', 'diff', 'tree',
   'analyze_code', 'code_similarity', 'type_hierarchy', 'rename_symbol',
-  'resolve_conflicts', 'system_info',
+  'resolve_conflicts', 'system_info', 'generate_adr',
 ]);
 
 /** Task text regexes that justify advertising heavy tools up front. */

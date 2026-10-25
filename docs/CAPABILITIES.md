@@ -4,7 +4,7 @@ Mochi is an autonomous, high-performance software engineering agent and multi-ag
 
 ---
 
-## 1. The 16 Specialized Subagent Roles
+## 1. The 17 Specialized Subagent Roles
 
 Mochi can dynamically spawn specialized child agents via the `subagent` tool, or orchestrate multi-agent swarms using `mochi team "<goal>"`. Each role is assigned a specific model capability profile (`reasoning`, `coding`, `fast`, `review`) and a scoped tool allowlist:
 
@@ -31,7 +31,7 @@ Mochi can dynamically spawn specialized child agents via the `subagent` tool, or
 
 ## 2. Native Tools Suite
 
-Mochi ships with 30+ built-in tools covering file operations, AST intelligence, shell execution, web crawling, and diagnostic tools:
+Mochi ships with 81 built-in tools covering file operations, AST intelligence, shell execution, web crawling, and diagnostic tools:
 
 ### File & Code Editing Tools
 - **`edit`**: Performs surgical, anchor-matched text replacements with whitespace tolerance.

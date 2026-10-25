@@ -13,6 +13,11 @@ export interface ModelConfig {
    *  model); profiles fall back to the primary's when unset. Mid-stream
    *  failures are NOT retried on a fallback (partial output can't be replayed). */
   failover?: ModelConfig[];
+  /** True when the user pinned this model explicitly (CLI --model / env /
+   *  config `model.model`), as opposed to inheriting a provider default.
+   *  Measured routing (observability/routing-table.ts) NEVER overrides a
+   *  pinned model — a pin is an instruction, not a suggestion. */
+  modelPinned?: boolean;
   /** Speculative reasoning preflight (DeepSeek/Cline-style "think before
    *  acting"). When enabled, hard non-chat tasks run the SpeculativeEngine
    *  once before the main model call and inject its chosen approach + pitfall
@@ -173,6 +178,22 @@ export interface MochiConfig {
    *  Env overrides: MOCHI_EMBEDDING_MODEL / MOCHI_EMBEDDING_PROVIDER /
    *  MOCHI_SEMANTIC_INDEX=0. */
   retrieval?: { embeddingProvider?: string; embeddingModel?: string; semanticIndex?: boolean };
+  /** Short-task fast lane (core/fastlane.ts). Default ON; `enabled: false`
+   *  or MOCHI_FASTLANE=0 disables. Enters only on positive proof of
+   *  shortness and escalates back on struggle evidence. */
+  fastlane?: { enabled?: boolean };
+  /** Long-task milestone strategy (agent/milestones.ts). Default ON;
+   *  `pacing: false` keeps the plan but disables budget pacing. Env
+   *  MOCHI_LONGTASK=0 / MOCHI_LONGTASK_PACING=0 override. */
+  longtask?: { enabled?: boolean; pacing?: boolean };
+  /** Measured model routing (observability/routing-table.ts). Default ON;
+   *  only acts when a derived table exists under .mochi/state and the model
+   *  is not pinned. MOCHI_ROUTING=0 disables. */
+  routing?: { enabled?: boolean; minSamples?: number };
+  /** @deprecated NO-OP, retained only so existing config files still parse.
+   *  Mochi has NO outbound telemetry (see PRIVACY.md); nothing in `src/`
+   *  reads this key and no new behaviour should be hidden behind it. It is
+   *  scheduled for removal with the next config-schema version. */
   telemetry: boolean;
   projectDir: string;
   configDir: string;
@@ -426,7 +447,14 @@ export type MochiEvent =
   | { type: 'edit:reverted'; path: string; strategy: 'exact' | 'normalized' | 'relaxed' | 'anchored'; errors: string; agentId: string }
   | { type: 'edit:failed'; path: string; failureKind: 'not-found' | 'ambiguous' | 'no-change'; attempts: number; nearMisses: number; agentId: string }
   | { type: 'message:chunk'; content: string; agentId: string }
-  | { type: 'usage:updated'; agentId: string; inputTokens: number; outputTokens: number; cacheTokens: number; totalTokens: number; costUsd?: number; model?: string }
+  | { type: 'usage:updated'; agentId: string; inputTokens: number; outputTokens: number; cacheTokens: number; totalTokens: number; costUsd?: number; model?: string; cacheMeasured?: boolean }
+  // ── Measured model routing (observability/routing-table.ts) ─────────────
+  /** One start-of-run routing decision. `source` says why:
+   *  'routed' (table chose a different model), 'already-optimal',
+   *  'insufficient-data', or 'pinned' (user pin — never overridden). */
+  | { type: 'routing:decision'; agentId: string; taskKind: string; model: string; source: 'pinned' | 'insufficient-data' | 'already-optimal' | 'routed'; fromModel?: string; costPerSolveUsd?: number; solveRate?: number; samples?: number }
+  | { type: 'routing:escalated'; agentId: string; taskKind: string; fromModel: string; toModel: string; trigger: string; costPerSolveUsd?: number; solveRate?: number }
+  | { type: 'routing:escalation-blocked'; agentId: string; taskKind: string; fromModel: string; toModel: string; trigger: string; reason: string }
   | { type: 'error'; error: string; agentId?: string }
   | { type: 'pulse'; state: AgentState }
   | { type: 'message'; role: 'user' | 'assistant' | 'system'; content: string; agentId?: string }

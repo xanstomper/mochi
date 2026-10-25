@@ -17,7 +17,14 @@ function makeConfig(dir: string, url: string): MochiConfig {
       provider: 'openai',
       baseUrl: url,
       model: 'fake-model',
+      // Scripted fake turns map 1:1 onto the MAIN loop. The speculative
+      // preflight is a separate model conversation (3 candidates), so leaving
+      // it on would consume scripted tool calls and make the loop see prose.
+      speculative: { preflight: false },
     },
+    // Same reason: a complex task would ask the provider to decompose the
+    // task into milestones before the main loop, eating a scripted turn.
+    longtask: { enabled: false },
     safety: {
       mode: 'auto',
       commandTimeoutSeconds: 10,
@@ -1331,7 +1338,11 @@ goSuite('polyglot: go repo end-to-end', () => {
     execSync('git config user.email t@t && git config user.name t', { cwd: dir });
     writeFileSync(resolve(dir, 'go.mod'), 'module example.com/fib\n\ngo 1.22\n');
     writeFileSync(resolve(dir, 'fib.go'), 'package fib\n\nfunc Fib(n int) int {\n    if n <= 1 {\n        return n\n    }\n    return Fib(n-1) + Fib(n-2) + 1\n}\n');
-    writeFileSync(resolve(dir, 'fib_test.go'), 'package fib\n\nimport "testing"\n\nfunc TestFib(t *testing.T) {\n    if got := Fib(5); got != 5 {\n        t.Fatalf("Fib(5) = %d, want 5", got)\n    }\n}\n');
+    // Table cases, not just Fib(5): a single Fib(5) assertion is satisfied by
+    // the base-case mutation `n <= 1` -> `n >= 1` (it returns n for any n >= 1),
+    // so the verifier's mutation check would correctly report weak coverage and
+    // downgrade an otherwise-correct fix to PARTIAL.
+    writeFileSync(resolve(dir, 'fib_test.go'), 'package fib\n\nimport "testing"\n\nfunc TestFib(t *testing.T) {\n    cases := map[int]int{0: 0, 1: 1, 2: 1, 5: 5}\n    for n, want := range cases {\n        if got := Fib(n); got != want {\n            t.Fatalf("Fib(%d) = %d, want %d", n, got, want)\n        }\n    }\n}\n');
     execSync('git add -A && git commit -qm init', { cwd: dir });
 
     const writeCall = (id: string, path: string, content: string) => ({

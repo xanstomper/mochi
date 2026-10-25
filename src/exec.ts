@@ -13,8 +13,10 @@ import { accessSync, constants } from 'node:fs';
 
 export interface SandboxOptions {
   /** 'off' (default) runs directly; 'bubblewrap' forces bwrap (fails if
-   *  missing); 'auto' uses bwrap when available, else runs directly. */
-  mode: 'off' | 'auto' | 'bubblewrap';
+   *  missing); 'unshare' forces Linux user-namespace isolation (fails if
+   *  unavailable); 'auto' uses bwrap when available, then a probed unshare
+   *  user namespace, else runs directly. */
+  mode: 'off' | 'auto' | 'bubblewrap' | 'unshare';
   /** Allow network inside the sandbox. Default true (npm/tests need it). */
   network?: boolean;
   /** Extra read-write paths beyond cwd + tmpdir + devtool caches. */
@@ -365,12 +367,65 @@ export function buildBubblewrapArgs(
   return [bwrapBin, ...argv];
 }
 
+/** Absolute path to `unshare`, or null when unavailable. Cached. Mirrors
+ *  detectBubblewrap's test seam via resetUnshareCache(). */
+let cachedUnshare: string | null | undefined;
+
+export function resetUnshareCache(): void {
+  cachedUnshare = undefined;
+}
+
+export function detectUnshare(pathEnv = process.env.PATH ?? ''): string | null {
+  if (cachedUnshare !== undefined && pathEnv === (process.env.PATH ?? '')) return cachedUnshare;
+  let found: string | null = null;
+  for (const dir of pathEnv.split(delimiter).filter(Boolean)) {
+    const full = resolve(dir, 'unshare');
+    try {
+      accessSync(full, constants.X_OK);
+      found = full;
+      break;
+    } catch { /* not here */ }
+  }
+  // Existing is not enough: the binary may be present while user namespaces
+  // are disabled by the kernel/sysctl. Probe once — a sandbox that cannot
+  // start must degrade in `auto`, not turn every command into an error.
+  if (found && process.platform === 'linux') {
+    try {
+      const probe = spawnSync(found, ['--map-root-user', 'true'], { stdio: 'ignore', timeout: 5_000 });
+      if (probe.status !== 0) found = null;
+    } catch {
+      found = null;
+    }
+  } else if (process.platform !== 'linux') {
+    found = null;
+  }
+  if (pathEnv === (process.env.PATH ?? '')) cachedUnshare = found;
+  return found;
+}
+
+/** Linux user-namespace jail: private mount/PID/IPC/UTS namespaces, root
+ *  mapped to the invoking user, fresh /proc. This isolates process visibility
+ *  and mount state; it does NOT bind a read-only rootfs the way bubblewrap
+ *  does, so it is the documented SECOND backend, not an equivalent one. */
+export function buildUnshareArgs(
+  unshareBin: string,
+  cmd: string,
+  args: readonly string[],
+  opts: { network?: boolean } = {},
+): string[] {
+  const argv = ['--map-root-user', '--mount', '--pid', '--ipc', '--uts', '--fork', '--mount-proc'];
+  if (opts.network === false) argv.push('--net');
+  argv.push('--', cmd, ...args);
+  return [unshareBin, ...argv];
+}
+
 /** Wrap [cmd, args] per opts.sandbox. Returns the command unchanged when the
- *  sandbox is off or unavailable in auto mode — or throws in `bubblewrap` mode
- *  when bwrap is missing (explicit request, fail loudly, never silently run
- *  unsandboxed). NOTE: no win32 early-return — bubblewrap is POSIX-only, so a
- *  forced request on Windows must throw the loud "bwrap not found" error
- *  instead of silently running unsandboxed. */
+ *  sandbox is off or unavailable in auto mode — or throws in `bubblewrap` /
+ *  `unshare` mode when the requested backend is missing (explicit request,
+ *  fail loudly, never silently run unsandboxed). NOTE: no win32 early-return
+ *  — these backends are Linux-only, so a forced request on another platform
+ *  must throw the loud "not found" error instead of silently running
+ *  unsandboxed. */
 export function maybeSandbox(
   cmd: string,
   args: readonly string[],
@@ -379,16 +434,24 @@ export function maybeSandbox(
   const sb = opts.sandbox;
   if (!sb || sb.mode === 'off') return { cmd, args: [...args] };
   const bwrap = detectBubblewrap();
-  if (!bwrap) {
-    if (sb.mode === 'bubblewrap') {
-      throw new Error('Sandbox requested (bubblewrap) but `bwrap` was not found on PATH. Install bubblewrap or use sandbox mode "off".');
-    }
-    return { cmd, args: [...args] };
+  if (bwrap) {
+    const full = buildBubblewrapArgs(bwrap, cmd, args, {
+      cwd: opts.cwd,
+      network: sb.network,
+      writablePaths: sb.writablePaths,
+    });
+    return { cmd: full[0], args: full.slice(1) };
   }
-  const full = buildBubblewrapArgs(bwrap, cmd, args, {
-    cwd: opts.cwd,
-    network: sb.network,
-    writablePaths: sb.writablePaths,
-  });
-  return { cmd: full[0], args: full.slice(1) };
+  if (sb.mode === 'bubblewrap') {
+    throw new Error('Sandbox requested (bubblewrap) but `bwrap` was not found on PATH. Install bubblewrap or use sandbox mode "off".');
+  }
+  const unshare = detectUnshare();
+  if (unshare) {
+    const full = buildUnshareArgs(unshare, cmd, args, { network: sb.network });
+    return { cmd: full[0], args: full.slice(1) };
+  }
+  if (sb.mode === 'unshare') {
+    throw new Error('Sandbox requested (unshare) but `unshare` was not found (or user namespaces are unavailable). Install util-linux or use sandbox mode "off".');
+  }
+  return { cmd, args: [...args] };
 }

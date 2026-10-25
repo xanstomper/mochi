@@ -7,7 +7,9 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { contentText, splitContent } from '../types.js';
 import type { ChatMessage, ToolDefinition, StreamChunk, ModelResponse } from '../types.js';
+import { estimateCostUsd } from '../pricing.js';
 import type { ProviderConfig } from './openai.js';
 import { ProviderError, describeModelError, parseRetryAfter } from '../utils/http-error.js';
 import { classifyError, withRetries } from './rate-limit.js';
@@ -105,40 +107,15 @@ function parseCredentials(apiKeyOrJson?: string): {
   return { accessToken: trimmed, projectId: 'aicode-consumers' };
 }
 
-function contentText(m: ChatMessage): string {
-  if (typeof m.content === 'string') return m.content;
-  if (!Array.isArray(m.content)) return '';
-  return m.content
-    .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
-    .map((p) => p.text)
-    .join('\n');
-}
-
-function splitContent(content: ChatMessage['content']): {
-  text: string;
-  images: Array<{ mime: string; data: string } | { url: string }>;
-} {
-  if (typeof content === 'string') return { text: content, images: [] };
-  if (!Array.isArray(content)) return { text: '', images: [] };
-  const textParts: string[] = [];
-  const images: Array<{ mime: string; data: string } | { url: string }> = [];
-  for (const part of content) {
-    if (part.type === 'text') {
-      textParts.push(part.text);
-    } else if (part.type === 'image_url') {
-      const u = part.image_url.url;
-      const m = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/.exec(u);
-      if (m) images.push({ mime: m[1], data: m[2] });
-      else images.push({ url: u });
-    }
-  }
-  return { text: textParts.join('\n'), images };
-}
 
 function mapAntigravityFinish(reason?: string): StreamChunk['finishReason'] {
   if (reason === 'MAX_TOKENS') return 'length';
   return 'stop';
 }
+// NOTE (audit L-03): Claude rows are deliberately ABSENT — they are priced by
+// src/pricing.ts (the table of record) and resolved first in
+// computeAntigravityCost. Only Antigravity-hosted ids that pricing.ts excludes
+// appear here, each with the vendor list rate in the comment above it.
 export const ANTIGRAVITY_PRICING_TABLE: Record<string, { in: number; out: number; cache: number }> = {
   // Gemini 3.8 / 3.7 / 3.6 Flash ($0.75 / $3.75 per 1M tokens, cache read $0.075)
   'gemini-3.8-flash': { in: 0.75, out: 3.75, cache: 0.075 },
@@ -152,12 +129,6 @@ export const ANTIGRAVITY_PRICING_TABLE: Record<string, { in: number; out: number
   // Gemini 2.5 Flash ($0.30 / $2.50 per 1M tokens, cache read $0.03)
   'gemini-2.5-flash': { in: 0.30, out: 2.50, cache: 0.03 },
   'gemini-2.5-flash-lite': { in: 0.10, out: 0.40, cache: 0.01 },
-  // Claude Sonnet 4.6 / 4.5 ($3.00 / $15.00 per 1M tokens, cache read $0.30)
-  'claude-sonnet-4-6': { in: 3.00, out: 15.00, cache: 0.30 },
-  'claude-sonnet-4-5': { in: 3.00, out: 15.00, cache: 0.30 },
-  // Claude Opus 4.6 / 4.5 ($5.00 / $25.00 per 1M tokens, cache read $0.50)
-  'claude-opus-4-6': { in: 5.00, out: 25.00, cache: 0.50 },
-  'claude-opus-4-5': { in: 5.00, out: 25.00, cache: 0.50 },
   // Free / preview tiers ($0)
   'gpt-oss-120b': { in: 0, out: 0, cache: 0 },
   'gemini-4-argon-disabled': { in: 0, out: 0, cache: 0 },
@@ -165,23 +136,28 @@ export const ANTIGRAVITY_PRICING_TABLE: Record<string, { in: number; out: number
   'tab_jump_flash_lite_preview': { in: 0, out: 0, cache: 0 },
 };
 
+/** Exact-id rates for the Antigravity-hosted models that the shared price
+ *  table deliberately excludes (host-dependent 3.x ids; Wave G policy). The
+ *  Claude rows live in pricing.ts and are resolved THERE, not duplicated. */
 export function computeAntigravityCost(model: string, inTokens: number, outTokens: number, cachedTokens = 0): number {
-  const m = model.toLowerCase();
-  const direct = ANTIGRAVITY_PRICING_TABLE[m];
-  let rates = direct;
-  if (!rates) {
-    if (m.includes('opus')) rates = ANTIGRAVITY_PRICING_TABLE['claude-opus-4-6'];
-    else if (m.includes('sonnet') || m.includes('claude')) rates = ANTIGRAVITY_PRICING_TABLE['claude-sonnet-4-6'];
-    else if (m.includes('3.8') || m.includes('3.7') || m.includes('3.6')) rates = ANTIGRAVITY_PRICING_TABLE['gemini-3.8-flash'];
-    else if (m.includes('3.5')) rates = ANTIGRAVITY_PRICING_TABLE['gemini-3.5-flash'];
-    else if (m.includes('flash')) rates = ANTIGRAVITY_PRICING_TABLE['gemini-3-flash'];
-    else rates = ANTIGRAVITY_PRICING_TABLE['gemini-3.8-flash'];
-  }
+  // 1. Shared table of record (+ operator overrides) wins. pricing.ts knows
+  //    the Claude ids and Gemini 2.5; its dollars are tracked as ESTIMATED.
+  const shared = estimateCostUsd(model, {
+    inputTokens: inTokens,
+    outputTokens: outTokens,
+    cacheReadTokens: cachedTokens,
+  });
+  if (shared) return Math.round(shared.costUsd * 10_000_000) / 10_000_000;
+
+  // 2. Antigravity's own 3.x ids: EXACT match only. The old substring
+  //    fallback invented a price for any unknown model (`my-model` →
+  //    gemini-3.8-flash rates), which is a fabricated measurement.
+  const rates = ANTIGRAVITY_PRICING_TABLE[model.toLowerCase()];
+  if (!rates) return 0; // unpriced, not guessed
 
   const inRate = rates.in / 1_000_000;
   const outRate = rates.out / 1_000_000;
   const cacheRate = rates.cache / 1_000_000;
-
   const billableIn = Math.max(0, inTokens - cachedTokens);
   const cost = billableIn * inRate + cachedTokens * cacheRate + outTokens * outRate;
   return Math.round(cost * 10_000_000) / 10_000_000;

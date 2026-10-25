@@ -152,6 +152,7 @@ export const COMPLETION_COMMANDS: CompletionCommand[] = [
   { name: 'chameleon', description: 'Removed standalone — engine runs auto + via --enhance' },
   { name: 'self-train', description: 'Self-review loop (--schedule for nightly learning)', aliases: ['selftrain', 'train'] },
   { name: 'sleeptime', description: 'Nightly consolidation pipeline (--cap <usd>, --dry-run)' },
+  { name: 'routing', description: 'Measured model routing table (show|derive)' },
   {
     name: 'tools', description: 'Tool Forge: self-synthesised tools (audit, disable, forge runs)',
     subcommands: [
