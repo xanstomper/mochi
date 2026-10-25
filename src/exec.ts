@@ -350,7 +350,7 @@ function finishSpawn(
       opts.signal?.removeEventListener('abort', onAbort);
       reject(err);
     });
-    child.on('close', (code, signal) => done(code, { signal }));
+    child.on('close', (code) => done(code));
     // Already-aborted: run the abort path AFTER the listeners exist. The old
     // early-return skipped 'error'/'close' attachment — a spawn that fails
     // while already aborted (nonexistent cwd, deleted shell) then emitted
@@ -494,13 +494,55 @@ function wrapForExec(cmd: string, args: readonly string[], opts: ExecOptions): W
   });
 }
 
-/** Attach the applied sandbox level/backend to a finished result (only
- *  when a sandbox actually engaged — off/absent leaves the result shape
- *  exactly as it was). */
-function withSandboxInfo(p: Promise<ExecResult>, wrapped: WrappedCommand): Promise<ExecResult> {
-  const level = wrapped.level;
-  if (level === 'off') return p;
-  return p.then((r) => ({ ...r, sandboxLevel: level, sandboxBackend: wrapped.backend }));
+let cachedBwrap: string | null | undefined;
+
+/** Test seam: forget the cached bwrap probe. detectBubblewrap() caches by
+ *  comparing its pathEnv argument to the CURRENT process.env.PATH, so a test
+ *  that mutates PATH (to simulate "no bwrap installed") must reset the cache
+ *  before AND after, or the poisoned null survives the restore. */
+export function resetBubblewrapCache(): void {
+  cachedBwrap = undefined;
+}
+
+/** Absolute path to `bwrap`, or null when unavailable. Cached. Testable via
+ *  explicit pathEnv (production callers omit it). */
+export function detectBubblewrap(pathEnv = process.env.PATH ?? ''): string | null {
+  if (cachedBwrap !== undefined && pathEnv === (process.env.PATH ?? '')) return cachedBwrap;
+  let found: string | null = null;
+  for (const dir of pathEnv.split(delimiter).filter(Boolean)) {
+    const full = resolve(dir, 'bwrap');
+    try {
+      accessSync(full, constants.X_OK);
+      found = full;
+      break;
+    } catch { /* not here */ }
+  }
+  if (pathEnv === (process.env.PATH ?? '')) cachedBwrap = found;
+  return found;
+}
+
+/** Pure argv builder: wrap [cmd, ...args] in a bubblewrap invocation.
+ *  Exported for tests; runArgv/runShellString call it via maybeSandbox. */
+export function buildBubblewrapArgs(
+  bwrapBin: string,
+  cmd: string,
+  args: readonly string[],
+  opts: { cwd?: string; network?: boolean; writablePaths?: string[] } = {},
+): string[] {
+  const cwd = opts.cwd ?? process.cwd();
+  const argv: string[] = [
+    '--ro-bind', '/', '/',
+    '--dev', '/dev',
+    '--proc', '/proc',
+    '--tmpfs', '/tmp',
+  ];
+  const writable = [...defaultSandboxWritable(cwd), ...(opts.writablePaths ?? [])];
+  for (const p of new Set(writable)) {
+    argv.push('--bind', p, p);
+  }
+  if (opts.network === false) argv.push('--unshare-net');
+  argv.push('--chdir', cwd, '--', cmd, ...args);
+  return [bwrapBin, ...argv];
 }
 
 /** Wrap [cmd, args] per opts.sandbox. Returns the command unchanged when the
