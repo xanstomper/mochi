@@ -1,7 +1,9 @@
 import type { MochiConfig, ModelProfile, ModelConfig } from '../types.js';
 import {PROVIDERS, providerById, loadConfigFile, saveConfigFile} from './providers.js';
 import { setKeyringKey, setAccount } from './keyring.js';
-import { normalizeModelName } from './router.js';
+// Light import (P2 speed): see model-name.ts — keeps the provider SDK graph
+// out of config/model-manager loads.
+import { normalizeModelName } from './model-name.js';
 
 export interface ProviderSelection {
   provider: string;

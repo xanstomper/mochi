@@ -36,6 +36,82 @@ interface ServerState {
   runtime: Runtime | null;
 }
 
+/** P2 speed (streaming + progress): out-of-band progress notifications, in
+ *  the protocol the server verifiably speaks — MCP 2024-11-05, utilities/
+ *  progress: a client that passes params._meta.progressToken (string or
+ *  integer, unique across active requests) MAY receive notifications/progress
+ *  {progressToken, progress (MUST increase), total? (MAY be omitted when
+ *  unknown)}. Requirements honored here: only active-request tokens are
+ *  referenced; emissions are rate-limited; notifications stop when the tool
+ *  call completes. No unverified protocol extension is used. */
+export interface McpProgressNotify {
+  (n: { method: 'notifications/progress'; params: { progressToken: string | number; progress: number; total?: number } }): void;
+}
+
+export interface McpHandleOpts {
+  /** Out-of-band notifier (the stdio loop writes these frames to stdout). */
+  notify?: McpProgressNotify;
+  /** Minimum interval between progress emissions (rate limiting — spec
+   *  SHOULD). Default 250ms. */
+  progressIntervalMs?: number;
+}
+
+/** Subscribe to the runtime's event stream and emit rate-limited progress
+ *  notifications for the duration of ONE tool call. Returns stop(). */
+function trackProgress(
+  rt: Runtime,
+  progressToken: string | number,
+  opts: McpHandleOpts,
+): () => void {
+  const notify = opts.notify;
+  if (!notify) return () => {};
+  const intervalMs = opts.progressIntervalMs ?? 250;
+  let count = 0;
+  let lastSentAt = 0;
+  let lastSentProgress = -1;
+  // progress MUST increase with each notification — the monotonic guard also
+  // makes the final tick a no-op when the throttled loop already sent the
+  // closing count.
+  const emit = () => {
+    if (count <= lastSentProgress) return;
+    lastSentProgress = count;
+    // No total: the goal engine cannot predict its own task count honestly.
+    notify({ method: 'notifications/progress', params: { progressToken, progress: count } });
+  };
+  // Immediate first tick: the client learns the call is live at once.
+  emit();
+  const unsub = rt.events.onAll(() => {
+    count++;
+    const now = Date.now();
+    if (now - lastSentAt < intervalMs) return;
+    lastSentAt = now;
+    emit();
+  });
+  return () => {
+    unsub();
+    // Final emission (if unseen progress remains), then stop (spec: progress
+    // notifications MUST stop after completion).
+    emit();
+  };
+}
+
+/** Extract a progress token from a tools/call request's _meta. */
+function progressTokenOf(call: McpCall): string | number | undefined {
+  const meta = call.params?._meta as { progressToken?: unknown } | undefined;
+  const t = meta?.progressToken;
+  return (typeof t === 'string' || typeof t === 'number') ? t : undefined;
+}
+
+/** Track progress when THIS request carries a progress token; no-op otherwise
+ *  (spec: notifications reference only tokens provided in an active request). */
+function trackOnToken(rt: Runtime, call: McpCall, opts: McpHandleOpts): () => void {
+  const token = progressTokenOf(call);
+  if (token === undefined) return () => {};
+  return trackProgress(rt, token, opts);
+}
+
+
+
 const TOOLS = [
   {
     name: 'mochi_run',
@@ -222,6 +298,7 @@ function buildPrompt(name: string, args: Record<string, unknown>): PromptResult 
 export async function handleMcp(
   call: McpCall,
   state: ServerState,
+  opts: McpHandleOpts = {},
 ): Promise<McpResponse> {
   const id = call.id ?? null;
   const method = String(call.method ?? '');
@@ -249,9 +326,12 @@ export async function handleMcp(
           const goal = String(args.goal ?? '');
           if (!goal) return { id, error: { code: -32602, message: 'mochi_run requires a goal' } };
           const rt = getRuntime(state);
+          const stopProgress = trackOnToken(rt, call, opts);
           const constraints = Array.isArray(args.constraints) ? args.constraints.map(String) : [];
-          const out = await rt.goal(goal, constraints);
-          text = typeof out === 'string' ? out : JSON.stringify(out ?? { done: true });
+          try {
+            const out = await rt.goal(goal, constraints);
+            text = typeof out === 'string' ? out : JSON.stringify(out ?? { done: true });
+          } finally { stopProgress(); }
         } else if (name === 'mochi_plan') {
           const task = String(args.task ?? '');
           if (!task) return { id, error: { code: -32602, message: 'mochi_plan requires a task' } };
@@ -272,9 +352,12 @@ export async function handleMcp(
           const ctx = typeof args.context === 'string' ? args.context : '';
           const subCwd = typeof args.cwd === 'string' && args.cwd ? resolve(args.cwd) : state.cwd;
           const rt = subCwd === state.cwd ? getRuntime(state) : Runtime.create({ cwd: subCwd });
+          const stopProgress = trackOnToken(rt, call, opts);
           const prompt = ctx ? `${goal}\n\nCONTEXT:\n${ctx.slice(0, 8_000)}` : goal;
-          const out = await rt.runPrompt(prompt);
-          text = out;
+          try {
+            const out = await rt.runPrompt(prompt);
+            text = out;
+          } finally { stopProgress(); }
         } else if (name === 'mochi_review') {
           const input = String(args.input ?? '');
           if (!input) return { id, error: { code: -32602, message: 'mochi_review requires input' } };
@@ -329,12 +412,16 @@ export async function mcpServerLoop(cwd: string): Promise<void> {
   const state: ServerState = { cwd: resolve(cwd), runtime: null };
   const rl = createInterface({ input: process.stdin });
   const write = (msg: unknown) => process.stdout.write(JSON.stringify(msg) + '\n');
+  // Out-of-band progress notifications (MCP 2024-11-05 utilities/progress):
+  // only written when the REQUEST carried _meta.progressToken — trackOnToken
+  // never invents one.
+  const notify: McpProgressNotify = (n) => write({ jsonrpc: '2.0', ...n });
   for await (const line of rl) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     let call: McpCall;
     try { call = JSON.parse(trimmed); } catch { continue; }
-    const res = await handleMcp(call, state);
+    const res = await handleMcp(call, state, { notify });
     if (call.method === 'notifications/initialized' || call.method === 'notifications/cancelled') continue;
     write(call.id === undefined ? { jsonrpc: '2.0', method: 'rpc', params: res } : { jsonrpc: '2.0', id: res.id, ...(res.error ? { error: res.error } : { result: res.result }) });
     if (call.method === 'shutdown') process.exit(0);

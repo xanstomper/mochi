@@ -27,6 +27,13 @@ if (!process.env.NODE_COMPILE_CACHE && nodeModule.enableCompileCache) {
     nodeModule.enableCompileCache(cacheDir);
   } catch { /* read-only home or pre-22 node — run without cache */ }
 }
+// Startup phase tracer (P2 speed): MOCHI_STARTUP_TRACE=1 emits one JSON line
+// to stderr on exit — the cold-start phase breakdown bench/startup-phases.mjs
+// reports. Off = only one tiny module on the fast path. Static import (no
+// top-level await — this file must stay TLA-free for the standalone build).
+import { startupMark, startupTraceOnExit } from './observability/startup-trace.js';
+startupTraceOnExit();
+startupMark('entry-eval');
 // Repo module, lazy: `findProjectRoot` is only needed by specific commands
 // (hooks/doctor/sessions) — never by --version/--help or the initial TUI
 // frame. Loading it statically cost ~12ms CPU on EVERY invocation.
@@ -240,6 +247,7 @@ async function main() {
   }
 
   const { flags, positional } = parseArgs(process.argv.slice(2));
+  startupMark('args-parsed');
 
   // Ultra-fast path for info queries (version, help): exit immediately in <3ms
   if (flags.h || flags.help) { printHelp(); return; }
@@ -347,6 +355,7 @@ async function main() {
   const { randomSlug } = await import('./util.js');
   const { status, diff, isRepo } = await import('./repo/git.js');
   const runtime = Runtime.create({ cwd, config: configOverrides });
+  startupMark('runtime-ready');
 
   // Permission policy — propagate --yolo / --uncensored / env var to the runtime object so
   // the TUI status badge and PermissionManager can read it without config hacks.
