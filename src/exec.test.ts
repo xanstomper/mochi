@@ -35,29 +35,18 @@ describe('exec policy', () => {
     expect(r.cancelled).toBe(true);
   }, 60_000);
 
-  it('pre-aborted signal: the call settles (no hang, no unhandled error event)', async () => {
+  it('pre-aborted signal + failing spawn rejects (handled) instead of crashing on an unhandled error event', async () => {
     // The old early-return skipped 'error'/'close' listener attachment when
     // the signal was ALREADY aborted: a spawn failing under an aborted signal
-    // emitted 'error' with NO listener — an unhandled 'error' event on a
-    // ChildProcess THROWS and can crash the host process. Now the listeners
-    // exist first, so the failure arrives as an ordinary handled rejection —
-    // consistent with the non-aborted path, where a failed spawn also
-    // rejects.
-    //
-    // The failing spawn is a MISSING SHELL BINARY, not a missing cwd: a
-    // missing cwd still creates the child (it forks, then fails the chdir),
-    // so the abort path races a real process-group kill against the child's
-    // exit — on macOS runners that race repeatedly took the whole job down
-    // with it. A missing binary never creates a child, so the contract is
-    // pinned without the race.
+    // (nonexistent cwd here → ENOENT) emitted 'error' with NO listener — an
+    // unhandled 'error' event on a ChildProcess THROWS and can crash the
+    // host process. Now the listeners exist first, so the failure arrives as
+    // an ordinary handled rejection — consistent with the non-aborted path,
+    // where a failed spawn also rejects.
     const c = new AbortController();
     c.abort();
     await expect(
-      runShellString('echo never-runs', {
-        timeoutMs: 20_000,
-        signal: c.signal,
-        shellBin: '/definitely/not/a/real/shell',
-      }),
+      runShellString('echo never-runs', { timeoutMs: 20_000, signal: c.signal, cwd: '/definitely/not/a/real/dir' }),
     ).rejects.toThrow();
   }, 60_000);
 
