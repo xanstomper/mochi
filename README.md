@@ -14,7 +14,6 @@ Goals · Task DAGs · Multi-agent Teams · Persistent Daemon · Deep Run Traces 
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-339933?style=for-the-badge&logo=nodedotjs&logoColor=white&labelColor=0d1f12)](https://nodejs.org)
 [![Rust Core](https://img.shields.io/badge/core-rust--native-dea584?style=for-the-badge&logo=rust&logoColor=white&labelColor=2b1a0e)](native/mochi_core)
 [![Tests](https://img.shields.io/badge/tests-2326%20passing-3fb950?style=for-the-badge&labelColor=0e2415)](#testing)
-[![Tests](https://img.shields.io/badge/tests-2821%20passing-3fb950?style=for-the-badge&labelColor=0e2415)](#testing)
 [![Deps](https://img.shields.io/badge/runtime%20deps-0-cf222e?style=for-the-badge&labelColor=2b0d0d)](#architecture)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge&labelColor=0d1b2e)](LICENSE)
 [![CI](https://img.shields.io/badge/CI-linux%20%C2%B7%20macOS%20%C2%B7%20windows-2094d3?style=for-the-badge&logo=githubactions&logoColor=white&labelColor=0a1d2b)](https://github.com/xanstomper/mochi/actions)
@@ -69,7 +68,7 @@ Recurring work is owned by the daemon and persists in `.mochi/cron.json`;
 `mochi cron` manages it without HTTP. Device and desktop commands run through
 the same bounded exec policy as the shell tool.
 
-Zero runtime JS dependencies. Runs under **Node 22** or **Bun**, and ships a standalone native binary (`npm run build:bin`) that needs no runtime at all. The performance core is a zero-dependency Rust crate (`native/mochi_core`): tokenization, budget math, context compaction planning, and agent-loop decisions run natively — every native path has a parity-tested TypeScript fallback, so nothing breaks when the Rust binary is absent (CI, cold installs). The harness is polyglot: an 18-ecosystem repo detector, a 10-language tree-sitter codegraph, and native Rust/C++ accelerators in the `edit`/`patch` hot paths.
+Zero runtime JS dependencies. Runs under **Node 22** or **Bun**, and ships a standalone native binary (`npm run build:bin`) that needs no runtime at all. The performance core is a zero-dependency Rust crate (`native/mochi_core`): tokenization, budget math, context compaction planning, and agent-loop decisions run natively — every native path has a parity-tested TypeScript fallback, so nothing breaks when the Rust binary is absent (CI, cold installs). The harness is polyglot: a 15-language registry, tree-sitter codegraph, and native Rust/C++ accelerators in the `edit`/`patch` hot paths.
 
 <div align="center">
 

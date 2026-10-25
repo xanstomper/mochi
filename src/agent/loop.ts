@@ -9616,45 +9616,15 @@ Continue from 'Next:', do not redo completed progress.`,
     // structured word — never from the run's self-reported success.
     try {
       const { getSkillsLoadedThisRun, clearSkillsLoadedThisRun } = await import('../tools/skill.js');
-      const { recordSkillUsage, recordSkillFailure, clearSkillFailures, recordSkillOutcome, recordSkillKindOutcome } = await import('../skills/skills.js');
-      const loadedSkills = getSkillsLoadedThisRun();
-      const verdict = this.skillRunVerdict();
-      const kind = this.taskKind ?? classifyTaskKind(task);
-      for (const name of loadedSkills) {
+      const { recordSkillUsage, recordSkillFailure, clearSkillFailures } = await import('../skills/skills.js');
+      const loaded = getSkillsLoadedThisRun();
+      for (const name of loaded) {
         recordSkillUsage(this.workspace.dir, name, success === true);
-        recordSkillOutcome(this.workspace.dir, name, verdict, kind);
-        // MCH-201: accrue win/loss outcome into the skill quality score DB.
-        try {
-          const { markUsed } = await import('../skills/skill-manager.js');
-          markUsed(this.workspace.dir, name, { win: success === true });
-        } catch { /* score accrual is best-effort */ }
         // Failure notes feed the curator's self-repair pass; a green run clears
         // the queue so a one-off flake doesn't permanently scar the skill.
         if (success === true) clearSkillFailures(this.workspace.dir, name);
         else recordSkillFailure(this.workspace.dir, name, String(this.lastToolError ?? summary).slice(0, 500));
       }
-      // Baseline arm: every verified run feeds its kind's totals, whether or
-      // not it loaded skills — the curator subtracts a skill's own loads to
-      // get the matched no-skill comparison.
-      if (verdict !== 'none') recordSkillKindOutcome(this.workspace.dir, kind, verdict === 'pass');
-      // S4 effort calibration: the same gate verdict, attributed to the
-      // (kind x base-tier) outcome table — pass/fail only (partial and
-      // blocked are not clean solve/fail evidence). This is the data the
-      // calibrated base tier in resolveReasoning() is allowed to move on.
-      if (verdict === 'pass' || verdict === 'fail') {
-        recordEffortOutcome(this.workspace.dir, kind, this.runBaseReasoningTier ?? resolveAutoReasoning(kind), verdict === 'pass');
-      }
-      this.events.emit({
-        type: 'skills:attributed',
-        agentId: this.id,
-        skills: loadedSkills.map((id) => ({ id, verdict })),
-        verifyStatus: this.lastVerifyStatus ?? 'NONE',
-        taskKind: kind,
-        // B21: a run whose course was corrected mid-flight by a parent
-        // steer is marked, so skill evidence never credits an unsteered
-        // success with what the steer caused (lifted by buildTrajectory).
-        steered: this.deliveredParentSteers.length > 0,
-      });
       clearSkillsLoadedThisRun();
     } catch { /* skill outcome attribution must never affect task completion */ }
     // Lesson attribution: a retrieved lesson that was actually injected gets

@@ -136,6 +136,13 @@ export function closeBrowserSessions(): void {
   for (const key of [...SESSIONS.keys()]) shutdown(key, { graceful: true });
 }
 
+/** Close only the browser sessions owned by one workspace. */
+export function closeBrowserSession(workspaceDir: string): void {
+  const prefix = `${resolve(workspaceDir)}::`;
+  for (const key of [...SESSIONS.keys()]) {
+    if (key.startsWith(prefix)) shutdown(key, { graceful: true });
+  }
+}
 
 function ensureBroker(opts: BrowserSessionOptions): Broker {
   const key = keyFor(opts);

@@ -67,13 +67,11 @@ import { compilePromptTool } from './compile-prompt.js';
 import { toolFactoryTool, RESERVED_TOOL_NAMES, loadAuthoredTools } from './tool-factory.js';
 import { loadForgedToolsSafe } from './tool-forge.js';
 import { browserTool } from './browser.js';
-import { cdpBrowserTool } from './cdp-browser.js';
 import { docsTool } from './docs.js';
 import { emailTool } from './email.js';
 import { canvasTool } from './canvas.js';
 import { scheduleTool } from './schedule.js';
 import { deviceTool } from './device.js';
-import { recordToolExposureUsage } from './tool-exposure.js';
 
 import { timerTool } from './timer.js';
 import { envTool } from './env.js';
@@ -107,13 +105,11 @@ export const ALL_TOOLS: Tool[] = [
   notesTool, tuiBuilderTool, mcpManageTool, markdownTool, colorTool,
   toolFactoryTool,
   browserTool,
-  cdpBrowserTool,
   docsTool,
   emailTool,
   canvasTool,
   scheduleTool,
   deviceTool,
-  computerTool,
   acceptPlanTool,
   askQuestionTool,
   notebookTool,
@@ -137,10 +133,8 @@ export const AUXILIARY_TOOL_NAMES = new Set([
  *  tools for the same work. The model can pull any of these in mid-run via
  *  the `load_tools` tool. */
 export const HEAVY_TOOL_NAMES = new Set([
-  'browser', 'cdp_browser', 'db_inspect', 'deepwiki', 'sql_codebase_query', 'create_pr', 'review_pr', 'repl',
+  'browser', 'db_inspect', 'deepwiki', 'sql_codebase_query', 'create_pr', 'review_pr', 'repl',
   'perf', 'clipboard', 'mcp_manage', 'lint', 'format', 'diff', 'tree', 'device',
-  'browser', 'computer', 'db_inspect', 'deepwiki', 'sql_codebase_query', 'create_pr', 'review_pr', 'repl',
-  'perf', 'clipboard', 'mcp_manage', 'lint', 'format', 'diff', 'tree',
   'analyze_code', 'code_similarity', 'type_hierarchy', 'rename_symbol',
   'resolve_conflicts', 'system_info',
 ]);
