@@ -289,3 +289,27 @@ redesigned gate-safe). Landing: the report's Phase 3 prioritized list is
 queued as distillation fuel D1–D10 (telemetry sidecar first, through
 run-recipe manifest). Distillation CLOSED as a research run; its items
 now ship only with their proof metrics measured.
+
+## G6 journal write-failure tolerance + G11 idle compaction — WooWop independent verification (2026-10-25)
+WooWop-direct implementation (queue item 4; the loop did not launch it on
+coder), worktree ~/mochi-g6g11, branch feat/g6g11, base f9861d9. Commits:
+79ec40c (G6 bounded-retry appends, dedupe on fsync failure, atomic tail
+salvage), d00da9e (G11 idle-compaction decision, activity clocks, named
+break reason), 32b65de (G11 idle-compaction trigger at run start +
+per-child windows), 65f4efd (steer-acceptance window fix, see below).
+First full gate at 32b65de came back 3,474 passed / 1 failed / 12 skipped —
+and the 1 failure was a REAL regression, not a flake: subagent-steer test
+(e), queued-child steer delivery (base f9861d9 passes 6/6, item tree failed
+twice). Mechanism was a microtask race: G11's awaited idle check deferred
+runActive past the child-launch handover, so the queued steer was refused
+as "not started". Fix 65f4efd opens the steer-acceptance window before
+run()'s first await, plus new regression test (g): a queued child opted
+into idle compaction still receives its queued steer from its first turn.
+Fresh worktree at 65f4efd, Node 26.12.1: tsc CLEAN; full suite **3,476
+passed / 0 failed / 12 skipped** (432 files passed, 4 skipped); the
+subagent-steer file is 7/7. Proof metrics unchanged by the fix: G6 7/7
+injected-fault scenarios, 0 lost runs; G11 8/8 decision-matrix verdicts,
+0 false triggers, first-turn tokens 11,260 -> 2,135 on fixture (est.
+~2,963 -> ~562, -81%). G6+G11 CLOSED. Verified chain:
+3,269/2 -> 3,271 -> 3,285 -> 3,328 -> 3,384 -> 3,401 -> 3,445 -> 3,450 ->
+3,454 -> 3,476, zero failures at the tip.
