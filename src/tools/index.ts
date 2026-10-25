@@ -30,8 +30,8 @@ import { treeTool } from './tree.js';
 import { regexReplaceTool } from './regex-replace.js';
 import { deepwikiTool } from './deepwiki.js';
 import { clipboardTool } from './clipboard.js';
-import { computerTool } from './computer.js';
 import { sqlCodebaseTool } from '../repo/codebase-sql.js';
+import { recordToolExposureUsage } from './tool-exposure.js';
 import { performance } from 'node:perf_hooks';
 import { searchReplaceMultiTool } from './search-replace-multi.js';
 import { analyzeCodeTool } from './analyze-code.js';
@@ -68,7 +68,6 @@ import { compilePromptTool } from './compile-prompt.js';
 import { toolFactoryTool, RESERVED_TOOL_NAMES, loadAuthoredTools } from './tool-factory.js';
 import { loadForgedToolsSafe } from './tool-forge.js';
 import { browserTool } from './browser.js';
-import { docsTool } from './docs.js';
 import { emailTool } from './email.js';
 import { canvasTool } from './canvas.js';
 import { scheduleTool } from './schedule.js';
@@ -80,7 +79,6 @@ import { lintTool } from './lint.js';
 import { formatTool } from './format.js';
 import { benchmarkTool } from './benchmark.js';
 import { notesTool } from './notes.js';
-import { selfConfigTool } from './self-config.js';
 import { tuiBuilderTool } from './tui-builder.js';
 import { mcpManageTool } from './mcp-manage.js';
 import { markdownTool } from './markdown.js';
@@ -106,7 +104,7 @@ export const ALL_TOOLS: Tool[] = [
   notesTool, tuiBuilderTool, mcpManageTool, markdownTool, colorTool,
   toolFactoryTool,
   browserTool,
-  docsTool,
+  docsQueryTool,
   emailTool,
   canvasTool,
   scheduleTool,

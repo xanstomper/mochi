@@ -277,6 +277,53 @@ export function resetBubblewrapCache(): void {
 
 /** Absolute path to `bwrap`, or null when unavailable. Cached. Testable via
  *  explicit pathEnv (production callers omit it). */
+
+let cachedUnshare: string | null | undefined;
+
+export function detectUnshare(pathEnv = process.env.PATH ?? ''): string | null {
+  if (cachedUnshare !== undefined && pathEnv === (process.env.PATH ?? '')) return cachedUnshare;
+  let found: string | null = null;
+  for (const dir of pathEnv.split(delimiter).filter(Boolean)) {
+    const full = resolve(dir, 'unshare');
+    try {
+      accessSync(full, constants.X_OK);
+      found = full;
+      break;
+    } catch { /* not here */ }
+  }
+  // Existing is not enough: the binary may be present while user namespaces
+  // are disabled by the kernel/sysctl. Probe once — a sandbox that cannot
+  // start must degrade in `auto`, not turn every command into an error.
+  if (found && process.platform === 'linux') {
+    try {
+      const probe = spawnSync(found, ['--map-root-user', 'true'], { stdio: 'ignore', timeout: 5_000 });
+      if (probe.status !== 0) found = null;
+    } catch {
+      found = null;
+    }
+  } else if (process.platform !== 'linux') {
+    found = null;
+  }
+  if (pathEnv === (process.env.PATH ?? '')) cachedUnshare = found;
+  return found;
+}
+
+/** Linux user-namespace jail: private mount/PID/IPC/UTS namespaces, root
+ *  mapped to the invoking user, fresh /proc. This isolates process visibility
+ *  and mount state; it does NOT bind a read-only rootfs the way bubblewrap
+ *  does, so it is the documented SECOND backend, not an equivalent one. */
+export function buildUnshareArgs(
+  unshareBin: string,
+  cmd: string,
+  args: readonly string[],
+  opts: { network?: boolean } = {},
+): string[] {
+  const argv = ['--map-root-user', '--mount', '--pid', '--ipc', '--uts', '--fork', '--mount-proc'];
+  if (opts.network === false) argv.push('--net');
+  argv.push('--', cmd, ...args);
+  return [unshareBin, ...argv];
+}
+
 export function detectBubblewrap(pathEnv = process.env.PATH ?? ''): string | null {
   if (cachedBwrap !== undefined && pathEnv === (process.env.PATH ?? '')) return cachedBwrap;
   let found: string | null = null;

@@ -19,11 +19,6 @@ export interface ModelConfig {
    *  model); profiles fall back to the primary's when unset. Mid-stream
    *  failures are NOT retried on a fallback (partial output can't be replayed). */
   failover?: ModelConfig[];
-  /** True when the user pinned this model explicitly (CLI --model / env /
-   *  config `model.model`), as opposed to inheriting a provider default.
-   *  Measured routing (observability/routing-table.ts) NEVER overrides a
-   *  pinned model — a pin is an instruction, not a suggestion. */
-  modelPinned?: boolean;
   /** Speculative reasoning preflight (DeepSeek/Cline-style "think before
    *  acting"). When enabled, hard non-chat tasks run the SpeculativeEngine
    *  once before the main model call and inject its chosen approach + pitfall
@@ -251,23 +246,11 @@ export interface MochiConfig {
    *  provider is deliberately not reused implicitly. semanticIndex:false
    *  disables the index entirely. */
   retrieval?: { embeddingProvider?: string; embeddingModel?: string; semanticIndex?: boolean };
-  /** Short-task fast lane (core/fastlane.ts). Default ON; `enabled: false`
-   *  or MOCHI_FASTLANE=0 disables. Enters only on positive proof of
-   *  shortness and escalates back on struggle evidence. */
-  fastlane?: { enabled?: boolean };
-  /** Long-task milestone strategy (agent/milestones.ts). Default ON;
-   *  `pacing: false` keeps the plan but disables budget pacing. Env
-   *  MOCHI_LONGTASK=0 / MOCHI_LONGTASK_PACING=0 override. */
-  longtask?: { enabled?: boolean; pacing?: boolean };
-  /** Measured model routing (observability/routing-table.ts). Default ON;
-   *  only acts when a derived table exists under .mochi/state and the model
-   *  is not pinned. MOCHI_ROUTING=0 disables. */
-  routing?: { enabled?: boolean; minSamples?: number };
   /** @deprecated NO-OP, retained only so existing config files still parse.
    *  Mochi has NO outbound telemetry (see PRIVACY.md); nothing in `src/`
    *  reads this key and no new behaviour should be hidden behind it. It is
    *  scheduled for removal with the next config-schema version. */
-  telemetry: boolean;
+  telemetry?: boolean;
   projectDir: string;
   configDir: string;
   quiet: boolean;

@@ -312,3 +312,25 @@ export function escalationBudgetBlock(budget?: {
   if (phase === 'cheap' || phase === 'verify') return `the run budget is in its ${phase} phase`;
   return null;
 }
+
+/** Derive + persist (vermes/port). The sleep-time pass and
+ *  `mochi costs routing --rebuild` run this. */
+export function refreshRoutingTable(
+  stateDir: string,
+  opts: { minSamples?: number } = {},
+): RoutingTable {
+  const table = deriveRoutingTable(stateDir, { minSamples: opts.minSamples, write: true });
+  return table;
+}
+
+// ─── Policy (pure) ───────────────────────────────────────────────────────
+
+/** A cell the policy may act on: enough samples and a measured dollar
+ *  figure. Everything else is display-only data. */
+export function isProvenCell(cell: RoutingCell): boolean {
+  return cell.sufficient && cell.costPerSolveUsd !== null;
+}
+
+export function provenCellsForKind(table: RoutingTable, kind: string): RoutingCell[] {
+  return table.cells.filter((c) => c.taskKind === kind && isProvenCell(c));
+}

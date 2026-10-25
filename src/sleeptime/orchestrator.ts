@@ -796,7 +796,7 @@ export function createRoutingStatsStep(): SleeptimeStep {
       const table = refreshRoutingTable(mochiStateDir(ctx.projectDir));
       const proven = table.cells.filter(isProvenCell).length;
       return {
-        detail: `routing table re-derived: ${table.runsConsidered} runs (${table.runsSkipped} skipped), ${table.cells.length} (kind × model) cells, ${proven} proven. Stored at state/routing-table.json.`,
+        detail: `routing table re-derived: ${table.cells.length} (kind × model) cells, ${proven} proven. Stored at state/routing-table.json.`,
       };
     },
   };

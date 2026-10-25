@@ -9,6 +9,7 @@ import {
   type BrowserResponse,
 } from '../browser/session.js';
 import { liveCall, liveStatus } from '../browser/celeste.js';
+import { listProfiles } from '../browser/profiles.js';
 import { browserOptions } from '../browser/options.js';
 
 // Stateful browser automation for Mochi.

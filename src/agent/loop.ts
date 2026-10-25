@@ -4721,7 +4721,7 @@ Continue from 'Next:', do not redo completed progress.`,
     const remaining = t.state.milestones.filter((m) => m.status === 'pending' || m.status === 'active');
     let inputs: MilestoneInput[] | null = null;
     if (this.ltPlannerFn) {
-      inputs = await this.ltPlannerFn({ task, current, remaining, evidence: [gate.reason], replan: true }).catch(() => null);
+      inputs = await this.ltPlannerFn({ task, current: current ?? undefined, remaining, evidence: [gate.reason], replan: true }).catch(() => null);
     }
     if (!inputs) {
       const passedTitles = t.state.milestones.filter((m) => m.status === 'passed').map((m) => m.title);

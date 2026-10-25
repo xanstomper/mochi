@@ -10,11 +10,10 @@ import { randomUUID } from 'node:crypto';
 import { contentText, splitContent } from '../types.js';
 import type { ChatMessage, ToolDefinition, StreamChunk, ModelResponse } from '../types.js';
 import { estimateCostUsd } from '../pricing.js';
+import { openSSEStream } from './sse.js';
 import type { ProviderConfig } from './openai.js';
 import { ProviderError, describeModelError, parseRetryAfter } from '../utils/http-error.js';
 import { classifyError, withRetries } from './rate-limit.js';
-import { openSSEStream } from './sse.js';
-import { estimateCostUsd } from '../pricing.js';
 
 function logBackoff(attempt: number, delayMs: number, err: unknown): void {
   const detail = err instanceof Error ? err.message.split('\n')[0] : String(err);

@@ -152,9 +152,11 @@ export function deriveCurriculumCandidates(
   }
   const failing = records.filter((rec) => {
     const verdict = rec.verification?.verdict ?? (rec.verification?.status ?? '');
-    if (!FAILING_VERDICTS.has(String(verdict))) return false;
+    if (!FAILING_VERDICTS.has(String(verdict).toUpperCase())) return false;
     const ended = rec.endedAt ?? rec.startedAt ?? 0;
-    return ended === 0 || now - ended <= maxAgeMs;
+    // endedAt near the Unix epoch means the exporter never stamped a real
+    // date — treat as undated (always in window), not as 56-year-old news.
+    return ended < 10_000 || now - ended <= maxAgeMs;
   });
   failing.sort((a, b) => (b.endedAt ?? b.startedAt ?? 0) - (a.endedAt ?? a.startedAt ?? 0));
 

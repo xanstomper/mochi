@@ -125,27 +125,27 @@ describe('mochi sleeptime (production wiring)', () => {
     }).find((r) => r?.kind === 'mochi-sleeptime-report');
     expect(reportJson).toBeDefined();
     const report = reportJson!;
-    expect(report.steps.map((s) => s.id)).toEqual(['repair', 'curator', 'gate', 'health', 'curriculum', 'routing-stats']);
+    expect(report.steps.map((s) => s.id)).toEqual(['repair', 'curator', 'gate', 'health', 'induction', 'curriculum', 'routing-stats']);
 
     // Repair: a real patch attempt happened (the stub's detail confessed
     // "STUB repair"; the unavailable port could not patch at all).
     const repair = report.steps[0];
     expect(repair.units).toHaveLength(1);
     expect(repair.units[0].status).toBe('completed');
-    expect(repair.units[0].detail).toContain('D8 repair applied');
+    expect(repair.units[0].detail).toContain("repaired 'broken-deploy'");
     expect(repair.units[0].detail).not.toContain('STUB');
     expect(loadSkillUsage(proj).get('broken-deploy')?.repairAttempts).toBe(1);
 
     // Curriculum: a real validated task was generated (the no-op port
     // planned [] forever).
-    const curriculum = report.steps[4];
+    const curriculum = report.steps[5];
     expect(curriculum.units).toHaveLength(1);
     expect(curriculum.units[0].status).toBe('completed');
     expect(curriculum.units[0].detail).toContain('generated validated practice task');
     expect(existsSync(join(proj, '.mochi', 'curriculum'))).toBe(true);
 
-    // Both adapters are model-free: the night spent nothing.
-    expect(report.spend.usedCostUsd).toBe(0);
+    // The repair step is model-driven and honestly reports its actual spend;
+    expect(report.spend.usedCostUsd).toBeGreaterThan(0);
     expect(process.exitCode).toBe(0);
   }, 60_000);
 });

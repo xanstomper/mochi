@@ -74,11 +74,6 @@ export async function handleSleeptimeCommand({ positional, flags, cwd }: Sleepti
       projectDir: cwd,
       spendCapUsd: resolveCapUsd(flags),
       dryRun: !!flags['dry-run'],
-      // Production wiring (audit L-01): the REAL D8 repair adapter and D10
-      // curriculum adapter, passed explicitly. The orchestrator's defaults
-      // are the same adapters — passing them here keeps the production
-      // call site self-evidently wired (and testably so).
-      ports: { repair: createSkillRepairPort(), curriculum: createCurriculumPort() },
       ...(typeof flags.night === 'string' ? { nightKey: flags.night } : {}),
       // Real D8/D10 engines — without these the pipeline falls back to the
       // labelled repair stub and a no-op curriculum step (audit L-01).
