@@ -9,10 +9,14 @@
 // - hybrid: the PRODUCTION path verbatim — semanticSearch's fused top
 //   chunk pool (limit 80, the shared benchmark's pool size) aggregated by
 //   aggregateHitsToFiles exactly as the tool/context surfaces do.
-//   (AggregateHitsToFiles' `0.25 x rest` term is only meaningful over a
-//   bounded pool: over all ~10.8k chunks a 300-chunk file's tail swamps
-//   every best-chunk signal — measured: ARCHITECTURE.md fileScore 32 vs
-//   0.58 for the true target.)
+//   (Since P4 the aggregation policy follows the embedder kind: with a
+//   provider embedder it is file-level RRF over per-file best per-signal
+//   chunks; the old `0.25 x rest` term was only meaningful over a bounded
+//   pool — over all ~10.8k chunks a 300-chunk file's tail swamped every
+//   best-chunk signal — and, over a bounded pool, let a many-chunk file's
+//   vote scale with its chunk count. The fallback embedder KEEPS the
+//   count-voting formula: with no strong ranker present it is the
+//   spread-evidence mechanism, measured on the 2048-file fixture.)
 //
 // The index at `root` must have been built with `embedder` (vectors are
 // keyed by embedder id; a mismatch just yields vectorScore 0 everywhere).
@@ -86,7 +90,7 @@ export async function runRecallHarness(
     const embeddedRank = bestChunkFileRanking(full.hits, (h) => h.vectorScore, 10);
     // Production hybrid: bounded fused pool + the shared file aggregation.
     const prod = await semanticSearch(root, q.query, { embedder, limit: hybridPool });
-    const hybridRank = prod ? aggregateHitsToFiles(prod.hits, 10).map((f) => f.rel) : [];
+    const hybridRank = prod ? aggregateHitsToFiles(prod.hits, 10, { embedderKind: embedder.kind }).map((f) => f.rel) : [];
     rows.push({
       id: q.id,
       query: q.query,

@@ -183,6 +183,12 @@ export function failureClassOf(summary: string): string {
         })
         .join(' ')
         .replace(/\(fast lane\)/g, '')
+        // Same class-splitting poison as '(fast lane)': the PARTIAL targeted
+        // pre-check annotation is harness framing on the SAME failure — a
+        // failure seen through the pre-check lane and through the full gate
+        // must share a class, or the same-approach streak resets and the x3
+        // strategy switch never fires.
+        .replace(/\(PARTIAL targeted pre-check:[^)]*\)/g, '')
         .replace(/:\d+(:\d+)?/g, ':L')
         .replace(/[+-]?\d+(\.\d+)?/g, '#')
         .replace(/\s+/g, ' ')

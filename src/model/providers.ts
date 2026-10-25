@@ -1,7 +1,8 @@
 import { homedir } from 'node:os';
 import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { resolve, dirname } from 'node:path';
 import type { MochiConfig } from '../types.js';
+import { warnPlaintextKeysOnce } from '../config-plaintext-keys.js';
 
 export type ProviderKind = 'openai' | 'anthropic' | 'gemini';
 
@@ -98,7 +99,13 @@ export function loadConfigFile(): MochiConfig {
   const path = configFilePath();
   if (!existsSync(path)) return {} as MochiConfig;
   try {
-    return JSON.parse(readFileSync(path, 'utf8')) as MochiConfig;
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as MochiConfig;
+    // P3 gun 3 (config-side only): warn once per process when this file
+    // carries raw key material — field paths only, never values. The keyring
+    // path is the sibling auth.json (mirrors keyringPath() without importing
+    // it: keyring.ts already imports configFilePath from this module).
+    warnPlaintextKeysOnce(parsed, path, resolve(dirname(path), 'auth.json'));
+    return parsed;
   } catch {
     return {} as MochiConfig;
   }

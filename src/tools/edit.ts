@@ -17,7 +17,10 @@ import {
 // edit-apply.ts now, alongside the rest of the strategy ladder).
 export { findRelaxedUnique, normalizeRelaxedLine };
 
-function trimIndent(text: string): string {
+/** Trim leading/trailing blank lines and common indent — shared with
+ *  security/edit-review.ts so a per-hunk preview computes the SAME new
+ *  content the edit tool will write when args.trim is set. */
+export function trimIndent(text: string): string {
   const lines = text.split('\n');
   if (lines[0]?.trim() === '') lines.shift();
   if (lines[lines.length - 1]?.trim() === '') lines.pop();

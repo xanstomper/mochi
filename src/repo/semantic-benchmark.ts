@@ -107,10 +107,10 @@ export async function runSemanticBenchmark(
     const tq = Date.now();
     const hybrid = await semanticSearch(root, q.text, { embedder, limit: 80 });
     hybridLatencies.push(Date.now() - tq);
-    const hybridRanked = hybrid ? aggregateHitsToFiles(hybrid.hits, BENCH_K).map((f) => f.rel) : [];
+    const hybridRanked = hybrid ? aggregateHitsToFiles(hybrid.hits, BENCH_K, { embedderKind: embedder.kind }).map((f) => f.rel) : [];
 
     const conditioned = await semanticSearchForTask(root, q.text, { embedder, limit: 80 });
-    const conditionedRanked = conditioned ? aggregateHitsToFiles(conditioned.hits, BENCH_K).map((f) => f.rel) : [];
+    const conditionedRanked = conditioned ? aggregateHitsToFiles(conditioned.hits, BENCH_K, { embedderKind: embedder.kind }).map((f) => f.rel) : [];
 
     rows.push({
       conceptId: q.conceptId,

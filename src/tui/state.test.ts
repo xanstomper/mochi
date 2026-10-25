@@ -11,6 +11,7 @@ import {
   rewrapSummaries,
   toAbsLine,
   toRelLine,
+  formatRoutingReason,
 } from './state.js';
 import { STREAM_LINE_CAP } from './state.js';
 
@@ -535,5 +536,120 @@ describe('summary:rendered fallback + rewrap', () => {
     for (let i = 0; i < 600; i++) pushLine(s, 'system', `filler-${i}`);
     expect(s.lines.some((l) => l.kind === 'summary')).toBe(false);
     expect(rewrapSummaries(s, w)).toBe(false);
+  });
+});
+
+describe('status line live stats (W3-4)', () => {
+  it('usage:updated counts a live turn and records the active model', () => {
+    const s = createTuiState();
+    expect(s.turns).toBe(0);
+    reduceEvent(s, ev({ type: 'usage:updated', agentId: 'root', inputTokens: 10, outputTokens: 5, cacheTokens: 0, totalTokens: 15, model: 'gpt-5.1' }));
+    expect(s.turns).toBe(1);
+    expect(s.activeModel).toBe('gpt-5.1');
+    // A second call increments; an event WITHOUT a model label keeps the
+    // previous active model (failover endpoints stop sending usage metadata).
+    reduceEvent(s, ev({ type: 'usage:updated', agentId: 'root', inputTokens: 10, outputTokens: 5, cacheTokens: 0, totalTokens: 15 }));
+    expect(s.turns).toBe(2);
+    expect(s.activeModel).toBe('gpt-5.1');
+  });
+
+  it('routing:decision records the compact evidence reason and re-renders', () => {
+    const s = createTuiState();
+    expect(reduceEvent(s, ev({
+      type: 'routing:decision', agentId: 'root', taskKind: 'bugfix', model: 'gpt-5.1-mini',
+      source: 'routed', fromModel: 'deepseek-v4', costPerSolveUsd: 0.0021, solveRate: 0.91, samples: 14,
+    }))).toBe(true);
+    expect(s.routingReason).toBe('routed gpt-5.1-mini←deepseek-v4: cps $0.0021 · 91% solve · 14 runs');
+    // A routed decision IS the live active model, before the next usage event.
+    expect(s.activeModel).toBe('gpt-5.1-mini');
+  });
+
+  it('routing:decision covers every source kind', () => {
+    const mk = (source: string, extra: Record<string, unknown> = {}) => {
+      const s = createTuiState();
+      reduceEvent(s, ev({ type: 'routing:decision', agentId: 'root', taskKind: 'k', model: 'm', source, ...extra }));
+      return s.routingReason;
+    };
+    expect(mk('pinned')).toBe('pinned');
+    expect(mk('insufficient-data')).toBe('no routing data');
+    expect(mk('already-optimal', { costPerSolveUsd: 0.5, solveRate: 1, samples: 3 })).toBe('optimal: cps $0.5000 · 100% solve · 3 runs');
+    expect(mk('routed')).toBe('routed m: '); // no measured evidence in the cell yet
+  });
+
+  it('routing:escalated and -blocked record trigger/block reasons', () => {
+    const s = createTuiState();
+    reduceEvent(s, ev({ type: 'routing:escalated', agentId: 'root', taskKind: 'k', fromModel: 'a', toModel: 'b', trigger: 'verify_failures', solveRate: 0.5 }));
+    expect(s.routingReason).toBe('↑ b (verify_failures · 50%)');
+    // An escalation does not change what the run is running on its own — the
+    // loop's setActiveModel does; the badge only reports the trigger.
+    const s2 = createTuiState();
+    reduceEvent(s2, ev({ type: 'routing:escalation-blocked', agentId: 'root', taskKind: 'k', fromModel: 'a', toModel: 'b', trigger: 'same_failure', reason: 'budget exhausted' }));
+    expect(s2.routingReason).toBe('↑ blocked: budget exhausted');
+  });
+
+  it('formatRoutingReason is undefined for non-routing events', () => {
+    expect(formatRoutingReason(ev({ type: 'usage:updated' }))).toBeUndefined();
+    expect(formatRoutingReason(ev({ type: 'message', role: 'assistant', content: 'x' }))).toBeUndefined();
+  });
+});
+
+describe('spawn ledger (W3-4 subagent panel feed)', () => {
+  it('subagent:started opens a running ledger entry', () => {
+    const s = createTuiState();
+    reduceEvent(s, ev({ type: 'subagent:started', agentId: 'a-sub-1', parentId: 'root', role: 'coder', prompt: 'fix it' }));
+    const e = s.spawnLedger.get('a-sub-1');
+    expect(e).toBeDefined();
+    expect(e!.status).toBe('running');
+    expect(e!.role).toBe('coder');
+    expect(e!.tokens).toBe(0);
+    // activeSubagents still tracks live children for the transcript lines.
+    expect(s.activeSubagents.has('a-sub-1')).toBe(true);
+  });
+
+  it('child usage:updated accumulates token spend while running', () => {
+    const s = createTuiState();
+    reduceEvent(s, ev({ type: 'subagent:started', agentId: 'a-sub-1', parentId: 'root', role: 'coder', prompt: 'fix it' }));
+    reduceEvent(s, ev({ type: 'usage:updated', agentId: 'a-sub-1', inputTokens: 100, outputTokens: 20, cacheTokens: 0, totalTokens: 120 }));
+    reduceEvent(s, ev({ type: 'usage:updated', agentId: 'a-sub-1', inputTokens: 100, outputTokens: 30, cacheTokens: 0, totalTokens: 130 }));
+    expect(s.spawnLedger.get('a-sub-1')!.tokens).toBe(250);
+    // The ROOT's own usage does not bill any child.
+    reduceEvent(s, ev({ type: 'usage:updated', agentId: 'root', inputTokens: 1, outputTokens: 1, cacheTokens: 0, totalTokens: 2 }));
+    expect(s.spawnLedger.get('a-sub-1')!.tokens).toBe(250);
+  });
+
+  it('subagent:completed closes the entry with outcome + authoritative tokens', () => {
+    const s = createTuiState();
+    reduceEvent(s, ev({ type: 'subagent:started', agentId: 'a-sub-1', parentId: 'root', role: 'coder', prompt: 'fix it' }));
+    reduceEvent(s, ev({ type: 'usage:updated', agentId: 'a-sub-1', inputTokens: 100, outputTokens: 20, cacheTokens: 0, totalTokens: 120 }));
+    reduceEvent(s, ev({ type: 'subagent:completed', agentId: 'a-sub-1', parentId: 'root', role: 'coder', success: true, summary: 'done', tokensUsed: 300 }));
+    const e = s.spawnLedger.get('a-sub-1');
+    expect(e!.status).toBe('done');
+    expect(e!.endedAt).toBeDefined();
+    expect(e!.tokens).toBe(300); // tokensUsed replaces the running estimate
+    expect(s.activeSubagents.has('a-sub-1')).toBe(false);
+  });
+
+  it('failed children keep their status and accumulated tokens when no final count arrives', () => {
+    const s = createTuiState();
+    reduceEvent(s, ev({ type: 'subagent:started', agentId: 'a-sub-1', parentId: 'root', role: 'reviewer', prompt: 'review' }));
+    reduceEvent(s, ev({ type: 'usage:updated', agentId: 'a-sub-1', inputTokens: 50, outputTokens: 10, cacheTokens: 0, totalTokens: 60 }));
+    reduceEvent(s, ev({ type: 'subagent:completed', agentId: 'a-sub-1', parentId: 'root', role: 'reviewer', success: false, summary: 'boom', tokensUsed: 0 }));
+    const e = s.spawnLedger.get('a-sub-1');
+    expect(e!.status).toBe('failed');
+    expect(e!.tokens).toBe(60);
+  });
+
+  it('evicts the oldest finished entries past the cap but never a running child', () => {
+    const s = createTuiState(500);
+    for (let i = 0; i < 70; i++) {
+      reduceEvent(s, ev({ type: 'subagent:started', agentId: `child-${i}`, parentId: 'root', role: 'coder', prompt: 'p' }));
+      reduceEvent(s, ev({ type: 'subagent:completed', agentId: `child-${i}`, parentId: 'root', role: 'coder', success: true, summary: 'ok', tokensUsed: i }));
+    }
+    // One live child that must survive.
+    reduceEvent(s, ev({ type: 'subagent:started', agentId: 'child-live', parentId: 'root', role: 'coder', prompt: 'p' }));
+    expect(s.spawnLedger.size).toBe(64);
+    expect(s.spawnLedger.has('child-live')).toBe(true);
+    expect(s.spawnLedger.has('child-0')).toBe(false); // oldest finished evicted
+    expect(s.spawnLedger.has('child-69')).toBe(true); // newest kept
   });
 });

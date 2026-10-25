@@ -388,6 +388,10 @@ export interface StatusBarModel {
   /** extra mochi badges: kv-cache, queued tasks */
   extra?: string[];
   tokenVelocity?: number;
+  /** Live model-turn count this run (one per provider call). */
+  turns?: number;
+  /** Why the current model is active (cost-per-solve routing evidence). */
+  routingReason?: string;
 }
 
 function modeColor(mode: string): string {
@@ -403,6 +407,18 @@ function modeColor(mode: string): string {
     default:
       return T.gray;
   }
+}
+
+/** One-word route summary for medium-width terminals: the evidence class
+ *  without the numbers. */
+export function shortRouteReason(reason: string): string {
+  if (reason === 'pinned') return 'pinned';
+  if (reason.startsWith('routed')) return 'routed';
+  if (reason.startsWith('optimal')) return 'optimal';
+  if (reason.startsWith('no routing')) return 'no-data';
+  if (reason.startsWith('↑ blocked')) return 'blocked';
+  if (reason.startsWith('↑')) return 'escalated';
+  return reason.split(' ')[0] ?? reason;
 }
 
 /** Row 1: model + [REASON: LEVEL] + [mode] + context … plan/act toggle */
@@ -438,6 +454,20 @@ export function statusBarRow1(m: StatusBarModel, width: number): string {
       : ` ${modeColor(m.agentMode)}${T.bold}[${m.agentMode[0].toUpperCase()}]${T.reset}`
     : '';
 
+  // Live turn meter rides with the usage cluster (falls with barText).
+  const turnsBadge = (m.turns !== undefined && width >= 58)
+    ? ` ${T.grayDark}· ${m.turns} turn${m.turns === 1 ? '' : 's'}${T.reset}`
+    : '';
+
+  // Routing evidence: WHY this model is active. Full reason on wide terminals,
+  // a short verb at medium width, hidden on narrow ones.
+  const routeBadge = !m.routingReason ? ''
+    : width >= 104
+      ? ` ${T.grayDark}[route: ${m.routingReason}]${T.reset}`
+      : width >= 76
+        ? ` ${T.grayDark}[⇢ ${shortRouteReason(m.routingReason)}]${T.reset}`
+        : '';
+
   const bar = m.maxInputTokens ? contextBar(m.totalTokens, m.maxInputTokens) : undefined;
   const usage = usageText(m.totalTokens, m.totalCost);
 
@@ -455,30 +485,34 @@ export function statusBarRow1(m: StatusBarModel, width: number): string {
     const shortTokens = m.totalTokens >= 1000 ? `${(m.totalTokens / 1000).toFixed(1)}k` : `${m.totalTokens}`;
     barText = ` ${T.gray}${shortTokens}${T.reset}`;
   }
+  barText += turnsBadge;
 
   const extra = m.extra?.length && width >= 90 ? ` ${T.grayDark}· ${m.extra.join(' · ')}${T.reset}` : '';
 
   const togglePart = toggle ? `  ${toggle}` : '';
   const togglePartLen = visibleLen(togglePart);
-  const fixedLen = visibleLen(reasoningBadge) + visibleLen(velocityBadge) + visibleLen(modeBadge) + visibleLen(barText) + togglePartLen + visibleLen(extra);
+  const fixedLen = visibleLen(reasoningBadge) + visibleLen(velocityBadge) + visibleLen(modeBadge) + visibleLen(routeBadge) + visibleLen(barText) + togglePartLen + visibleLen(extra);
   const availForModel = Math.max(4, width - fixedLen);
   const modelMax = Math.min(28, availForModel);
   const modelText = `${T.fg}${T.bold}${ellipsize(m.modelId, modelMax)}${T.reset}`;
 
   // Plan/act toggle sits directly beside the token usage/bar on the left, not right-padded.
-  let line = `${modelText}${velocityBadge}${reasoningBadge}${modeBadge}${barText}${togglePart}${extra}`;
+  let line = `${modelText}${velocityBadge}${reasoningBadge}${routeBadge}${modeBadge}${barText}${togglePart}${extra}`;
   if (visibleLen(line) > width) {
-    line = `${modelText}${velocityBadge}${reasoningBadge}${modeBadge}${barText}${togglePart}`;
+    line = `${modelText}${velocityBadge}${reasoningBadge}${routeBadge}${modeBadge}${barText}${togglePart}`;
     if (visibleLen(line) > width) {
-      line = `${modelText}${reasoningBadge}${modeBadge}${barText}${togglePart}`;
+      line = `${modelText}${reasoningBadge}${routeBadge}${modeBadge}${barText}${togglePart}`;
       if (visibleLen(line) > width) {
-        line = `${modelText}${modeBadge}${barText}${togglePart}`;
+        line = `${modelText}${routeBadge}${modeBadge}${barText}${togglePart}`;
         if (visibleLen(line) > width) {
-          line = `${modelText}${barText}${togglePart}`;
+          line = `${modelText}${modeBadge}${barText}${togglePart}`;
           if (visibleLen(line) > width) {
-            line = `${modelText}${togglePart}`;
+            line = `${modelText}${barText}${togglePart}`;
             if (visibleLen(line) > width) {
-              line = `${ellipsize(modelText, Math.max(4, width - togglePartLen))}${togglePart}`;
+              line = `${modelText}${togglePart}`;
+              if (visibleLen(line) > width) {
+                line = `${ellipsize(modelText, Math.max(4, width - togglePartLen))}${togglePart}`;
+              }
             }
           }
         }

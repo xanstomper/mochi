@@ -396,3 +396,49 @@ describe('antigravity provider', () => {
     expect(computeAntigravityCost('claude-sonnet-4-6', 0, 0)).toBeNull();
   });
 });
+
+// ISSUES L-10: antigravity must use the CANONICAL contentText/splitContent
+// (types.ts) like anthropic/openai/gemini — same message, same image
+// extraction on every provider. Regression: the deleted private copy required
+// `image/*;base64` data URIs and treated ANY non-data URL as an image URL.
+describe('antigravity content mapping uses canonical splitContent', () => {
+  it('maps any-mime base64 data URIs to inlineData and drops non-http(s) URLs', async () => {
+    const captured: { body?: unknown } = {};
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      captured.body = JSON.parse(String(init?.body ?? '{}'));
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ response: { candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }], usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 } } }),
+      } as unknown as Response;
+    }) as typeof fetch;
+
+    const provider = createAntigravityProvider({
+      baseUrl: 'https://daily-cloudcode-pa.googleapis.com',
+      model: 'gemini-3.5-flash',
+      apiKey: 'fixture-key',
+    });
+
+    const msgs: ChatMessage[] = [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'see attachment' },
+          // PNG data URI (the form the product itself produces).
+          { type: 'image_url', image_url: { url: 'data:image/png;base64,aGVsbG8=' } } as never,
+          // The old private copy turned ANY non-data URL into an image URL.
+          { type: 'image_url', image_url: { url: 'ftp://example.invalid/not-an-image' } } as never,
+        ],
+      },
+    ];
+    await provider.chat(msgs, []);
+
+    const req = (captured.body as Record<string, unknown>).request as { contents: Array<{ parts: Array<Record<string, unknown>> }> };
+    const userTurn = req.contents.find((c) => c.parts.some((p) => 'inlineData' in p));
+    expect(userTurn).toBeDefined();
+    expect(userTurn!.parts).toContainEqual({ inlineData: { mimeType: 'image/png', data: 'aGVsbG8=' } });
+    // ftp:// is dropped by the canonical helper — no text echo of it either.
+    const flat = JSON.stringify(req.contents);
+    expect(flat).not.toContain('ftp://example.invalid');
+  });
+});

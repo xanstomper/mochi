@@ -32,16 +32,10 @@ export interface PrefixSegment {
   text: string;
 }
 
-/** Segments that form the stable head, in composition order. The head is
- *  what forked children inherit byte-for-byte and what the lint guards. */
-export const STABLE_HEAD_SEGMENTS = ['core', 'rulesRoot', 'repo'] as const;
-
 /** All segment names buildSystemPrompt emits, in order. */
 export const PROMPT_SEGMENTS = [
   'core', 'rulesRoot', 'repo', 'rulesModular', 'skills', 'contract', 'memory', 'feedback',
 ] as const;
-
-export type PromptSegmentName = (typeof PROMPT_SEGMENTS)[number];
 
 /** One recorded prefix break: the composed wire prefix (system prompt
  *  bytes, or the history under them) changed mid-run. `cause` is the

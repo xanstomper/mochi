@@ -1,4 +1,5 @@
 import type { Tool } from '../tools/types.js';
+import type { ToolDefinition } from '../types.js';
 import { McpClient, schemaToParameters, type McpServerConfig } from './index.js';
 
 // Connect configured MCP servers and wrap their tools as native Mochi tools so
@@ -6,6 +7,18 @@ import { McpClient, schemaToParameters, type McpServerConfig } from './index.js'
 // pi pull in external tool + memory servers. Servers are named by their config
 // key; tools are registered under a namespaced name (`serverName__toolName`) so
 // collisions across servers / native tools are avoided.
+//
+// Lazy tool-schema loading (W3-3): with `lazySchemas: true` a tool is
+// registered with a THIN def (name + description, NO input schema) — tool
+// definitions are the context bill, and every connected server's schemas
+// otherwise ride every prompt. The full schema is injected on demand:
+//   - `load_tools` with the tool's namespaced name (the existing deferred-tool
+//     machinery in tools/index.ts), or
+//   - the run start wiring in agent/loop.ts when the task text names the tool.
+// `inflateMcpToolSchemas` performs the swap on a live tool map; it is
+// idempotent and never throws. Thin tools stay CALLABLE either way (execute
+// forwards args to tools/call verbatim) — laziness shrinks schemas, not
+// capability.
 
 export interface McpToolMap {
   tools: Map<string, Tool>;
@@ -14,6 +27,8 @@ export interface McpToolMap {
   /** Number of resources discovered per server (resources are optional). */
   resourceCounts: Record<string, number>;
   promptCounts: Record<string, number>;
+  /** True when tools were registered with thin (lazy) defs. */
+  lazySchemas: boolean;
 }
 
 type McpServerSpec = Record<string, McpServerConfig>;
@@ -23,7 +38,7 @@ function normalizeServerConfig(servers: Record<string, Partial<McpServerConfig>>
   for (const [name, cfg] of Object.entries(servers ?? {})) {
     if (!cfg || typeof cfg !== 'object') continue;
     if (typeof cfg.command === 'string') {
-      out[name] = { command: cfg.command, args: cfg.args, env: cfg.env, version: cfg.version };
+      out[name] = { command: cfg.command, args: cfg.args, env: cfg.env, version: cfg.version, reconnect: cfg.reconnect };
     } else if (typeof cfg.url === 'string') {
       out[name] = { url: cfg.url, headers: cfg.headers, version: cfg.version };
     }
@@ -31,16 +46,48 @@ function normalizeServerConfig(servers: Record<string, Partial<McpServerConfig>>
   return out;
 }
 
+/** Whether lazy MCP tool-schema loading is enabled: config knob OR env
+ *  MOCHI_MCP_LAZY_SCHEMAS=1 (env wins, mirroring MOCHI_TOOLS). Default OFF. */
+export function mcpLazySchemasEnabled(config?: { mcpLazySchemas?: boolean } | null): boolean {
+  const env = (process.env.MOCHI_MCP_LAZY_SCHEMAS ?? '').toLowerCase();
+  if (env === '1' || env === 'true') return true;
+  return config?.mcpLazySchemas === true;
+}
+
+/** Full definition of a lazily-registered MCP tool, keyed by the Tool object
+ *  (Tool objects move between maps by reference — the loop merges them into
+ *  its live toolset — so object identity is the stable key). */
+const mcpFullDefs = new WeakMap<Tool, ToolDefinition>();
+
+/** Swap lazy (thin) MCP tool defs back to their full schemas on a live tool
+ *  map. `names` selects which tools to inflate (omit = inflate every lazy
+ *  tool). Idempotent: already-inflated tools are skipped. Returns the names
+ *  that were inflated. Never throws. */
+export function inflateMcpToolSchemas(tools: Map<string, Tool>, names?: Iterable<string>): string[] {
+  const wanted = names === undefined ? null : new Set(names);
+  const inflated: string[] = [];
+  for (const tool of tools.values()) {
+    const full = mcpFullDefs.get(tool);
+    if (!full || tool.def === full) continue; // not lazy, or already inflated
+    if (wanted && !wanted.has(tool.def.name)) continue;
+    tool.def = full;
+    inflated.push(full.name);
+  }
+  return inflated;
+}
+
 export async function buildMcpTools(
   servers: Record<string, Partial<McpServerConfig>> | undefined,
   log = (_m: string) => void 0,
+  opts: { lazySchemas?: boolean } = {},
 ): Promise<McpToolMap> {
+  const lazySchemas = opts.lazySchemas === true;
   const tools = new Map<string, Tool>();
   const errors: string[] = [];
   const resourceCounts: Record<string, number> = {};
   const promptCounts: Record<string, number> = {};
   const clients = new Map<string, McpClient>();
-  if (!servers) return { tools, close: () => void 0, errors, resourceCounts, promptCounts };
+  if (!servers) return { tools, close: () => void 0, errors, resourceCounts, promptCounts, lazySchemas };
 
   const normalized = normalizeServerConfig(servers);
   for (const [name, cfg] of Object.entries(normalized)) {
@@ -52,13 +99,23 @@ export async function buildMcpTools(
       for (const rt of remoteTools) {
         const fullName = `${name}__${rt.name}`;
         if (tools.has(fullName)) continue;
-        tools.set(fullName, {
-          def: {
-            name: fullName,
-            description: rt.description ?? `MCP tool ${fullName}`,
-            parameters: schemaToParameters(rt.inputSchema),
-            permission: 'network',
-          },
+        const fullDef: ToolDefinition = {
+          name: fullName,
+          description: rt.description ?? `MCP tool ${fullName}`,
+          parameters: schemaToParameters(rt.inputSchema),
+          permission: 'network',
+        };
+        // Lazy mode: advertise the thin def (description carries the restore
+        // path), keep the full one for inflateMcpToolSchemas.
+        const def = lazySchemas
+          ? {
+              ...fullDef,
+              description: `${fullDef.description} (input schema not loaded to save context — call load_tools with ["${fullName}"] to expose its parameters)`,
+              parameters: [],
+            }
+          : fullDef;
+        const tool: Tool = {
+          def,
           async execute(args, ctx) {
             try {
               const resultText = await client.callTool(rt.name, args as Record<string, unknown>);
@@ -71,9 +128,11 @@ export async function buildMcpTools(
               return failText;
             }
           },
-        });
+        };
+        if (lazySchemas) mcpFullDefs.set(tool, fullDef);
+        tools.set(fullName, tool);
       }
-      log(`[mcp] registered ${remoteTools.length} tool(s) from server '${name}'`);
+      log(`[mcp] registered ${remoteTools.length} tool(s) from server '${name}'${lazySchemas ? ' (lazy schemas)' : ''}`);
 
       // Resources (optional MCP capability): expose list + read as native
       // tools so the model can pull server-provided context on demand. A
@@ -201,5 +260,6 @@ export async function buildMcpTools(
     errors,
     resourceCounts,
     promptCounts,
+    lazySchemas,
   };
 }

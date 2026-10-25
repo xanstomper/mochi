@@ -1,8 +1,9 @@
 import { homedir } from 'node:os';
 import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { resolve, dirname } from 'node:path';
 import type { MochiConfig, ModelProfile } from './types.js';
 import { PROVIDERS } from './model/providers.js';
+import { warnPlaintextKeysOnce } from './config-plaintext-keys.js';
 import { normalizeModelName } from './model/router.js';
 
 const defaultConfig = (): MochiConfig => ({
@@ -39,7 +40,11 @@ const defaultConfig = (): MochiConfig => ({
     gitDestructive: true,
     admin: true,
   },
-  telemetry: false,
+  // P3 (ISSUES L-06): the dead `telemetry` knob is REMOVED from the schema.
+  // It was parsed, persisted, env-settable (MOCHI_TELEMETRY) — and read by
+  // nothing anywhere in src/ or native/: MOCHI_TELEMETRY=1 was a silent
+  // no-op. Config files carrying `telemetry: false` still load (unknown-key
+  // merge tolerates it); the knob just no longer pretends to exist.
   // Balanced default: "max" over-specifies heavy compute for the free/low-tier
   // flash models (making them slow/stall/thin on trivial work). medium keeps
   // correctness while responding fast; users can raise via MOCHI_REASONING or
@@ -124,8 +129,15 @@ export function loadConfig(overrides: Partial<MochiConfig> = {}, configPath?: st
   // ignored. The later assignment stays: it keeps the env var winning when
   // the user config file itself carries a configDir key.
   if (process.env.MOCHI_CONFIG_DIR) cfg.configDir = process.env.MOCHI_CONFIG_DIR;
-  const user = readJsonFile(configPath ?? process.env.MOCHI_CONFIG_PATH ?? resolve(cfg.configDir, 'config.json'));
-  if (user) merge(cfg as unknown as Record<string, unknown>, user);
+  const userConfigPath = configPath ?? process.env.MOCHI_CONFIG_PATH ?? resolve(cfg.configDir, 'config.json');
+  const user = readJsonFile(userConfigPath);
+  if (user) {
+    merge(cfg as unknown as Record<string, unknown>, user);
+    // P3 gun 3 (config-side only): one warning per process when the config
+    // file carries raw key material — names the field paths, never the
+    // values, and documents the keyring that should hold them instead.
+    warnPlaintextKeysOnce(user, userConfigPath, resolve(dirname(userConfigPath), 'auth.json'));
+  }
 
   // Project-level configurations (mochi.json, .mochi/config.json, .mcp.json).
   // B26: resolve against the RUNTIME'S directory, not blindly process.cwd() —
@@ -263,7 +275,7 @@ if (!cfg.model.failover || cfg.model.failover.length === 0) {
   merge(cfg as unknown as Record<string, unknown>, { model: envModelConfig() });
   if (process.env.MOCHI_PROJECT_DIR) cfg.projectDir = process.env.MOCHI_PROJECT_DIR;
   if (process.env.MOCHI_CONFIG_DIR) cfg.configDir = process.env.MOCHI_CONFIG_DIR;
-  if (process.env.MOCHI_TELEMETRY) cfg.telemetry = /^(1|true|yes)$/i.test(process.env.MOCHI_TELEMETRY.trim());
+  // (ISSUES L-06) MOCHI_TELEMETRY was removed: it set a field nothing read.
   if (process.env.MOCHI_UNCENSORED === '1') {
     cfg.safety.mode = 'uncensored';
     cfg.permissions = {

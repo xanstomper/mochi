@@ -11,7 +11,7 @@ import type {
 } from '../tools/user-prompt.js';
 import type {
   ApprovalRequest,
-  ApprovalDecision,
+  ApprovalDecisionEx,
 } from '../security/approval.js';
 
 export interface PromptMenuDeps {
@@ -87,15 +87,90 @@ export async function tuiPromptUser(
   return { answers };
 }
 
+/** Per-hunk diff preview for the transcript: colored +/− rows, bounded. */
+const HUNK_PREVIEW_MAX_ROWS = 60;
+
+export function renderDiffPreview(diff: string): string[] {
+  const out: string[] = [];
+  for (const l of diff.split('\n')) {
+    const color = l.startsWith('+') ? T.lime
+      : l.startsWith('-') ? T.error
+      : (l.startsWith('diff ') || l.startsWith('*** ') || l.startsWith('@@')) ? T.grayDark
+      : '';
+    out.push(color ? `${color}${l}${T.reset}` : l);
+  }
+  if (out.length > HUNK_PREVIEW_MAX_ROWS) {
+    const rest = out.length - HUNK_PREVIEW_MAX_ROWS;
+    return [...out.slice(0, HUNK_PREVIEW_MAX_ROWS), `${T.grayDark}… +${rest} more diff rows${T.reset}`];
+  }
+  return out;
+}
+
+/** One-line summary of a hunk's shape: `+3 −1` (adds, removals). */
+export function hunkSummary(hunk: string): string {
+  let adds = 0;
+  let dels = 0;
+  for (const l of hunk.split('\n')) {
+    if (l.startsWith('+')) adds++;
+    else if (l.startsWith('-')) dels++;
+  }
+  return `+${adds} −${dels}`;
+}
+
 /** Interactive approval gate (Claude Code parity): allow once / allow always
- *  this session / deny. Esc denies. */
+ *  this session / deny. Esc denies.
+ *  W3-4: when the request carries a per-hunk edit review with >= 2 hunks,
+ *  the menu becomes a hunk review — each hunk toggles accept/reject, then
+ *  apply-accepted / apply-all / deny. Single-hunk edits keep the plain menu
+ *  (one hunk to accept = the edit itself); the diff preview is shown either
+ *  way. */
 export async function tuiRequestApproval(
   deps: PromptMenuDeps,
   req: ApprovalRequest,
-): Promise<ApprovalDecision> {
+): Promise<ApprovalDecisionEx> {
   const { openMenu, push, scheduleRender, setMenuSelected } = deps;
   const risk = req.risk && req.risk !== 'low' ? ` ${T.warning ?? T.orange ?? ''}[risk: ${req.risk}]${T.reset}` : '';
   push('system', `? ${T.bold}${req.tool}${T.reset} wants to run: ${req.summary}${risk}`);
+  const review = req.edit;
+  if (review) {
+    push('system', `  reviewing ${review.path} — ${review.hunks.length} hunk${review.hunks.length === 1 ? '' : 's'} proposed`);
+    for (const row of renderDiffPreview(review.diff)) push('system', row);
+  }
+  if (review && review.hunks.length >= 2) {
+    const accepted = new Set<number>(review.hunks.map((_, i) => i));
+    for (;;) {
+      const items = [
+        ...review.hunks.map((h, i) => `${accepted.has(i) ? `${T.lime}✓` : `${T.error}✗`}${T.reset} hunk ${i + 1}/${review.hunks.length} ${T.grayDark}(${hunkSummary(h)})${T.reset} — ${accepted.has(i) ? 'accept' : 'reject'}`),
+        `${T.lime}✓ Apply accepted (${accepted.size}/${review.hunks.length})${T.reset}`,
+        `${T.cyan}✓ Apply all — allow always this session${T.reset}`,
+        `${T.error}✗ Deny all${T.reset}${T.grayDark} (Esc)${T.reset}`,
+      ];
+      setMenuSelected(0);
+      const idx = await openMenu(`Review ${review.path} — pick hunks, then apply`, items);
+      if (idx < 0 || idx === items.length - 1) break; // Esc / Deny
+      if (idx === items.length - 2) {
+        push('system', `◇ allowed always this session: all ${review.hunks.length} hunks of ${review.path}`);
+        scheduleRender();
+        return 'allow-always';
+      }
+      if (idx === items.length - 3) {
+        if (accepted.size === 0) {
+          push('system', '◇ no hunks accepted — toggle at least one hunk, or deny');
+          continue;
+        }
+        const picked = [...accepted].sort((a, b) => a - b);
+        push('system', `◇ applying ${picked.length}/${review.hunks.length} hunks to ${review.path}`);
+        scheduleRender();
+        return { decision: 'allow-once', acceptedHunks: picked };
+      }
+      // A hunk row: toggle its acceptance and re-open the menu.
+      if (accepted.has(idx)) accepted.delete(idx);
+      else accepted.add(idx);
+    }
+    push('system', `◇ denied: ${req.summary} — the agent works around it`);
+    scheduleRender();
+    return 'deny';
+  }
   const items = [
     `${T.lime}Allow once${T.reset}${T.grayDark} — run it this time${T.reset}`,
     `${T.cyan}Allow always${T.reset}${T.grayDark} — remember for this session${T.reset}`,

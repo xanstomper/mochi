@@ -8,6 +8,13 @@
 
 import { randomUUID } from 'node:crypto';
 import type { ChatMessage, ToolDefinition, StreamChunk, ModelResponse } from '../types.js';
+// Canonical content helpers (ISSUES L-10): antigravity used to carry private
+// copies of contentText/splitContent that had DIVERGED from types.ts — its
+// data-URI regex required `image/*` + `;base64`, and it treated ANY non-data
+// URL as an image URL where the canonical helper only accepts http(s). Same
+// message, different image extraction per provider. The canonical versions
+// (types.ts) are the ones anthropic/openai/gemini already import.
+import { contentText, splitContent } from '../types.js';
 import type { ProviderConfig } from './openai.js';
 import { ProviderError, describeModelError, parseRetryAfter } from '../utils/http-error.js';
 import { classifyError, withRetries } from './rate-limit.js';
@@ -104,36 +111,6 @@ function parseCredentials(apiKeyOrJson?: string): {
     }
   }
   return { accessToken: trimmed, projectId: 'aicode-consumers' };
-}
-
-function contentText(m: ChatMessage): string {
-  if (typeof m.content === 'string') return m.content;
-  if (!Array.isArray(m.content)) return '';
-  return m.content
-    .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
-    .map((p) => p.text)
-    .join('\n');
-}
-
-function splitContent(content: ChatMessage['content']): {
-  text: string;
-  images: Array<{ mime: string; data: string } | { url: string }>;
-} {
-  if (typeof content === 'string') return { text: content, images: [] };
-  if (!Array.isArray(content)) return { text: '', images: [] };
-  const textParts: string[] = [];
-  const images: Array<{ mime: string; data: string } | { url: string }> = [];
-  for (const part of content) {
-    if (part.type === 'text') {
-      textParts.push(part.text);
-    } else if (part.type === 'image_url') {
-      const u = part.image_url.url;
-      const m = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/.exec(u);
-      if (m) images.push({ mime: m[1], data: m[2] });
-      else images.push({ url: u });
-    }
-  }
-  return { text: textParts.join('\n'), images };
 }
 
 function mapAntigravityFinish(reason?: string): StreamChunk['finishReason'] {

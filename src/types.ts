@@ -97,6 +97,14 @@ export interface SafetyConfig {
   /** Extra writable paths inside the sandbox, beyond the workspace, the
    *  OS tmpdir, and dev-tool caches. */
   sandboxWritablePaths?: string[];
+  /** Per-exec CPU-time ceiling in seconds for shell commands (RLIMIT_CPU
+   *  via prlimit; Linux only, unset = no ceiling). A ceiling kill is clean
+   *  (process-tree sweep) and LABELED in the tool output — never silent.
+   *  See exec.ts. */
+  execCpuLimitSeconds?: number;
+  /** Per-exec address-space ceiling in MB for shell commands (RLIMIT_AS;
+   *  same semantics as execCpuLimitSeconds, unset = none). */
+  execMemoryLimitMb?: number;
   maxVerifyRetries?: number;
   /** B27 restructure: hostnames whose POST/PUT/PATCH/DELETE endpoints are
    *  OPERATOR-DECLARED read-only (GraphQL query endpoints, search APIs that
@@ -184,6 +192,12 @@ export interface MochiConfig {
   safety: SafetyConfig;
   permissions: PermissionConfig;
   mcpServers?: Record<string, { command?: string; args?: string[]; url?: string; headers?: Record<string, string>; env?: Record<string, string> }>;
+  /** Lazy MCP tool-schema loading (W3-3): advertise connected MCP tools as
+   *  thin defs (name + description, no input schema) and inject the full
+   *  schema on demand — via load_tools or when the task text names the tool.
+   *  Every connected server's schemas otherwise ride EVERY prompt. Default
+   *  OFF; env MOCHI_MCP_LAZY_SCHEMAS=1 overrides. See mcp/tools.ts. */
+  mcpLazySchemas?: boolean;
   /** Plan-then-act: in plan mode the agent produces a plan instead of editing. */
   planMode?: boolean;
   /** Tool exposure policy (P1.3): 'measured' (default) advertises a
@@ -194,6 +208,12 @@ export interface MochiConfig {
   /** Total serialized schema-char budget for measured tool exposure.
    *  Env MOCHI_TOOL_SCHEMA_BUDGET overrides. Default 24,000 (≈ 6K tokens). */
   toolSchemaBudgetChars?: number;
+  /** Per-tool paths (config-file way to point a tool at a binary).
+   *  browser.cdpExecutable: the CDP-native browser stack resolves its
+   *  chromium in the order config path -> MOCHI_CDP_BROWSER env -> pinned
+   *  cache install -> system fallback; this is the config slot of that
+   *  chain. See src/browser/cdp/manager.ts. */
+  browser?: { cdpExecutable?: string };
   /** Self-repair: when the agent detects a harness-attributable failure, run an
    *  automatic repair pass after the main task. Defaults to on inside Mochi's
    *  own source repo, off elsewhere ( repairs must not surprise users). */
@@ -226,7 +246,6 @@ export interface MochiConfig {
    *  provider is deliberately not reused implicitly. semanticIndex:false
    *  disables the index entirely. */
   retrieval?: { embeddingProvider?: string; embeddingModel?: string; semanticIndex?: boolean };
-  telemetry: boolean;
   projectDir: string;
   configDir: string;
   quiet: boolean;

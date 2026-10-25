@@ -153,6 +153,63 @@ describe('statusBar rows', () => {
     expect(plain).toContain('-8');
     expect(plain).toContain('Auto improve: OFF');
   });
+
+  it('row1 shows the live turn count next to usage (W3-4)', () => {
+    const row = statusBarRow1(baseStatus({ turns: 7 }), 90);
+    const plain = row.replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).toContain('· 7 turns');
+  });
+
+  it('row1 singularizes a single turn', () => {
+    const row = statusBarRow1(baseStatus({ turns: 1 }), 90);
+    const plain = row.replace(/\x1b\[[0-9;]*m/g, '');
+    // `turn` followed by whitespace — 'turns' (plural) would NOT match.
+    expect(plain).toMatch(/· 1 turn\s/);
+  });
+
+  it('row1 hides the turn count on narrow terminals', () => {
+    const row = statusBarRow1(baseStatus({ turns: 7 }), 46);
+    const plain = row.replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).not.toContain('turn');
+  });
+
+  it('row1 shows the routing reason for the current model (W3-4)', () => {
+    const row = statusBarRow1(
+      baseStatus({ routingReason: 'routed deepseek-v4←default: cps $0.0021 · 91% solve · 14 runs' }),
+      120,
+    );
+    const plain = row.replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).toContain('[route: routed deepseek-v4←default: cps $0.0021 · 91% solve · 14 runs]');
+  });
+
+  it('row1 compacts the routing badge to the evidence class at medium width', () => {
+    const row = statusBarRow1(
+      baseStatus({ routingReason: 'routed deepseek-v4←default: cps $0.0021 · 91% solve · 14 runs' }),
+      80,
+    );
+    const plain = row.replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).toContain('[⇢ routed]');
+    expect(plain).not.toContain('cps');
+  });
+
+  it('row1 hides the routing badge on narrow terminals', () => {
+    const row = statusBarRow1(baseStatus({ routingReason: 'pinned' }), 60);
+    const plain = row.replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).not.toContain('pinned');
+    expect(plain).not.toContain('⇢');
+  });
+
+  it('row1 never overflows width with a very long routing reason', () => {
+    const row = statusBarRow1(baseStatus({ routingReason: 'routed x: ' + 'y'.repeat(160) }), 100);
+    expect(visibleLen(row)).toBeLessThanOrEqual(100);
+  });
+
+  it('row1 shows no routing badge when no routing decision was made', () => {
+    const row = statusBarRow1(baseStatus(), 120);
+    const plain = row.replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).not.toContain('[route:');
+    expect(plain).not.toContain('⇢');
+  });
 });
 
 describe('renderToolOutput', () => {

@@ -89,6 +89,13 @@ export class PermissionManager {
     if (policy === 'yolo') return true;
 
     const readTools = new Set(['read', 'glob', 'search', 'inspect', 'memory', 'git', 'diff', 'tree', 'deepwiki', 'fetch', 'skill', 'todo']);
+    // load_tools is a zero-side-effect meta-tool: it only changes which tool
+    // schemas are ADVERTISED next turn (the live map's defs), never files,
+    // shell, or network. The headless floor must allow it — the deferred-
+    // tools note the harness itself injects tells the model to call it, and
+    // denying the call headless broke the deferred-tool escape hatch
+    // entirely (W3-3 lazy MCP schemas depend on it too).
+    readTools.add('load_tools');
     if (readTools.has(req.tool)) {
       // B27: fetch is read-only for GET/HEAD — POST/PUT/PATCH/DELETE mutate
       // remote state and fall through to the policy gate like other non-read

@@ -1,5 +1,10 @@
 # MOCHI MASTER PROMPT — Operation Frontier (v1, 2026-10-10)
 
+> Disambiguation (Wave P3, L-15): this underscore file is the **iteration-laws
+> dogfooding contract** (TECHMAP.md: "read before coding here"). It is NOT the
+> phase spec the test suite cites — that is the hyphenated `MASTER-PROMPT.md`.
+
+
 **Read this at the top of EVERY iteration before touching code. Internalize, then act.**
 
 ## The Goal

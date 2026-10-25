@@ -5,6 +5,7 @@ import { dirname, resolve, join as pathJoin } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { parseArgs, configFromFlags } from './cli-flags.js';
+import { nodeEngineProblem } from './node-engine.js';
 import * as nodeModule from 'node:module';
 // V8 compile cache: persist compiled module bytecode under ~/.cache/mochi so
 // subsequent invocations skip re-parsing (~16% faster cold start, 109ms ->
@@ -229,6 +230,15 @@ function srcFileNewer(dir: string, mtime: number): boolean {
 }
 
 async function main() {
+  // Engine preflight (P3 gun 4) — the FIRST action, before any dispatch:
+  // Node < 22 boots and then fails weirdly mid-run (auto-rebuild hangs,
+  // node:sqlite missing), so refuse here with one precise message.
+  const engineProblem = nodeEngineProblem();
+  if (engineProblem) {
+    console.error(engineProblem);
+    process.exit(1);
+  }
+
   const { flags, positional } = parseArgs(process.argv.slice(2));
 
   // Ultra-fast path for info queries (version, help): exit immediately in <3ms
@@ -347,6 +357,15 @@ async function main() {
     process.env.MOCHI_UNCENSORED === '1';
   runtime.setPermPolicy((isUncensored || isYolo) ? 'yolo'
     : (configOverrides.safety?.mode === 'auto' ? 'workspace-safe' : 'strict'));
+
+  // W3-5 sandbox preflight: at startup, detect whether the shell sandbox will
+  // be degraded and say so PRECISELY ONCE (which backend, what's missing)
+  // instead of the run discovering it mid-task. Quiet when an OS backend is
+  // available or the operator opted out (safety.sandbox = 'off').
+  try {
+    const { maybeSandboxPreflightNotice } = await import('./security/sandbox-preflight.js');
+    maybeSandboxPreflightNotice(runtime.config);
+  } catch { /* preflight must never block startup */ }
   // Announce elevated mode ONLY when explicitly requested on THIS command
   // line. Reading it from config/env printed the banner on every run — noise,
   // not an announcement (the TUI badge still reflects the active policy).

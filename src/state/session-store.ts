@@ -400,6 +400,23 @@ export class SessionStore {
     }
   }
 
+  /** ms timestamp of a session's last recorded activity (its updatedAt),
+   *  or undefined when the session is unknown or the store is down.
+   *  G11 idle detection reads this clock: every append/begin/rename
+   *  bumps updatedAt, so it is the session's true last-activity time. */
+  lastActivityAt(sessionId: string): number | undefined {
+    return this.session(sessionId)?.updatedAt;
+  }
+
+  /** ms since a session's last activity at `now`; undefined when the
+   *  session is unknown or the store is down (callers must not compact
+   *  on an unknown clock — see shouldIdleCompact's unknown-activity
+   *  verdict). */
+  idleDurationMs(sessionId: string, now = Date.now()): number | undefined {
+    const at = this.lastActivityAt(sessionId);
+    return at === undefined ? undefined : Math.max(0, now - at);
+  }
+
   /** Full formatted transcript of a session. */
   fullTranscript(sessionId: string): string {
     const msgs = this.messages(sessionId);

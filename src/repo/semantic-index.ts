@@ -841,30 +841,90 @@ export async function semanticSearch(
 
 export interface FileHit {
   rel: string;
-  /** Aggregated file score: best chunk + 0.25 x the rest of the file's
-   *  chunk scores. A file whose evidence is spread across several chunks
-   *  (header + two symbols) must be able to beat a one-chunk decoy — pure
-   *  best-chunk ranking systematically under-ranks exactly the files a
-   *  concept lives in. */
+  /** Aggregated file score. Provider embedder: an RRF vote over the file's
+   *  best chunk PER SIGNAL (vector rank + lexical rank within the pool) —
+   *  count-immune. Lexical fallback: the legacy best chunk + 0.25 x the
+   *  rest of the file's pooled chunks — there the count vote IS the
+   *  spread-evidence mechanism (see aggregateHitsToFiles). */
   fileScore: number;
   best: SemanticHit;
   chunkCount: number;
 }
 
+export interface AggregateHitsOptions {
+  /** Which embedder kind produced the hits. Decides the aggregation
+   *  policy (see aggregateHitsToFiles); omitted = the lexical-fallback
+   *  policy (the historical default). */
+  embedderKind?: 'provider' | 'lexical-fallback';
+}
+
 /** Aggregate chunk hits to a file ranking. Shared by the tool, the context
- *  packet and the benchmark so every surface ranks files the same way. */
-export function aggregateHitsToFiles(hits: SemanticHit[], limit = 10): FileHit[] {
+ *  packet and the benchmark so every surface ranks files the same way.
+ *
+ *  P4 tuning — the aggregation policy follows the embedder kind, for the
+ *  same reason the chunk-level RRF weights already do (the weak ranker
+ *  votes at half weight):
+ *
+ *  - provider embedder (a trained semantic ranker is present): file-level
+ *    RRF over the file's best chunk PER SIGNAL, lexical vote at HALF
+ *    weight — with a trained ranker present the exact-token vote is the
+ *    weak one (the mirror of the chunk-level VECTOR_WEIGHT_FALLBACK
+ *    discount). The old formula (best
+ *    chunk + 0.25 x the rest of the file's pooled chunk scores) is
+ *    dominated by how many of a file's chunks made the fused chunk pool —
+ *    vocabulary-rich multi-chunk files (CHANGELOG.md, agent loop,
+ *    SKILL.md docs) swarm the ranking while a target file's 1-2
+ *    high-vector chunks cannot compete (measured on the 24-query recall
+ *    set: CHANGELOG.md put 10 chunks in the top-80 pool and fileScore
+ *    0.067 vs the true target's 0.018 with the 2nd-best vector score in
+ *    the pool). Ranking files by their best chunk PER SIGNAL and
+ *    RRF-fusing those two file rankings is immune to chunk-count.
+ *
+ *  - lexical fallback (the vector IS a weak hashed-lexical view): the
+ *    legacy count-voting formula stays. Measured on the 2048-file
+ *    fallback fixture: file-level RRF drops hybrid recall@10 from 0.698
+ *    to 0.594 (below the pure-lexical 0.698) — with no strong ranker
+ *    present, a file whose evidence spreads over several chunks NEEDS the
+ *    count vote to outrank one-lucky-chunk distractors. The count vote is
+ *    spread-evidence there, not noise.
+ */
+const FILE_RRF_K = 60;
+const FILE_LEX_WEIGHT_PROVIDER = 0.5;
+const FILE_VEC_WEIGHT = 1.0;
+export function aggregateHitsToFiles(hits: SemanticHit[], limit = 10, opts: AggregateHitsOptions = {}): FileHit[] {
   const byFile = new Map<string, SemanticHit[]>();
   for (const h of hits) {
     let arr = byFile.get(h.rel);
     if (!arr) { arr = []; byFile.set(h.rel, arr); }
     arr.push(h);
   }
-  const files: FileHit[] = Array.from(byFile.entries()).map(([rel, hs]) => {
-    const sorted = [...hs].sort((a, b) => b.score - a.score);
-    const rest = sorted.slice(1).reduce((a, h) => a + h.score, 0);
-    return { rel, fileScore: sorted[0].score + 0.25 * rest, best: sorted[0], chunkCount: hs.length };
-  });
+  const entries = Array.from(byFile.entries());
+  const mk = (fileScoreOf: (rel: string, sorted: SemanticHit[]) => number): FileHit[] =>
+    entries.map(([rel, hs]) => {
+      const sorted = [...hs].sort((a, b) => b.score - a.score);
+      return { rel, fileScore: fileScoreOf(rel, sorted), best: sorted[0], chunkCount: hs.length };
+    });
+  let files: FileHit[];
+  if (opts.embedderKind === 'provider') {
+    const nFiles = entries.length;
+    const rankFiles = (scoreOf: (hs: SemanticHit[]) => number): Map<string, number> => {
+      const ranked = entries
+        .map(([rel, hs]) => ({ rel, s: scoreOf(hs) }))
+        .sort((a, b) => (b.s - a.s) || (a.rel < b.rel ? -1 : 1));
+      const ranks = new Map<string, number>();
+      ranked.forEach((x, i) => ranks.set(x.rel, i + 1));
+      return ranks;
+    };
+    const hasVector = hits.some((h) => h.vectorScore > 0);
+    const vecRank = rankFiles((hs) => Math.max(...hs.map((h) => h.vectorScore)));
+    const lexRank = rankFiles((hs) => Math.max(...hs.map((h) => h.lexicalScore)));
+    files = mk((rel) =>
+      (hasVector ? FILE_VEC_WEIGHT / (FILE_RRF_K + (vecRank.get(rel) ?? nFiles)) : 0)
+        + FILE_LEX_WEIGHT_PROVIDER / (FILE_RRF_K + (lexRank.get(rel) ?? nFiles)));
+  } else {
+    // Legacy (lexical-fallback) aggregation: best chunk + 0.25 x the rest.
+    files = mk((_rel, sorted) => sorted[0].score + 0.25 * sorted.slice(1).reduce((a, h) => a + h.score, 0));
+  }
   files.sort((a, b) => (b.fileScore - a.fileScore) || (a.rel < b.rel ? -1 : 1));
   return files.slice(0, limit);
 }
@@ -925,7 +985,7 @@ export async function semanticContextText(
     if (!result || result.hits.length === 0) return undefined;
     // One line per FILE (aggregated over its chunks) — the packet points
     // at files, the model reads what it needs.
-    const fileHits = aggregateHitsToFiles(result.hits, 8);
+    const fileHits = aggregateHitsToFiles(result.hits, 8, { embedderKind: result.embedderKind });
     const label = result.embedderKind === 'provider'
       ? `embedder: ${result.embedderId}`
       : `embedder: ${result.embedderId} [lexical-fallback — local hashed vectors, not true semantic embeddings]`;

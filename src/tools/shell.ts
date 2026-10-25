@@ -238,7 +238,7 @@ export const shellTool: Tool = {
       extraWritablePaths: ctx.config.safety.sandboxWritablePaths,
       workspaceDir: ctx.workspace?.dir ?? targetCwd,
     });
-    let r: { stdout: string; stderr: string; code: number | null; timedOut: boolean; cancelled: boolean; sandboxLevel?: 'os' | 'soft'; sandboxBackend?: string };
+    let r: { stdout: string; stderr: string; code: number | null; timedOut: boolean; cancelled: boolean; sandboxLevel?: 'os' | 'soft'; sandboxBackend?: string; ceilings?: { cpuLimitSeconds?: number; memoryLimitMb?: number; applied: boolean; ceilingHit?: 'cpu' | 'memory' } };
     try {
       r = await runShellString(command, {
         cwd: targetCwd,
@@ -246,6 +246,11 @@ export const shellTool: Tool = {
         timeoutMs,
         maxOutput: MAX_OUTPUT,
         signal: ctx.abortSignal,
+        // W3-5 per-exec resource ceilings (opt-in via safety config): the
+        // exec layer applies them via prlimit and reports the outcome —
+        // surfaced as labeled lines below, never silent.
+        cpuLimitSeconds: ctx.config.safety?.execCpuLimitSeconds,
+        memoryLimitMb: ctx.config.safety?.execMemoryLimitMb,
         sandbox: { mode: pol.mode, network: pol.network, envScrub: pol.envScrub, writablePaths: pol.writablePaths, workspaceDir: pol.workspaceDir },
         onAudit: (info) => {
           if (risk !== 'low' && ctx.events) {
@@ -275,6 +280,17 @@ export const shellTool: Tool = {
     // Generation-keyed caches (search/inspect) must not serve stale results
     // after any command execution.
     markMutation();
+    // W3-5 exec ceilings: a ceiling kill is LABELED (never silent), and a
+    // ceiling that could not be applied on this host says so too.
+    if (r.ceilings) {
+      if (!r.ceilings.applied) {
+        out += `\n[exec ceilings NOT applied (cpu=${r.ceilings.cpuLimitSeconds ?? 'off'}s, mem=${r.ceilings.memoryLimitMb ?? 'off'}MB): prlimit unavailable on this host]`;
+      } else if (r.ceilings.ceilingHit === 'cpu') {
+        out += `\n[command killed by CPU ceiling (${r.ceilings.cpuLimitSeconds}s) — output above may be truncated]`;
+      } else if (r.ceilings.ceilingHit === 'memory') {
+        out += `\n[command killed by memory ceiling (${r.ceilings.memoryLimitMb}MB address space) — output above may be truncated]`;
+      }
+    }
     if (r.timedOut) return out + `\n[command timed out after ${timeoutMs / 1000}s]`;
     if (r.cancelled) return out + '\n[command was cancelled]';
     return out;
