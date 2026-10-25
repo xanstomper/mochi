@@ -227,3 +227,29 @@ hybrid 0.883/0.900. Hybrid CLOSED. Verified chain: 3,269/2 -> 3,271 -> 3,285 ->
 3,328 -> 3,384 -> 3,401 -> 3,445 -> 3,450, zero failures throughout.
 Open from the run: q23 ground-truth ambiguity (session-store.ts vs
 state-store.ts) — needs a human call, recorded not decided.
+
+## Lightpanda bake-off — WooWop independent verification (2026-10-24)
+Fresh worktree at 69c0fde (feat/lightpanda-engine), Node 26.12.1: tsc CLEAN;
+full suite **3,475 passed / 0 failed / 12 skipped** — exactly the coder pass
+count, and the coder gate single failure (src/agent/loop.test.ts:1318, pytest
+case) did NOT reproduce in the full suite at tip. Adjudicated a load flake,
+not a lightpanda regression (same pattern as the batch-2 load-flake
+adjudication). Lightpanda CLOSED: verdict stands — opt-in engine only, NO
+auto-routing. Decisive probe: Accessibility.getFullAXTree works, interactive
+roles carry backendDOMNodeId, ref-id snapshots work.
+
+## MCP server-side 2026-07-28 — coder audit CLOSED, zero code changes (2026-10-24)
+Coder stopped at the brief stop condition: src/mcp-server.ts speaks exactly
+one revision, 2024-11-05 (hardcoded, no negotiation); there is NO MCP SDK in
+the tree (no dependencies field, zero MCP entries in package-lock, no
+@modelcontextprotocol in node_modules); the latest published SDK
+@modelcontextprotocol/sdk@1.32.2 tops out at 2025-11-25 with no
+server/discover — 2026-07-28 support exists only on TS SDK main, unpublished.
+Implementing discover + cache hints would have meant hand-rolling unverified
+protocol, explicitly forbidden. Tree still exactly f9861d9. No code to land,
+no verification suite to re-run: that tip was already independently verified
+(hybrid verification, 3,450/0/12); the coder own gate on the untouched tree
+was 3,450/1 with the same known loop.test.ts flake. Follow-ups, not rig
+tasks now: revisit when a published SDK supports 2026-07-28; note the client
+cacheScope vocabulary mismatch (ours: connection/process; spec:
+public/private) for whenever server hints arrive.
