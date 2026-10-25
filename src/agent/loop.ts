@@ -1769,20 +1769,27 @@ export class Agent {
   }
 
   async run(task: Task): Promise<AgentResult> {
+    // B21/G11 ordering — the steer-acceptance window MUST open before the
+    // first await in run(). The child-launch handover (launchTrackedChild)
+    // calls acceptParentSteer as soon as startChildRun resolves; an await
+    // here — even on an already-resolved promise, and especially through
+    // .catch()'s extra promise hop — defers runActive past that handover,
+    // so a queued child's first steer is refused as "not started" and
+    // marked undelivered (subagent-steer test (e) regression). Capture the
+    // pre-run active state first: the idle guard must see the PREVIOUS
+    // run's value, not the window being opened.
+    const wasActive = this.runActive;
+    this.runActive = true;
+    this.deliveredParentSteers = [];
     // G11 idle compaction: a reused instance returning after a long idle
     // gap compacts BEFORE the new run's first model turn, so the resumed
     // turn doesn't pay full uncached context. Fires only at this run
-    // boundary (never mid-turn — runActive is still the previous run's
-    // value here), only when the host opted in, and at most once per
-    // idle period. Never breaks a run: failures are swallowed.
-    await this.maybeIdleCompact().catch(() => {});
+    // boundary (never mid-turn — wasActive is the previous run's value),
+    // only when the host opted in, and at most once per idle period.
+    // Never breaks a run: failures are swallowed.
+    await this.maybeIdleCompact(Date.now(), wasActive).catch(() => {});
     this.startTime = performance.now();
     this.activeTask = task;
-    // B21: the steer-acceptance window opens with the run; delivered-steer
-    // provenance is per-run evidence (a reused instance must not credit a
-    // previous run's steers to this one).
-    this.runActive = true;
-    this.deliveredParentSteers = [];
     // B2: each run() gets exactly one finish(). A previous run's guard entry
     // must not swallow this run's teardown (auto-resume reuses the instance).
     this.finishPromise = null;
@@ -4979,7 +4986,9 @@ Continue from 'Next:', do not redo completed progress.`,
   }
 
   /** G11: compact-on-idle trigger. Returns true when an idle compaction
-   *  ran. Called once at run() start (a run boundary — never mid-turn):
+   *  ran. Called once at run() start (a run boundary — never mid-turn);
+   *  run() passes the PREVIOUS run's active state (it opens the
+   *  steer-acceptance window before its first await — see run()):
    *  the session's in-process activity clock (ContextEngine, fed by
    *  every addMessage) is compared against the engine's idle config
    *  (host opt-in, or a parent-set per-child window). The compaction
@@ -4987,14 +4996,14 @@ Continue from 'Next:', do not redo completed progress.`,
    *  when disabled (the default), when a turn is in flight, when the
    *  clock is unknown, when not yet idle, or when this idle period
    *  already compacted — see shouldIdleCompact. */
-  private async maybeIdleCompact(now = Date.now()): Promise<boolean> {
+  private async maybeIdleCompact(now = Date.now(), active = this.runActive): Promise<boolean> {
     const cfg = this.context.getIdleCompactionConfig();
     const verdict = shouldIdleCompact({
       enabled: cfg.enabled,
       thresholdMs: cfg.thresholdMs ?? DEFAULT_IDLE_COMPACTION_THRESHOLD_MS,
       lastActivityAt: this.context.getLastActivityAt(),
       now,
-      active: this.runActive,
+      active,
       lastIdleCompactionAt: this.context.getLastIdleCompactionAt(),
     });
     if (!verdict.eligible) return false;
@@ -6306,6 +6315,7 @@ Continue from 'Next:', do not redo completed progress.`,
     scratchpad?: string;
     timeoutMs?: number;
     isolate?: boolean;
+    autoCompactWindow?: number;
   }): Promise<{ id: string; status: string; note: string }> {
     if (!canSpawnAtDepth(this.subagentDepth, resolveMaxSubagentDepth(this.config))) {
       return {
