@@ -12,12 +12,18 @@ import { accessSync, constants } from 'node:fs';
 
 export interface SandboxOptions {
   /** 'off' (default) runs directly; 'bubblewrap' forces bwrap (fails if
-   *  missing); 'auto' uses bwrap when available, else runs directly. */
-  mode: 'off' | 'auto' | 'bubblewrap';
+   *  missing); 'unshare' forces unshare namespaces (fails if missing);
+   *  'auto' uses bwrap when available, else runs directly. */
+  mode: 'off' | 'auto' | 'bubblewrap' | 'unshare';
   /** Allow network inside the sandbox. Default true (npm/tests need it). */
   network?: boolean;
   /** Extra read-write paths beyond cwd + tmpdir + devtool caches. */
   writablePaths?: string[];
+  /** Scrub environment variables that could leak credentials/secrets into
+   *  the sandboxed process (legacy call paths). */
+  envScrub?: boolean;
+  /** Workspace root used for the soft-jail cwd clamp (legacy call paths). */
+  workspaceDir?: string;
 }
 
 export interface ExecOptions {
@@ -33,7 +39,11 @@ export interface ExecOptions {
   killGraceMs?: number;
   /** Called once with the outcome for audit/risk logging. Never throws. */
   onAudit?: (info: { cmd: string; code: number | null; timedOut: boolean; durationMs: number }) => void;
-  /** OS-level sandbox (bubblewrap). Default off — opt in per call or via
+  /** Wall-clock CPU budget in seconds (prlimit-enforced). */
+  cpuLimitSeconds?: number;
+  /** Memory cap in MB (prlimit-enforced). */
+  memoryLimitMb?: number;
+  /** OS-level sandbox (bubblewrap/unshare). Default off — opt in per call or via
    *  `safety.sandbox` for the shell tool. */
   sandbox?: SandboxOptions;
 }
