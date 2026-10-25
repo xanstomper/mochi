@@ -31,6 +31,7 @@ import { ContextEngine, estimateMessagesTokens, shouldIdleCompact, DEFAULT_IDLE_
 import { cacheHitRatio, type PrefixStats } from '../prompt/stable-prefix.js';
 import { MemoryStore } from '../memory/memory.js';
 import { projectMemoryPrefix, recordProjectMemory } from '../memory/project-memory.js';
+import { decisionMemoryPrefix, recordRejectedApproach } from '../memory/decision-memory.js';
 import { loadReadCache, saveReadCache } from '../state/read-cache-store.js';
 import { createProvider, normalizeModelName, type RawProvider } from '../model/router.js';
 import { PROVIDERS } from '../model/providers.js';
@@ -2385,6 +2386,12 @@ Continue from 'Next:', do not redo completed progress.`,
           // gated until struggle/escalation like the volatile block.
           if (memPrefix && !this.fastLaneMemoryGated()) this.context.addMessage({ role: 'system', content: memPrefix });
         }
+        // Decision memory: past REJECTED approaches whose task signature
+        // matches this task, as warnings. Deliberately NOT fast-lane gated:
+        // a dead-approach warning at task start is exactly what prevents the
+        // struggle the fast lane waits for. Bounded (<=3 records, ~10 lines).
+        const dmBlock = decisionMemoryPrefix(this.workspace.dir, `${task.title} ${task.description ?? ''}`);
+        if (dmBlock) this.context.addMessage({ role: 'system', content: dmBlock });
         this.context.addMessage({ role: 'system', content: TASK_FOCUS_PROTOCOL });
         this.maybeInjectStaleTodoNote();
       }
@@ -2724,6 +2731,10 @@ Continue from 'Next:', do not redo completed progress.`,
         // Fast lane: gated until struggle/escalation (struggle-gated recall).
         const memPrefix = projectMemoryPrefix(this.workspace.dir);
         if (memPrefix && !this.fastLaneMemoryGated()) this.context.addMessage({ role: 'system', content: memPrefix });
+        // Decision memory: past REJECTED approaches matching this task, as
+        // warnings (see the twin injection site above for the rationale).
+        const dmBlock = decisionMemoryPrefix(this.workspace.dir, `${task.title} ${task.description ?? ''}`);
+        if (dmBlock) this.context.addMessage({ role: 'system', content: dmBlock });
         this.context.addMessage({ role: 'system', content: TASK_FOCUS_PROTOCOL });
         this.maybeInjectStaleTodoNote();
       }
@@ -9879,6 +9890,33 @@ Continue from 'Next:', do not redo completed progress.`,
           }
         }
       } catch { /* success memory must never affect task completion */ }
+      // Decision memory: a run that did REAL work (files changed) and then
+      // FAILED abandoned its approach — that is the exact write condition for
+      // a rejection record ("tried X, failed because Y"), so a future session
+      // on a similar task is warned before repeating it. Runs that merely
+      // considered an approach (no edits) write nothing. Subagents skip (the
+      // parent run owns the outcome); chat/plan kinds skip (no approach to
+      // abandon). Same vitest guard as the success fact above.
+      try {
+        if (
+          !success
+          && this.fileChanged
+          && this.subagentDepth === 0
+          && !(process.env.VITEST && !process.env.MOCHI_MEMORY_FILE)
+        ) {
+          const kind = this.taskKind ?? classifyTaskKind(task);
+          if (kind !== 'chat' && kind !== 'plan') {
+            const relFiles = [...new Set(this.context['state'].filesModified)]
+              .map((p: string) => (p.startsWith(this.cwd) ? p.slice(this.cwd.length + 1) : p));
+            recordRejectedApproach(this.workspace.dir, {
+              taskSignature: task.title,
+              approach: summary.split('\n').map((l: string) => l.trim()).filter(Boolean).slice(0, 2).join(' — ') || task.title,
+              reason: (this.lastToolError ?? summary).split('\n')[0]?.trim() || `run ended: ${stopReason}`,
+              evidence: `run stopReason=${stopReason}; files: ${relFiles.slice(0, 5).join(', ')}`,
+            });
+          }
+        }
+      } catch { /* decision memory must never affect task completion */ }
       // MCH-52: persist this run's tool sequence for route-pattern mining.
       try {
         // D9: persist the v2 record (outcome + gate-verified + task kind)
