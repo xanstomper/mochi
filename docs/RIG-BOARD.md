@@ -253,3 +253,39 @@ was 3,450/1 with the same known loop.test.ts flake. Follow-ups, not rig
 tasks now: revisit when a published SDK supports 2026-07-28; note the client
 cacheScope vocabulary mismatch (ours: connection/process; spec:
 public/private) for whenever server hints arrive.
+
+## Recall queries — WooWop independent verification (2026-10-25)
+Fresh worktree at 518a6b7 (feat/recall-queries), Node 26.12.1: tsc CLEAN;
+full suite **3,454 passed / 0 failed / 12 skipped**. Coder's fix SHIPS:
+`expandQueryText()` glossary in src/repo/semantic-index.ts (generic
+everyday->technical vocabulary, no target filenames/symbols), applied at the
+single semanticSearch entry so lexical and embedding signals see the same
+expanded text. 60-query set, real production path: hybrid **0.883/0.900 ->
+0.917/0.950** (+0.033/+0.050); lexical @10 +0.017, embedded @10 +0.050.
+Row-level diff: exactly q10/q12/q21 changed, all upward (hybrid file ranks
+0->4, 20->5, 0->6); 57 rows byte-identical; q23 untouched. Diff scope
+verified: exactly semantic-index.ts + its test (+112 lines), bench/ and
+evals/ untouched, frozen set byte-identical. Coder's own gate showed 1
+failure (polyglot-python e2e, loop.test.ts:1318) that did NOT reproduce in
+this independent full suite; coder proved it pre-existing by A/B on the
+pristine f9861d9 tree (fails identically there, gated on a pytest venv
+that has since appeared on PATH). Recall CLOSED. Verified chain:
+3,269/2 -> 3,271 -> 3,285 -> 3,328 -> 3,384 -> 3,401 -> 3,445 -> 3,450 ->
+3,454, zero failures throughout.
+Open from the run: q21 ownership adjudication (workspace.ts vs
+prefetch/trace/read-cache-store, which literally track file reads/writes)
+joins the existing q23 question (session-store.ts vs state-store.ts) —
+both need a human call, recorded not decided.
+
+## Hermes distillation — vermes research run COMPLETE (2026-10-24)
+Research + data collection ONLY — no Mochi source touched. Subject:
+Hermes Agent v0.22.5, probe model glm-5.3-flash via freeinference (same
+model family as the rig). Deliverables: report at
+~/campaign/hermes-distillation-report.md + corpus under
+~/campaign/distill-hermes/ (13 subsystem notes, 8 exported probe
+trajectories, per-run token/cost measurements). One consent-gate event
+(17:07Z fixture-generation heredoc timed out, not retried; probe 5
+redesigned gate-safe). Landing: the report's Phase 3 prioritized list is
+queued as distillation fuel D1–D10 (telemetry sidecar first, through
+run-recipe manifest). Distillation CLOSED as a research run; its items
+now ship only with their proof metrics measured.
