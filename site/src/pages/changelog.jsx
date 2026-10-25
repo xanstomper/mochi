@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import Mochi from '../Mascot.jsx';
 import Footer from '../Footer.jsx';
-import CRTWarpBackground from '../CRTWarpBackground.jsx';
+import EngineeringGridBackground from '../EngineeringGridBackground.jsx';
 import { AnimatedContent } from '../anim.jsx';
 import { IconSearch } from '../icons.jsx';
 import { RELEASES } from '../changelog-data.js';
@@ -104,7 +104,7 @@ export default function Changelog() {
 
   return (
     <>
-      <CRTWarpBackground />
+      <EngineeringGridBackground />
       <div style={{ maxWidth: 1560, margin: '0 auto', padding: '120px 4vw 80px' }}>
         {/* Header Hero Row */}
         <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: 40, alignItems: 'center', marginBottom: 40 }}>

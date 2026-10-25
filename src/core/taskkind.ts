@@ -115,6 +115,6 @@ export function kindHint(kind: TaskKind): string {
       return '\n# Focus: documentation\nMatch the project\'s existing doc style. Cover the WHY before the HOW. Keep examples concrete and runnable.\n';
     case 'implement':
     default:
-      return '\n# Focus: implementation\nMatch the project\'s architecture, patterns, and type systems. Analyze boundary cases and invariants. Make clean, surgical changes, and verify with a real test runner or compiler before declaring done.\n';
+      return '\n# Focus: implementation\nMatch the project\'s architecture, patterns, and type systems. Analyze boundary cases and invariants. Make clean, surgical changes, and verify with a real test runner or compiler before declaring done. For greenfield builds (new game/app/website/file that did not exist): create the files FIRST with the write tool, then run only a cheap syntax check (`node --check`, `python3 -m py_compile`, `test -f`) — never the repo-wide suite. A prose description without files is not a deliverable.\n';
   }
 }

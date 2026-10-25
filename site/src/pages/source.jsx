@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import RepoBrowser from '../RepoBrowser.jsx';
 import Mochi from '../Mascot.jsx';
 import Footer from '../Footer.jsx';
-import CRTWarpBackground from '../CRTWarpBackground.jsx';
+import EngineeringGridBackground from '../EngineeringGridBackground.jsx';
 import { AnimatedContent } from '../anim.jsx';
 import { IconGlobe, IconUsers, IconMessageSquare } from '../icons.jsx';
 
@@ -40,7 +40,7 @@ export default function Source() {
 
   return (
     <>
-      <CRTWarpBackground />
+      <EngineeringGridBackground />
       <div className="pagehead">
         <div className="wrap" style={{ maxWidth: 1560, width: '100%' }}>
           <div className="pagehead-row">
