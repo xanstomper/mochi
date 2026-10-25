@@ -1,94 +1,82 @@
-// Google Docs automation.
-//
-// This is the workflow people actually ask for: "write me a detailed Google
-// Doc about X". A screenshot-and-click agent can't do it — Docs is a canvas
-// editor that ignores synthetic DOM events. This tool drives it through the
-// persistent Playwright profile with REAL keyboard input, so headings, lists,
-// and long-form prose land in the document and Google's autosave keeps them.
-//
-// First run needs a login: `mochi browser login https://docs.google.com`.
-// After that the profile keeps the session for every future run.
+// Native tools: docs_query, generate_adr
+// Thin wrappers over src/docs-index.ts (the documentation index + ADR
+// generator, renamed from dox.ts per audit L-12). Both are pure file
+// operations — no model calls, no network.
+
 import type { Tool } from './types.js';
-import { browserCall, initBrowserSession } from '../browser/session.js';
-import { browserOptions } from '../browser/options.js';
+import { queryDocs, generateAdr, type AdrInput } from '../docs-index.js';
+import { resolve } from 'node:path';
 
-const DOCS_URL = 'https://docs.new';
-
-function summary(action: string, res: Record<string, unknown>): string {
-  if (res.ok === false) return `[docs ${action}] ERROR: ${String(res.error ?? 'unknown error')}`;
-  const lines = [`[docs ${action}] ok`];
-  if (typeof res.title === 'string') lines.push(`title: ${res.title}`);
-  if (typeof res.url === 'string') lines.push(`url: ${res.url}`);
-  if (typeof res.blocks === 'number') lines.push(`blocks written: ${res.blocks}${typeof res.totalBlocks === 'number' ? `/${res.totalBlocks}` : ''}`);
-  if (typeof res.chars === 'number') lines.push(`characters: ${res.chars}`);
-  if (typeof res.text === 'string') {
-    lines.push(`text (${res.text.length} chars):`);
-    lines.push(res.text.slice(0, 8000));
-  }
-  if (typeof res.note === 'string') lines.push(`note: ${res.note}`);
-  return lines.join('\n');
-}
-
-export const docsTool: Tool = {
+export const docsQueryTool: Tool = {
   def: {
-    name: 'docs',
+    name: 'docs_query',
     description:
-      'Create, append to, or read Google Docs in the signed-in browser. `create` builds a full document from markdown ' +
-      '(# headings, - bullets, 1. numbered lists, paragraphs, tables, code blocks) with real formatting via keyboard shortcuts, ' +
-      'sets the title, and returns the document URL. Requires a one-time `mochi browser login https://docs.google.com`. ' +
-      'Use this whenever the user asks for a Google Doc, report, spec, plan, or write-up in Docs.',
+      "Search the project's local documentation (Markdown/TXT/RST/AsciiDoc) and return the ranked chunks that match. Use before writing docs, when answering questions about the project, or to find an existing ADR. Read-only.",
     parameters: [
-      { name: 'action', type: 'string', description: 'create | append | read', required: true },
-      { name: 'title', type: 'string', description: 'Document title (create)', required: false },
-      { name: 'content', type: 'string', description: 'Markdown content (create/append). Be detailed and well-structured.', required: false },
-      { name: 'url', type: 'string', description: 'Existing document URL (append/read)', required: false },
-      { name: 'maxBlocks', type: 'integer', description: 'Safety cap on blocks (default 1500)', required: false },
+      { name: 'query', type: 'string', description: 'Search terms (substring + word overlap)', required: true },
+      { name: 'root', type: 'string', description: "Docs root to search (default: the project root)", required: false },
+      { name: 'limit', type: 'number', description: 'Max chunks to return (default 5, max 20)', required: false },
     ],
-    permission: 'network',
+    permission: 'read',
   },
   async execute(args, ctx) {
-    const action = String(args.action ?? 'create').toLowerCase();
-    const session = browserOptions(ctx.cwd);
-    const timeoutMs = 240_000;
-    try {
-      await initBrowserSession(session);
-      if (action === 'read') {
-        const url = String(args.url ?? '');
-        if (!url) return '[docs read] ERROR: url is required';
-        const res = await browserCall(session, 'readDocument', { url }, timeoutMs);
-        return summary('read', res);
-      }
-      if (action === 'append') {
-        const url = String(args.url ?? '');
-        if (!url) return '[docs append] ERROR: url is required';
-        const res = await browserCall(session, 'writeDocument', {
-          url,
-          title: args.title ? String(args.title) : undefined,
-          markdown: String(args.content ?? ''),
-          append: true,
-          maxBlocks: args.maxBlocks,
-        }, timeoutMs);
-        return summary('append', res);
-      }
-      // create: open a fresh doc, then write it.
-      const nav = await browserCall(session, 'navigate', { url: DOCS_URL, timeoutMs: 45_000 }, 60_000);
-      if (nav.ok === false) return summary('create', nav);
-      const res = await browserCall(session, 'writeDocument', {
-        title: args.title ? String(args.title) : undefined,
-        markdown: String(args.content ?? ''),
-        maxBlocks: args.maxBlocks,
-      }, timeoutMs);
-      const out = summary('create', res);
-      if (res.ok !== false && typeof res.url === 'string') {
-        return `${out}\nOpen it: ${res.url}`;
-      }
-      // A login redirect is the most common failure — make the fix explicit.
-      if (/sign-in|accounts\.google\.com/i.test(String(nav.url ?? ''))) {
-        return `${out}\nFix: run \`mochi browser login https://docs.google.com\`, sign in once, then retry.`;
-      }
-      return out;
-    } catch (err) {
-      return `[docs ${action}] ERROR: ${err instanceof Error ? err.message : String(err)}`;
+    const query = String(args.query || '').trim();
+    if (!query) throw new Error('query is required');
+    const root = resolve(ctx.cwd, args.root ? String(args.root) : '.');
+    const limit = Math.min(Math.max(Number(args.limit) || 5, 1), 20);
+    const hits = queryDocs(root, query, limit);
+    if (!hits.length) return `No documentation chunks matched "${query}" under ${root}.`;
+    return hits
+      .map((c, i) => {
+        const text = c.text.replace(/\s+/g, ' ').trim();
+        return `${i + 1}. ${c.title} (${c.path})\n   ${text.slice(0, 400)}${text.length > 400 ? '…' : ''}`;
+      })
+      .join('\n');
+  },
+};
+
+export const generateAdrTool: Tool = {
+  def: {
+    name: 'generate_adr',
+    description:
+      'Write a numbered Architecture Decision Record under docs/adr/NNN-slug.md. Use when the task is to record a design decision that should outlive the session. The next number is assigned automatically.',
+    parameters: [
+      { name: 'title', type: 'string', description: 'ADR title', required: true },
+      { name: 'context', type: 'string', description: 'The forces / problem being decided', required: true },
+      { name: 'decision', type: 'string', description: 'What was decided', required: true },
+      {
+        name: 'status',
+        type: 'string',
+        description: "'accepted' (default) | 'proposed' | 'superseded' | 'deprecated'",
+        required: false,
+      },
+      { name: 'tradeoffs', type: 'array', description: 'Alternatives considered (one line each)', required: false },
+      { name: 'consequences', type: 'string', description: 'Follow-up effects of the decision', required: false },
+      { name: 'root', type: 'string', description: 'Project root (default: cwd); ADRs go under <root>/docs/adr/', required: false },
+    ],
+    permission: 'write',
+  },
+  async execute(args, ctx) {
+    const title = String(args.title || '').trim();
+    const context = String(args.context || '').trim();
+    const decision = String(args.decision || '').trim();
+    if (!title) throw new Error('title is required');
+    if (!context) throw new Error('context is required');
+    if (!decision) throw new Error('decision is required');
+    const status = args.status ? String(args.status) : undefined;
+    if (status && !['accepted', 'proposed', 'superseded', 'deprecated'].includes(status)) {
+      throw new Error(`status must be one of accepted|proposed|superseded|deprecated (got "${status}")`);
     }
+    const root = resolve(ctx.cwd, args.root ? String(args.root) : '.');
+    const input: AdrInput = {
+      title,
+      context,
+      decision,
+      status: status as AdrInput['status'],
+      tradeoffs: Array.isArray(args.tradeoffs) ? args.tradeoffs.map(String) : undefined,
+      consequences: args.consequences ? String(args.consequences) : undefined,
+    };
+    const path = generateAdr(root, input);
+    return `ADR written: ${path}`;
   },
 };

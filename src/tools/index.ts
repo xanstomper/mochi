@@ -49,6 +49,7 @@ import { dbInspectTool } from './db-inspect.js';
 import { createPrTool } from './create-pr.js';
 import { reviewPrTool } from './review-pr.js';
 import { explainTool } from './explain.js';
+import { docsQueryTool, generateAdrTool } from './docs.js';
 import { thinkTool } from './think.js';
 import { renameSymbolTool } from './rename-symbol.js';
 import { replTool } from './repl.js';
@@ -67,13 +68,11 @@ import { compilePromptTool } from './compile-prompt.js';
 import { toolFactoryTool, RESERVED_TOOL_NAMES, loadAuthoredTools } from './tool-factory.js';
 import { loadForgedToolsSafe } from './tool-forge.js';
 import { browserTool } from './browser.js';
-import { cdpBrowserTool } from './cdp-browser.js';
 import { docsTool } from './docs.js';
 import { emailTool } from './email.js';
 import { canvasTool } from './canvas.js';
 import { scheduleTool } from './schedule.js';
 import { deviceTool } from './device.js';
-import { recordToolExposureUsage } from './tool-exposure.js';
 
 import { timerTool } from './timer.js';
 import { envTool } from './env.js';
@@ -107,19 +106,18 @@ export const ALL_TOOLS: Tool[] = [
   notesTool, tuiBuilderTool, mcpManageTool, markdownTool, colorTool,
   toolFactoryTool,
   browserTool,
-  cdpBrowserTool,
   docsTool,
   emailTool,
   canvasTool,
   scheduleTool,
   deviceTool,
-  computerTool,
   acceptPlanTool,
   askQuestionTool,
   notebookTool,
   reviewPrTool,
   explainTool,
-  selfConfigTool, // MCH-213/214: agent self-setup (show/probe/set own config)
+  docsQueryTool,
+  generateAdrTool,
 ];
 
 export const ALL_TOOLS_MAP = new Map<string, Tool>(ALL_TOOLS.map((t) => [t.def.name, t]));
@@ -137,12 +135,10 @@ export const AUXILIARY_TOOL_NAMES = new Set([
  *  tools for the same work. The model can pull any of these in mid-run via
  *  the `load_tools` tool. */
 export const HEAVY_TOOL_NAMES = new Set([
-  'browser', 'cdp_browser', 'db_inspect', 'deepwiki', 'sql_codebase_query', 'create_pr', 'review_pr', 'repl',
+  'browser', 'db_inspect', 'deepwiki', 'sql_codebase_query', 'create_pr', 'review_pr', 'repl',
   'perf', 'clipboard', 'mcp_manage', 'lint', 'format', 'diff', 'tree', 'device',
-  'browser', 'computer', 'db_inspect', 'deepwiki', 'sql_codebase_query', 'create_pr', 'review_pr', 'repl',
-  'perf', 'clipboard', 'mcp_manage', 'lint', 'format', 'diff', 'tree',
   'analyze_code', 'code_similarity', 'type_hierarchy', 'rename_symbol',
-  'resolve_conflicts', 'system_info',
+  'resolve_conflicts', 'system_info', 'generate_adr',
 ]);
 
 /** Task text regexes that justify advertising heavy tools up front. */

@@ -105,6 +105,36 @@ describe('mutation.runMutationCheck', () => {
     expect(readFileSync(resolve(dir, 'math.js'), 'utf8')).toContain('a + b');
   }, 20_000);
 
+  it('does not mistake TAP timing noise for a killed mutant', async () => {
+    // Regression (Wave S4): `node --test` emits `duration_ms: 1.029107` in
+    // its per-test YAML diagnostics. The old normalizer only stripped the
+    // `duration_ms 5` footer form, so two identical green runs differed and
+    // EVERY mutant was reported KILLED — the check became a no-op exactly on
+    // the runner it was meant to police.
+    const dir = makeRepo();
+    writeFileSync(resolve(dir, 'same.js'), 'module.exports = { same: (a, b) => a === b };');
+    let n = 0;
+    const tap = () => [
+      'TAP version 13',
+      '# Subtest: unrelated',
+      'ok 1 - unrelated',
+      '  ---',
+      `  duration_ms: ${n++ === 0 ? '1.029107' : '2.718281'}`,
+      '  ...',
+      '1..1',
+      '# pass 1',
+    ].join('\n');
+    const result = await runMutationCheck(
+      dir,
+      'node --test',
+      async () => 0, // green before AND after the mutation
+      async () => tap(),
+    );
+    expect(result.applied).toBe(true);
+    expect(result.survived).toBe(true);
+    expect(result.killed).toBe(false);
+  });
+
   it('mutates python sources and reports KILLED under pytest', async () => {
     const dir = makeRepo();
     writeFileSync(resolve(dir, 'arith.py'), 'def add(a, b):\n    return a + b\n');

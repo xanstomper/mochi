@@ -1,7 +1,7 @@
 # Mochi Technical Architecture Blueprint
 
-> **Canonical curated architecture doc.** The root `ARCHITECTURE.md` is an auto-generated
-> module/symbol dump (`mochi docgen --write`) — when the two disagree, this file wins.
+> **Canonical architecture doc.** The root `ARCHITECTURE.md` is a generated
+> module/API dump; this file is the curated design narrative (audit L-15).
 
 Mochi is designed as a dual-engine autonomous software engineering harness:
 1. **Compiled Native Rust Core Runtime (`native/mochi_core`)**: Zero-dependency, high-throughput Rust engine for BPE tokenization, token budgeting, context compaction cut math, repo indexing, and atomic diff calculations.

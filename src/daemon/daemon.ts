@@ -16,7 +16,6 @@ import { atomicWriteFileSync } from '../core/atomic-fs.js';
 import type { MochiConfig } from '../types.js';
 import { Runtime } from '../runtime.js';
 import { addJob, listJobs, removeJob, getJob, setJobPaused, setJobEnabled, runJobNow, runDueCronJobs } from './cron.js';
-import { runDueAutomations } from './automation.js';
 import { truncateMiddle } from '../util.js';
 
 export interface DaemonInfo {
@@ -243,12 +242,6 @@ export async function startDaemonInProcess(opts: {
       // Serial, timeout-aware, and persisted: a crashing/timing-out job can
       // never wedge the scheduler or re-fire immediately.
       await runDueCronJobs(cwd, (prompt, signal) => runtime.goal(prompt, [], undefined, signal));
-      // Durable automations: resume interrupted slots + fire due triggers.
-      // Journal-backed, so a firing the daemon died inside of completes
-      // exactly once instead of re-executing its side effects.
-      await runDueAutomations(cwd, {
-        runGoal: async (prompt, journalRunId) => (await runtime.runGoal(prompt, [], { journalRunId })).summary,
-      });
     } finally {
       processing = false;
     }
@@ -903,9 +896,6 @@ export async function serverMain(argv: string[]): Promise<void> {
     processing = true;
     try {
       await runDueCronJobs(cwd, (prompt, signal) => rt.goal(prompt, [], undefined, signal));
-      await runDueAutomations(cwd, {
-        runGoal: async (prompt, journalRunId) => (await rt.runGoal(prompt, [], { journalRunId })).summary,
-      });
     } finally { processing = false; }
   }, 10_000);
   server.listen(Number(port), host, () => {

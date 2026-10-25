@@ -597,12 +597,10 @@ export const skillManageTool: Tool = {
         category: category === 'global' || category === 'user' ? undefined : category,
       });
       if (!r.ok) return JSON.stringify(r);
+      // Model-authored skills must enter the curator lifecycle (stale,
       // archive, consolidation, regression doctor) — writeSkill only records
       // usage, which left agentCreated=false and made them invisible to it.
       try { markUsed(targetDir, name, { agentCreated: true, category: category === 'global' || category === 'user' ? undefined : category }); } catch { /* best-effort */ }
-      if (r.state === 'probation') {
-        return `Created skill '${name}' at ${r.path} — on PROBATION: it is advertised only when a task matches it strongly, and the curator promotes it to fully active after 3 runs that load it end in a verifier PASS (with its verification snippet, if any, passing). Its quality score (${r.quality?.score ?? 0}/100) is a format gate only and does not activate it. The user can read it with 'mochi skills ${name}'.`;
-      }
       return `Created skill '${name}' at ${r.path}. It is advertised to every future session in this scope; the user can read it with 'mochi skills ${name}'.`;
     }
     if (action === 'edit') {

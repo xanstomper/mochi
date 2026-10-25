@@ -1,14 +1,16 @@
-// Docs index + ADR generator (spec section 4). Renamed from dox.ts (ISSUES
-// L-12): two unrelated "DOX" modules shared an acronym — this one (docs index
-// + `dox_query`/`dox_generate_adr` tool surface, never wired) and the LIVE
-// src/cognitive/dox.ts (AGENTS.md contract hierarchy, imported by
-// chameleon.ts). Same acronym, adjacent domains, real wiring-mistake risk.
+// Documentation index + ADR generator (spec section 4).
 //
-// docs-index.ts indexes local docs (Markdown/TSDoc/Rustdoc/Sphinx-ish) into
-// chunked, searchable entries without polluting the model transcript —
-// `dox_query` returns ranked hits, and `dox_generate_adr` writes a numbered
-// Architecture Decision Record under docs/adr/. Both are pure file operations
-// so they stay fast and testable.
+// Renamed from `dox.ts` (audit L-12): the repo already had a LIVE, unrelated
+// `src/cognitive/dox.ts` (the AGENTS.md contract hierarchy), and the two shared
+// a three-letter name in adjacent domains — an invitation for the next wiring
+// mistake. This module is surfaced through the `docs_query` and `generate_adr`
+// tools (`src/tools/docs.ts`).
+//
+// It indexes local docs (Markdown/TSDoc/Rustdoc/Sphinx-ish) into chunked,
+// searchable entries without polluting the model transcript — `docs_query`
+// returns ranked hits, and `generate_adr` writes a numbered Architecture
+// Decision Record under docs/adr/. Both are pure file operations so they stay
+// fast and testable.
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, existsSync, statSync } from 'node:fs';
 import { resolve, join, relative } from 'node:path';
 

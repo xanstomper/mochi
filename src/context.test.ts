@@ -370,3 +370,42 @@ describe('conditional tool guidelines (VNext P1.3)', () => {
   });
 });
 
+
+describe('image parts are priced per image, not by their wire payload (audit L-04)', () => {
+  // A 1x1 PNG is a tiny payload; the size of the base64 blob is irrelevant to
+  // what a provider charges for vision. The counter must charge the constant.
+  const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+  it('charges the same for a data URI and an https URL', async () => {
+    const { cachedMessageTokens, IMAGE_PART_TOKENS } = await import('./context.js');
+    const dataMsg = { role: 'user', content: [{ type: 'text', text: 'look' }, { type: 'image_url', image_url: { url: png } }] };
+    const urlMsg = { role: 'user', content: [{ type: 'text', text: 'look' }, { type: 'image_url', image_url: { url: 'https://example.com/a.png' } }] };
+    const textOnly = { role: 'user', content: [{ type: 'text', text: 'look' }] };
+    const a = cachedMessageTokens(dataMsg);
+    const b = cachedMessageTokens(urlMsg);
+    const t = cachedMessageTokens(textOnly);
+    // Same structural placeholder + the per-image constant, both forms.
+    expect(a).toBe(b);
+    // Adding a part costs the constant plus the (small) JSON shape of the
+    // placeholder itself — never the payload.
+    expect(a - t).toBeGreaterThanOrEqual(IMAGE_PART_TOKENS);
+    expect(a - t).toBeLessThan(IMAGE_PART_TOKENS + 50);
+  });
+
+  it('does not scale with payload size', async () => {
+    const { cachedMessageTokens } = await import('./context.js');
+    const small = 'data:image/png;base64,AAAA';
+    const big = 'data:image/png;base64,' + 'A'.repeat(500_000);
+    const msg = (url: string) => ({ role: 'user', content: [{ type: 'image_url', image_url: { url } }] });
+    expect(cachedMessageTokens(msg(big))).toBe(cachedMessageTokens(msg(small)));
+  });
+
+  it('counts each image part once', async () => {
+    const { cachedMessageTokens, IMAGE_PART_TOKENS } = await import('./context.js');
+    const one = { role: 'user', content: [{ type: 'text', text: 'x' }, { type: 'image_url', image_url: { url: png } }] };
+    const two = { role: 'user', content: [{ type: 'text', text: 'x' }, { type: 'image_url', image_url: { url: png } }, { type: 'image_url', image_url: { url: png } }] };
+    const delta = cachedMessageTokens(two) - cachedMessageTokens(one);
+    expect(delta).toBeGreaterThanOrEqual(IMAGE_PART_TOKENS);
+    expect(delta).toBeLessThan(IMAGE_PART_TOKENS + 50);
+  });
+});

@@ -11,17 +11,20 @@ export {
   runSleeptime, renderSleeptimeReportMd, nightKeyFor, loadSleeptimeLedger, sleeptimeLedgerPath,
   estimateUsageCostUsd, estimatedUnitCostUsd, defaultSleeptimeSteps,
   createRepairStep, createCuratorStep, createGateStep, createCurriculumStep,
-  createSkillRepairPort, createCurriculumPort, demotedRepairCandidates,
   createFrozenIntegrityGatePort,
   SleeptimeError, DEFAULT_SLEEPTIME_CAP_USD, DEFAULT_REPAIR_ESTIMATE,
   type SleeptimeOptions, type SleeptimeReport, type SleeptimeStep, type SleeptimeUsage,
   type SkillRepairPort, type GatePort, type CurriculumPort,
 } from './sleeptime/orchestrator.js';
 export {
+  createRealSkillRepairPort, createRealCurriculumPort, deriveCurriculumCandidates,
+} from './sleeptime/ports.js';
+export {
   runHealthScan, renderHealthDigest, detectTestCommand, parseTestCounts, healthStatePath,
   FINDING_TTL_DAYS, type HealthScanOptions, type HealthScanResult, type HealthFinding,
 } from './health/health-scan.js';
 export { createHealthScanStep } from './health/health-step.js';
+export { createInductionStep } from './observability/induction-step.js';
 export { HookManager, registerHook, type HookName, type HookHandler, type HookHandlerResult } from './hooks.js';
 export { MemoryStore } from './memory/memory.js';
 export { consolidate } from './memory/consolidate.js';
