@@ -37,6 +37,68 @@ import {
 
 const CANDIDATE_RULES = ['MOCHI.md', 'mochi.md', 'AGENTS.md', 'CLAUDE.md', 'GEMINI.md', '.cursorrules', '.github/copilot-instructions.md'];
 
+// ── G11 idle compaction ──────────────────────────────────────────────────
+// Claude Code compacts a long conversation after ~54 min idle — before the
+// 1-hour prompt-cache TTL expires, so the next message doesn't pay full
+// reprocess. Mochi had no idle trigger at all: a user returning to an idle
+// long session paid an uncached full-context turn. These types + the pure
+// decision function are the mechanism; the loop owns the trigger (see
+// Agent.maybeIdleCompact), the session store owns the persisted activity
+// clock (SessionStore.lastActivityAt), and spawn specs own per-child
+// windows (ChildRunSpec.autoCompactWindow).
+
+/** Idle-compaction switch + threshold for one context engine. Kill
+ *  switch: default is OFF — nothing compacts on idle unless a host opts
+ *  in (or a parent sets a per-child window). */
+export interface IdleCompactionConfig {
+  enabled: boolean;
+  /** ms of inactivity before an idle compaction may fire. Defaults to
+   *  DEFAULT_IDLE_COMPACTION_THRESHOLD_MS (54 min — just inside a 1h
+   *  prompt-cache TTL, the Claude Code shape). */
+  thresholdMs?: number;
+}
+
+/** Default idle threshold: 54 minutes — inside the 1-hour prompt-cache
+ *  TTL, so the compacted session re-warms the cache instead of paying a
+ *  full reprocess on the next turn. */
+export const DEFAULT_IDLE_COMPACTION_THRESHOLD_MS = 54 * 60 * 1000;
+
+export interface IdleCompactionInput {
+  enabled: boolean;
+  thresholdMs: number;
+  /** ms timestamp of the session's last activity; undefined = unknown —
+   *  never compact on an unknown clock. */
+  lastActivityAt?: number;
+  /** "now" (injectable for tests). */
+  now: number;
+  /** True when a turn is currently in flight — idle compaction must
+   *  never interrupt active work; it fires only at run boundaries. */
+  active: boolean;
+  /** ms timestamp of the last idle-triggered compaction; undefined =
+   *  none. An idle period compacts at most once: after a compaction,
+   *  only NEW activity (lastActivityAt past the compaction) re-arms it. */
+  lastIdleCompactionAt?: number;
+}
+
+export type IdleCompactionVerdict =
+  | { eligible: true; idleMs: number }
+  | { eligible: false; reason: 'disabled' | 'active' | 'unknown-activity' | 'not-idle' | 'already-compacted' };
+
+/** Pure idle-compaction decision. Every guard is explicit so the
+ *  false-trigger count is testable: disabled, active, unknown clock,
+ *  not yet idle, and already-compacted-for-this-idle-period all refuse. */
+export function shouldIdleCompact(input: IdleCompactionInput): IdleCompactionVerdict {
+  if (!input.enabled) return { eligible: false, reason: 'disabled' };
+  if (input.active) return { eligible: false, reason: 'active' };
+  if (input.lastActivityAt === undefined) return { eligible: false, reason: 'unknown-activity' };
+  const idleMs = input.now - input.lastActivityAt;
+  if (idleMs < input.thresholdMs) return { eligible: false, reason: 'not-idle' };
+  if (input.lastIdleCompactionAt !== undefined && input.lastActivityAt <= input.lastIdleCompactionAt) {
+    return { eligible: false, reason: 'already-compacted' };
+  }
+  return { eligible: true, idleMs };
+}
+
 /** MCH-93: tiny-workspace fast path — at/below this file count, skip scouting. */
 const TINY_WORKSPACE_FILES = 12;
 
@@ -511,6 +573,16 @@ export class ContextEngine {
    *  only when this engine's own head signature matches it exactly. */
   private inheritedHead?: { text: string; sig: string };
 
+  /** G11: idle-compaction switch + threshold for this engine (default
+   *  OFF — see IdleCompactionConfig). Set by the host, or by a parent
+   *  via ChildRunSpec.autoCompactWindow. */
+  private idleCompaction: IdleCompactionConfig = { enabled: false };
+  /** G11: ms timestamp of the last idle-triggered compaction on this engine. */
+  private lastIdleCompactionAt?: number;
+  /** G11: ms timestamp of the last message added to this engine — its
+   *  in-process activity clock. Undefined until the first message. */
+  private lastActivityAt?: number;
+
   /** Record a prefix break with its cause (segment name or history
    *  rewrite label). Called by the mutation points themselves. */
   notePrefixBreak(cause: string): void {
@@ -614,6 +686,31 @@ export class ContextEngine {
     if (Number.isFinite(tokens) && tokens >= 1000) this.budget = Math.floor(tokens);
   }
 
+  /** G11: set this engine's idle-compaction switch + threshold. */
+  setIdleCompactionConfig(cfg: IdleCompactionConfig): void {
+    this.idleCompaction = { ...cfg };
+  }
+
+  getIdleCompactionConfig(): IdleCompactionConfig {
+    return { ...this.idleCompaction };
+  }
+
+  /** G11: in-process last-activity clock (ms epoch, Date.now basis). */
+  getLastActivityAt(): number | undefined {
+    return this.lastActivityAt;
+  }
+
+  /** G11: ms timestamp of the last idle-triggered compaction, if any. */
+  getLastIdleCompactionAt(): number | undefined {
+    return this.lastIdleCompactionAt;
+  }
+
+  /** G11: record that an idle compaction just ran (re-arms only on new
+   *  activity — see shouldIdleCompact's already-compacted verdict). */
+  markIdleCompaction(now = Date.now()): void {
+    this.lastIdleCompactionAt = now;
+  }
+
   constructor(config: MochiConfig, projectRoot: string, userSkillsDir?: string) {
     this.config = config;
     this.budget = config.safety.contextBudgetTokens;
@@ -654,6 +751,8 @@ export class ContextEngine {
   private lastReportedPromptTokens: number | null = null;
 
   addMessage(message: ChatMessage) {
+    // G11: every message is activity — the in-process idle clock.
+    this.lastActivityAt = Date.now();
     const msg = message.tool_calls ? { ...message, tool_calls: [...message.tool_calls] } : message;
     if (!this.initialUserPrompt && msg.role === 'user' && typeof msg.content === 'string' && msg.content.trim()) {
       const trimmed = msg.content.trim();
@@ -1856,7 +1955,7 @@ ${this.toolGuidelines(tools)}
     return this.messages.slice(0, cutIndex);
   }
 
-  async compact(checkpoint?: string, keepFloor?: number) {
+  async compact(checkpoint?: string, keepFloor?: number, opts?: { reason?: string }) {
     // Tier 1 (micro): drop everything but the recency window and distill small facts.
     // B15: an explicit keepFloor (context-limit recovery) may go below the
     // default complex/simple floor.
@@ -1873,8 +1972,10 @@ ${this.toolGuidelines(tools)}
     this.messages = this.messages.slice(cutIndex);
     // P5: compaction rewrites the history under the stable head — an
     // EXPECTED prefix break (the cache must re-warm), recorded with its
-    // cause rather than left invisible.
-    this.notePrefixBreak('compaction');
+    // cause rather than left invisible. G11: an idle-triggered compaction
+    // names itself 'idle-compaction' so break attribution can tell it
+    // apart from budget/floor compactions.
+    this.notePrefixBreak(opts?.reason ?? 'compaction');
 
     // MCH-219 (lineage compression): a PRIOR compaction's ledger is a dropped
     // system message. Losing it silently orphans earlier sessions' memory —
