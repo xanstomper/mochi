@@ -19,6 +19,12 @@
 // newest turn), compaction accepts an explicit smaller floor, and the floor
 // region is not exempt from in-place shrinking.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+// Hermetic: this file exercises the TypeScript context engine only. The
+// native Rust runtime must NOT be spawned from here — a live child process
+// left behind in the vitest worker keeps the macOS runner's test step alive
+// (the runner's orphan cleanup then tears the job down). The native path has
+// its own parity tests.
+process.env.MOCHI_NO_NATIVE = '1';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
