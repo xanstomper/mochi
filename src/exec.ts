@@ -11,16 +11,12 @@ import { spawn, spawnSync, execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 
 export interface SandboxOptions {
-  /** 'off' (default) runs directly. 'bubblewrap'/'unshare' force that OS
-   *  backend (throw when unavailable — an explicit request never degrades
-   *  silently). 'auto' uses the best OS backend (bubblewrap, then unshare
-   *  namespaces), else the SOFT jail (env scrub + cwd clamp, reported as
-   *  level 'soft' — never a silent direct run). See security/sandbox.ts. */
-  mode: SandboxMode;
-  /** Allow network inside the sandbox. When false, OS backends isolate
-   *  the network namespace. Undefined keeps each backend's historical
-   *  default (shared network); the shell tool's tier policy always passes
-   *  an explicit value (default OFF — see resolveShellSandboxPolicy). */
+  /** 'off' (default) runs directly; 'bubblewrap' forces bwrap (fails if
+   *  missing); 'unshare' forces Linux user-namespace isolation (fails if
+   *  unavailable); 'auto' uses bwrap when available, then a probed unshare
+   *  user namespace, else runs directly. */
+  mode: 'off' | 'auto' | 'bubblewrap' | 'unshare';
+  /** Allow network inside the sandbox. Default true (npm/tests need it). */
   network?: boolean;
   /** Extra read-write paths beyond cwd + tmpdir + devtool caches. */
   writablePaths?: string[];
@@ -301,7 +297,11 @@ function finishSpawn(
       }
       try {
         // Negative pid = the child's process group (it is the group leader).
-        if (child.pid) process.kill(-child.pid, sig);
+        // Only while the child is STILL RUNNING: once it has exited, its pid
+        // may already have been recycled, and a negative-pid kill would then
+        // signal an unrelated process group (a sibling's, or — worst case —
+        // the host's own). An exited child needs no signal at all.
+        if (child.pid && child.exitCode === null && child.signalCode === null) process.kill(-child.pid, sig);
         else child.kill(sig);
       } catch {
         try { child.kill(sig); } catch { /* already dead */ }
@@ -346,7 +346,7 @@ function finishSpawn(
       opts.signal?.removeEventListener('abort', onAbort);
       reject(err);
     });
-    child.on('close', (code, signal) => done(code, { signal }));
+    child.on('close', (code) => done(code));
     // Already-aborted: run the abort path AFTER the listeners exist. The old
     // early-return skipped 'error'/'close' attachment — a spawn that fails
     // while already aborted (nonexistent cwd, deleted shell) then emitted
@@ -490,26 +490,142 @@ function wrapForExec(cmd: string, args: readonly string[], opts: ExecOptions): W
   });
 }
 
-/** Attach the applied sandbox level/backend to a finished result (only
- *  when a sandbox actually engaged — off/absent leaves the result shape
- *  exactly as it was). */
-function withSandboxInfo(p: Promise<ExecResult>, wrapped: WrappedCommand): Promise<ExecResult> {
-  const level = wrapped.level;
-  if (level === 'off') return p;
-  return p.then((r) => ({ ...r, sandboxLevel: level, sandboxBackend: wrapped.backend }));
+let cachedBwrap: string | null | undefined;
+
+/** Test seam: forget the cached bwrap probe. detectBubblewrap() caches by
+ *  comparing its pathEnv argument to the CURRENT process.env.PATH, so a test
+ *  that mutates PATH (to simulate "no bwrap installed") must reset the cache
+ *  before AND after, or the poisoned null survives the restore. */
+export function resetBubblewrapCache(): void {
+  cachedBwrap = undefined;
+}
+
+/** Absolute path to `bwrap`, or null when unavailable. Cached. Testable via
+ *  explicit pathEnv (production callers omit it). */
+export function detectBubblewrap(pathEnv = process.env.PATH ?? ''): string | null {
+  if (cachedBwrap !== undefined && pathEnv === (process.env.PATH ?? '')) return cachedBwrap;
+  let found: string | null = null;
+  for (const dir of pathEnv.split(delimiter).filter(Boolean)) {
+    const full = resolve(dir, 'bwrap');
+    try {
+      accessSync(full, constants.X_OK);
+      found = full;
+      break;
+    } catch { /* not here */ }
+  }
+  if (pathEnv === (process.env.PATH ?? '')) cachedBwrap = found;
+  return found;
+}
+
+/** Pure argv builder: wrap [cmd, ...args] in a bubblewrap invocation.
+ *  Exported for tests; runArgv/runShellString call it via maybeSandbox. */
+export function buildBubblewrapArgs(
+  bwrapBin: string,
+  cmd: string,
+  args: readonly string[],
+  opts: { cwd?: string; network?: boolean; writablePaths?: string[] } = {},
+): string[] {
+  const cwd = opts.cwd ?? process.cwd();
+  const argv: string[] = [
+    '--ro-bind', '/', '/',
+    '--dev', '/dev',
+    '--proc', '/proc',
+    '--tmpfs', '/tmp',
+  ];
+  const writable = [...defaultSandboxWritable(cwd), ...(opts.writablePaths ?? [])];
+  for (const p of new Set(writable)) {
+    argv.push('--bind', p, p);
+  }
+  if (opts.network === false) argv.push('--unshare-net');
+  argv.push('--chdir', cwd, '--', cmd, ...args);
+  return [bwrapBin, ...argv];
+}
+
+/** Absolute path to `unshare`, or null when unavailable. Cached. Mirrors
+ *  detectBubblewrap's test seam via resetUnshareCache(). */
+let cachedUnshare: string | null | undefined;
+
+export function resetUnshareCache(): void {
+  cachedUnshare = undefined;
+}
+
+export function detectUnshare(pathEnv = process.env.PATH ?? ''): string | null {
+  if (cachedUnshare !== undefined && pathEnv === (process.env.PATH ?? '')) return cachedUnshare;
+  let found: string | null = null;
+  for (const dir of pathEnv.split(delimiter).filter(Boolean)) {
+    const full = resolve(dir, 'unshare');
+    try {
+      accessSync(full, constants.X_OK);
+      found = full;
+      break;
+    } catch { /* not here */ }
+  }
+  // Existing is not enough: the binary may be present while user namespaces
+  // are disabled by the kernel/sysctl. Probe once — a sandbox that cannot
+  // start must degrade in `auto`, not turn every command into an error.
+  if (found && process.platform === 'linux') {
+    try {
+      const probe = spawnSync(found, ['--map-root-user', 'true'], { stdio: 'ignore', timeout: 5_000 });
+      if (probe.status !== 0) found = null;
+    } catch {
+      found = null;
+    }
+  } else if (process.platform !== 'linux') {
+    found = null;
+  }
+  if (pathEnv === (process.env.PATH ?? '')) cachedUnshare = found;
+  return found;
+}
+
+/** Linux user-namespace jail: private mount/PID/IPC/UTS namespaces, root
+ *  mapped to the invoking user, fresh /proc. This isolates process visibility
+ *  and mount state; it does NOT bind a read-only rootfs the way bubblewrap
+ *  does, so it is the documented SECOND backend, not an equivalent one. */
+export function buildUnshareArgs(
+  unshareBin: string,
+  cmd: string,
+  args: readonly string[],
+  opts: { network?: boolean } = {},
+): string[] {
+  const argv = ['--map-root-user', '--mount', '--pid', '--ipc', '--uts', '--fork', '--mount-proc'];
+  if (opts.network === false) argv.push('--net');
+  argv.push('--', cmd, ...args);
+  return [unshareBin, ...argv];
 }
 
 /** Wrap [cmd, args] per opts.sandbox. Returns the command unchanged when the
- *  sandbox is off or unavailable in auto mode — or throws in `bubblewrap`/
- *  `unshare` mode when the requested binary is missing (explicit request,
+ *  sandbox is off or unavailable in auto mode — or throws in `bubblewrap` /
+ *  `unshare` mode when the requested backend is missing (explicit request,
  *  fail loudly, never silently run unsandboxed). NOTE: no win32 early-return
- *  — both backends are POSIX-only, so a forced request on Windows must throw
- *  the loud "not found" error instead of silently running unsandboxed. */
+ *  — these backends are Linux-only, so a forced request on another platform
+ *  must throw the loud "not found" error instead of silently running
+ *  unsandboxed. */
 export function maybeSandbox(
   cmd: string,
   args: readonly string[],
   opts: ExecOptions,
 ): { cmd: string; args: string[] } {
-  const w = wrapForExec(cmd, args, opts);
-  return { cmd: w.cmd, args: w.args };
+  const sb = opts.sandbox;
+  if (!sb || sb.mode === 'off') return { cmd, args: [...args] };
+  const bwrap = detectBubblewrap();
+  if (bwrap) {
+    const full = buildBubblewrapArgs(bwrap, cmd, args, {
+      cwd: opts.cwd,
+      network: sb.network,
+      writablePaths: sb.writablePaths,
+    });
+    return { cmd: full[0], args: full.slice(1) };
+  }
+  if (sb.mode === 'bubblewrap') {
+    throw new Error('Sandbox requested (bubblewrap) but `bwrap` was not found on PATH. Install bubblewrap or use sandbox mode "off".');
+  }
+  const unshare = detectUnshare();
+  if (unshare) {
+    const full = buildUnshareArgs(unshare, cmd, args, { network: sb.network });
+    return { cmd: full[0], args: full.slice(1) };
+  }
+  if (sb.mode === 'unshare') {
+    throw new Error('Sandbox requested (unshare) but `unshare` was not found (or user namespaces are unavailable). Install util-linux or use sandbox mode "off".');
+  }
+  return { cmd, args: [...args] };
 }

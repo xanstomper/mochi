@@ -3,11 +3,52 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { browserProbe, closeBrowserSessions, daemonNode, daemonScript } from './session.js';
+import { browserProbe, closeBrowserSessions, daemonNode, daemonScript, type BrowserResponse } from './session.js';
 import { browserExecutable, browserProfilePath } from './options.js';
-import { liveStatus } from './celeste.js';
-import { PINNED_SHELL, PINNED_LIGHTPANDA, resolveCdpBrowserBinary } from './cdp/manager.js';
-import { fetchCdpHeadlessShell, fetchLightpanda, shellInstallInfo, lightpandaInstallInfo } from './cdp/fetch.js';
+import { liveStatus, type LiveStatus } from './celeste.js';
+
+/** Machine-readable shape of `mochi browser status --json`. Stable for scripts. */
+export interface BrowserStatusReport {
+  /** True when headless is OK AND live is either not applicable or connected. */
+  ok: boolean;
+  headless: {
+    ok: boolean;
+    browsers: string[];
+    error?: string;
+  };
+  profile: {
+    path: string;
+    exists: boolean;
+  };
+  engine: string;
+  live: LiveStatus;
+  daemonScript: string;
+}
+
+/** Pure builder: assemble the structured status report from already-fetched
+ *  probe + live values. Exported separately from runBrowserCli so a unit
+ *  test can pin the shape without spawning the broker or hitting Celeste. */
+export function buildBrowserStatusReport(pw: BrowserResponse, live: LiveStatus): BrowserStatusReport {
+  return {
+    ok: pw.ok && (!live.available || live.connected === true),
+    headless: {
+      ok: pw.ok,
+      browsers: Array.isArray(pw.browsers) ? (pw.browsers as string[]) : [],
+      error: pw.ok ? undefined : typeof pw.error === 'string' ? pw.error : undefined,
+    },
+    profile: {
+      path: browserProfilePath(),
+      exists: existsSync(browserProfilePath()),
+    },
+    engine: browserExecutable() ?? 'Playwright bundled Chromium',
+    live: {
+      ...live,
+      connected: live.connected ?? false,
+      detail: live.detail ?? undefined,
+    },
+    daemonScript: daemonScript(),
+  };
+}
 
 let cachedHere: string | undefined;
 function hereDir(): string {
@@ -49,65 +90,20 @@ export async function runBrowserCli(positional: string[], flags: Record<string, 
     return;
   }
   if (action === 'status' || action === 'probe' || action === 'doctor') {
-    const profile = browserProfilePath();
-    const executable = browserExecutable();
     const [pw, live] = await Promise.all([browserProbe(), liveStatus()]);
+    const report = buildBrowserStatusReport(pw, live);
+    if (flags.json) {
+      console.log(JSON.stringify(report, null, 2));
+      return;
+    }
     console.log('Browser engines');
-    console.log(`  headless playwright : ${pw.ok ? 'ready' : 'UNAVAILABLE'}${Array.isArray(pw.browsers) && pw.browsers.length ? ` (${(pw.browsers as string[]).join(', ')})` : ''}`);
+    console.log(`  headless playwright : ${pw.ok ? 'ready' : 'UNAVAILABLE'}${report.headless.browsers.length ? ` (${report.headless.browsers.join(', ')})` : ''}`);
     if (!pw.ok) console.log(`    ${String(pw.error ?? '')}\n    Install: npm i -g playwright && npx playwright install chromium`);
-    console.log(`  persistent profile  : ${profile} (${existsSync(profile) ? 'exists' : 'not created yet'})`);
-    console.log(`  login/browser engine: ${executable ?? 'Playwright bundled Chromium'}`);
+    console.log(`  persistent profile  : ${report.profile.path} (${report.profile.exists ? 'exists' : 'not created yet'})`);
+    console.log(`  login/browser engine: ${report.engine}`);
     console.log(`  live (Celeste)      : ${live.available && live.connected ? `ready at ${live.base}` : `unavailable — ${live.detail ?? live.base}`}`);
-    // CDP-native stack: resolution only (a browser never launches here).
-    try {
-      const cdp = resolveCdpBrowserBinary(typeof flags.cdpExecutable === 'string' ? flags.cdpExecutable : undefined);
-      const info = shellInstallInfo();
-      console.log(`  cdp (headless shell): ${cdp.path} [${cdp.source}]${cdp.isHeadlessShell ? '' : ' (full chrome, --headless=new)'}`);
-      if (info) console.log(`    pinned install fetched ${info.fetchedAt}`);
-    } catch (err) {
-      console.log(`  cdp (headless shell): UNAVAILABLE — ${(err as Error).message.split('.')[0]}.`);
-      console.log(`    Install: mochi browser fetch-cdp-shell (pinned ${PINNED_SHELL.version}, checksum-verified)`);
-    }
-    // Lightpanda: OPT-IN engine — presence only, never resolution-failure noise.
-    const lpInfo = lightpandaInstallInfo();
-    console.log(`  cdp (lightpanda opt-in): ${lpInfo ? `installed (${lpInfo.asset}, fetched ${lpInfo.fetchedAt}) — enable with browser.cdpEngine=lightpanda or MOCHI_CDP_ENGINE=lightpanda` : 'not installed (optional) — mochi browser fetch-lightpanda'}`);
-    console.log(`  daemon script       : ${daemonScript()}`);
+    console.log(`  daemon script       : ${report.daemonScript}`);
     console.log('\nLog in once for Google Docs / Gmail: mochi browser login https://accounts.google.com');
-    return;
-  }
-  if (action === 'fetch-cdp-shell' || action === 'fetch') {
-    console.log(`Fetching pinned chrome-headless-shell ${PINNED_SHELL.version} (sha256-verified)…`);
-    try {
-      const res = await fetchCdpHeadlessShell({
-        onProgress: (received) => console.log(`  … ${Math.round(received / (1024 * 1024))} MB`),
-      });
-      console.log(
-        res.alreadyInstalled
-          ? `already installed: ${res.path}`
-          : `installed: ${res.path}\n  bytes: ${res.bytes}\n  sha256: ${res.sha256} (verified)`,
-      );
-    } catch (err) {
-      console.error(`fetch failed: ${(err as Error).message}`);
-      process.exitCode = 1;
-    }
-    return;
-  }
-  if (action === 'fetch-lightpanda') {
-    console.log(`Fetching pinned Lightpanda ${PINNED_LIGHTPANDA.version} (sha256-verified, opt-in engine)…`);
-    try {
-      const res = await fetchLightpanda({
-        onProgress: (received) => console.log(`  … ${Math.round(received / (1024 * 1024))} MB`),
-      });
-      console.log(
-        res.alreadyInstalled
-          ? `already installed: ${res.path}`
-          : `installed: ${res.path}\n  asset: ${res.asset}\n  bytes: ${res.bytes}\n  sha256: ${res.sha256} (verified)`,
-      );
-      console.log('Enable per session: MOCHI_CDP_ENGINE=lightpanda (or browser.cdpEngine=lightpanda in config). The DEFAULT engine is unchanged.');
-    } catch (err) {
-      console.error(`fetch failed: ${(err as Error).message}`);
-      process.exitCode = 1;
-    }
     return;
   }
   if (action === 'close' || action === 'stop') {
@@ -116,9 +112,9 @@ export async function runBrowserCli(positional: string[], flags: Record<string, 
     return;
   }
   if (action === 'help' || action === '--help' || action === '-h') {
-    console.log('Usage: mochi browser <login [url] | status | close | fetch-cdp-shell | fetch-lightpanda>');
+    console.log('Usage: mochi browser <login [url] | status [--json] | close>');
     return;
   }
-  console.error(`Unknown browser action "${action}". Use: login, status, close, fetch-cdp-shell, fetch-lightpanda.`);
+  console.error(`Unknown browser action "${action}". Use: login, status, close.`);
   process.exitCode = 1;
 }

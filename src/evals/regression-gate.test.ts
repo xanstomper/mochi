@@ -53,7 +53,11 @@ function solutionRunner(tokensPerTrial: number, sabotageTaskId?: string): TaskRu
   };
 }
 
-const baseOpts = () => ({ repoRoot: root, frozenDir, blocklistPath: REAL_BLOCKLIST, reportsDir, writeReport: false });
+// k=1: none of these tests exercise multi-trial semantics (flake detection /
+// convergence), and each trial is a real temp-dir + real verifier execution —
+// k=3 made every baseline+run pair spawn ~144 verifiers, enough for the file
+// to blow the default 120s test timeout on a loaded CI runner.
+const baseOpts = () => ({ repoRoot: root, frozenDir, blocklistPath: REAL_BLOCKLIST, reportsDir, writeReport: false, k: 1 });
 
 describe('frozen set integrity', () => {
   it('(a) hash tamper → loadFrozenSet refuses loudly', () => {

@@ -814,4 +814,3 @@ export class CurriculumProgress {
     return p;
   }
 }
-

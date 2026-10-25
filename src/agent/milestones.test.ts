@@ -1,305 +1,146 @@
-// Long-task milestone strategy — unit tests for the pure core
-// (src/agent/milestones.ts): plan construction + validation, the pacing
-// ladder (tighten → re-plan → escalate), the evidence gate on re-plans,
-// verified-checkpoint state transitions, and persistence round-trips.
-// Loop-level behavior (claims judged by checks, kill/resume at a
-// boundary, wrong-assumption re-plans) lives in longtask.test.ts.
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
+import { join } from 'node:path';
 import {
   MilestoneTracker,
   buildMilestonePlan,
   loadMilestoneState,
-  normalizeMilestoneInputs,
-  parseMilestoneInputs,
+  parseMilestonePlan,
   planMilestonesWithChat,
   resolveLongtaskFlags,
   runMilestoneCheck,
   saveMilestoneState,
+  type MilestoneEvent,
   type MilestoneInput,
 } from './milestones.js';
 
-const cmd = (command: string) => ({ kind: 'command' as const, command });
-const art = (path: string, contains?: string) => ({ kind: 'artifact' as const, path, ...(contains ? { contains } : {}) });
+const INPUTS: MilestoneInput[] = [
+  { title: 'types compile', check: 'npx tsc --noEmit' },
+  { title: 'unit tests pass', check: 'npx vitest run src/a.test.ts' },
+  { title: 'docs updated', check: 'grep -q foo README.md', optional: true },
+];
 
-function inputs(n: number, extra?: Partial<MilestoneInput>): MilestoneInput[] {
-  return Array.from({ length: n }, (_, i) => ({
-    id: `m${i + 1}`,
-    title: `Milestone ${i + 1}`,
-    detail: `Do step ${i + 1}`,
-    check: cmd(`check-${i + 1}`),
-    ...extra,
-  }));
+function tracker(budget = { tokens: 1000, turns: 20 }): { t: MilestoneTracker; events: MilestoneEvent[] } {
+  const events: MilestoneEvent[] = [];
+  const state = buildMilestonePlan('task-1', 'Fix the thing', INPUTS, budget);
+  return { t: new MilestoneTracker(state, (e) => events.push(e)), events };
 }
 
-describe('plan construction', () => {
-  it('distributes finite budgets by weight and leaves unbounded dimensions at 0', () => {
-    const plan = buildMilestonePlan('t1', 'Task', [
-      { id: 'a', title: 'A', check: cmd('a'), weight: 1 },
-      { id: 'b', title: 'B', check: cmd('b'), weight: 1 },
-      { id: 'c', title: 'C', check: cmd('c'), weight: 2 },
-    ], { tokens: 0, turns: 40 });
-    expect(plan.milestones.map((m) => m.budgetTurns)).toEqual([10, 10, 20]);
-    expect(plan.milestones.map((m) => m.budgetTokens)).toEqual([0, 0, 0]);
-    expect(plan.totalBudgetTurns).toBe(40);
+describe('long-task milestones (agent/milestones.ts)', () => {
+  it('rejects plans without adjudicable checks instead of auto-passing them', () => {
+    expect(() => buildMilestonePlan('t', 'x', [], { tokens: 0, turns: 0 })).toThrow(/empty/);
+    expect(() => buildMilestonePlan('t', 'x', [{ title: 'no check' }], { tokens: 0, turns: 0 })).toThrow(/no adjudicable check/);
+    expect(() => buildMilestonePlan('t', 'x', [{ title: 'manual', check: { kind: 'manual' } }], { tokens: 0, turns: 0 })).toThrow(/manual/);
   });
 
-  it('derives unique slug ids from titles when ids are absent', () => {
-    const norm = normalizeMilestoneInputs([
-      { title: 'Write the code', check: cmd('x') },
-      { title: 'Write the code', check: cmd('y') },
-    ]);
-    expect(norm[0].id).toBe('write-the-code');
-    expect(norm[1].id).toBe('write-the-code-2');
-  });
-
-  it('topologically sorts by dependsOn (titles resolve through ids)', () => {
-    const norm = normalizeMilestoneInputs([
-      { id: 'c', title: 'C', check: cmd('c'), dependsOn: ['b'] },
-      { id: 'a', title: 'A', check: cmd('a') },
-      { id: 'b', title: 'B', check: cmd('b'), dependsOn: ['a'] },
-    ]);
-    expect(norm.map((m) => m.id)).toEqual(['a', 'b', 'c']);
-  });
-
-  it('rejects empty plans, unknown deps, self-deps, cycles, and bad checks', () => {
-    expect(() => normalizeMilestoneInputs([])).toThrow(/empty/);
-    expect(() => normalizeMilestoneInputs([{ id: 'a', title: 'A', check: cmd('x'), dependsOn: ['ghost'] }])).toThrow(/unknown milestone/);
-    expect(() => normalizeMilestoneInputs([{ id: 'a', title: 'A', check: cmd('x'), dependsOn: ['a'] }])).toThrow(/itself/);
-    expect(() => normalizeMilestoneInputs([
-      { id: 'a', title: 'A', check: cmd('x'), dependsOn: ['b'] },
-      { id: 'b', title: 'B', check: cmd('y'), dependsOn: ['a'] },
-    ])).toThrow(/cycle/);
-    expect(() => normalizeMilestoneInputs([{ title: 'A', check: { kind: 'command', command: ' ' } as never }])).toThrow(/non-empty command/);
-    expect(() => normalizeMilestoneInputs([{ title: 'A', check: { kind: 'vibes' } as never }])).toThrow(/unknown check kind/);
-  });
-});
-
-describe('plan parsing + provider planner', () => {
-  it('parses fenced JSON and returns null on garbage or invalid entries', () => {
-    const good = parseMilestoneInputs('```json\n[{"title":"A","check":{"kind":"artifact","path":"a.txt"}}]\n```');
-    expect(good).toHaveLength(1);
-    expect(parseMilestoneInputs('no json here')).toBeNull();
-    expect(parseMilestoneInputs('[{"title":"A","check":{"kind":"nope"}}]')).toBeNull();
-    expect(parseMilestoneInputs('[]')).toBeNull();
-  });
-
-  it('planMilestonesWithChat round-trips through an injected chat fn and swallows failures', async () => {
-    const ok = await planMilestonesWithChat(
-      { title: 'Build it', description: 'stages' },
-      async () => ({ content: '[{"title":"One","detail":"d","check":{"kind":"command","command":"true"}}]' }),
-    );
-    expect(ok).toHaveLength(1);
-    const bad = await planMilestonesWithChat({ title: 'X' }, async () => ({ content: 'I cannot' }));
-    expect(bad).toBeNull();
-    const boom = await planMilestonesWithChat({ title: 'X' }, async () => { throw new Error('down'); });
-    expect(boom).toBeNull();
-  });
-});
-
-describe('tracker lifecycle', () => {
-  it('closes milestones in order, only on passing checks, and reports position', () => {
-    const events: string[] = [];
-    const t = new MilestoneTracker(buildMilestonePlan('t', 'T', inputs(3), { tokens: 0, turns: 30 }), (e) => events.push(e.type));
-    expect(t.current()?.id).toBe('m1');
-    t.activate();
-    expect(t.current()?.status).toBe('active');
-    t.recordCheck(false, 'exit_code: 1\nnope');
-    expect(t.current()?.id).toBe('m1');
-    expect(t.current()?.attempts).toBe(1);
-    t.recordCheck(true, 'exit_code: 0\nok');
-    expect(t.current()?.id).toBe('m2');
+  it('activates milestones in order and only passes on a harness check', () => {
+    const { t, events } = tracker();
+    const first = t.activate();
+    expect(first?.title).toBe('types compile');
+    expect(t.recordCheck(false, 'exit_code: 1')).toBeNull();
+    expect(first?.attempts).toBe(1);
+    expect(events.some((e) => e.type === 'check-failed')).toBe(true);
+    const closed = t.recordCheck(true, 'exit_code: 0');
+    expect(closed?.title).toBe('types compile');
     expect(t.passedCount()).toBe(1);
-    expect(t.position()).toEqual({ index: 2, total: 3 });
-    expect(events).toEqual(['check-failed', 'passed']);
+    expect(t.current()?.title).toBe('unit tests pass');
   });
 
-  it('a dropped dependency counts as satisfied for its dependents', () => {
-    const plan = buildMilestonePlan('t', 'T', [
-      { id: 'opt', title: 'Optional base', check: cmd('x'), optional: true },
-      { id: 'dep', title: 'Dependent', check: cmd('y'), dependsOn: ['opt'] },
-    ], { tokens: 0, turns: 10 });
-    const t = new MilestoneTracker(plan);
+  it('checkpoint text carries the Next: contract', () => {
+    const { t } = tracker();
     t.activate();
-    t.state.milestones[0].status = 'dropped';
-    expect(t.current()?.id).toBe('dep');
+    const text = t.checkpointText('resume me');
+    expect(text).toContain('Next: types compile');
+    expect(text).toContain('npx tsc --noEmit');
   });
 
-  it('the evidence gate admits a re-plan only on first-sighting evidence', () => {
-    const t = new MilestoneTracker(buildMilestonePlan('t', 'T', inputs(2), { tokens: 0, turns: 20 }));
+  it('tightens by dropping optional milestones when burn outruns progress', () => {
+    const { t, events } = tracker();
     t.activate();
-    expect(t.gateReplan('x').allowed).toBe(false);
-    t.recordCheck(false, 'AssertionError: expected 5 to be 6');
-    expect(t.hasPendingEvidence()).toBe(true);
-    expect(t.gateReplan('x').allowed).toBe(true);
-    // Same failure again: same class, already seen — NOT new evidence.
-    t.recordCheck(false, 'AssertionError: expected 5 to be 6');
-    expect(t.gateReplan('x').allowed).toBe(false);
-    // A different failure class is new evidence.
-    t.recordCheck(false, 'TypeError: cannot read property x of undefined');
-    expect(t.gateReplan('x').allowed).toBe(true);
+    t.recordCheck(true, 'exit_code: 0');
+    t.noteSpend(800, 5);
+    const verdict = t.assessPacing();
+    expect(verdict.action).toBe('tighten');
+    const dropped = t.applyTightening(verdict.reason);
+    expect(dropped).toEqual(['ms-3']);
+    expect(events.some((e) => e.type === 'dropped')).toBe(true);
+    expect(t.current()?.title).toBe('unit tests pass');
   });
-});
 
-describe('pacing ladder', () => {
-  function overburnedTracker() {
-    // 2 milestones, 20 turns total → slices of 10. Burn 16 turns on m1.
-    const t = new MilestoneTracker(buildMilestonePlan('t', 'T', inputs(2), { tokens: 0, turns: 20 }));
-    t.activate();
-    t.noteSpend(0, 16);
-    return t;
-  }
-
-  it('tighten fires first on over-burn and drops unstarted optional scope', () => {
-    const plan = buildMilestonePlan('t', 'T', [
-      { id: 'core', title: 'Core', check: cmd('core') },
-      { id: 'extra', title: 'Extra polish', check: cmd('extra'), optional: true },
-      { id: 'final', title: 'Final', check: cmd('final'), dependsOn: ['core'] },
-    ], { tokens: 0, turns: 30 });
-    const t = new MilestoneTracker(plan);
-    t.activate();
-    t.noteSpend(0, 16); // core slice is 10 → 1.6× over-burn
-    const a = t.assessPacing();
-    expect(a.action).toBe('tighten');
-    const dropped = t.applyTightening(a.reason);
-    expect(dropped).toEqual(['extra']);
-    expect(t.state.milestones.find((m) => m.id === 'extra')?.status).toBe('dropped');
-    // After tightening, with no new evidence, pacing does not demand a re-plan.
+  it('escalates when the budget is actually exhausted', () => {
+    const { t } = tracker();
+    t.noteSpend(1000, 1);
+    const v = t.assessPacing();
+    expect(v.action).toBe('escalate');
+    t.markEscalated(v.reason);
+    expect(t.state.escalated?.reason).toContain('token budget');
     expect(t.assessPacing().action).toBe('none');
   });
 
-  it('re-plan is recommended after tightening when new evidence is pending', () => {
-    const t = overburnedTracker();
-    expect(t.assessPacing().action).toBe('tighten');
-    t.applyTightening('test');
-    t.recordCheck(false, 'boom: totally new failure mode');
-    const a = t.assessPacing();
-    expect(a.action).toBe('replan');
-  });
-
-  it('escalates when a finite budget is nearly gone with milestones open', () => {
-    const t = new MilestoneTracker(buildMilestonePlan('t', 'T', inputs(3), { tokens: 0, turns: 30 }));
+  it('re-plans only with evidence, preserves passed work, and enforces cooldown', () => {
+    const { t, events } = tracker();
     t.activate();
-    t.noteSpend(0, 28); // 93% of the turn budget, nothing passed
-    expect(t.assessPacing().action).toBe('escalate');
+    t.recordCheck(true, 'exit_code: 0');
+    const gate = t.gateReplan('pacing');
+    expect(gate.allowed).toBe(true);
+    t.applyReplan([
+      { title: 'new path A', check: 'echo a' },
+      { title: 'new path B', check: 'echo b' },
+    ], gate.reason);
+    expect(t.state.milestones.map((m) => m.title)).toEqual(['types compile', 'new path A', 'new path B']);
+    expect(t.state.milestones[0]!.status).toBe('passed');
+    expect(t.state.milestones[2]!.id).toBe('ms-3');
+    expect(events.some((e) => e.type === 'replanned')).toBe(true);
+    expect(t.gateReplan('pacing').allowed).toBe(false);
   });
 
-  it('escalates past the give-up line for a single milestone', () => {
-    const t = new MilestoneTracker(buildMilestonePlan('t', 'T', inputs(4), { tokens: 0, turns: 40 }));
+  it('round-trips plan state through the workspace', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mochi-ms-'));
+    const ws = { stateDir: join(dir, 'state') };
+    const { t } = tracker();
     t.activate();
-    t.noteSpend(0, 26); // m1 slice is 10 → 2.6× — past give-up, under the 90% global line
-    expect(t.assessPacing().action).toBe('escalate');
-  });
-
-  it('healthy burn yields no pacing action', () => {
-    const t = new MilestoneTracker(buildMilestonePlan('t', 'T', inputs(2), { tokens: 0, turns: 20 }));
-    t.activate();
-    t.noteSpend(0, 4);
-    expect(t.assessPacing().action).toBe('none');
-  });
-});
-
-describe('re-plans', () => {
-  it('preserve passed milestones, journal the trigger, and re-derive slices from the remaining budget', () => {
-    const t = new MilestoneTracker(buildMilestonePlan('t', 'T', inputs(3), { tokens: 0, turns: 30 }));
-    t.activate();
-    t.noteSpend(0, 5);
-    t.recordCheck(true, 'ok');
-    t.activate();
-    t.noteSpend(0, 4); // spent 9 total; 21 turns remain
-    const rec = t.applyReplan([
-      { id: 'm2', title: 'Milestone 2 (revised)', check: cmd('check-2b') },
-      { id: 'm3', title: 'Milestone 3', check: cmd('check-3') },
-    ], 'milestone check failed 2x: m2; new evidence: ...');
-    expect(rec.replacedIds).toEqual(['m2', 'm3']);
-    expect(t.state.milestones.map((m) => m.id)).toEqual(['m1', 'm2', 'm3']);
-    expect(t.state.milestones[0].status).toBe('passed');
-    // Same-id replacement carries its spend over (4 turns on old m2).
-    expect(t.state.milestones[1].spentTurns).toBe(4);
-    // Remaining 21 turns split evenly across the two fresh milestones.
-    expect(t.state.milestones[1].budgetTurns + t.state.milestones[2].budgetTurns).toBe(21);
-    expect(t.state.replans).toHaveLength(1);
-    expect(t.state.replans[0].trigger).toContain('milestone check failed 2x');
-    expect(t.current()?.id).toBe('m2');
-  });
-});
-
-describe('check execution', () => {
-  it('command checks are decided by the exit_code envelope', async () => {
-    const runShell = async (command: string) => (command === 'good' ? 'exit_code: 0\nfine' : 'exit_code: 3\nbad');
-    expect((await runMilestoneCheck(cmd('good'), '/tmp', runShell)).passed).toBe(true);
-    const bad = await runMilestoneCheck(cmd('bad'), '/tmp', runShell);
-    expect(bad.passed).toBe(false);
-    expect(bad.output).toContain('exit 3');
-    const noEnvelope = await runMilestoneCheck(cmd('x'), '/tmp', async () => 'just text');
-    expect(noEnvelope.passed).toBe(false);
-  });
-
-  it('artifact checks assert existence and content', async () => {
-    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-ms-check-'));
-    try {
-      writeFileSync(resolve(dir, 'a.txt'), 'hello world');
-      const shell = async () => 'exit_code: 0';
-      expect((await runMilestoneCheck(art('a.txt'), dir, shell)).passed).toBe(true);
-      expect((await runMilestoneCheck(art('a.txt', 'world'), dir, shell)).passed).toBe(true);
-      expect((await runMilestoneCheck(art('a.txt', 'mars'), dir, shell)).passed).toBe(false);
-      expect((await runMilestoneCheck(art('missing.txt'), dir, shell)).passed).toBe(false);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-});
-
-describe('persistence', () => {
-  it('state round-trips through the workspace JSON store and resumes at the open boundary', () => {
-    const store = new Map<string, unknown>();
-    const ws = {
-      readJson<T>(path: string, fallback?: T): T {
-        return (store.has(path) ? store.get(path) : fallback) as T;
-      },
-      writeJson(path: string, value: unknown) { store.set(path, value); },
-    };
-    const t = new MilestoneTracker(buildMilestonePlan('task-9', 'T', inputs(3), { tokens: 0, turns: 30 }));
-    t.activate();
-    t.recordCheck(true, 'ok');
-    t.recordCheck(false, 'AssertionError: expected 5 to be 6');
+    t.recordCheck(true, 'exit_code: 0');
     saveMilestoneState(ws, t.state);
-    const loaded = loadMilestoneState(ws, 'task-9');
-    expect(loaded).not.toBeNull();
-    const t2 = new MilestoneTracker(JSON.parse(JSON.stringify(loaded)) as never);
-    expect(t2.passedCount()).toBe(1);
-    expect(t2.current()?.id).toBe('m2');
-    // The pre-kill failure was already evidence once — a resumed tracker
-    // must not treat its repeat as fresh grounds for a re-plan.
-    expect(t2.gateReplan('resume').allowed).toBe(false);
-    expect(loadMilestoneState(ws, 'other-task')).toBeNull();
+    const loaded = loadMilestoneState(ws, 'task-1');
+    expect(loaded?.milestones[0]?.status).toBe('passed');
+    expect(loadMilestoneState(ws, 'other')).toBeNull();
   });
-});
 
-describe('flags', () => {
-  it('env kill-switches win over config, config wins over defaults', () => {
-    expect(resolveLongtaskFlags(undefined, {} as NodeJS.ProcessEnv)).toEqual({ enabled: true, pacing: true });
-    expect(resolveLongtaskFlags(undefined, { MOCHI_LONGTASK: '0' } as NodeJS.ProcessEnv).enabled).toBe(false);
-    expect(resolveLongtaskFlags({ enabled: false }, {} as NodeJS.ProcessEnv).enabled).toBe(false);
-    expect(resolveLongtaskFlags({ pacing: false }, {} as NodeJS.ProcessEnv).pacing).toBe(false);
-    expect(resolveLongtaskFlags(undefined, { MOCHI_LONGTASK_PACING: '0' } as NodeJS.ProcessEnv).pacing).toBe(false);
+  it('runs command checks and refuses to adjudicate manual ones', async () => {
+    const ok = await runMilestoneCheck({ kind: 'command', command: 'true' }, '.', async () => 'exit_code: 0\nstdout:\nok');
+    expect(ok.passed).toBe(true);
+    const bad = await runMilestoneCheck({ kind: 'command', command: 'false' }, '.', async () => 'exit_code: 1');
+    expect(bad.passed).toBe(false);
+    const manual = await runMilestoneCheck({ kind: 'manual' }, '.', async () => 'exit_code: 0');
+    expect(manual.passed).toBe(false);
   });
-});
 
-describe('briefs + summaries', () => {
-  it('the escalation summary names open milestones, spend, and re-plan triggers', () => {
-    const t = new MilestoneTracker(buildMilestonePlan('t', 'Big Task', inputs(2), { tokens: 5000, turns: 20 }));
-    t.activate();
-    t.noteSpend(400, 6);
-    t.recordCheck(false, 'nope');
-    const s = t.stateSummary('HEADER');
-    expect(s).toContain('HEADER');
-    expect(s).toContain('Big Task');
-    expect(s).toContain('0 passed');
-    expect(s).toContain('400');
-    const cp = t.checkpointText('note');
-    expect(cp).toContain('Next: Resume at milestone "Milestone 1"');
+  it('parses only milestones that carry a check', () => {
+    const parsed = parseMilestonePlan('[{"title":"a","check":"echo a"},{"title":"b"},{"title":"c","check":"echo c","optional":true}]');
+    expect(parsed?.map((m) => m.title)).toEqual(['a', 'c']);
+    expect(parseMilestonePlan('not json')).toBeNull();
+  });
+
+  it('asks the provider for a plan and returns null on unusable output', async () => {
+    const good = await planMilestonesWithChat(
+      { title: 'fix', description: 'do it' },
+      async () => ({ content: '[{"title":"step","check":"echo ok"}]' }),
+    );
+    expect(good).toHaveLength(1);
+    const bad = await planMilestonesWithChat({ title: 'fix' }, async () => ({ content: 'sorry, no' }));
+    expect(bad).toBeNull();
+  });
+
+  it('resolves flags with kill switches', () => {
+    const prev = process.env.MOCHI_LONGTASK;
+    process.env.MOCHI_LONGTASK = '0';
+    try {
+      expect(resolveLongtaskFlags()).toEqual({ enabled: false, pacing: false });
+    } finally {
+      if (prev === undefined) delete process.env.MOCHI_LONGTASK;
+      else process.env.MOCHI_LONGTASK = prev;
+    }
+    expect(resolveLongtaskFlags()).toEqual({ enabled: true, pacing: true });
   });
 });

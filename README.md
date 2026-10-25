@@ -14,7 +14,6 @@ Goals · Task DAGs · Multi-agent Teams · Persistent Daemon · Deep Run Traces 
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-339933?style=for-the-badge&logo=nodedotjs&logoColor=white&labelColor=0d1f12)](https://nodejs.org)
 [![Rust Core](https://img.shields.io/badge/core-rust--native-dea584?style=for-the-badge&logo=rust&logoColor=white&labelColor=2b1a0e)](native/mochi_core)
 [![Tests](https://img.shields.io/badge/tests-2326%20passing-3fb950?style=for-the-badge&labelColor=0e2415)](#testing)
-[![Tests](https://img.shields.io/badge/tests-2821%20passing-3fb950?style=for-the-badge&labelColor=0e2415)](#testing)
 [![Deps](https://img.shields.io/badge/runtime%20deps-0-cf222e?style=for-the-badge&labelColor=2b0d0d)](#architecture)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge&labelColor=0d1b2e)](LICENSE)
 [![CI](https://img.shields.io/badge/CI-linux%20%C2%B7%20macOS%20%C2%B7%20windows-2094d3?style=for-the-badge&logo=githubactions&logoColor=white&labelColor=0a1d2b)](https://github.com/xanstomper/mochi/actions)
@@ -40,36 +39,7 @@ mochi team "ship the payments refactor"          # role-diverse agent team
 mochi trace <goalId>                             # replay any run end to end
 ```
 
-## Real browser, documents, email, and devices
-
-Mochi does not stop at the filesystem. The `browser` tool keeps one live
-Playwright session per workspace (cookies, tabs, console/network history,
-downloads, uploads), and can either drive the user's **real, logged-in browser**
-through the Celeste bridge (`backend: "live"`) or an isolated headless browser
-(`backend: "headless"`). `auto` uses live first for read-shaped commands and
-refuses to silently retarget clicks/typing to a different browser. Live pages support ref-based fill/press/select/hover/focus, JS eval, waits, extraction, cookies/console/network, screenshots, and tab create/activate/close. (Live fill/press need a Celeste daemon with `POST /api/browser/action`; restart Celeste after updating.)
-
-```bash
-mochi browser login https://accounts.google.com   # one-time persistent profile
-mochi browser status                              # engines, live bridge, profile
-```
-
-High-level tools built on the same session:
-
-| Tool | What it does |
-| :--- | :--- |
-| `browser` | navigate, snapshot with refs, click/type/fill/press, tabs, console/network, cookies, upload/download, PDF, screenshots, evaluate |
-| `docs` | create / append / read a formatted Google Doc (headings, lists, code, tables, quotes) |
-| `email` | Gmail draft or send, CC/BCC, attachments; sending requires `send: true` |
-| `canvas` | self-contained visual HTML plan + drag-and-drop `.excalidraw` scene, optional publish to excalidraw.com |
-| `schedule` | create/list/pause/resume/run/remove recurring agent jobs with timeout, delivery, last status/error/output |
-| `device` | Android via adb (tap/swipe/type/UI dump/apps/install/logcat), desktop via xdotool/scrot/wmctrl, iOS simulator via simctl |
-
-Recurring work is owned by the daemon and persists in `.mochi/cron.json`;
-`mochi cron` manages it without HTTP. Device and desktop commands run through
-the same bounded exec policy as the shell tool.
-
-Zero runtime JS dependencies. Runs under **Node 22** or **Bun**, and ships a standalone native binary (`npm run build:bin`) that needs no runtime at all. The performance core is a zero-dependency Rust crate (`native/mochi_core`): tokenization, budget math, context compaction planning, and agent-loop decisions run natively — every native path has a parity-tested TypeScript fallback, so nothing breaks when the Rust binary is absent (CI, cold installs). The harness is polyglot: an 18-ecosystem repo detector, a 10-language tree-sitter codegraph, and native Rust/C++ accelerators in the `edit`/`patch` hot paths.
+Zero runtime JS dependencies. Runs under **Node 22** or **Bun**, and ships a standalone native binary (`npm run build:bin`) that needs no runtime at all. The performance core is a zero-dependency Rust crate (`native/mochi_core`): tokenization, budget math, context compaction planning, and agent-loop decisions run natively — every native path has a parity-tested TypeScript fallback, so nothing breaks when the Rust binary is absent (CI, cold installs). The harness is polyglot: an 18-ecosystem detector, a 10-language tree-sitter codegraph, and native Rust/C++ accelerators in the `edit`/`patch` hot paths.
 
 <div align="center">
 
@@ -377,7 +347,7 @@ The runtime loop is `preflight → model → tools → verify → recover → pu
 
 1. **Preflight** — context packet built in ~325 ms cold (batched binary probing, fingerprint-cached rules/memory so multi-hundred-iteration tasks don't re-read disk every call).
 2. **Model** — tiered tool advertising (21 lean tools / ~3K tokens on the first call, 7 for chat, 16 for research, 65 on demand via `load_tools` recovery), speculative preflight on hard tasks, streaming with mid-stream Ctrl-C abort on the wire.
-3. **Tools** — 89 tools through a permission-gated bus; every shell command risk-classified (22 destructive + 13 network regex patterns); output folded head/tail through the Rust core; secrets redacted on every output, trace line, and disk write.
+3. **Tools** — 81 tools through a permission-gated bus; every shell command risk-classified against destructive and network pattern tables; output folded head/tail through the Rust core; secrets redacted on every output, trace line, and disk write.
 4. **Verify** — baseline + proportionate verification (goal-engine tasks add the independent verifier and outcome judge with rule-based veto on contradictory PASSes).
 5. **Recover** — provider failover, key rotation, model auto-escalation, checkpoint/rollback, warm-start resume.
 6. **Pulse / Struggle injection** — consecutive tool errors, repeated identical tool results (3+ reads of the same content), empty responses, and verification loops are surfaced to the model as a STRUGGLE STATE system message plus an escape-plan directive, so a struggling model never starts its next turn blind to its own failure history. Healthy runs pay nothing (zero-cost no-op).
@@ -478,7 +448,7 @@ Global: `~/.config/mochi/config.json` · Project: `.mochi/config.json`
 | `MOCHI_REASONING=max` | Reasoning depth override |
 | `MOCHI_RATE_LIMIT_RPM=20` | Leaky-bucket request-rate cap |
 | `MOCHI_RATE_LIMIT_CONCURRENCY=3` | Concurrent in-flight request cap |
-| `MOCHI_CPG_BACKEND=tree-sitter` | Tree-sitter symbol-graph backend (falls back to TS-AST) |
+| `MOCHI_CPG_BACKEND=tsc` | Force the TypeScript-AST symbol-graph backend (tree-sitter WASM is the default) |
 | `MOCHI_LIGHT=1` | Disable embedded SQLite index + WASM parser |
 | `FREEINFERENCE_API_KEY=...` | Provider key (or any OpenAI-compatible env) |
 
@@ -710,16 +680,16 @@ mochi bluebubbles run       # iMessage via a BlueBubbles server (aliases: imessa
 
 ## Symbol Graph Backends
 
-`get_function` / `find_callers` / `type_hierarchy` index the repo into an in-memory SQLite code graph. Two parsers back the index, selectable by env, with backend-agnostic read paths:
+`get_function` / `find_callers` / `type_hierarchy` index the repo into an in-memory SQLite code graph. Two parsers back the index, with backend-agnostic read paths:
 
-- `tree-sitter` (default): a WASM CST walk for lower startup cost. Requires `npm i web-tree-sitter tree-sitter-typescript`; missing packages fall back to `tsc` automatically.
-- `tsc`: the TypeScript compiler AST, always available. Opt out of tree-sitter with `MOCHI_CPG_BACKEND=tsc`.
+- `tree-sitter` (default): a WASM CST walk, in-process and lazy — grammars load on first symbol-index use, and only for languages actually present. Packages ship as optional dependencies (installed by default); missing packages fall back automatically.
+- `tsc`: the TypeScript compiler AST, always available. Covers `.ts`/`.js` only, and is the opt-out: set `MOCHI_CPG_BACKEND=tsc` (or `MOCHI_LIGHT=1`, which forces it).
 
 ```bash
 MOCHI_CPG_BACKEND=tsc mochi inspect "SessionManager"
 ```
 
-The codegraph parses and indexes **10 languages** (TypeScript, JavaScript, Python, Rust, Go, Java, C++, C#, Ruby, PHP). The repo detector recognises 18 ecosystems (marker files, test/lint commands, hints), and test-file matching (`_test.go` / `test_*.py` / `*Test.java`) spans the detected set.
+Two counts, two different jobs: Mochi **detects 18 ecosystems** (`src/repo/repo.ts` — TypeScript, JavaScript, Python, Go, Rust, Java, C#, C++, Zig, Ruby, PHP, Swift, Kotlin, Elixir, Haskell, Scala, Dart, Lua: marker files, test/lint commands, hints), and **parses/indexes 10 languages** with tree-sitter (`src/repo/codegraph.ts` — TypeScript, JavaScript, Python, Go, Rust, Java, C++, Ruby, PHP, C#). Test-file matching (`_test.go`, `test_*.py`, `*Test.java`) is a third, separate regex convention in `src/core/mutation.ts`.
 
 ## Light Mode
 
