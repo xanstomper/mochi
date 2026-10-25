@@ -7,14 +7,9 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { ChatMessage, ToolDefinition, StreamChunk, ModelResponse } from '../types.js';
-// Canonical content helpers (ISSUES L-10): antigravity used to carry private
-// copies of contentText/splitContent that had DIVERGED from types.ts — its
-// data-URI regex required `image/*` + `;base64`, and it treated ANY non-data
-// URL as an image URL where the canonical helper only accepts http(s). Same
-// message, different image extraction per provider. The canonical versions
-// (types.ts) are the ones anthropic/openai/gemini already import.
 import { contentText, splitContent } from '../types.js';
+import type { ChatMessage, ToolDefinition, StreamChunk, ModelResponse } from '../types.js';
+import { estimateCostUsd } from '../pricing.js';
 import type { ProviderConfig } from './openai.js';
 import { ProviderError, describeModelError, parseRetryAfter } from '../utils/http-error.js';
 import { classifyError, withRetries } from './rate-limit.js';
@@ -113,27 +108,60 @@ function parseCredentials(apiKeyOrJson?: string): {
   return { accessToken: trimmed, projectId: 'aicode-consumers' };
 }
 
+
 function mapAntigravityFinish(reason?: string): StreamChunk['finishReason'] {
   if (reason === 'MAX_TOKENS') return 'length';
   return 'stop';
 }
-/** Cost of one Antigravity call, priced through the Phase C table of
- *  record (pricing.ts) — this provider used to carry a shadow price table
- *  whose fallback priced ANY unrecognized model at gemini-3.8-flash rates
- *  and emitted the guess as a measured costUsd (audit L-03). Per the
- *  pricing doctrine, an unpriced model (the Gemini 3.x ids are deliberately
- *  untabled — host-dependent) yields null: no costUsd is emitted, and
- *  BudgetEngine treats the call as unmeasured instead of recording
- *  fabricated dollars. Antigravity's promptTokenCount INCLUDES cached
- *  tokens (Google usage convention), matching pricing.ts's default
- *  inputIncludesCache handling. */
-export function computeAntigravityCost(model: string, inTokens: number, outTokens: number, cachedTokens = 0): number | null {
-  const est = estimateCostUsd(model, {
+// NOTE (audit L-03): Claude rows are deliberately ABSENT — they are priced by
+// src/pricing.ts (the table of record) and resolved first in
+// computeAntigravityCost. Only Antigravity-hosted ids that pricing.ts excludes
+// appear here, each with the vendor list rate in the comment above it.
+export const ANTIGRAVITY_PRICING_TABLE: Record<string, { in: number; out: number; cache: number }> = {
+  // Gemini 3.8 / 3.7 / 3.6 Flash ($0.75 / $3.75 per 1M tokens, cache read $0.075)
+  'gemini-3.8-flash': { in: 0.75, out: 3.75, cache: 0.075 },
+  'gemini-3.7-flash': { in: 0.75, out: 3.75, cache: 0.075 },
+  // Gemini 3 Flash ($0.50 / $3.00 per 1M tokens, cache read $0.05)
+  'gemini-3-flash': { in: 0.50, out: 3.00, cache: 0.05 },
+  // Gemini 3.5 Flash ($1.50 / $9.00 per 1M tokens, cache read $0.15)
+  'gemini-3.5-flash': { in: 1.50, out: 9.00, cache: 0.15 },
+  'gemini-3.5-flash-lite': { in: 0.30, out: 2.50, cache: 0.03 },
+  'gemini-3.1-flash-lite': { in: 0.25, out: 1.50, cache: 0.025 },
+  // Gemini 2.5 Flash ($0.30 / $2.50 per 1M tokens, cache read $0.03)
+  'gemini-2.5-flash': { in: 0.30, out: 2.50, cache: 0.03 },
+  'gemini-2.5-flash-lite': { in: 0.10, out: 0.40, cache: 0.01 },
+  // Free / preview tiers ($0)
+  'gpt-oss-120b': { in: 0, out: 0, cache: 0 },
+  'gemini-4-argon-disabled': { in: 0, out: 0, cache: 0 },
+  'tab_flash_lite_preview': { in: 0, out: 0, cache: 0 },
+  'tab_jump_flash_lite_preview': { in: 0, out: 0, cache: 0 },
+};
+
+/** Exact-id rates for the Antigravity-hosted models that the shared price
+ *  table deliberately excludes (host-dependent 3.x ids; Wave G policy). The
+ *  Claude rows live in pricing.ts and are resolved THERE, not duplicated. */
+export function computeAntigravityCost(model: string, inTokens: number, outTokens: number, cachedTokens = 0): number {
+  // 1. Shared table of record (+ operator overrides) wins. pricing.ts knows
+  //    the Claude ids and Gemini 2.5; its dollars are tracked as ESTIMATED.
+  const shared = estimateCostUsd(model, {
     inputTokens: inTokens,
     outputTokens: outTokens,
     cacheReadTokens: cachedTokens,
   });
-  return est ? est.costUsd : null;
+  if (shared) return Math.round(shared.costUsd * 10_000_000) / 10_000_000;
+
+  // 2. Antigravity's own 3.x ids: EXACT match only. The old substring
+  //    fallback invented a price for any unknown model (`my-model` →
+  //    gemini-3.8-flash rates), which is a fabricated measurement.
+  const rates = ANTIGRAVITY_PRICING_TABLE[model.toLowerCase()];
+  if (!rates) return 0; // unpriced, not guessed
+
+  const inRate = rates.in / 1_000_000;
+  const outRate = rates.out / 1_000_000;
+  const cacheRate = rates.cache / 1_000_000;
+  const billableIn = Math.max(0, inTokens - cachedTokens);
+  const cost = billableIn * inRate + cachedTokens * cacheRate + outTokens * outRate;
+  return Math.round(cost * 10_000_000) / 10_000_000;
 }
 
 function extractAntigravity(data: AntigravityResponsePayload, defaultModel = 'gemini-3.8-flash'): ModelResponse {

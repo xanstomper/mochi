@@ -275,9 +275,19 @@ if (!cfg.model.failover || cfg.model.failover.length === 0) {
 }
 
   merge(cfg as unknown as Record<string, unknown>, { model: envModelConfig() });
+  // Measured routing may only override a DEFAULT model choice. If any layer
+  // set the model explicitly — SDK overrides, user config, project config, or
+  // MOCHI_MODEL — the user has pinned it and routing must defer.
+  const userModel = (user as { model?: { model?: unknown } } | undefined)?.model;
+  const projectModel = (projectFragments as { model?: { model?: unknown } } | undefined)?.model;
+  cfg.model.modelPinned = [
+    overrides.model?.model,
+    userModel?.model,
+    projectModel?.model,
+    process.env.MOCHI_MODEL,
+  ].some((m) => typeof m === 'string' && m.trim() !== '');
   if (process.env.MOCHI_PROJECT_DIR) cfg.projectDir = process.env.MOCHI_PROJECT_DIR;
   if (process.env.MOCHI_CONFIG_DIR) cfg.configDir = process.env.MOCHI_CONFIG_DIR;
-  // (ISSUES L-06) MOCHI_TELEMETRY was removed: it set a field nothing read.
   if (process.env.MOCHI_UNCENSORED === '1') {
     cfg.safety.mode = 'uncensored';
     cfg.permissions = {

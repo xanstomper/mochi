@@ -60,17 +60,6 @@ export class WorktreeManager {
 
   /** Create an isolated ephemeral worktree branched from the current HEAD. */
   async create(label = 'worker'): Promise<WorktreeInfo> {
-    // Best-effort orphan reap, once per process per worktree base: a previous
-    // process that crashed/killed left its worktrees + branches behind
-    // (the registry is in-memory only). Fire-and-forget so create() is never
-    // slowed or broken by it — reapOrphans never throws, uses the default
-    // 24h staleness rule, and anything in the live registry (including the
-    // worktree about to be created, whose dir is brand-new) is safe.
-    if (!autoReapedBases.has(this.worktreeBase)) {
-      autoReapedBases.add(this.worktreeBase);
-      void this.reapOrphans().catch(() => { /* never break create() */ });
-    }
-
     const id = `${label}-${randomUUID().slice(0, 8)}`;
     const branch = `mochi/worktree/${id}`;
     const path = join(this.worktreeBase, id);
@@ -81,11 +70,35 @@ export class WorktreeManager {
     let baseBranch = 'HEAD';
     try { baseBranch = git(this.repoRoot, ['rev-parse', '--abbrev-ref', 'HEAD']); } catch { /* ok */ }
 
-    // Create branch + worktree
-    await gitAsync(this.repoRoot, ['worktree', 'add', '-b', branch, path, 'HEAD']);
-
+    // Register in the live registry BEFORE the worktree exists on disk and
+    // before the background orphan-reap below starts. The old order (fire
+    // reap -> git worktree add -> register) meant the background reap read
+    // an EMPTY registry snapshot, then — racing with a concurrent
+    // reapOrphans()/backdated dir — could reap the very worktree this
+    // manager owned (live test: `never reaps a worktree registered in the
+    // calling manager`). Registration first makes the entry unconditionally
+    // protected; if the checkout fails, the entry is rolled back.
     const info: WorktreeInfo = { id, branch, path, baseBranch, createdAt: Date.now() };
     this.worktrees.set(id, info);
+
+    // Best-effort orphan reap, once per process per worktree base: a previous
+    // process that crashed/killed left its worktrees + branches behind
+    // (the registry is in-memory only). Fire-and-forget so create() is never
+    // slowed or broken by it — reapOrphans never throws, uses the default
+    // 24h staleness rule, and everything already in the live registry is
+    // safe.
+    if (!autoReapedBases.has(this.worktreeBase)) {
+      autoReapedBases.add(this.worktreeBase);
+      void this.reapOrphans().catch(() => { /* never break create() */ });
+    }
+
+    try {
+      // Create branch + worktree
+      await gitAsync(this.repoRoot, ['worktree', 'add', '-b', branch, path, 'HEAD']);
+    } catch (e) {
+      this.worktrees.delete(id); // no phantom live entry for a checkout that never happened
+      throw e;
+    }
     return info;
   }
 
@@ -150,21 +163,20 @@ export class WorktreeManager {
       const now = Date.now();
       const isStale = (mtimeMs: number): boolean => maxAgeMs === 0 || now - mtimeMs > maxAgeMs;
 
-      // Live-registry protection, checked at decision time: id (dir
-      // basename), branch name, and resolved path of anything this
-      // process currently owns.
-      const liveIds = new Set<string>();
-      const liveBranches = new Set<string>();
-      const livePaths = new Set<string>();
-      for (const info of this.worktrees.values()) {
-        liveIds.add(info.id);
-        liveBranches.add(info.branch);
-        livePaths.add(resolve(info.path));
-      }
-      const isLive = (path: string, branch?: string): boolean =>
-        livePaths.has(resolve(path)) ||
-        liveIds.has(basename(path)) ||
-        (branch !== undefined && liveBranches.has(branch));
+      // Live-registry protection, checked at decision time — and the sets
+      // are re-read from the registry on EVERY check, not snapshotted at
+      // call time. reapOrphans is async and yields on git calls; a sibling
+      // create() that registers during one of those awaits must be protected
+      // even though it was not in the map when this method started.
+      const isLive = (path: string, branch?: string): boolean => {
+        const wantPath = resolve(path);
+        const wantId = basename(path);
+        for (const info of this.worktrees.values()) {
+          if (info.id === wantId || resolve(info.path) === wantPath) return true;
+          if (branch !== undefined && info.branch === branch) return true;
+        }
+        return false;
+      };
 
       const dirMtime = (p: string): number | null => {
         try { return statSync(p).mtimeMs; } catch { return null; }
@@ -262,7 +274,13 @@ export class WorktreeManager {
           if (!trimmed) continue;
           const [branch, unix] = trimmed.split(/\s+/);
           if (!branch || attachedBranches.has(branch)) continue; // handled with its worktree above
-          if (liveBranches.has(branch) || liveIds.has(branch.replace(/^mochi\/worktree\//, ''))) continue;
+          // Live-branch protection: a branch owned by this manager (even one
+          // whose worktree has not been created yet) is never reaped.
+          let owned = false;
+          for (const info of this.worktrees.values()) {
+            if (info.branch === branch) { owned = true; break; }
+          }
+          if (owned) continue;
           const tipMs = Number(unix) * 1000;
           if (Number.isFinite(tipMs) && tipMs > 0 && !isStale(tipMs)) continue;
           try {

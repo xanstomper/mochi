@@ -267,7 +267,7 @@ export function changedSourceFiles(cwd: string): string[] {
 function normalizeForMutationDiff(out: string): string {
   return out
     .replace(/\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b/g, '<ts>')
-    .replace(/duration_ms:?\s+\d+(?:\.\d+)?/g, 'duration_ms <t>')
+    .replace(/duration_ms\s*:?\s*\d+(?:\.\d+)?/g, 'duration_ms <t>')
     .replace(/\b\d+(?:\.\d+)?\s?(?:ms|us|µs|ns|s|m|h)\b/g, '<t>');
 }
 

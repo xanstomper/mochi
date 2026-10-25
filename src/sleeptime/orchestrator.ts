@@ -7,13 +7,12 @@
 //
 // Steps (in order):
 //   1. repair     — demoted skills get a repair attempt and ALWAYS re-enter
-//                   via the probation path. The default port is the real D8
-//                   adapter (createSkillRepairPort over skills/skill-repair):
-//                   a deterministic, model-free patch compiled from the
-//                   skill's recorded failure trajectories — the step
-//                   reserves $0 against the cap. (A labelled stub,
-//                   createCuratorStubRepairPort, remains for tests that pin
-//                   the probation-re-entry mechanics; it is NOT a default.)
+//                   via the probation path. Driven through the SkillRepairPort
+//                   contract: `mochi sleeptime` injects the real D8 repair
+//                   port (src/sleeptime/ports.ts → skill-repair.ts); when no
+//                   port is injected (SDK embedders), the default is a
+//                   clearly-labelled STUB against the current curator/
+//                   probation APIs (stampSkillBirth) — createCuratorStubRepairPort.
 //   2. curator    — the existing skill curator pass (lifecycle transitions,
 //                   lesson promotion, dedup, age archival). Model-free, $0.
 //   3. gate       — the frozen regression gate's trust anchor: the frozen
@@ -24,12 +23,13 @@
 //   4. health     — proactive repo health scan (Wave O3): read-only checks
 //                   (tests on HEAD, deps, TODOs, dead code, hotspots) whose
 //                   ranked digest rides in this report. Model-free, $0.
-//   5. curriculum — failure-curriculum practice tasks (D10). The default
-//                   port is the real adapter (createCurriculumPort over
-//                   curriculum/curriculum): it plans tasks for the source
-//                   files implicated by failed runs and generates VALIDATED
-//                   bug-injection tasks inside scratch copies — model-free,
-//                   and the user's tree is never mutated.
+//   5. induction  — D9 workflow induction: mine VERIFIED exported
+//                   trajectories for winning tool spines + recovery
+//                   sequences, drafting each hit as a probation skill the
+//                   curator later promotes. Model-free, $0.
+//   6. curriculum — failure-curriculum practice tasks (D10). Default port
+//                   plans nothing and says so; inject a real CurriculumPort
+//                   when needed.
 //
 // HARD spend cap: every unit of work declares an estimated usage up front.
 // The estimate is priced through the Phase C price table (pricing.ts),
@@ -73,6 +73,7 @@ import { detectRepo } from '../repo/repo.js';
 import { loadFrozenSet } from '../evals/regression-gate.js';
 import { isProvenCell, refreshRoutingTable } from '../observability/routing-table.js';
 import { createHealthScanStep } from '../health/health-step.js';
+import { createInductionStep } from '../observability/induction-step.js';
 
 export class SleeptimeError extends Error {
   constructor(message: string) {
@@ -332,6 +333,10 @@ export interface RepairCandidate {
 }
 
 export interface SkillRepairPort {
+  /** Why the step had nothing to plan (shown in the morning report). Absent →
+   *  the step's own generic wording. A real port must state the actual reason
+   *  ("no demoted skills"), never claim the module is unwired. */
+  emptyNote?(): string;
   listCandidates(projectDir: string): Promise<RepairCandidate[]> | RepairCandidate[];
   repairOne(
     projectDir: string,
@@ -462,6 +467,10 @@ export interface CurriculumTaskSpec {
 }
 
 export interface CurriculumPort {
+  /** Why the step planned nothing (shown in the morning report). Absent → the
+   *  step falls back to the "default port is a no-op" wording, which is only
+   *  true for the placeholder port. */
+  emptyNote?(): string;
   planTasks(projectDir: string, ctx: SleeptimeStepContext): Promise<CurriculumTaskSpec[]> | CurriculumTaskSpec[];
   generateOne(
     projectDir: string,
@@ -674,7 +683,7 @@ export function createRepairStep(port: SkillRepairPort = createSkillRepairPort()
         units,
         note: candidates.length
           ? `${candidates.length} demoted skill(s) eligible for repair`
-          : 'no demoted skills — nothing to repair',
+          : (port.emptyNote?.() ?? 'no demoted skills — nothing to repair'),
       };
     },
     async execute(unit: PlannedUnit, ctx: SleeptimeStepContext): Promise<UnitOutcome> {
@@ -746,7 +755,7 @@ export function createCurriculumStep(port: CurriculumPort = createCurriculumPort
         units,
         note: tasks.length
           ? `${tasks.length} practice task(s) planned`
-          : 'no curriculum tasks planned — no failed run implicates a mutable source file with a detectable test command',
+          : (port.emptyNote?.() ?? 'no curriculum tasks planned (default port is a no-op — inject a real CurriculumPort)'),
       };
     },
     async execute(unit: PlannedUnit, ctx: SleeptimeStepContext): Promise<UnitOutcome> {
@@ -799,6 +808,11 @@ export function defaultSleeptimeSteps(opts: SleeptimeOptions = {}): SleeptimeSte
     createCuratorStep(),
     createGateStep(opts.ports?.gate),
     createHealthScanStep(),
+    // After the curator (which owns promotion of existing skills) and before
+    // curriculum: induction drafts NEW probation macros from verified runs,
+    // and the curator picks those drafts up on a following night once they
+    // have evidence. Model-free, $0.
+    createInductionStep(),
     createCurriculumStep(opts.ports?.curriculum, opts.maxCurriculumTasks ?? 3),
     createRoutingStatsStep(),
   ];

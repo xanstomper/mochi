@@ -1,125 +1,119 @@
-// Cache-aware prompt shaping (Wave P5): the stable prefix as an explicit,
-// measured artifact.
+// Stable-prefix accounting (P5).
 //
-// Provider prompt caches (Anthropic cache_control blocks, OpenAI/DeepSeek
-// automatic prefix caching, Gemini implicit caching) bill a byte-stable
-// leading prefix at a fraction of fresh-input price — but only when the
-// bytes actually repeat. Before this module the "stable tier" was a
-// convention in comments; nothing hashed it, nothing detected a break, and
-// volatile content (live free-memory figures, probe results that flap
-// under load, task-selected rule blocks) silently leaked into it.
+// Providers cache the LEADING BYTES of a prompt: the system prompt, then the
+// earliest history. Every byte that changes invalidates the cache from that
+// point on — so a mid-run system-prompt drift (a new tool schema, a memory
+// digest that ticks, a repo-map refresh) silently reprices every subsequent
+// turn. This module owns the primitives the ContextEngine and the loop use to
+// make that visible instead of invisible:
 //
-// This module defines:
-//  - the segment model buildSystemPrompt composes from (stable head vs
-//    session tail), so a prefix change can be attributed to ONE segment;
-//  - sha256 hashing for the head/system (the local proxy metric: a hash
-//    change mid-run is a guaranteed provider cache break);
-//  - a lint that flags volatile content (timestamps, ids, live counters)
-//    inside the stable head — the guard that keeps tomorrow's feature
-//    from re-introducing churn.
+//   - `sha256Hex`             content hash for segments / prompts
+//   - `firstChangedSegment`   which composed segment broke the prefix
+//   - `cacheHitRatio`         measured cache-hit share across model calls
+//   - `PrefixSegment`         one named slice of the system prompt
+//   - `PrefixBreak`           one attributed mid-run prefix break
+//   - `PrefixStats`           the per-run snapshot surfaced in AgentResult
+//
+// Nothing here talks to a provider. It is pure bookkeeping, deliberately
+// allocation-light (the loop calls it on every model call).
 
 import { createHash } from 'node:crypto';
 
-export function sha256Hex(text: string): string {
-  return createHash('sha256').update(text).digest('hex');
-}
-
-/** One named slice of the composed system prompt. The stable head is the
- *  leading run of task-independent segments; everything after the first
- *  task/store-dependent segment is the session tail. */
+/** One named slice of the composed system prompt, in wire order. */
 export interface PrefixSegment {
+  /** Stable identifier used in break attribution ('core', 'rulesRoot', …). */
   name: string;
+  /** The exact text this segment contributes to the prompt. */
   text: string;
 }
 
-/** All segment names buildSystemPrompt emits, in order. */
-export const PROMPT_SEGMENTS = [
-  'core', 'rulesRoot', 'repo', 'rulesModular', 'skills', 'contract', 'memory', 'feedback',
-] as const;
-
-/** One recorded prefix break: the composed wire prefix (system prompt
- *  bytes, or the history under them) changed mid-run. `cause` is the
- *  first differing segment name for system changes, or a history-rewrite
- *  label ('compaction' | 'tool-output-shrink'). Breaks are EXPECTED for
- *  history rewrites — they are labeled, never hidden. */
+/** One attributed prefix break: what changed, and after how many packets. */
 export interface PrefixBreak {
+  /** Segment name, or a history-rewrite label ('compaction', 'tool-output-shrink'). */
   cause: string;
-  /** buildPacket count at the time the break was observed. */
+  /** Number of prompt packets composed before the break was recorded. */
   packet: number;
 }
 
+/** Per-run prefix-cache snapshot, surfaced in the run result. */
 export interface PrefixStats {
-  /** sha256 of the stable head from the latest packet (null pre-packet). */
+  /** Hash of the stable head (core + root rules + repo info) as last rendered. */
   stableHash: string | null;
-  /** sha256 of the full system prompt from the latest packet. */
+  /** Hash of the full composed system prompt as last rendered. */
   systemHash: string | null;
-  /** Packets built by this engine. */
+  /** How many times the system prompt was composed this run. */
   packets: number;
-  /** Every mid-run prefix break, in order, with its cause. */
+  /** Every attributed mid-run prefix break, in order. */
   breaks: PrefixBreak[];
+  /** Convenience: `breaks.length`. */
   breakCount: number;
 }
 
-/** Patterns that must never appear in the stable head: each one is a
- *  value that changes without any content changing (time, identity of
- *  the run, live machine counters), i.e. a guaranteed cache break.
- *  Deliberately tight — legitimate prose (years in instructions, version
- *  numbers) must not false-positive. */
-const VOLATILE_PATTERNS: Array<{ re: RegExp; label: string }> = [
-  { re: /\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/, label: 'ISO-8601 datetime' },
-  { re: /\b\d{4}-\d{2}-\d{2}\b/, label: 'calendar date (YYYY-MM-DD)' },
-  { re: /\b\d{2}:\d{2}:\d{2}\b/, label: 'wall-clock time (HH:MM:SS)' },
-  { re: /\b\d{13}\b/, label: 'epoch milliseconds' },
-  { re: /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i, label: 'UUID' },
-  { re: /\b\d+(?:\.\d+)?\s*GB free\b/i, label: 'live free-memory figure' },
-  { re: /\bfree \/ [\d.]+ GB total\b/i, label: 'live free/total memory figure' },
-];
-
-/** Lint a stable-head candidate: returns one finding per volatile pattern
- *  present (empty = clean). Used by tests to prove the real head is clean
- *  and to prove the lint itself has teeth on injected volatility. */
-export function lintStablePrefix(text: string): string[] {
-  const findings: string[] = [];
-  for (const { re, label } of VOLATILE_PATTERNS) {
-    const m = text.match(re);
-    if (m) findings.push(`${label}: "${m[0]}"`);
-  }
-  return findings;
+/** One model call's prompt/cache accounting, as the provider reported it. */
+export interface CacheCall {
+  promptTokens: number;
+  /** Prompt tokens the provider served from cache. Undefined when the
+   *  provider reported no cache figure at all — such calls are excluded
+   *  from `measuredCalls` rather than counted as zero hits. */
+  cachedTokens?: number;
 }
 
-/** First segment whose hash differs between two renders (the break
- *  cause), or null when the segment lists are byte-equivalent. */
+export interface CacheRatio {
+  /** cachedTokens / promptTokens across measured calls; null when no call
+   *  reported a cache figure (unmeasured is not 0%). */
+  ratio: number | null;
+  /** Calls that carried a cache figure. */
+  measuredCalls: number;
+  /** Sum of prompt tokens across measured calls. */
+  promptTokens: number;
+  /** Sum of cached tokens across measured calls. */
+  cachedTokens: number;
+}
+
+/** SHA-256 of a string, lowercase hex. */
+export function sha256Hex(text: string): string {
+  return createHash('sha256').update(text, 'utf8').digest('hex');
+}
+
+/**
+ * First segment whose hash differs between two compositions, or `null` when
+ * the segment list is identical. A segment that appeared or disappeared is
+ * attributed to that segment's name (the prefix changed at its boundary).
+ */
 export function firstChangedSegment(
   prev: ReadonlyArray<{ name: string; hash: string }>,
   next: ReadonlyArray<{ name: string; hash: string }>,
 ): string | null {
-  const n = Math.max(prev.length, next.length);
-  for (let i = 0; i < n; i++) {
-    if (prev[i]?.hash !== next[i]?.hash) return (next[i] ?? prev[i]).name;
+  const byName = new Map(prev.map((s) => [s.name, s.hash]));
+  for (const seg of next) {
+    if (byName.get(seg.name) !== seg.hash) return seg.name;
   }
+  // Every surviving segment matched, but a segment vanished.
+  const nextNames = new Set(next.map((s) => s.name));
+  for (const seg of prev) if (!nextNames.has(seg.name)) return seg.name;
   return null;
 }
 
-/** Cache-hit ratio for one run, from provider-reported usage.
- *  Returns null (UNMEASURED) when no call in the run carried a provider
- *  cache figure — a fabricated 0 would read as "cache never hits" and a
- *  fabricated ratio would be worse. Only measured calls enter either
- *  side of the fraction. */
-export function cacheHitRatio(calls: ReadonlyArray<{
-  promptTokens: number;
-  cachedTokens?: number;
-}>): { ratio: number | null; measuredCalls: number; promptTokens: number; cachedTokens: number } {
+/**
+ * Measured cache-hit share across calls. Only calls that reported a cache
+ * figure participate: treating "provider said nothing" as "zero cached"
+ * would understate real caching, and treating it as "fully cached" would
+ * invent savings. No measured calls → ratio null.
+ */
+export function cacheHitRatio(calls: readonly CacheCall[]): CacheRatio {
+  let measured = 0;
   let prompt = 0;
   let cached = 0;
-  let measured = 0;
-  for ( const c of calls) {
-    if (c.cachedTokens === undefined) continue; // provider reported nothing
+  for (const c of calls) {
+    if (typeof c.cachedTokens !== 'number' || !Number.isFinite(c.cachedTokens)) continue;
+    if (!Number.isFinite(c.promptTokens) || c.promptTokens <= 0) continue;
     measured++;
     prompt += c.promptTokens;
-    cached += c.cachedTokens;
+    // Defensive: some gateways report cached > prompt on bad accounting.
+    cached += Math.min(Math.max(0, c.cachedTokens), c.promptTokens);
   }
   return {
-    ratio: measured > 0 && prompt > 0 ? cached / prompt : null,
+    ratio: prompt > 0 ? cached / prompt : null,
     measuredCalls: measured,
     promptTokens: prompt,
     cachedTokens: cached,

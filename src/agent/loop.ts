@@ -672,6 +672,11 @@ const MUTATING_TOOLS = new Set([
   'notebook',
 ]);
 
+/** Repro-first gate message, shared by the per-call and batch-scope gates so
+ *  their wording can never drift. */
+const REPRO_FIRST_MESSAGE =
+  'REPRODUCE FIRST: this is a fix/debug task and you have not yet observed the failure. Before editing any code, reproduce it: run the failing test/command or a minimal repro script (shell or verify tool) and look at the actual failure output. Then edit, and re-run the same check to prove the fix. If no runnable check exists for this failure, attempt the closest one you can (e.g. run the affected module/test file directly) — after that attempt, or if you retry this edit, the edit will be allowed through.';
+
 /** P0.5: the in-loop completion gate's verdict, in the VerifierEngine's
  *  vocabulary (src/verification.ts). `passed` stays the binary the loop's
  *  finish machinery consumes; `status` is the structured verdict — PASS /
@@ -4721,7 +4726,7 @@ Continue from 'Next:', do not redo completed progress.`,
     const remaining = t.state.milestones.filter((m) => m.status === 'pending' || m.status === 'active');
     let inputs: MilestoneInput[] | null = null;
     if (this.ltPlannerFn) {
-      inputs = await this.ltPlannerFn({ task, current, remaining, evidence: [gate.reason], replan: true }).catch(() => null);
+      inputs = await this.ltPlannerFn({ task, current: current ?? undefined, remaining, evidence: [gate.reason], replan: true }).catch(() => null);
     }
     if (!inputs) {
       const passedTitles = t.state.milestones.filter((m) => m.status === 'passed').map((m) => m.title);
@@ -5532,6 +5537,42 @@ Continue from 'Next:', do not redo completed progress.`,
     }
   }
 
+  /** Batch-scope repro-first gate (see executeToolCalls). The per-call gate
+   *  vetoes ONE mutation and lets a retry through after the model reproduces.
+   *  Within a single multi-file batch that rule is unsafe: the parallel write
+   *  group vetoed `arith.py` and still APPLIED `test_arith.py`, leaving a tree
+   *  that imports a symbol which never landed (live polyglot run). When two or
+   *  more calls mutate EXISTING files and no repro has been attempted yet,
+   *  veto the whole set together — one coherent message, one clean retry
+   *  boundary. New-file-only calls stay exempt, exactly like the per-call
+   *  gate, so create-then-fix runs are unaffected. */
+  private async preflightBatchReproGate(batch: ToolCall[]): Promise<ToolCall[]> {
+    if (this.reproAttempted || this.reproVetoFired || !this.reproGateApplies()) return batch;
+    const gated = batch.filter((tc) => {
+      const name = TOOL_ALIASES[tc.function.name] || tc.function.name;
+      return MUTATING_TOOLS.has(name)
+        && this.reproMutationTargetState(name, tc.function.arguments ?? '') !== 'absent';
+    });
+    if (gated.length === 0) return batch;
+    // Before vetoing anything, let the harness try to produce the reproduction
+    // itself. A VALIDATED synthesis has actually run a failing command against
+    // the current tree (see synthesizeRepro), i.e. the failure has been
+    // observed — the gate's requirement is met, so the batch may proceed.
+    const synthesized = this.reproSynthTried ? null : await this.trySynthesizeRepro();
+    if (this.reproAttempted) return batch;
+    if (gated.length < 2) return batch;
+    this.reproVetoFired = true;
+    const reason = REPRO_FIRST_MESSAGE + (synthesized ? `\n\n${synthesized}` : '');
+    for (const tc of gated) this.vetoToolCall(tc, reason);
+    this.events.emit({
+      type: 'agent:log',
+      agentId: this.id,
+      message: `[repro-first] vetoed ${gated.length} mutating calls in one batch on a fix task — no reproduction attempted yet`,
+    });
+    const vetoed = new Set(gated);
+    return batch.filter((tc) => !vetoed.has(tc));
+  }
+
   /**
    * Run the model's chosen tool calls in parallel-where-safe order:
    *   1. All read-only calls (read/search/glob/etc.) run concurrently via Promise.all.
@@ -5542,7 +5583,8 @@ Continue from 'Next:', do not redo completed progress.`,
    *      env stays consistent.
    */
   private async executeToolCalls(batchInput: ToolCall[]): Promise<void> {
-    const batch = [...batchInput];
+    const batch = await this.preflightBatchReproGate([...batchInput]);
+    if (batch.length === 0) return;
     while (batch.length > 0) {
       if (this.abortSignal?.aborted) return;
       const head = batch[0];
@@ -6811,7 +6853,7 @@ Continue from 'Next:', do not redo completed progress.`,
         // the task (repro-synth.ts). Best-effort: on any failure the veto
         // message is exactly the historical one.
         const synthesized = await this.trySynthesizeRepro();
-        this.vetoToolCall(tc, 'REPRODUCE FIRST: this is a fix/debug task and you have not yet observed the failure. Before editing any code, reproduce it: run the failing test/command or a minimal repro script (shell or verify tool) and look at the actual failure output. Then edit, and re-run the same check to prove the fix. If no runnable check exists for this failure, attempt the closest one you can (e.g. run the affected module/test file directly) — after that attempt, or if you retry this edit, the edit will be allowed through.' + (synthesized ? `\n\n${synthesized}` : ''));
+        this.vetoToolCall(tc, REPRO_FIRST_MESSAGE + (synthesized ? `\n\n${synthesized}` : ''));
         return;
       }
       if (!this.reproGateBypassed) {
@@ -8506,6 +8548,12 @@ Continue from 'Next:', do not redo completed progress.`,
         testCommand: task?.verificationCommand,
       }, { inPlace: true, timeoutMs: 30_000 });
       if (result.outcome === 'validated') {
+        // A validated synthesis ran a REAL failing command and captured its
+        // output: by the gate's own definition the failure has now been
+        // observed, so stop blocking mutations on it. (Without this, a
+        // multi-file batch could still be half-applied: the first call was
+        // vetoed, synthesis completed, and the rest of the batch ran.)
+        this.reproAttempted = true;
         this.events.emit({ type: 'agent:log', agentId: this.id, message: `[repro-synth] synthesised + validated a repro for this task: ${result.candidate.command}` });
         const sig = result.validation.signature;
         return `A minimal reproduction was synthesised and verified against the current tree — run it (shell) to observe the failure, then re-run it after your fix to prove the fix:\n  ${result.candidate.command}${sig ? `\nIt currently fails with: ${sig}` : ''}`;

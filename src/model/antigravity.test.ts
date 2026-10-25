@@ -364,10 +364,15 @@ describe('antigravity provider', () => {
     expect(genHigh.thinkingConfig.thinkingLevel).toBe('HIGH');
   });
 
-  it('prices known models through pricing.ts (the table of record)', () => {
-    // Same numbers the old shadow table carried for the Claude ids — they
-    // are pricing.ts list rates, so the totals are unchanged.
+  it('computes accurate pricing matching omp rates for all available models', () => {
+    expect(ANTIGRAVITY_PRICING_TABLE['gemini-3.8-flash']).toEqual({ in: 0.75, out: 3.75, cache: 0.075 });
+    expect(computeAntigravityCost('gemini-3.8-flash', 1000, 100)).toBeCloseTo(0.001125);
+
+    // L-03: Claude ids are priced by the shared table of record, never a
+    // shadow copy in this provider.
+    expect(ANTIGRAVITY_PRICING_TABLE['claude-sonnet-4-6']).toBeUndefined();
     expect(computeAntigravityCost('claude-sonnet-4-6', 1000, 100)).toBeCloseTo(0.0045);
+    expect(ANTIGRAVITY_PRICING_TABLE['claude-opus-4-6']).toBeUndefined();
     expect(computeAntigravityCost('claude-opus-4-6', 1000, 100)).toBeCloseTo(0.0075);
     // Parity with pricing.ts itself, token for token, incl. cache reads.
     for (const model of ['claude-sonnet-4-5', 'claude-opus-4-5', 'gemini-2.5-flash', 'gemini-2.5-flash-lite']) {
@@ -440,5 +445,16 @@ describe('antigravity content mapping uses canonical splitContent', () => {
     // ftp:// is dropped by the canonical helper — no text echo of it either.
     const flat = JSON.stringify(req.contents);
     expect(flat).not.toContain('ftp://example.invalid');
+  });
+
+  it('never fabricates a price for an unknown model (L-03)', () => {
+    // The old substring fallback billed every unknown id at Gemini 3.8 rates.
+    expect(computeAntigravityCost('totally-unknown-model-9000', 1_000_000, 1_000_000)).toBe(0);
+    expect(computeAntigravityCost('my-custom-flash', 1_000_000, 1_000_000)).toBe(0);
+  });
+
+  it('prices cached input at the cache-read rate, not the fresh-input rate', () => {
+    // 1M input (all cached) + 0 output at Gemini 3.8: $0.075 cache read.
+    expect(computeAntigravityCost('gemini-3.8-flash', 1_000_000, 0, 1_000_000)).toBeCloseTo(0.075);
   });
 });

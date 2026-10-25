@@ -1,4 +1,5 @@
-// dox.ts: documentation index + ADR generator (spec section 4).
+// docs-index.ts: documentation index + ADR generator (spec section 4).
+// (Renamed from dox.ts to end the name collision with src/cognitive/dox.ts.)
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, writeFileSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
