@@ -37,32 +37,29 @@ describe('exec policy', () => {
 
   it('pre-aborted signal: the call settles (no hang, no unhandled error event)', async () => {
     // The old early-return skipped 'error'/'close' listener attachment when
-    // the signal was ALREADY aborted, and returned before the child was
-    // cleaned up: a spawn that failed under an aborted signal emitted
-    // 'error' with NO listener (an unhandled 'error' event on a ChildProcess
-    // THROWS and can crash the host process), and the promise could be left
-    // unsettled. The abort path now runs AFTER the listeners exist, so the
-    // failure arrives as an ordinary handled rejection (the non-aborted
-    // path) or the call settles as cancelled (the aborted path) — never a
-    // hang, never an unhandled event.
+    // the signal was ALREADY aborted: a spawn failing under an aborted signal
+    // emitted 'error' with NO listener — an unhandled 'error' event on a
+    // ChildProcess THROWS and can crash the host process. Now the listeners
+    // exist first, so the failure arrives as an ordinary handled rejection —
+    // consistent with the non-aborted path, where a failed spawn also
+    // rejects.
     //
-    // The contract is pinned as "the call always settles", not "it rejects":
-    // which of the two happens depends on whether the spawn fails before
-    // or after the abort path runs, and the test must not depend on that
-    // race. (A spawn that fails under an aborted signal is also left to the
-    // platform: on macOS the abort path settles the call first, so the
-    // result is a cancellation rather than a rejection.)
+    // The failing spawn is a MISSING SHELL BINARY, not a missing cwd: a
+    // missing cwd still creates the child (it forks, then fails the chdir),
+    // so the abort path races a real process-group kill against the child's
+    // exit — on macOS runners that race repeatedly took the whole job down
+    // with it. A missing binary never creates a child, so the contract is
+    // pinned without the race.
     const c = new AbortController();
     c.abort();
-    const outcome = await Promise.race([
-      runShellString('echo never-runs', { timeoutMs: 20_000, signal: c.signal }).then(
-        (r) => `resolved(cancelled=${r.cancelled})`,
-        (e) => `rejected(${String(e?.message ?? e).slice(0, 60)})`,
-      ),
-      new Promise<string>((res) => setTimeout(() => res('hung'), 5_000)),
-    ]);
-    expect(outcome).not.toBe('hung');
-  }, 30_000);
+    await expect(
+      runShellString('echo never-runs', {
+        timeoutMs: 20_000,
+        signal: c.signal,
+        shellBin: '/definitely/not/a/real/shell',
+      }),
+    ).rejects.toThrow();
+  }, 60_000);
 
   it.skipIf(process.platform === 'win32')('kills the whole process TREE on timeout, not just the direct child', async () => {
     const { mkdtempSync, readFileSync } = await import('node:fs');

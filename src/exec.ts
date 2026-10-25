@@ -301,7 +301,11 @@ function finishSpawn(
       }
       try {
         // Negative pid = the child's process group (it is the group leader).
-        if (child.pid) process.kill(-child.pid, sig);
+        // Only while the child is STILL RUNNING: once it has exited, its pid
+        // may already have been recycled, and a negative-pid kill would then
+        // signal an unrelated process group (a sibling's, or — worst case —
+        // the host's own). An exited child needs no signal at all.
+        if (child.pid && child.exitCode === null && child.signalCode === null) process.kill(-child.pid, sig);
         else child.kill(sig);
       } catch {
         try { child.kill(sig); } catch { /* already dead */ }
