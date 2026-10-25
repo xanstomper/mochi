@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import {
   aggregateHitsToFiles,
   ensureSemanticIndex,
+  expandQueryText,
   indexStatus,
   semanticContextText,
   semanticSearch,
@@ -18,6 +19,7 @@ import {
 } from './semantic-index.js';
 import { LocalFallbackEmbedder, contentHash, type Embedder } from './embeddings.js';
 import { generateMonorepoFixture, FIXTURE_FORBIDDEN_WORDS } from './semantic-fixture.js';
+import { tokenize } from '../memory/relevance.js';
 
 const dirs: string[] = [];
 function tmpRepo(): string {
@@ -273,6 +275,75 @@ describe('aggregateHitsToFiles file-level RRF (P4, provider embedder)', () => {
     expect(asProvider[0].rel).toBe('vector-first.ts');
     const asFallback = aggregateHitsToFiles(hits, 3, { embedderKind: 'lexical-fallback' });
     expect(asFallback[0].rel).toBe('lexical-rich.md');
+  });
+});
+
+describe('query expansion glossary (everyday phrasing -> corpus vocabulary)', () => {
+  it('expands glossary phrases, is case-insensitive, and stays additive (original words kept)', () => {
+    const out = expandQueryText('How does the terminal UI draw colored output?');
+    expect(out).toBe('How does the terminal UI draw colored output? ansi escape codes style stdout frames render flush');
+    // Case-insensitive phrase firing, original casing preserved.
+    expect(expandQueryText('COLORED TEXT rendering')).toContain('ansi escape codes style stdout frames render flush');
+    expect(expandQueryText('COLORED TEXT rendering').startsWith('COLORED TEXT rendering')).toBe(true);
+    // British spelling fires too; unrelated queries pass through untouched.
+    expect(expandQueryText('the coloured output of the plot')).toContain('ansi escape codes');
+    expect(expandQueryText('How are provider API keys rotated?')).toBe('How are provider API keys rotated?');
+  });
+
+  it('composes multiple phrases and never mutates the input between rules', () => {
+    const q = 'track file reads and writes for delayed runs of colored output';
+    const out = expandQueryText(q);
+    // Rules fire in glossary order (colored-output, delayed-runs, track-reads-writes).
+    expect(out).toBe(
+      `${q} ansi escape codes style stdout frames render flush deferred execution batched tasks save load state json files working directory`,
+    );
+  });
+
+  it('feeds BOTH signals: the embedder receives the expanded text, not the raw query', async () => {
+    const dir = tmpRepo();
+    seedRepo(dir);
+    await ensureSemanticIndex(dir, { embedder: FALLBACK });
+    const seen: string[] = [];
+    const spy: Embedder = {
+      id: FALLBACK.id, kind: FALLBACK.kind, dims: FALLBACK.dims,
+      async embed(texts: string[]) { seen.push(...texts); return FALLBACK.embed(texts); },
+    };
+    await semanticSearch(dir, 'How does the terminal UI draw colored output?', { embedder: spy });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain('ansi escape codes style stdout frames render flush');
+  });
+
+  it('bridges a real vocabulary gap: a file speaking only ANSI vocabulary ranks first for "draw colored output"', async () => {
+    const dir = tmpRepo();
+    // Target speaks ONLY technical vocabulary — none of the query's raw
+    // tokens appear in it (asserted below), so ONLY the glossary can bridge.
+    writeFileSync(join(dir, 'ansi-render.ts'), [
+      '/** Minimal ANSI renderer: emits escape-code sequences that style stdout frames. */',
+      'export function flushAnsiFrame(seq: string): void {',
+      '  process.stdout.write(`\\x1b[${seq}`);',
+      '}',
+      '',
+    ].join('\n'));
+    writeFileSync(join(dir, 'billing.ts'), [
+      '/** Builds invoice totals, applies tax rows and formats the summary. */',
+      'export function buildInvoiceTotals(rows: Array<Record<string, unknown>>): number {',
+      '  return rows.reduce((acc, r) => acc + Number(r.amount ?? 0), 0);',
+      '}',
+      '',
+    ].join('\n'));
+    await ensureSemanticIndex(dir, { embedder: FALLBACK });
+    const query = 'How does the terminal UI draw colored output?';
+    // The gap is real: zero raw query tokens occur in the target file.
+    const targetText = readFileSync(join(dir, 'ansi-render.ts'), 'utf8');
+    const rawTokens = new Set(tokenize(query));
+    for (const t of rawTokens) {
+      expect(targetText.toLowerCase().includes(t), `raw token ${t} unexpectedly present`).toBe(false);
+    }
+    // With the glossary in the search path the technical-vocabulary file wins.
+    const res = await semanticSearch(dir, query, { embedder: FALLBACK });
+    expect(res).not.toBeNull();
+    expect(res!.hits[0].rel).toBe('ansi-render.ts');
+    expect(res!.hits[0].lexicalScore).toBeGreaterThan(0.3);
   });
 });
 
