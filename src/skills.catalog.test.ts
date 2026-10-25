@@ -26,31 +26,32 @@ describe('bundled skills catalog', () => {
     const dir2 = bundledSkillsDir();
     expect(dir2).toBeTruthy();
     const files = discoverSkills(dir2 as string).skills;
-    expect(files.some((s) => s.name === 'fullstack-dev')).toBe(true);
-    expect(files.some((s) => s.name === 'security-audit')).toBe(true);
+    // Culled stubs (fullstack-dev, security-audit, devops-ci, reverse-engineering)
+    // replaced by procedure skills — assert on the new floor.
+    expect(files.some((s) => s.name === 'native-core-port')).toBe(true);
+    expect(files.some((s) => s.name === 'exec-policy')).toBe(true);
     expect(files.some((s) => s.name === 'database-optimizer')).toBe(true);
-    expect(files.some((s) => s.name === 'devops-ci')).toBe(true);
-    expect(files.some((s) => s.name === 'reverse-engineering')).toBe(true);
+    expect(files.some((s) => s.name === 'tdd-workflow')).toBe(true);
   });
 
   it('loadAllSkills includes both bundle and project skills', () => {
     const { skills } = loadAllSkills(dir);
     expect(skills.some((s) => s.name === 'project-skill')).toBe(true);
-    expect(skills.some((s) => s.name === 'fullstack-dev')).toBe(true);
+    expect(skills.some((s) => s.name === 'native-core-port')).toBe(true);
   });
 
   it('project skill shadows a bundled skill with the same name', () => {
-    // Create a project skill named fullstack-dev to verify shadowing order.
-    mkdirSync(join(dir, '.mochi', 'skills', 'fullstack-dev'), { recursive: true });
-    writeFileSync(join(dir, '.mochi', 'skills', 'fullstack-dev', 'SKILL.md'), [
+    // Create a project skill named exec-policy to verify shadowing order.
+    mkdirSync(join(dir, '.mochi', 'skills', 'exec-policy'), { recursive: true });
+    writeFileSync(join(dir, '.mochi', 'skills', 'exec-policy', 'SKILL.md'), [
       '---',
-      'name: fullstack-dev',
-      'description: MY fullstack override',
+      'name: exec-policy',
+      'description: MY exec override',
       '---',
       '# Override',
     ].join('\n'));
     const { skills } = loadAllSkills(dir);
-    const override = skills.find((s) => s.name === 'fullstack-dev');
-    expect(override?.description).toBe('MY fullstack override');
+    const override = skills.find((s) => s.name === 'exec-policy');
+    expect(override?.description).toBe('MY exec override');
   });
 });
