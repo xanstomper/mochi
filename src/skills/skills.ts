@@ -3,7 +3,8 @@ import { basename, dirname, join } from 'node:path';
 import { mochiStateDir } from '../core/mochi-dir.js';
 import { fileURLToPath } from 'node:url';
 import { lintSkillDoc, type SkillLintResult } from './skill-lint.js';
-import { BLOCK_SCALAR_RE, readBlockScalar, stripMatchingQuotes } from './frontmatter.js';
+import { parseFrontmatter } from './frontmatter.js';
+import { validateAaifSkill, AAIF_BLOCKING_RULES } from './aaif-conformance.js';
 
 // Agent Skills support (agentskills.io spec), modeled on pi's loader. Skills are
 // markdown files (typically `SKILL.md` or `my-skill.md`) whose YAML frontmatter
@@ -15,6 +16,11 @@ import { BLOCK_SCALAR_RE, readBlockScalar, stripMatchingQuotes } from './frontma
 //
 // Fully offline + deterministic (no model, no network): parsing, discovery,
 // dedup, and prompt formatting are all pure, unit-testable.
+
+// Canonical frontmatter parser now lives in frontmatter.ts (shared with the
+// AAIF conformance validator); re-exported so every existing import site
+// (skill-manager.ts, skill-importer.ts, cli.ts) keeps working unchanged.
+export { parseFrontmatter };
 
 export interface Skill {
   name: string;
@@ -29,67 +35,21 @@ export interface Skill {
 const MAX_NAME_LENGTH = 64;
 const MAX_DESCRIPTION_LENGTH = 1024;
 
-const NAME_RE = /^[a-z0-9-]+$/;
+const NAME_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
+/** Validate a skill name against the Agent Skills spec: 1-64 chars, lowercase
+ *  letters/digits, hyphens only, no leading/trailing hyphen, no consecutive
+ *  hyphens. Kept in sync with the `slug-format` rule in skill-lint.ts — both
+ *  express the same spec rule; this one returns bare strings for the loader. */
 export function validateSkillName(name: string): string[] {
   const errs: string[] = [];
+  if (!name || !name.trim()) return ['name is required'];
   if (name.length > MAX_NAME_LENGTH) errs.push(`name exceeds ${MAX_NAME_LENGTH} chars`);
+  if (name !== name.toLowerCase()) errs.push('name must be lowercase');
+  if (name.startsWith('-') || name.endsWith('-')) errs.push('name must not start or end with a hyphen');
+  if (name.includes('--')) errs.push('name must not contain consecutive hyphens');
   if (!NAME_RE.test(name)) errs.push('name must be lowercase a-z, 0-9, hyphens only');
   return errs;
-}
-
-/** Parse a small YAML-ish frontmatter block. Handles scalar strings, flags, and
- *  `- item` arrays (projecting both inline and multiline lists). Not a full YAML
- *  parser (enough for the agentskills spec). */
-/** Fold a YAML folded-scalar (`>`) block: adjacent non-empty lines join with a
- *  space, blank lines become paragraph breaks. */
-export function parseFrontmatter(raw: string): { frontmatter: Record<string, string | boolean | string[]>; body: string } {
-  const m = /^\ufeff?---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)([\s\S]*)$/.exec(raw);
-  if (!m) return { frontmatter: {}, body: raw };
-  const yaml = m[1];
-  const body = (m[2] ?? '').replace(/^\r?\n/, '');
-  const out: Record<string, string | boolean | string[]> = {};
-  const lines = yaml.split(/\r?\n/);
-  let lastArrayKey: string | undefined;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (/^\s*-\s+/.test(line) && lastArrayKey) {
-      const item = stripMatchingQuotes(line.replace(/^\s*-\s*/, '').trim());
-      if (item) (out[lastArrayKey] as string[]).push(item);
-      continue;
-    }
-    lastArrayKey = undefined;
-    const idx = line.search(/:\s*/);
-    if (idx < 0) continue;
-    const key = line.slice(0, idx).trim();
-    const value = line.slice(idx + 1).trim();
-    if (!key) continue;
-    // YAML block scalars (`key: |`, `key: >-`, `key: |+`, `key: |2-` …): consume
-    // the indented continuation lines. Imported Cursor/Antigravity/Hermes skills
-    // write long descriptions this way, and dropping the continuation left the
-    // description as a bare `>-`, which broke skill retrieval + the prompt.
-    const block = BLOCK_SCALAR_RE.exec(value);
-    if (block) {
-      const { text, next } = readBlockScalar(lines, i, value);
-      out[key] = text;
-      i = next;
-      continue;
-    }
-    if (value === 'true' || value === 'false') {
-      out[key] = value === 'true';
-    } else if (value.startsWith('- ')) {
-      const arr = [stripMatchingQuotes(value.slice(2).trim())];
-      out[key] = arr;
-      lastArrayKey = key;
-    } else if (value === '') {
-      // A key with no inline value is an array/list start (items follow).
-      out[key] = [];
-      lastArrayKey = key;
-    } else {
-      out[key] = stripMatchingQuotes(value).trim();
-    }
-  }
-  return { frontmatter: out, body };
 }
 
 /** Lint a raw SKILL.md source. Parses frontmatter with the canonical parser so
@@ -108,7 +68,10 @@ export function lintSkillSource(
 }
 
 /** Load a single skill from a markdown file. Returns null (with diagnostics)
- *  if it lacks both a name and a description. */
+ *  if it lacks both a name and a description. Diagnostics also carry every
+ *  AAIF spec violation — a skill Mochi loads is validated, never silently
+ *  tolerated (the hard gate lives in `mochi skills lint` + the conformance
+ *  test; here violations surface loudly but do not brick discovery). */
 export function loadSkillFile(filePath: string): { skill: Skill | null; diagnostics: string[] } {
   const diagnostics: string[] = [];
   let raw: string;
@@ -123,19 +86,38 @@ export function loadSkillFile(filePath: string): { skill: Skill | null; diagnost
   if (!description.trim()) {
     return { skill: null, diagnostics: [`skill ${name} has no description; skipping`] };
   }
-  const tools = Array.isArray(frontmatter.tools)
-    ? (frontmatter.tools as string[])
-    : typeof frontmatter.tools === 'string'
-      ? (frontmatter.tools as string).split(/[\s,]+/).filter(Boolean)
-      : undefined;
+  // Declared tools: the spec's `allowed-tools` (space-separated string) first,
+  // falling back to Mochi's legacy `tools` extension (string or list). Both
+  // fold into Skill.tools so consumers keep one shape.
+  const parseToolList = (v: unknown): string[] =>
+    Array.isArray(v) ? (v as string[]).filter((x) => typeof x === 'string')
+      : typeof v === 'string' ? v.split(/[\s,]+/).filter(Boolean)
+      : [];
+  const tools = [...new Set([...parseToolList(frontmatter['allowed-tools']), ...parseToolList(frontmatter.tools)])];
   for (const e of validateSkillName(name)) diagnostics.push(`skill ${name}: ${e}`);
+  // AAIF conformance: same validator the bundled-catalog gate uses. Files with
+  // no frontmatter at all are not skills (already skipped above). Only SPEC
+  // violations surface here (loud diagnostics; the skill still loads) — the
+  // full house quality report lives in `mochi skills lint` and the
+  // conformance test, so thin-but-valid user skills don't spam every session.
+  if (/^\ufeff?---\s*\r?\n/.test(raw)) {
+    const isSkillMd = basename(filePath) === 'SKILL.md';
+    const aaif = validateAaifSkill(raw, {
+      file: filePath,
+      ...(isSkillMd ? { dirName: basename(dirname(filePath)) } : { flatFileName: basename(filePath).replace(/\.md$/, '') }),
+    });
+    for (const v of aaif.violations) {
+      if (!AAIF_BLOCKING_RULES.has(v.rule)) continue;
+      diagnostics.push(`aaif:${v.rule} (${v.file}${v.line !== undefined ? `:${v.line}` : ''}): ${v.message}`);
+    }
+  }
   return {
     skill: {
       name,
       description: description.slice(0, MAX_DESCRIPTION_LENGTH),
       path: filePath,
       disableModelInvocation: frontmatter['disable-model-invocation'] === true,
-      tools,
+      tools: tools.length > 0 ? tools : undefined,
     },
     diagnostics,
   };

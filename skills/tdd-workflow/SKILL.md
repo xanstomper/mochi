@@ -1,7 +1,7 @@
 ---
 name: tdd-workflow
 description: Test-Driven Development (TDD) and test repair workflow. Use when adding features with automated test guarantees, fixing flaky tests, or establishing test suites for uncovered code.
-tools: [read, write, edit, patch, shell, glob, search, verify]
+allowed-tools: read write edit patch shell glob search verify
 ---
 
 # Test-Driven Development (TDD) & Test Engineering Skill

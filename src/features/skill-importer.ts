@@ -25,10 +25,12 @@
 // and docs/. No overlap with workstreams A/B/C.
 
 import { existsSync, readdirSync, statSync, mkdirSync, cpSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, basename, resolve, isAbsolute } from 'node:path';
+import { join, basename, dirname, resolve, isAbsolute } from 'node:path';
 import { runArgv } from '../exec.js';
 import { parseFrontmatter, safeSlug } from '../skills/skill-manager.js';
 import { lintSkillDoc } from '../skills/skill-lint.js';
+import { validateAaifSkill, AAIF_BLOCKING_RULES, QUARANTINE_DIRNAME, type AaifViolation } from '../skills/aaif-conformance.js';
+import { screenSkillSource, SECURITY_BLOCKING_RULES } from './skill-security-screen.js';
 
 export interface ImportedSkillInfo {
   name: string;
@@ -38,13 +40,39 @@ export interface ImportedSkillInfo {
   size: number;
 }
 
+export interface QuarantinedSkillInfo {
+  name: string;
+  from: string;
+  /** Where the skill was parked (targetRoot/.quarantine/<slug>) with QUARANTINE.json. */
+  to: string;
+  /** Every blocking reason: rule + message (+ line when pinned). */
+  reasons: string[];
+}
+
 export interface SkillImportReport {
   imported: ImportedSkillInfo[];
   skipped: Array<{ name: string; reason: string; from: string }>;
+  quarantined: QuarantinedSkillInfo[];
   errors: string[];
   /** Installed anyway, but the lint gate flagged quality notes (shown, not hidden). */
   warnings: Array<{ name: string; issues: string[]; from: string }>;
   origin: string;
+  /** Git provenance of the source, when the source is a clone (source + commit/tag). */
+  provenance?: ImportProvenance;
+}
+
+/** Recorded next to every imported skill as `.origin.json`. */
+export interface ImportProvenance {
+  origin: string;
+  /** The source spec as the user gave it (dir path, github:owner/repo, URL…). */
+  source: string;
+  /** Resolved local source directory the copy came from. */
+  resolvedFrom: string;
+  /** HEAD commit of the source clone, when one exists. */
+  commit?: string;
+  /** Exact tag at HEAD, when one exists. */
+  tag?: string;
+  importedAt: string;
 }
 
 // Known agent skill roots on this machine (Terminus ecosystem).
@@ -144,6 +172,32 @@ export async function resolveSourceDir(spec: string, { update = false } = {}): P
   return existsSync(join(dest, '.git')) ? { dir: dest } : { dir: null, error: `clone produced no usable repo at ${dest}` };
 }
 
+/** Git provenance of a resolved source directory: HEAD commit + exact tag at
+ *  HEAD, best-effort (a non-git source simply has neither). */
+export async function gitProvenance(dir: string): Promise<{ commit?: string; tag?: string }> {
+  if (!existsSync(join(dir, '.git'))) return {};
+  try {
+    const head = await runArgv('git', ['rev-parse', 'HEAD'], { cwd: dir });
+    if (head.code !== 0) return {};
+    const out: { commit?: string; tag?: string } = { commit: head.stdout.trim() };
+    try {
+      const tag = await runArgv('git', ['describe', '--tags', '--exact-match'], { cwd: dir });
+      if (tag.code === 0 && tag.stdout.trim()) out.tag = tag.stdout.trim();
+    } catch { /* no tag at HEAD is normal */ }
+    return out;
+  } catch { return {}; }
+}
+
+/** Quarantine parking spot for a rejected skill: <targetRoot>/.quarantine/<slug>,
+ *  suffixed on collision so a re-import never overwrites earlier evidence. */
+function quarantineDir(targetRoot: string, slug: string): string {
+  const base = join(targetRoot, QUARANTINE_DIRNAME);
+  let dir = join(base, slug);
+  let n = 2;
+  while (existsSync(join(dir, 'QUARANTINE.json'))) dir = join(base, `${slug}-${n++}`);
+  return dir;
+}
+
 export interface DiscoveredSkill {
   name: string;
   path: string; // path to SKILL.md
@@ -233,6 +287,7 @@ function findSkillNames(dir: string, out: Set<string>, depth: number): void {
   for (const e of entries) {
     if (!e.isDirectory()) continue;
     if (e.name === '.git' || e.name === 'node_modules' || e.name === '.archive') continue;
+    if (e.name.startsWith('.')) continue; // .quarantine etc: parked skills are NOT installed
     findSkillNames(join(dir, e.name), out, depth + 1);
   }
 }
@@ -250,7 +305,7 @@ export async function importSkills(opts: {
   origin?: string;                // namespace override; else derived from source
   force?: boolean;
 }): Promise<SkillImportReport> {
-  const report: SkillImportReport = { imported: [], skipped: [], errors: [], warnings: [], origin: opts.origin || '' };
+  const report: SkillImportReport = { imported: [], skipped: [], quarantined: [], errors: [], warnings: [], origin: opts.origin || '' };
   const srcRes = await resolveSourceDir(opts.source);
   if (!srcRes.dir) {
     report.errors.push(srcRes.error || `source not found: ${opts.source}`);
@@ -265,6 +320,20 @@ export async function importSkills(opts: {
     report.origin ||
     (isGitSourceSpec(opts.source) ? repoNameFromSpec(opts.source) : originForSource(resolvedSource, opts.source));
   report.origin = origin;
+
+  // Provenance (source + commit/tag) is resolved once and written next to
+  // every imported skill as `.origin.json` (the bare `.origin` text file is
+  // kept for backward compatibility with older installs).
+  const prov = await gitProvenance(resolvedSource);
+  const provenance: ImportProvenance = {
+    origin,
+    source: opts.source,
+    resolvedFrom: resolvedSource,
+    importedAt: new Date().toISOString(),
+    ...(prov.commit ? { commit: prov.commit } : {}),
+    ...(prov.tag ? { tag: prov.tag } : {}),
+  };
+  report.provenance = provenance;
 
   const targetRoot = opts.targetRoot || (process.env.HOME ? join(process.env.HOME, '.mochi', 'skills') : '');
   if (!targetRoot) {
@@ -298,30 +367,65 @@ export async function importSkills(opts: {
       continue;
     }
 
-    // Install-time lint gate: a download catalog is an attack surface.
-    // Prompt-injection payloads are rejected outright (never installed
-    // silently); quality notes (placeholders, thin procedures) install
-    // anyway but are reported visibly in `warnings` — the user asked for
-    // the skill, so we deliver it flagged, not censored.
-    try {
-      const raw = readFileSync(s.path, 'utf8');
-      const parsed = parseFrontmatter(raw);
-      if (parsed) {
-        const res = lintSkillDoc(
-          String(parsed.meta.name ?? s.name),
-          String(parsed.meta.description ?? ''),
-          parsed.body,
-        );
-        const injection = res.issues.filter((i) => i.rule === 'no-injection');
-        if (injection.length > 0) {
-          report.skipped.push({ name: s.name, reason: `rejected: possible prompt injection (${injection.map((i) => i.message).join('; ').slice(0, 160)})`, from: s.path });
-          continue;
-        }
-        if (!res.ok || res.issues.length > 0) {
-          report.warnings.push({ name: s.name, issues: res.issues.map((i) => `${i.severity}:${i.rule}`), from: s.path });
-        }
+    // AAIF ingestion gate: spec conformance + security screen. Blocking
+    // violations (malformed frontmatter, bad name, injection language,
+    // credential exfiltration, hidden instructions) QUARANTINE the skill with
+    // named reasons — never a silent drop, never an install. House quality
+    // notes (thin body, placeholders) still install, flagged visibly.
+    let raw = '';
+    try { raw = readFileSync(s.path, 'utf8'); } catch { /* surfaces as a copy error below */ }
+    if (raw) {
+      const blockingViolations: AaifViolation[] = [];
+      const aaif = validateAaifSkill(raw, { file: s.path, dirName: basename(dirname(s.path)) });
+      for (const v of aaif.violations) {
+        if (AAIF_BLOCKING_RULES.has(v.rule)) blockingViolations.push(v);
       }
-    } catch { /* unreadable here surfaces as a copy error below */ }
+      const sec = screenSkillSource(raw);
+      const secBlocking = sec.hits.filter((h) => SECURITY_BLOCKING_RULES.has(h.rule));
+      if (blockingViolations.length > 0 || secBlocking.length > 0) {
+        const qdir = quarantineDir(targetRoot, slug);
+        const reasons = [
+          ...blockingViolations.map((v) => `aaif:${v.rule} (${v.file}:${v.line ?? '?'}): ${v.message}`),
+          ...secBlocking.map((h) => `security:${h.rule}${h.line ? `:${h.line}` : ''}: ${h.message}`),
+        ];
+        try {
+          mkdirSync(qdir, { recursive: true });
+          cpSync(dirname(s.path), qdir, { recursive: true, force: true });
+          writeFileSync(join(qdir, 'QUARANTINE.json'), JSON.stringify({
+            name: s.name,
+            origin,
+            source: opts.source,
+            quarantinedAt: new Date().toISOString(),
+            reasons,
+          }, null, 2), 'utf8');
+          report.quarantined.push({ name: s.name, from: s.path, to: qdir, reasons });
+        } catch (e) {
+          // A quarantine write failure is an ERROR, not a silent drop: the
+          // skill is not installed and the failure is on the report.
+          report.errors.push(`failed to quarantine ${s.name}: ${(e as Error).message} (reasons: ${reasons.join('; ')})`);
+        }
+        continue;
+      }
+      const secWarn = sec.hits.filter((h) => !SECURITY_BLOCKING_RULES.has(h.rule));
+      if (secWarn.length > 0) {
+        report.warnings.push({ name: s.name, issues: secWarn.map((h) => `${h.rule}: ${h.message}`), from: s.path });
+      }
+      try {
+        const parsed = parseFrontmatter(raw);
+        if (parsed) {
+          const res = lintSkillDoc(
+            String(parsed.meta.name ?? s.name),
+            String(parsed.meta.description ?? ''),
+            parsed.body,
+          );
+          // no-injection is enforced (harder) by the security screen above.
+          const quality = res.issues.filter((i) => i.rule !== 'no-injection');
+          if (quality.length > 0) {
+            report.warnings.push({ name: s.name, issues: quality.map((i) => `${i.severity}:${i.rule}`), from: s.path });
+          }
+        }
+      } catch { /* unreadable here surfaces as a copy error below */ }
+    }
 
     const destDir = join(targetRoot, slug);
     const destFile = join(destDir, 'SKILL.md');
@@ -338,6 +442,7 @@ export async function importSkills(opts: {
           cpSync(refs, join(destDir, 'references'), { recursive: true, force: true });
         }
         writeFileSync(originFile, origin, 'utf8');
+        writeFileSync(join(destDir, '.origin.json'), JSON.stringify(provenance, null, 2), 'utf8');
         report.imported.push({ name: s.name, origin, from: s.path, to: destFile, size: s.size });
       } else {
         report.skipped.push({ name: s.name, reason: 'destination already exists (use --force)', from: s.path });

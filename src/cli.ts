@@ -1038,9 +1038,16 @@ async function main() {
       const rep = await importSkills({ source: sourceName, force: !!flags.force });
       for (const it of rep.imported) console.log(`imported  ${it.name}  -> ${it.to}`);
       for (const sk of rep.skipped) console.log(`skipped   ${sk.name}  (${sk.reason})`);
+      for (const q of rep.quarantined) {
+        console.error(`QUARANTINE ${q.name}  ->  ${q.to}`);
+        for (const r of q.reasons) console.error(`    ${r}`);
+      }
       for (const w of rep.warnings) console.log(`warning   ${w.name}  (${w.issues.join(', ')})`);
       for (const e of rep.errors) console.error(`error     ${e}`);
-      console.log(`\n${rep.imported.length} imported, ${rep.skipped.length} skipped, ${rep.warnings.length} warnings, ${rep.errors.length} errors (origin: ${rep.origin}).`);
+      const prov = rep.provenance;
+      const provStr = prov ? ` | source: ${prov.source}${prov.commit ? ` @ ${prov.commit.slice(0, 12)}${prov.tag ? ` (tag: ${prov.tag})` : ''}` : ''}` : '';
+      console.log(`\n${rep.imported.length} imported, ${rep.skipped.length} skipped, ${rep.quarantined.length} quarantined, ${rep.warnings.length} warnings, ${rep.errors.length} errors (origin: ${rep.origin}${provStr}).`);
+      if (rep.quarantined.length > 0) console.error('Quarantined skills were NOT installed. Review their QUARANTINE.json before any manual reinstall.');
       return;
     }
     if (sub === 'repo' || sub === 'registry' || sub === 'src') {
@@ -1184,8 +1191,12 @@ async function main() {
       const rep = await importSkills({ source: packDir, force: !!flags.force });
       for (const it of rep.imported) console.log(`imported  ${it.name}  -> ${it.to}`);
       for (const sk of rep.skipped) console.log(`skipped   ${sk.name} (${sk.reason})`);
+      for (const q of rep.quarantined) {
+        console.error(`QUARANTINE ${q.name}  ->  ${q.to}`);
+        for (const r of q.reasons) console.error(`    ${r}`);
+      }
       for (const e of rep.errors) console.error(`error     ${e}`);
-      console.log(`\n${rep.imported.length} imported, ${rep.skipped.length} skipped, ${rep.errors.length} errors.`);
+      console.log(`\n${rep.imported.length} imported, ${rep.skipped.length} skipped, ${rep.quarantined.length} quarantined, ${rep.errors.length} errors.`);
       return;
     }
     if (sub === 'install') {
@@ -1210,17 +1221,22 @@ async function main() {
           console.error(`No packs with category '${cat}' in '${src.name}'.`);
           return;
         }
-        let installed = 0, skipped = 0, warns = 0, errs = 0;
+        let installed = 0, skipped = 0, warns = 0, errs = 0, quarantined = 0;
         for (const p of packs) {
           const pd = resolvePackDir(res.dir, p.name, src.catalogFile);
           if (!pd) { errs++; console.error(`error  pack '${p.name}' unresolvable in source`); continue; }
           const rep = await importSkills({ source: pd, origin: src.name, force: !!flags.force });
           for (const it of rep.imported) { installed++; console.log(`installed  ${it.name}  -> ${it.to}`); }
           for (const s of rep.skipped) { skipped++; console.log(`skipped    ${s.name}  (${s.reason})`); }
+          for (const q of rep.quarantined) {
+            quarantined++;
+            console.error(`QUARANTINE ${q.name}  ->  ${q.to}`);
+            for (const r of q.reasons) console.error(`    ${r}`);
+          }
           for (const w of rep.warnings) { warns++; console.log(`warning    ${w.name}  (${w.issues.join(', ')})`); }
           for (const e of rep.errors) { errs++; console.error(`error      ${e}`); }
         }
-        console.log(`\n${installed} installed, ${skipped} skipped, ${warns} warnings, ${errs} errors (source: ${src.name}, category: ${cat}).`);
+        console.log(`\n${installed} installed, ${skipped} skipped, ${quarantined} quarantined, ${warns} warnings, ${errs} errors (source: ${src.name}, category: ${cat}).`);
         return;
       }
       const resolvedPackId = repoName ? packId : null;
@@ -1233,9 +1249,13 @@ async function main() {
       const rep = await importSkills({ source: targetDir ?? res.dir, origin: src.name, force: !!flags.force });
       for (const it of rep.imported) console.log(`installed  ${it.name}  -> ${it.to}`);
       for (const sk of rep.skipped) console.log(`skipped    ${sk.name}  (${sk.reason})`);
+      for (const q of rep.quarantined) {
+        console.error(`QUARANTINE ${q.name}  ->  ${q.to}`);
+        for (const r of q.reasons) console.error(`    ${r}`);
+      }
       for (const w of rep.warnings) console.log(`warning    ${w.name}  (${w.issues.join(', ')})`);
       for (const e of rep.errors) console.error(`error      ${e}`);
-      console.log(`\n${rep.imported.length} installed, ${rep.skipped.length} skipped, ${rep.warnings.length} warnings, ${rep.errors.length} errors (source: ${src.name}).`);
+      console.log(`\n${rep.imported.length} installed, ${rep.skipped.length} skipped, ${rep.quarantined.length} quarantined, ${rep.warnings.length} warnings, ${rep.errors.length} errors (source: ${src.name}).`);
       return;
     }
     if (sub === 'suggest') {
@@ -1265,10 +1285,11 @@ async function main() {
     if (sub === 'lint') {
       const { formatSkillLint } = await import('./skills/skill-lint.js');
       const { assessSkillQuality } = await import('./skills/skill-manager.js');
+      const { validateAaifSkill, formatAaifViolations, AAIF_SPEC_INFO } = await import('./skills/aaif-conformance.js');
       const { readFileSync } = await import('node:fs');
       const target = positional[2];
       const { discoverSkills, bundledSkillsDir, lintSkillSource } = await import('./skills/skills.js');
-      const { resolve } = await import('node:path');
+      const { resolve, dirname, basename } = await import('node:path');
       const { homedir } = await import('node:os');
       const dirs = target
         ? [resolve(target)]
@@ -1286,19 +1307,34 @@ async function main() {
           let pass = true;
           try {
             const raw = readFileSync(sk.path, 'utf8');
-            if (!/^\ufeff?---/.test(raw)) { console.error(`FAIL  ${sk.name}: bad frontmatter (no --- block)`); failing++; continue; }
-            const { description, body, result: r } = lintSkillSource(raw, sk.name);
-            if (!r.ok) { console.error(`FAIL  ${sk.name}: ${formatSkillLint(r)}`); pass = false; failing++; }
-            const dq: any = assessSkillQuality(description, body);
-            if (!dq.passed) { console.log(`WARN  ${sk.name}: quality bar missing — ${dq.missing.join('; ')}`); }
+            // AAIF conformance first: spec rules name their rule + file:line.
+            const isSkillMd = basename(sk.path) === 'SKILL.md';
+            const aaif = validateAaifSkill(raw, {
+              file: sk.path,
+              ...(isSkillMd ? { dirName: basename(dirname(sk.path)) } : { flatFileName: sk.name }),
+            });
+            if (!aaif.ok) {
+              console.error(`AAIF-FAIL  ${sk.name} (Agent Skills spec: ${AAIF_SPEC_INFO.sources[0]}):`);
+              console.error(formatAaifViolations(aaif.violations).split('\n').map((l) => `    ${l}`).join('\n'));
+              pass = false;
+            }
+            if (!/^\ufeff?---/.test(raw)) { console.error(`FAIL  ${sk.name}: bad frontmatter (no --- block)`); pass = false; }
+            else {
+              const { description, body, result: r } = lintSkillSource(raw, sk.name);
+              if (!r.ok) { console.error(`FAIL  ${sk.name}: ${formatSkillLint(r)}`); pass = false; }
+              const dq: any = assessSkillQuality(description, body);
+              if (!dq.passed) { console.log(`WARN  ${sk.name}: quality bar missing — ${dq.missing.join('; ')}`); }
+            }
           } catch (e) {
             console.error(`FAIL  ${sk.name}: ${(e as Error).message}`);
-            failing++; pass = false;
+            pass = false;
           }
-          if (pass) console.log(`ok    ${sk.name}`);
+          if (!pass) failing++;
+          else console.log(`ok    ${sk.name}`);
         }
       }
-      console.log(`\\nLinted ${scanned} skills${failing ? ` — ${failing} failed` : ' (all clean)'}.`);
+      console.log(`\nLinted ${scanned} skills (AAIF Agent Skills conformance + house quality bar)${failing ? ` — ${failing} failed` : ' (all clean)'}.`);
+      if (failing > 0) process.exitCode = 1;
       return;
     }
     if (sub === 'mine') {
@@ -1399,8 +1435,12 @@ async function main() {
     const rep = await importSkills({ source: sourceName, force: !!flags.force });
     for (const it of rep.imported) console.log(`imported  ${it.name}  -> ${it.to}`);
     for (const sk of rep.skipped) console.log(`skipped   ${sk.name}  (${sk.reason})`);
+    for (const q of rep.quarantined) {
+      console.error(`QUARANTINE ${q.name}  ->  ${q.to}`);
+      for (const r of q.reasons) console.error(`    ${r}`);
+    }
     for (const e of rep.errors) console.error(`error     ${e}`);
-    console.log(`\n${rep.imported.length} imported, ${rep.skipped.length} skipped, ${rep.errors.length} errors (origin: ${rep.origin}).`);
+    console.log(`\n${rep.imported.length} imported, ${rep.skipped.length} skipped, ${rep.quarantined.length} quarantined, ${rep.errors.length} errors (origin: ${rep.origin}).`);
     return;
   }
   if (first === 'plugins' || first === 'plugin') {
