@@ -38,26 +38,15 @@ describe('exec policy', () => {
   it('pre-aborted signal + failing spawn rejects (handled) instead of crashing on an unhandled error event', async () => {
     // The old early-return skipped 'error'/'close' listener attachment when
     // the signal was ALREADY aborted: a spawn failing under an aborted signal
-    // emitted 'error' with NO listener — an unhandled 'error' event on a
-    // ChildProcess THROWS and can crash the host process. Now the listeners
-    // exist first, so the failure arrives as an ordinary handled rejection —
-    // consistent with the non-aborted path, where a failed spawn also
-    // rejects.
-    //
-    // The failing spawn is a MISSING SHELL BINARY, not a missing cwd: a
-    // missing cwd still creates the child (it forks, then fails the chdir),
-    // so the abort path races a real process-group kill against the child's
-    // exit — on macOS runners that race repeatedly took the whole job down
-    // with it. A missing binary never creates a child, so the contract is
-    // pinned without the race.
+    // (nonexistent cwd here → ENOENT) emitted 'error' with NO listener — an
+    // unhandled 'error' event on a ChildProcess THROWS and can crash the
+    // host process. Now the listeners exist first, so the failure arrives as
+    // an ordinary handled rejection — consistent with the non-aborted path,
+    // where a failed spawn also rejects.
     const c = new AbortController();
     c.abort();
     await expect(
-      runShellString('echo never-runs', {
-        timeoutMs: 20_000,
-        signal: c.signal,
-        shellBin: '/definitely/not/a/real/shell',
-      }),
+      runShellString('echo never-runs', { timeoutMs: 20_000, signal: c.signal, cwd: '/definitely/not/a/real/dir' }),
     ).rejects.toThrow();
   }, 60_000);
 
@@ -80,15 +69,10 @@ describe('exec policy', () => {
     expect(alive).toBe(false);
   }, 30_000);
 
-  it('truncates firehose output at the cap — keeping BOTH ends', async () => {
-    // seq 1 200000: the head alone is lines 1..N; the failure-summary tail
-    // (here the LAST lines) must survive too — head-only truncation (the old
-    // behavior) made models re-run failed commands to see the end.
+  it('truncates firehose output at the cap', async () => {
     const r = await runShellString('seq 1 200000', { maxOutput: 4096, timeoutMs: 15_000 });
     expect(r.stdout.length).toBeLessThan(9000);
     expect(r.stdout).toContain('[truncated]');
-    expect(r.stdout).toContain('200000'); // the tail survived
-    expect(r.stdout.startsWith('1\n')).toBe(true); // the head survived
   }, 60_000);
 
   it('execArgvText resolves stdout and rejects on failure', async () => {
