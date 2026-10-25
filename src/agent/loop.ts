@@ -27,7 +27,7 @@ import type { Attempt, ChatMessage, ContentPart, MochiConfig, ModelProfile, Task
 import { contentText } from '../types.js';
 import type { EventBus } from '../events.js';
 import type { Workspace } from '../workspace.js';
-import { ContextEngine, estimateMessagesTokens } from '../context.js';
+import { ContextEngine, estimateMessagesTokens, shouldIdleCompact, DEFAULT_IDLE_COMPACTION_THRESHOLD_MS, type IdleCompactionConfig } from '../context.js';
 import { cacheHitRatio, type PrefixStats } from '../prompt/stable-prefix.js';
 import { MemoryStore } from '../memory/memory.js';
 import { projectMemoryPrefix, recordProjectMemory } from '../memory/project-memory.js';
@@ -464,6 +464,10 @@ export interface AgentOptions {
    *  unaffected. The provider is then re-called (and re-billed) for
    *  every turn of a resumed run, exactly as before this feature. */
   journalModelTurns?: boolean;
+  /** G11 idle compaction for this agent's own context (default: off).
+   *  Hosts opt in here; parents set per-child windows via
+   *  ChildRunSpec.autoCompactWindow instead. */
+  idleCompaction?: IdleCompactionConfig;
   /** Long-task strategy (src/agent/milestones.ts): host-supplied milestone
    *  decomposition for this run. When set (or milestonePlanner is), the
    *  milestone layer activates regardless of the complexity score. */
@@ -593,6 +597,11 @@ export interface ChildRunSpec {
   failoverIndex?: number;
   /** Force a private git worktree even without a worktree preset. */
   isolate?: boolean;
+  /** G11: per-child idle-compaction window in ms. When set, this child
+   *  opts into idle compaction with its OWN threshold (its own idle
+   *  clock, not the parent's schedule); unset = the parent's default
+   *  (off unless the host opted in). */
+  autoCompactWindow?: number;
   /** Extra system guidance appended after the preset addendum (fleet lens). */
   extraSystem?: string;
 }
@@ -1227,6 +1236,8 @@ export class Agent {
     this.events = opts.events;
     this.cwd = opts.cwd;
     this.context = opts.context;
+    // G11: host opt-in for idle compaction on this agent's own context.
+    if (opts.idleCompaction) this.context.setIdleCompactionConfig(opts.idleCompaction);
     this.budget = opts.budget;
     this.abortSignal = opts.abortSignal;
     this.promptUser = opts.promptUser;
@@ -1758,6 +1769,13 @@ export class Agent {
   }
 
   async run(task: Task): Promise<AgentResult> {
+    // G11 idle compaction: a reused instance returning after a long idle
+    // gap compacts BEFORE the new run's first model turn, so the resumed
+    // turn doesn't pay full uncached context. Fires only at this run
+    // boundary (never mid-turn — runActive is still the previous run's
+    // value here), only when the host opted in, and at most once per
+    // idle period. Never breaks a run: failures are swallowed.
+    await this.maybeIdleCompact().catch(() => {});
     this.startTime = performance.now();
     this.activeTask = task;
     // B21: the steer-acceptance window opens with the run; delivered-steer
@@ -4960,7 +4978,32 @@ Continue from 'Next:', do not redo completed progress.`,
     }
   }
 
-  private async checkpointAndCompact(reason: 'periodic' | 'floor' | 'error', keepFloor?: number): Promise<void> {
+  /** G11: compact-on-idle trigger. Returns true when an idle compaction
+   *  ran. Called once at run() start (a run boundary — never mid-turn):
+   *  the session's in-process activity clock (ContextEngine, fed by
+   *  every addMessage) is compared against the engine's idle config
+   *  (host opt-in, or a parent-set per-child window). The compaction
+   *  names itself 'idle-compaction' in P5 break attribution. A no-op
+   *  when disabled (the default), when a turn is in flight, when the
+   *  clock is unknown, when not yet idle, or when this idle period
+   *  already compacted — see shouldIdleCompact. */
+  private async maybeIdleCompact(now = Date.now()): Promise<boolean> {
+    const cfg = this.context.getIdleCompactionConfig();
+    const verdict = shouldIdleCompact({
+      enabled: cfg.enabled,
+      thresholdMs: cfg.thresholdMs ?? DEFAULT_IDLE_COMPACTION_THRESHOLD_MS,
+      lastActivityAt: this.context.getLastActivityAt(),
+      now,
+      active: this.runActive,
+      lastIdleCompactionAt: this.context.getLastIdleCompactionAt(),
+    });
+    if (!verdict.eligible) return false;
+    await this.checkpointAndCompact('idle');
+    this.context.markIdleCompaction(now);
+    return true;
+  }
+
+  private async checkpointAndCompact(reason: 'periodic' | 'floor' | 'error' | 'idle', keepFloor?: number): Promise<void> {
     const dropped = await this.context.previewCompact(keepFloor);
     if (!dropped || dropped.length === 0) {
       this.context.compact(undefined, keepFloor).catch(() => {});
@@ -5016,8 +5059,9 @@ Continue from 'Next:', do not redo completed progress.`,
     }
     // B15: pass the caller's explicit floor through — previewCompact() must
     // agree with the compact() cut, or the checkpoint would summarize a
-    // slice that compact() then keeps.
-    await this.context.compact(checkpoint, keepFloor);
+    // slice that compact() then keeps. G11: an idle compaction names its
+    // reason so P5 break attribution can tell it apart.
+    await this.context.compact(checkpoint, keepFloor, reason === 'idle' ? { reason: 'idle-compaction' } : undefined);
     this.clearReadStub();
     this.onHistoryRewritten();
     // Phase 7: durable checkpoint — survives process restarts for resume.
@@ -5710,8 +5754,8 @@ Continue from 'Next:', do not redo completed progress.`,
   private spawnerContext(): Partial<ToolContext> {
     if (!canSpawnAtDepth(this.subagentDepth, resolveMaxSubagentDepth(this.config))) return {};
     return {
-      spawnSubagent: (prompt: string, opts?: { role?: string; preset?: string; isolate?: boolean; timeoutMs?: number; scratchpad?: string }) => this.spawnSubagent(prompt, opts),
-      spawnSubagents: (tasks: Array<{ prompt: string; role?: string; preset?: string; timeoutMs?: number; scratchpad?: string }>) => this.spawnSubagents(tasks),
+      spawnSubagent: (prompt: string, opts?: { role?: string; preset?: string; isolate?: boolean; timeoutMs?: number; scratchpad?: string; autoCompactWindow?: number }) => this.spawnSubagent(prompt, opts),
+      spawnSubagents: (tasks: Array<{ prompt: string; role?: string; preset?: string; timeoutMs?: number; scratchpad?: string; autoCompactWindow?: number }>) => this.spawnSubagents(tasks),
       spawnAgentAsync: (spec) => this.spawnAgentAsync(spec),
       collectAgent: (id: string, opts?: { waitMs?: number; apply?: boolean }) => this.collectChildResult(id, opts),
       cancelAgent: (id: string) => this.cancelChildRun(id),
@@ -5767,6 +5811,13 @@ Continue from 'Next:', do not redo completed progress.`,
     }
 
     const childContext = new ContextEngine(this.config, childCwd);
+    // G11: per-child idle-compaction window — a parent-specified window
+    // opts this child into idle compaction with its own threshold (the
+    // child's own idle clock, not the parent's schedule). Invalid values
+    // are ignored (the child's default: off).
+    if (spec.autoCompactWindow !== undefined && Number.isFinite(spec.autoCompactWindow) && spec.autoCompactWindow > 0) {
+      childContext.setIdleCompactionConfig({ enabled: true, thresholdMs: spec.autoCompactWindow });
+    }
     // MCH-87a: per-child cost cap. Children previously shared the parent's
     // budget engine, so one runaway subagent could starve all siblings. The
     // child gets its OWN BudgetEngine scoped to a fraction of the parent's
@@ -6024,7 +6075,7 @@ Continue from 'Next:', do not redo completed progress.`,
    *  (unless worktree-isolated) cwd, so delegation is cheap and consistent. */
   private async spawnSubagent(
     prompt: string,
-    opts?: { role?: string; preset?: string; isolate?: boolean; timeoutMs?: number; scratchpad?: string; lane?: string; failoverIndex?: number } | string
+    opts?: { role?: string; preset?: string; isolate?: boolean; timeoutMs?: number; scratchpad?: string; lane?: string; failoverIndex?: number; autoCompactWindow?: number } | string
   ): Promise<string> {
     const spec: ChildRunSpec = typeof opts === 'string'
       ? { prompt, role: opts }
@@ -6036,6 +6087,7 @@ Continue from 'Next:', do not redo completed progress.`,
           scratchpad: opts?.scratchpad,
           lane: opts?.lane,
           failoverIndex: opts?.failoverIndex,
+          autoCompactWindow: opts?.autoCompactWindow,
         };
     const timeoutMs = typeof opts === 'object' ? opts?.timeoutMs : undefined;
     const prepared = await this.startChildRun(spec);
@@ -6523,7 +6575,7 @@ Continue from 'Next:', do not redo completed progress.`,
    *  max_concurrent_children): N unbounded Promise.allSettled would OOM or
    *  hammer a free-tier provider. Runs in a fixed pool, reusing spawnSubagent. */
   private async spawnSubagents(
-    tasks: Array<{ prompt: string; role?: string; preset?: string; timeoutMs?: number; scratchpad?: string }>
+    tasks: Array<{ prompt: string; role?: string; preset?: string; timeoutMs?: number; scratchpad?: string; autoCompactWindow?: number }>
   ): Promise<string[]> {
     // MCH-41 (agents v2): two upgrades to the pool.
     // (1) PRIORITY LANES — read-only research tasks (role=researcher/reviewer)
@@ -6553,14 +6605,14 @@ Continue from 'Next:', do not redo completed progress.`,
         // worst-case latency. Retry never re-runs a SUCCESSFUL child.
         try {
           const lane = (t as { lane?: string }).lane;
-          const val = await this.spawnSubagent(t.prompt, { role: t.role, preset: t.preset, timeoutMs: t.timeoutMs, scratchpad: t.scratchpad, lane, failoverIndex: i });
+          const val = await this.spawnSubagent(t.prompt, { role: t.role, preset: t.preset, timeoutMs: t.timeoutMs, scratchpad: t.scratchpad, lane, failoverIndex: i, autoCompactWindow: t.autoCompactWindow });
           results[i] = `[Subagent #${i + 1} (${t.role ?? 'coder'})]: ${val}`;
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           try {
             const lane = (t as { lane?: string }).lane;
             const retryTimeout = t.timeoutMs && t.timeoutMs > 0 ? Math.max(30_000, Math.floor(t.timeoutMs / 2)) : undefined;
-            const val = await this.spawnSubagent(t.prompt, { role: t.role, preset: t.preset, timeoutMs: retryTimeout, scratchpad: t.scratchpad, lane, failoverIndex: i + tasks.length });
+            const val = await this.spawnSubagent(t.prompt, { role: t.role, preset: t.preset, timeoutMs: retryTimeout, scratchpad: t.scratchpad, lane, failoverIndex: i + tasks.length, autoCompactWindow: t.autoCompactWindow });
             results[i] = `[Subagent #${i + 1} (${t.role ?? 'coder'}, retried after: ${msg.slice(0, 120)})]: ${val}`;
           } catch (err2) {
             const msg2 = err2 instanceof Error ? err2.message : String(err2);
