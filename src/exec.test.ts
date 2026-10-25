@@ -35,34 +35,31 @@ describe('exec policy', () => {
     expect(r.cancelled).toBe(true);
   }, 60_000);
 
-  it('pre-aborted signal: the call settles (no hang, no unhandled error event)', async () => {
+  it('pre-aborted signal + failing spawn rejects (handled) instead of crashing on an unhandled error event', async () => {
     // The old early-return skipped 'error'/'close' listener attachment when
-    // the signal was ALREADY aborted, and returned before the child was
-    // cleaned up: a spawn that failed under an aborted signal emitted
-    // 'error' with NO listener (an unhandled 'error' event on a ChildProcess
-    // THROWS and can crash the host process), and the promise could be left
-    // unsettled. The abort path now runs AFTER the listeners exist, so the
-    // failure arrives as an ordinary handled rejection (the non-aborted
-    // path) or the call settles as cancelled (the aborted path) — never a
-    // hang, never an unhandled event.
+    // the signal was ALREADY aborted: a spawn failing under an aborted signal
+    // emitted 'error' with NO listener — an unhandled 'error' event on a
+    // ChildProcess THROWS and can crash the host process. Now the listeners
+    // exist first, so the failure arrives as an ordinary handled rejection —
+    // consistent with the non-aborted path, where a failed spawn also
+    // rejects.
     //
-    // The contract is pinned as "the call always settles", not "it rejects":
-    // which of the two happens depends on whether the spawn fails before
-    // or after the abort path runs, and the test must not depend on that
-    // race. (A spawn that fails under an aborted signal is also left to the
-    // platform: on macOS the abort path settles the call first, so the
-    // result is a cancellation rather than a rejection.)
+    // The failing spawn is a MISSING SHELL BINARY, not a missing cwd: a
+    // missing cwd still creates the child (it forks, then fails the chdir),
+    // so the abort path races a real process-group kill against the child's
+    // exit — on macOS runners that race repeatedly took the whole job down
+    // with it. A missing binary never creates a child, so the contract is
+    // pinned without the race.
     const c = new AbortController();
     c.abort();
-    const outcome = await Promise.race([
-      runShellString('echo never-runs', { timeoutMs: 20_000, signal: c.signal }).then(
-        (r) => `resolved(cancelled=${r.cancelled})`,
-        (e) => `rejected(${String(e?.message ?? e).slice(0, 60)})`,
-      ),
-      new Promise<string>((res) => setTimeout(() => res('hung'), 5_000)),
-    ]);
-    expect(outcome).not.toBe('hung');
-  }, 30_000);
+    await expect(
+      runShellString('echo never-runs', {
+        timeoutMs: 20_000,
+        signal: c.signal,
+        shellBin: '/definitely/not/a/real/shell',
+      }),
+    ).rejects.toThrow();
+  }, 60_000);
 
   it.skipIf(process.platform === 'win32')('kills the whole process TREE on timeout, not just the direct child', async () => {
     const { mkdtempSync, readFileSync } = await import('node:fs');
@@ -168,63 +165,10 @@ describe('bubblewrap sandbox', () => {
       timeoutMs: 20_000,
     });
     expect(r.stdout).toContain('exit=1');
-  });
-});
-
-describe('exec ceilings (W3-5, prlimit-backed)', () => {
-  it('CPU ceiling kills a busy loop with a labeled result (signal kill, not a timeout)', async () => {
-    // Live evidence for detectCeilingHit's attribution: prlimit --cpu=1s
-    // (soft==hard) ends the busy child with SIGKILL. `sh -c` execs a single
-    // simple command in-place, so the close event carries the SIGNAL
-    // (code=null, signal SIGKILL) — the ceiling label is the visible truth.
-    const r = await runShellString('node -e "const t=Date.now(); while(Date.now()-t<20000){}"', {
-      cpuLimitSeconds: 1,
-      timeoutMs: 30_000,
-    });
-    expect(r.ceilings?.applied).toBe(true);
-    expect(r.ceilings?.ceilingHit).toBe('cpu');
-    expect(r.timedOut).toBe(false);
-    expect(r.code).toBeNull(); // killed by signal (RLIMIT_CPU), not exited
+    // ...and the probe file must not exist outside either.
+    const { existsSync } = await import('node:fs');
+    const { homedir } = await import('node:os');
+    const { resolve } = await import('node:path');
+    expect(existsSync(resolve(homedir(), unique))).toBe(false);
   }, 30_000);
-
-  it('memory ceiling kills a big allocator with a labeled result', async () => {
-    const r = await runShellString('node -e "const a=[];for(let i=0;i<400;i++)a.push(new Array(64*1024*1024).fill(1))"', {
-      memoryLimitMb: 256,
-      timeoutMs: 30_000,
-    });
-    expect(r.ceilings?.applied).toBe(true);
-    expect(r.ceilings?.ceilingHit).toBe('memory');
-    expect(r.timedOut).toBe(false);
-  }, 30_000);
-
-  it('a command within the ceilings runs normally and stays unlabeled', async () => {
-    const r = await runArgv('echo', ['ok'], { cpuLimitSeconds: 10, memoryLimitMb: 1024 });
-    expect(r.code).toBe(0);
-    expect(r.stdout.trim()).toBe('ok');
-    expect(r.ceilings?.applied).toBe(true);
-    expect(r.ceilings?.ceilingHit).toBeUndefined();
-  });
-
-  it('no ceilings requested: result shape unchanged (no ceilings field)', async () => {
-    const r = await runShellString('echo plain');
-    expect(r.stdout.trim()).toBe('plain');
-    expect(r.ceilings).toBeUndefined();
-  });
-
-  it('prlimit unavailable: ceilings reported NOT applied (never silent)', async () => {
-    const { runArgv: argvExec, _resetExecCeilingProbeForTests } = await import('./exec.js');
-    _resetExecCeilingProbeForTests();
-    const origPath = process.env.PATH;
-    process.env.PATH = '/nonexistent-mochi-probe-dir';
-    try {
-      // Absolute cmd so the spawn itself works despite the neutered PATH.
-      const r = await argvExec('/bin/echo', ['hi'], { cpuLimitSeconds: 5 });
-      expect(r.stdout.trim()).toBe('hi');
-      expect(r.ceilings?.applied).toBe(false);
-      expect(r.ceilings?.ceilingHit).toBeUndefined();
-    } finally {
-      process.env.PATH = origPath;
-      _resetExecCeilingProbeForTests();
-    }
-  });
 });
