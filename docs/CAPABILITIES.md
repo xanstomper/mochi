@@ -4,7 +4,7 @@ Mochi is an autonomous, high-performance software engineering agent and multi-ag
 
 ---
 
-## 1. The 16 Specialized Subagent Roles
+## 1. The 22 Specialized Subagent Roles
 
 Mochi can dynamically spawn specialized child agents via the `subagent` tool, or orchestrate multi-agent swarms using `mochi team "<goal>"`. Each role is assigned a specific model capability profile (`reasoning`, `coding`, `fast`, `review`) and a scoped tool allowlist:
 
@@ -26,12 +26,18 @@ Mochi can dynamically spawn specialized child agents via the `subagent` tool, or
 | **`tech_writer`** | Technical Writer | `coding` | `read`, `write`, `edit`, `patch`, `search`, `glob`, `inspect` | Architecture Decision Records (ADRs), READMEs, Mermaid diagrams, API references. |
 | **`qa_engineer`**| QA Automation Engineer | `coding` | `read`, `write`, `edit`, `patch`, `shell`, `search`, `glob`, `inspect` | End-to-end automation (Playwright/Cypress), visual regression tests, smoke testing. |
 | **`data_scientist`**| Data Scientist / ML Engineer | `reasoning`| `read`, `write`, `edit`, `patch`, `shell`, `search`, `glob`, `inspect` | Pandas/Polars wrangling, PyTorch/TensorFlow modeling, statistical evaluation. |
+| **`redteam`** | Red Team & Offensive Security Specialist | `reasoning` | `read`, `write`, `edit`, `patch`, `shell`, `browser`, `security_audit`, `subagent` | Attack-surface enumeration, vulnerability recon, safe exploit reproduction, defense-in-depth remediation. |
+| **`designer`** | UI/UX & TUI Designer | `coding` | `read`, `write`, `edit`, `patch`, `shell`, `chameleon`, `markdown`, `color`, `tui_builder`, `browser` | Production terminal & web UI craft: component libraries, design tokens, a11y states, render/screenshot verification. |
+| **`integrator`** | Integration & Cross-System Engineer | `coding` | `read`, `write`, `edit`, `patch`, `shell`, `fetch`, `web_search`, `web_crawl`, `browser`, `sql_codebase` | Wires systems together: contracts first, thin adapter layers, timeouts/retries/circuit breakers, live-call verification. |
+| **`pr_reviewer`** | PR Reviewer | `review` | `read`, `search`, `glob`, `git`, `diff`, `analyze_code`, `blast_radius` (read-only) | Reviews ONE provided diff hunk-by-hunk with file/line findings + severity and an approve/request-changes verdict. |
+| **`explorer`** | Code Explorer | `fast` | `read`, `codebase_map`, `search`, `glob`, `outline`, `tree`, `ast_slice` (read-only) | Read-only navigation of unfamiliar codebases: exact paths, symbols, line ranges, flow maps. |
+| **`scout`** | Fast Triage Scout | `fast` | `read`, `codebase_map`, `search`, `glob`, `outline`, `tree`, `shell`, `fetch`, `web_search` | Cheapest breadth-first orientation: counts, paths, names, versions; escalates instead of deep-diving. |
 
 ---
 
 ## 2. Native Tools Suite
 
-Mochi ships with 30+ built-in tools covering file operations, AST intelligence, shell execution, web crawling, and diagnostic tools:
+Mochi ships with 89 built-in tools covering file operations, AST intelligence, shell execution, web crawling, and diagnostic tools:
 
 ### File & Code Editing Tools
 - **`edit`**: Performs surgical, anchor-matched text replacements with whitespace tolerance.
@@ -94,7 +100,7 @@ Mochi ships with 30+ built-in tools covering file operations, AST intelligence, 
 
 ## 3. Specialized Skills Catalog
 
-Mochi includes 30+ bundled `SKILL.md` workflows that can be invoked via the `skill` tool or command palette:
+Mochi includes 150 bundled `SKILL.md` workflows that can be invoked via the `skill` tool or command palette:
 
 - **AI Architectures & Protocols**: `gpt-5-agent`, `o3-reasoning`, `deep-research`, `anthropic-research`, `cursor-workflow`, `devin-mode`, `github-copilot`, `vscode-copilot`, `gemini-learning`, `claude-design`, `hermes-workflow`.
 - **System Integration Guides**: `mcp-setup`, `acp-setup`, `mochi-architecture`, `core-harness`, `tools-design`, `memory-design`, `replication-design`.

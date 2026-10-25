@@ -212,11 +212,18 @@ function resolveKey(provider: Provider, config?: MochiConfig): string | undefine
 }
 
 /**
- * Pick the embedder for this config. Provider embeddings require ALL of:
- * an 'openai'-kind provider row, a resolvable API key (local providers with
- * an empty envKey — ollama/lmstudio — count as keyless-OK), and a known or
- * explicitly configured embedding model. Anything missing → the local
- * lexical fallback, with the reason recorded.
+ * Pick the embedder for this config. Provider embeddings are OPT-IN (W3-1
+ * gate, default OFF until measured): they require an EXPLICIT retrieval
+ * embedding config — retrieval.embeddingProvider / retrieval.embeddingModel,
+ * or their env overrides MOCHI_EMBEDDING_PROVIDER / MOCHI_EMBEDDING_MODEL.
+ * The configured CHAT provider is deliberately NOT reused implicitly: a user
+ * whose chat provider happens to be embedding-capable never asked for
+ * network embedding calls on every index build and query. Without explicit
+ * config the local lexical fallback serves, with the reason recorded.
+ * A provider embedder further requires ALL of: an 'openai'-kind provider
+ * row, a resolvable API key (local providers with an empty envKey —
+ * ollama/lmstudio — count as keyless-OK), and a known or explicitly
+ * configured embedding model.
  */
 export function resolveEmbedder(config?: MochiConfig): EmbedderResolution {
   const fallback = (reason: string): EmbedderResolution => ({
@@ -227,12 +234,17 @@ export function resolveEmbedder(config?: MochiConfig): EmbedderResolution {
   const retrieval = (config as MochiConfig | undefined)?.retrieval;
   const explicitModel = process.env.MOCHI_EMBEDDING_MODEL || retrieval?.embeddingModel;
   const providerId =
-    process.env.MOCHI_EMBEDDING_PROVIDER || retrieval?.embeddingProvider || config?.model?.provider || '';
+    process.env.MOCHI_EMBEDDING_PROVIDER || retrieval?.embeddingProvider || '';
+  if (!providerId && !explicitModel) {
+    return fallback(
+      'provider embeddings OFF by default (opt in via retrieval.embeddingProvider/embeddingModel or MOCHI_EMBEDDING_PROVIDER/MOCHI_EMBEDDING_MODEL)',
+    );
+  }
   const provider = PROVIDERS.find((p) => p.id === providerId.toLowerCase());
   if (!provider) {
     return fallback(providerId
       ? `no provider '${providerId}' in the provider table`
-      : 'no embedding provider configured (set retrieval.embeddingProvider/embeddingModel)');
+      : 'embedding model configured without a provider (set retrieval.embeddingProvider)');
   }
   if (provider.kind !== 'openai') {
     return fallback(`provider '${provider.id}' is ${provider.kind}-kind; only OpenAI-compatible /embeddings is wired`);

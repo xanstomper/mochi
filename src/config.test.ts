@@ -426,12 +426,11 @@ describe('provider-table consistency + env knobs', () => {
     }
   });
 
-  it('applies env knobs: dirs, telemetry, safety, sandbox, permissions, flags', () => {
+  it('applies env knobs: dirs, safety, sandbox, permissions, flags', () => {
     withEnv({
       MOCHI_UNCENSORED: undefined,
       MOCHI_PROJECT_DIR: '.proj-env',
       MOCHI_CONFIG_DIR: '/tmp/cfg-env',
-      MOCHI_TELEMETRY: 'yes',
       MOCHI_SAFETY: 'auto',
       MOCHI_SANDBOX: 'bubblewrap',
       MOCHI_PERMISSION_READ: '0',
@@ -443,7 +442,6 @@ describe('provider-table consistency + env knobs', () => {
       const cfg = loadConfig({}, '/nonexistent/nowhere.json');
       expect(cfg.projectDir).toBe('.proj-env');
       expect(cfg.configDir).toBe('/tmp/cfg-env');
-      expect(cfg.telemetry).toBe(true);
       expect(cfg.safety.mode).toBe('auto');
       expect(cfg.safety.sandbox).toBe('bubblewrap');
       expect(cfg.permissions.read).toBe(false);
@@ -459,11 +457,22 @@ describe('provider-table consistency + env knobs', () => {
       expect(cfg.safety.mode).toBe('ask'); // kept default
       expect(cfg.safety.sandbox).toBeUndefined();
     });
+  });
 
-    // MOCHI_TELEMETRY falsy forms flip the flag back off.
-    withEnv({ MOCHI_TELEMETRY: 'no' }, () => {
-      expect(loadConfig({}, '/nonexistent/nowhere.json').telemetry).toBe(false);
+  // ISSUES L-06: the dead `telemetry` knob is removed from the schema — it
+  // was parsed, env-settable, and read by nothing (MOCHI_TELEMETRY=1 was a
+  // silent no-op). These assertions PIN the removal: the field must not come
+  // back as a knob that does nothing, and config files still carrying it
+  // load unchanged (unknown keys are tolerated by the merge).
+  it('telemetry is no longer a config knob (removed schema field)', () => {
+    withEnv({ MOCHI_TELEMETRY: 'yes' }, () => {
+      const cfg = loadConfig({}, '/nonexistent/nowhere.json');
+      expect('telemetry' in (cfg as unknown as Record<string, unknown>)).toBe(false);
     });
+    const cfg = loadConfig({ telemetry: false } as never, '/nonexistent/nowhere.json');
+    // A legacy config file's telemetry key survives the merge as an unknown
+    // key (no schema rejection) — but nothing reads it.
+    expect((cfg as unknown as Record<string, unknown>).telemetry).toBe(false);
   });
 
   it('maps MOCHI_REASONING synonyms and falls back to medium', () => {
@@ -508,7 +517,7 @@ describe('provider-table consistency + env knobs', () => {
     const parsed = JSON.parse('{"__proto__": {"polluted": true}, "telemetry": true}') as Record<string, unknown>;
     const cfg = loadConfig({ quiet: undefined, ...parsed } as never, '/nonexistent/nowhere.json');
     expect(({} as Record<string, unknown>).polluted).toBeUndefined(); // prototype untouched
-    expect(cfg.telemetry).toBe(true);
+    expect((cfg as unknown as Record<string, unknown>).telemetry).toBe(true); // unknown key still merged through
     expect(cfg.quiet).toBe(false); // undefined source value skipped, default kept
   });
 });

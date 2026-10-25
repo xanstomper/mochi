@@ -1,7 +1,8 @@
 ---
 name: cognitive-sispis
 description: Output calibration gate — determines response format (direct answer, analytical explanation, or structured decision framework) based on entropy, upstream OWL signals, and weighted intent. Prevents over-structuring simple queries and under-structuring complex ones. Use at the end of the pipeline to calibrate how findings from OWL and ANCHOR are communicated. Applies when the request contains potential decision structure, comparative evaluation, or downstream impact.
-version: 0.3.2
+metadata:
+  version: "0.3.2"
 ---
 
 # SISPIS

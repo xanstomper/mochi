@@ -357,6 +357,53 @@ describe('subagent mid-run steering (B21)', () => {
     }
   }, 90_000);
 
+  it('(g) a queued child opted into idle compaction (autoCompactWindow) still receives its queued steer from its first turn', async () => {
+    // G6/G11 regression pin: run()'s idle-compaction await used to sit
+    // ahead of runActive=true, so the launch handover's acceptParentSteer
+    // refused the steer as "not started". An opted-in window must not
+    // reopen that race: the steer-acceptance window opens before run()'s
+    // first await regardless of the child's idle config.
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-steer-g-'));
+    writeFileSync(resolve(dir, 'notes-1.txt'), 'notes');
+    let alphaRequests = 0;
+    const fake = await routerFake((body) => {
+      const text = JSON.stringify(body);
+      if (text.includes('TASK-ALPHA')) {
+        alphaRequests++;
+        return readCall(`a-${alphaRequests}`, 'notes-1.txt');
+      }
+      if (text.includes('TASK-GAMMA')) {
+        if (text.includes('BEACON-GAMMA')) {
+          return {
+            content: jsonBlock({ status: 'done', summary: 'GAMMA STEERED FROM ITS FIRST TURN', findings: [], artifacts: [] }),
+            finishReason: 'stop',
+          };
+        }
+        return readCall('g-1', 'notes-1.txt');
+      }
+      return { content: 'ok', finishReason: 'stop' };
+    });
+    try {
+      const { agent: parent, workspace } = makeParent(dir, fake.url, { maxConcurrentSubagents: 1 });
+      const alpha = await parent.spawnAgentAsync({ prompt: 'TASK-ALPHA: read the notes repeatedly', preset: 'researcher' });
+      expect(alpha.status).toBe('running');
+      const gamma = await parent.spawnAgentAsync({ prompt: 'TASK-GAMMA: read the notes once', preset: 'researcher', autoCompactWindow: 60_000 });
+      expect(gamma.status).toBe('queued');
+
+      const reply = await parent.steerChildRun(gamma.id, 'BEACON-GAMMA: when you start, wrap up immediately with the beacon summary.');
+      expect(reply).toContain('Steer queued');
+
+      await parent.cancelChildRun(alpha.id);
+      const digest = await parent.collectChildResult(gamma.id, { waitMs: 60_000 });
+      expect(digest).toContain('GAMMA STEERED FROM ITS FIRST TURN');
+      const rec = new ChildRunStore(workspace).load(gamma.id);
+      expect(rec?.steered).toBe(true);
+      expect(rec?.steers?.[0].deliveredAt).toBeTypeOf('number');
+    } finally {
+      await fake.close();
+    }
+  }, 90_000);
+
   it('(f) the steer_agent tool forwards to the injected runtime and degrades cleanly without one', async () => {
     const bare = await steerAgentTool.execute(
       { id: 'sub-x', message: 'go left' },

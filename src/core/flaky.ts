@@ -421,16 +421,6 @@ export function flakyQuarantineReport(workspace: Workspace, now = Date.now()): F
   return { tracked: entries.length, quarantined: quarantinedEntries(reg), entries };
 }
 
-export function formatFlakyReport(report: FlakyQuarantineReport): string {
-  if (report.tracked === 0) return 'Flaky tests: none tracked.';
-  const lines = [`Flaky tests: ${report.tracked} tracked, ${report.quarantined.length} quarantined (score >= ${KNOWN_FLAKE_SCORE}).`];
-  for (const e of report.entries.slice(0, 20)) {
-    const when = new Date(e.lastSeenAt).toISOString().slice(0, 10);
-    lines.push(`  - ${e.id} — score ${e.score}, ${e.flakeEvents} flake event(s), last ${when}${e.score >= KNOWN_FLAKE_SCORE ? ' [QUARANTINED]' : ''}`);
-  }
-  return lines.join('\n');
-}
-
 /** Loud one-block summary of flakes observed in one verify run, for run
  *  summaries and traces. Never returns an empty string when hits exist —
  *  flakes must be impossible to miss. */

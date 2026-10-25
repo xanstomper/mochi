@@ -37,8 +37,6 @@ export const perfTool: Tool = {
           : '- Skill loads: none';
         const metrics: string[] = [
           `Performance Stats:`,
-          `- Token approximation rate: ~${Math.round(1000 / (performance.now() - performance.now() + 1))} estimates/sec`,
-          `- Message count: ${ctx.cwd ? 'tracked' : 'unknown'}`,
           `- Config safety mode: ${mode}`,
           `- Max iterations: ${maxIterations}`,
           `- Context budget: ${contextBudget} tokens`,

@@ -536,36 +536,10 @@ export function createModelAgentForgeSynthesizer(config: MochiConfig): AgentForg
   };
 }
 
-// ─── Live prober (replays a mined subtask, persona vs base) ───────────────
-
-/** Production prober: spawns a REAL child agent with the persona (or base)
- *  config on the mined prompt and asks the parent-tier model to judge the
- *  child's result quality 0..1. The probe is one agent-roundtrip per arm —
- *  bounded ambient spend, same as a forge gate run. */
-export function createAgentForgeProber(config: MochiConfig, spawnChild: (systemAddendum: string, tools?: string[]) => Promise<{ summary: string; success: boolean; tokensUsed: number }>): AgentForgeProber {
-  const provider = createProvider(config.model, 'reasoning');
-  const judge = async (summary: string, prompt: string): Promise<number> => {
-    try {
-      const res = await provider.chat(
-        [{ role: 'system', content: 'You judge whether an agent\'s result fully handled the task. Respond with ONLY a number 0.0-1.0 (1.0 = fully handled, correct, complete).' },
-         { role: 'user', content: `Task: ${prompt.slice(0, 400)}\n\nResult: ${summary.slice(0, 1_500)}` }],
-        [],
-        { temperature: 0, maxTokens: 20 },
-      );
-      const m = (res.content ?? '').match(/([01](?:\.\d+)?)/);
-      return m ? Math.min(1, Math.max(0, Number(m[1]))) : 0.5;
-    } catch {
-      return 0.5; // judge unavailable → neutral; the cost check still runs
-    }
-  };
-  return {
-    async probe(prompt, persona) {
-      const r = await spawnChild(persona.systemAddendum, persona.tools);
-      const quality = await judge(r.summary, prompt);
-      return { quality: r.success ? quality : 0, totalTokens: r.tokensUsed };
-    },
-  };
-}
+// ─── Live prober ──────────────────────────────────────────────────────────
+// (createAgentForgeProber removed — sweep 2: zero callers repo-wide, incl.
+// dynamic/string references. A prober is injectable via
+// AgentForgePassOptions.prober; no production or test call site existed.)
 
 // ─── The forge pass (mine → synthesize → gate → persist) ──────────────────
 

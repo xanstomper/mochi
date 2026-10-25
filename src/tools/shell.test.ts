@@ -64,3 +64,30 @@ describe('shellTool timeout sanitization', () => {
     expect(out).not.toContain('timed out');
   }, 20_000);
 });
+
+describe('shellTool exec ceilings (W3-5)', () => {
+  it('labels a CPU-ceiling kill in the tool output (never silent)', async () => {
+    const out = await shellTool.execute(
+      { command: 'node -e "const t=Date.now(); while(Date.now()-t<20000){}"' },
+      { cwd: CWD, config: { safety: { mode: 'safe', commandTimeoutSeconds: 30, execCpuLimitSeconds: 1 } as never } as never },
+    );
+    expect(out).toContain('[command killed by CPU ceiling (1s)');
+  }, 30_000);
+
+  it('labels a memory-ceiling kill in the tool output', async () => {
+    const out = await shellTool.execute(
+      { command: 'node -e "const a=[];for(let i=0;i<400;i++)a.push(new Array(64*1024*1024).fill(1))"' },
+      { cwd: CWD, config: { safety: { mode: 'safe', commandTimeoutSeconds: 30, execMemoryLimitMb: 256 } as never } as never },
+    );
+    expect(out).toContain('[command killed by memory ceiling (256MB address space)');
+  }, 30_000);
+
+  it('no ceilings configured: no ceiling labels in the output', async () => {
+    const out = await shellTool.execute(
+      { command: 'echo plain' },
+      { cwd: CWD, config: { safety: { mode: 'safe', commandTimeoutSeconds: 120 } as never } as never },
+    );
+    expect(out).toContain('plain');
+    expect(out).not.toContain('ceiling');
+  }, 20_000);
+});

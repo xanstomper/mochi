@@ -37,6 +37,17 @@
 //   * A torn final line (crash mid-append) is ignored on load; every
 //     complete line before it still loads. Appends use a single writeSync
 //     of one line, so a tear can only affect the last line.
+//   * G6 write-failure tolerance: a transient write error no longer
+//     latches the journal into in-memory-only mode for the rest of the
+//     run. Appends retry with bounded backoff; a write that landed but
+//     whose fsync failed is detected by a tail check and never written
+//     twice; and a later append re-attempts the file even after an
+//     exhausted retry run, so durability recovers when the failure
+//     window passes. On open, a torn tail is salvaged atomically
+//     (temp file + fsync + rename): the file is rewritten to its last
+//     good line boundary, so a later append can never glue onto torn
+//     bytes and corrupt two entries. Mid-file corruption is left alone
+//     (load already skips those lines) — only the tail is salvaged.
 //   * Everything persisted passes through redact()/redactObject() first
 //     (the security house rule for anything written to disk): a secret in
 //     a tool output or argument must never land in the journal, because a
@@ -67,25 +78,32 @@
 //     unaffected and keeps the semantics above.
 //
 // The journal never throws into the agent: file errors degrade to
-// in-memory-only operation (steps still tracked for the process lifetime,
-// replay across processes simply unavailable). Callers treat it as
+// in-memory-only operation for the affected appends (steps still tracked
+// for the process lifetime, replay across processes simply unavailable
+// for steps attempted inside a failure window). A later append retries
+// the file, so a transient failure costs at most the steps attempted
+// inside it — never the rest of the run. Callers treat it as
 // best-effort durability, exactly like the trace recorder.
 
 import {
   appendFileSync,
   closeSync,
   existsSync,
+  fstatSync,
   fsyncSync,
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   readdirSync,
+  renameSync,
   statSync,
   unlinkSync,
+  writeFileSync,
 } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { resolve } from 'node:path';
+import { resolve, basename } from 'node:path';
 import { redact, redactObject } from '../security/security.js';
 
 /** On-disk format version stamped on every line this build writes. */
@@ -197,6 +215,15 @@ export interface JournalStats {
   versionSkew?: boolean;
   /** Unparseable lines skipped at load (torn tail / corruption). */
   corruptLines?: number;
+  /** G6: append attempts spent on retries (attempts beyond the first). */
+  writeRetries?: number;
+  /** G6: appends that exhausted all retries and degraded to in-memory. */
+  writeFailures?: number;
+  /** G6: torn-tail bytes removed by the resume-time salvage rewrite. */
+  salvagedBytes?: number;
+  /** G6: the file's tail was repaired on open (torn bytes removed and/or
+   *  a missing trailing newline restored). */
+  tailRepaired?: boolean;
 }
 
 /** Storage bound for one step's output / serialized args. Tool output in
@@ -237,6 +264,17 @@ function boundText(text: string): { text: string; truncated: boolean } {
 
 function sha256(text: string): string {
   return createHash('sha256').update(text).digest('hex');
+}
+
+/** Blocking sleep for the journal retry backoff. The append path is
+ *  synchronous (no event loop to yield to); Atomics.wait is the
+ *  standard Node sync sleep. Best-effort: a missed backoff only
+ *  shortens the delay, it never changes retry semantics. */
+function sleepSync(ms: number): void {
+  if (ms <= 0) return;
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch { /* best effort */ }
 }
 
 /** Content state of one file: SHA-256, a `size:<n>` token for oversized
@@ -378,6 +416,10 @@ export interface RunJournalOptions {
    *  tracked for divergence. Defaults to baseDir's parent — correct for
    *  the loop, where baseDir IS `<root>/.mochi`. */
   cwd?: string;
+  /** G6 write-retry policy: total append attempts per line (default 5)
+   *  and base backoff in ms (default 10, doubling per retry, so a
+   *  persistently failing append costs at most ~150 ms). */
+  writeRetry?: { attempts?: number; baseDelayMs?: number };
 }
 
 export class RunJournal {
@@ -431,6 +473,15 @@ export class RunJournal {
   private capped = false;
   private versionSkew = false;
   private corruptLines = 0;
+  /** G6: retries spent, appends that exhausted retries, torn-tail bytes
+   *  salvaged on open, whether the tail was repaired on open. */
+  private writeRetries = 0;
+  private writeFailures = 0;
+  private salvagedBytes = 0;
+  private tailRepaired = false;
+  /** G6 retry policy (see RunJournalOptions.writeRetry). */
+  private readonly writeAttempts: number;
+  private readonly writeBaseDelayMs: number;
   private gitHeadCache: { at: number; value: string | undefined } | undefined;
 
   private constructor(opts: RunJournalOptions) {
@@ -438,6 +489,8 @@ export class RunJournal {
     this.taskId = opts.taskId;
     this.file = journalFilePath(opts.baseDir, opts.runId);
     this.rootDir = opts.cwd ?? resolve(opts.baseDir, '..');
+    this.writeAttempts = Math.max(1, Math.floor(opts.writeRetry?.attempts ?? 5));
+    this.writeBaseDelayMs = Math.max(0, opts.writeRetry?.baseDelayMs ?? 10);
     this.loadFromDisk();
   }
 
@@ -461,8 +514,25 @@ export class RunJournal {
       this.durable = false;
       return;
     }
-    for (const line of raw.split('\n')) {
-      if (!line.trim()) continue;
+    const endsWithNewline = raw.endsWith('\n');
+    const segments = raw.split('\n');
+    let offset = 0;
+    // Byte offset just past the last complete, parseable line — the
+    // salvage point if the file ends in torn bytes. Mid-file corruption
+    // never moves it backwards: later good lines advance it past the
+    // corrupt line, so a tail salvage preserves everything loadable.
+    let lastGoodEnd = 0;
+    let tailBadBytes = 0;
+    let tailNeedsNewline = false;
+    for (let i = 0; i < segments.length; i++) {
+      const line = segments[i];
+      const terminated = i < segments.length - 1 || endsWithNewline;
+      const segStart = offset;
+      offset += line.length + 1;
+      if (!line.trim()) {
+        if (terminated) lastGoodEnd = Math.min(segStart + line.length + 1, raw.length);
+        continue;
+      }
       let parsed: JournalLine;
       try {
         parsed = JSON.parse(line) as JournalLine;
@@ -472,7 +542,19 @@ export class RunJournal {
         // so later complete lines still load — one bad line must not
         // brick the journal for every future resume.
         this.corruptLines++;
+        // Only an UNTERMINATED bad tail is salvageable: it is the bytes
+        // of an append that never finished. Terminated bad lines are
+        // mid-file corruption and are left exactly where they are.
+        if (!terminated) tailBadBytes = Buffer.byteLength(line, 'utf8');
         continue;
+      }
+      if (terminated) lastGoodEnd = segStart + line.length + 1;
+      else {
+        // Complete entry, missing only its newline (the write landed the
+        // closing brace but died before the newline): load it, then
+        // normalize the file so the next append cannot glue onto it.
+        lastGoodEnd = raw.length;
+        tailNeedsNewline = true;
       }
       if (!parsed || typeof parsed !== 'object') continue;
       if (parsed.kind === 'run_finished') {
@@ -513,6 +595,18 @@ export class RunJournal {
         const queue = this.claimableBySig.get(entry.signature) ?? [];
         queue.push(entry);
         this.claimableBySig.set(entry.signature, queue);
+      }
+    }
+    // G6 resume-time tail salvage (atomic — see salvageTail): a torn
+    // tail is rewritten to the last good line boundary (or normalized
+    // with its missing newline), so the next append lands on a clean
+    // line boundary instead of gluing onto torn bytes and corrupting
+    // two entries. A failed salvage leaves the original untouched and
+    // the journal still loads — salvage is best-effort, never a brick.
+    if (tailBadBytes > 0 || tailNeedsNewline) {
+      if (this.salvageTail(lastGoodEnd, tailNeedsNewline)) {
+        this.salvagedBytes = tailBadBytes;
+        this.tailRepaired = true;
       }
     }
     if (this.versionSkew) {
@@ -621,22 +715,120 @@ export class RunJournal {
   }
 
   /** Append one line durably: single write + fsync before returning, so a
-   *  step reported complete to the caller survives an immediate SIGKILL. */
+   *  step reported complete to the caller survives an immediate SIGKILL.
+   *
+   *  G6 write-failure tolerance: a transient failure no longer latches
+   *  the journal into in-memory-only mode for the rest of the run. The
+   *  append retries with backoff (bounded by writeRetry); a write that
+   *  landed but whose fsync failed is detected by the tail check and
+   *  NOT written twice; and the next append re-attempts the file even
+   *  after an exhausted retry run, so durability recovers when the
+   *  failure window passes. Only an append that exhausts all retries
+   *  degrades to in-memory-only — for that append. isDurable reports
+   *  the most recent append's outcome. The journal still never throws
+   *  into the agent. */
   private appendLine(line: JournalLine): void {
-    if (!this.durable) return;
-    try {
-      mkdirSync(resolve(this.file, '..'), { recursive: true });
-      const fd = openSync(this.file, 'a');
+    const text = JSON.stringify(line) + '\n';
+    for (let attempt = 0; attempt < this.writeAttempts; attempt++) {
+      if (attempt > 0) {
+        this.writeRetries++;
+        sleepSync(this.writeBaseDelayMs * 2 ** (attempt - 1));
+      }
       try {
-        appendFileSync(fd, JSON.stringify(line) + '\n', 'utf8');
-        fsyncSync(fd);
+        mkdirSync(resolve(this.file, '..'), { recursive: true });
+        const fd = openSync(this.file, 'a');
+        try {
+          appendFileSync(fd, text, 'utf8');
+          fsyncSync(fd);
+        } finally {
+          closeSync(fd);
+        }
+        this.durable = true;
+        return;
+      } catch {
+        // The bytes may have landed even though fsync/close reported
+        // failure: re-appending would duplicate the line, and a
+        // duplicate claimable entry could serve a stale result for a
+        // legitimate repeat call. The tail check makes retry idempotent.
+        if (this.tailEquals(text)) {
+          this.durable = true;
+          return;
+        }
+        // Otherwise loop: retry with backoff, or exhaust below.
+      }
+    }
+    // All retries exhausted: this append degrades to in-memory-only.
+    // The latch is per-append, NOT permanent — the next append retries
+    // the file again, so a transient storm costs the steps attempted
+    // inside it, never the rest of the run.
+    this.durable = false;
+    this.writeFailures++;
+  }
+
+  /** True when the file's tail is exactly `text` — the append landed
+   *  even though its fsync/close reported failure. Best-effort: any
+   *  read problem returns false (the caller retries normally). */
+  private tailEquals(text: string): boolean {
+    try {
+      const fd = openSync(this.file, 'r');
+      try {
+        const size = fstatSync(fd).size;
+        if (size < text.length) return false;
+        const buf = Buffer.alloc(text.length);
+        readSync(fd, buf, 0, text.length, size - text.length);
+        return buf.toString('utf8') === text;
       } finally {
         closeSync(fd);
       }
     } catch {
-      // Degrade to in-memory only: the run continues, cross-process replay
-      // is simply unavailable. Never break the agent over its journal.
-      this.durable = false;
+      return false;
+    }
+  }
+
+  /** Atomically rewrite the journal to its last-good-line prefix (G6
+   *  segment rotation): the salvaged content goes to a temp sibling,
+   *  fsyncs, then renames over the original, with a best-effort dir
+   *  fsync after the swap — a crash mid-salvage leaves either the whole
+   *  old file or the whole salvaged file, never a half-truncated
+   *  journal. Preserves the original's mode. Returns true on success;
+   *  on ANY failure the original is left untouched (and the temp is
+   *  removed best-effort). */
+  private salvageTail(lastGoodEnd: number, appendNewline: boolean): boolean {
+    let tmp = '';
+    try {
+      const raw = readFileSync(this.file, 'utf8');
+      const content = raw.slice(0, lastGoodEnd) + (appendNewline ? '\n' : '');
+      const dir = resolve(this.file, '..');
+      let mode: number | undefined;
+      try {
+        mode = statSync(this.file).mode & 0o777;
+      } catch { /* default mode */ }
+      tmp = resolve(dir, `.${basename(this.file)}.salvage-${process.pid}-${randomUUID().slice(0, 8)}.tmp`);
+      const fd = openSync(tmp, 'w', mode);
+      try {
+        writeFileSync(fd, content, 'utf8');
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+      renameSync(tmp, this.file);
+      tmp = '';
+      try {
+        const dfd = openSync(dir, 'r');
+        try {
+          fsyncSync(dfd);
+        } finally {
+          closeSync(dfd);
+        }
+      } catch { /* dir fsync is best-effort */ }
+      return true;
+    } catch {
+      if (tmp) {
+        try {
+          unlinkSync(tmp);
+        } catch { /* best effort */ }
+      }
+      return false;
     }
   }
 
@@ -969,7 +1161,9 @@ export class RunJournal {
     return this.finishedOutcome;
   }
 
-  /** True when this journal was written to disk successfully so far. */
+  /** True when the most recent append succeeded (or no append has been
+   *  attempted). G6: a transient failure flips this false only until a
+   *  later append succeeds — it is no longer a permanent latch. */
   get isDurable(): boolean {
     return this.durable;
   }
@@ -996,6 +1190,10 @@ export class RunJournal {
       ...(this.capped ? { capped: true } : {}),
       ...(this.versionSkew ? { versionSkew: true } : {}),
       ...(this.corruptLines > 0 ? { corruptLines: this.corruptLines } : {}),
+      ...(this.writeRetries > 0 ? { writeRetries: this.writeRetries } : {}),
+      ...(this.writeFailures > 0 ? { writeFailures: this.writeFailures } : {}),
+      ...(this.salvagedBytes > 0 ? { salvagedBytes: this.salvagedBytes } : {}),
+      ...(this.tailRepaired ? { tailRepaired: true } : {}),
     };
   }
 
@@ -1014,6 +1212,11 @@ export class RunJournal {
     this.capped = false;
     this.versionSkew = false;
     this.corruptLines = 0;
+    this.writeRetries = 0;
+    this.writeFailures = 0;
+    this.salvagedBytes = 0;
+    this.tailRepaired = false;
+    this.durable = true;
     this.modelChain = [];
     this.modelChainSealed = false;
     this.modelTurnCursor = 0;

@@ -299,3 +299,16 @@ describe('adaptive effort (mechanism 6)', () => {
     expect(t.adjustEffort('medium')).toBe('max'); // still +2: only ONE clean turn since
   });
 });
+
+// P3 gun 6 (self-poisoning class): the PARTIAL targeted pre-check annotation
+// is harness framing on the SAME failure as the full-gate header — the two
+// must share a failure class, or the same-approach streak resets and the x3
+// strategy switch never fires (the exact bug '(fast lane)' had before
+// 9d66584).
+describe('failureClassOf harness-annotation hygiene', () => {
+  it('a PARTIAL targeted pre-check failure and the same full-gate failure share a class', () => {
+    const full = failureClassOf('Check failed: npm test\nAssertionError: expected 5 to be 6');
+    const partial = failureClassOf('Check failed: npm test (PARTIAL targeted pre-check: budget guard)\nAssertionError: expected 5 to be 6');
+    expect(partial).toBe(full);
+  });
+});

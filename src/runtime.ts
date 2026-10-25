@@ -2,7 +2,7 @@ import { loadConfig, loadProjectConfig, validateConfig } from './config.js';
 import type { MochiConfig } from './types.js';
 import { EventBus } from './events.js';
 import { Workspace } from './workspace.js';
-import { GoalEngine } from './goals/goal.js';
+import type { GoalEngine } from './goals/goal.js';
 import { findProjectRoot } from './repo/repo.js';
 import { SessionStore } from './state/session-store.js';
 import { readdirSync, statSync, readFileSync } from 'node:fs';
@@ -12,14 +12,65 @@ import { HookManager } from './hooks.js';
 import { AgentProfileService } from './agents/profile.js';
 import { MemoryStore } from './memory/memory.js';
 import { RetrievalEngine } from './memory/retrieval.js';
-import { SpeculativeEngine, type SpeculativeResult } from './agent/speculative.js';
+import type { SpeculativeResult } from './agent/speculative.js';
 import { BudgetEngine } from './budget.js';
 import {currentConfig, login as doLogin, selectProviderById, describeConfig, listModelsForProvider, addFallbackModel, removeFallbackModel, clearFallbackModels} from './model/model-manager.js';
 import { UsageStore } from './model/usage.js';
-import { TraceRecorder } from './observability/trace.js';
-import { buildTools } from './tools/index.js';
 import { applyMode, modeInstruction, MODE_IDS, isMode } from './modes.js';
 import { loadConfigFile, saveConfigFile } from './model/providers.js';
+import { createRequire } from 'node:module';
+// Startup phase tracer (P2 speed) — no-op unless MOCHI_STARTUP_TRACE=1.
+import { startupMark } from './observability/startup-trace.js';
+
+// ── Lazy engine loading (P2 speed, startup budget) ─────────────────────────
+// goals/goal.js statically drags in the agent loop, the context engine and
+// the whole tools graph (~200ms ESM module resolution+evaluation measured on
+// the reference machine, compile cache warm) — a cost EVERY Runtime creation
+// paid, including light commands (status, doctor, gc) that never run an
+// agent. The goal engine is built on first access instead:
+//  - Built dist (the CLI the user runs): Node >= 22.12 loads ESM
+//    synchronously through require(esm), which shares the module cache with
+//    import() (verified: same namespace object both channels) — same class
+//    identity, loaded only when first touched.
+//  - Source/vitest (the .ts graph): require() cannot resolve .js-specifier
+//    imports of .ts files, so the sync channel is unavailable; flows await
+//    ensureGoals() and the `goals` accessor builds once the module landed.
+//    Node < 22.12 behaves the same way (no require_module feature).
+function loadModuleLazy<T>(specifier: string): T | null {
+  try {
+    const req = createRequire(import.meta.url);
+    // require.resolve only succeeds for a real .js file — under vitest the
+    // path is src/*.ts and the async channel below handles it.
+    if (!req.resolve(specifier).endsWith('.js')) return null;
+    return req(specifier) as T;
+  } catch {
+    return null;
+  }
+}
+
+type GoalModule = typeof import('./goals/goal.js');
+
+/** Build the goal engine synchronously when the dist build allows it;
+ *  null when the module must come in through the async channel. */
+function goalModuleSync(): GoalModule | null {
+  return loadModuleLazy<GoalModule>('./goals/goal.js');
+}
+
+type ToolsModule = typeof import('./tools/index.js');
+
+/** Sync channel for the tools registry (listTools/getToolNames). Throws a
+ *  precise error on the src/.ts graph — those flows are agent flows that
+ *  already have the module loaded through the agent loop. */
+function requireToolsModule(): ToolsModule {
+  const m = loadModuleLazy<ToolsModule>('./tools/index.js');
+  if (!m) {
+    // Fallback for vitest/src: the module is loaded (transformed) already in
+    // any flow that owns tools; a pure lazy sync load is impossible there.
+    throw new Error('[mochi] tools registry requires the built dist (require(esm)); under vitest, import buildTools from ./tools/index.js directly');
+  }
+  return m;
+}
+
 
 export interface RuntimeOptions {
   cwd?: string;
@@ -41,9 +92,13 @@ export class Runtime {
   events: EventBus;
   workspace: Workspace;
   cwd: string;
-  goals: GoalEngine;
   private hooks: HookManager;
   usage: UsageStore;
+  /** Lazy goal engine (P2 speed): built on first access — see the module
+   *  comment on loadModuleLazy. `_projectRoot` is captured at construction
+   *  so the engine builds against the SAME root the eager constructor used. */
+  private _goals: GoalEngine | null = null;
+  private _projectRoot = '';
   /** MCH-79: run-level budget ledger — exposed so /usage can show a per-model cost breakdown. */
   budget?: BudgetEngine;
   private abortController: AbortController;
@@ -80,13 +135,13 @@ export class Runtime {
     // lost the target project's config).
     this.cwd = opts.cwd ?? process.cwd();
     this.config = loadConfig(opts.config, undefined, this.cwd);
+    startupMark('runtime:config-loaded');
     this.events = new EventBus();
     const projectRoot = findProjectRoot(this.cwd);
+    this._projectRoot = projectRoot;
     this.workspace = new Workspace(projectRoot, this.config.projectDir);
     this.workspace.ensure();
-    this.goals = new GoalEngine(this.config, this.workspace, this.events, projectRoot);
-    // MCH-79: capture the run-level BudgetEngine so /usage can show per-model cost.
-    this.goals.onBudget = (b) => { this.budget = b as BudgetEngine; };
+    startupMark('runtime:workspace-ready');
     this.hooks = new HookManager(this.workspace.dir);
     this.usage = new UsageStore(this.workspace.dir);
     // A run-level abort: a user hitting Ctrl-C (or a daemon shutdown) aborts
@@ -111,6 +166,44 @@ export class Runtime {
     if (problems.length) {
       throw new Error(`Invalid configuration:\n${problems.map((p) => `  - ${p}`).join('\n')}`);
     }
+  }
+
+  /** The goal engine, built on first access (lazy — P2 speed). On the built
+   *  dist the module loads synchronously through require(esm) (same module
+   *  cache as import(), so class identity is shared); under vitest/src the
+   *  caller must have awaited ensureGoals() first (all internal flows do). */
+  get goals(): GoalEngine {
+    if (!this._goals) {
+      const m = goalModuleSync();
+      if (!m) {
+        throw new Error('[mochi] goal engine accessed before initialization — await runtime.ensureGoals() first (sync lazy-load requires the built dist on Node >= 22.12)');
+      }
+      this.buildGoalsFromModule(m);
+    }
+    return this._goals!;
+  }
+
+  /** Build the engine from a loaded module namespace and wire the pending
+   *  propagation values (onBudget, promptUser, approvalHandler, permPolicy,
+   *  extraTools) that setters recorded while no engine existed. */
+  private buildGoalsFromModule(m: GoalModule): GoalEngine {
+    startupMark('runtime:goals-build-start');
+    const engine = new m.GoalEngine(this.config, this.workspace, this.events, this._projectRoot);
+    // MCH-79: capture the run-level BudgetEngine so /usage can show per-model cost.
+    engine.onBudget = (b) => { this.budget = b as BudgetEngine; };
+    this._goals = engine;
+    this.syncEngines();
+    startupMark('runtime:goals-built');
+    return engine;
+  }
+
+  /** Awaitable init for the goal engine — the async channel for the src/.ts
+   *  graph (vitest) and Node < 22.12. Every goal-touching flow calls this
+   *  first; on the built dist it returns the already-built engine. */
+  async ensureGoals(): Promise<GoalEngine> {
+    if (this._goals) return this._goals;
+    const m = goalModuleSync() ?? await import('./goals/goal.js');
+    return this._goals ? this._goals : this.buildGoalsFromModule(m);
   }
 
   /** Abort the currently-running goal (if any) so the loop stops cleanly. */
@@ -178,6 +271,8 @@ export class Runtime {
   async speculate(question: string): Promise<SpeculativeResult> {
     const budget = new BudgetEngine(this.config.safety);
     budget.start();
+    // Lazy import (P2 speed): speculative.js is agent-flow-only.
+    const { SpeculativeEngine } = await import('./agent/speculative.js');
     const engine = new SpeculativeEngine(this.config, budget);
     return engine.speculate(question);
   }
@@ -284,7 +379,7 @@ export class Runtime {
    *  a workspace directory on Windows, where open SQLite handles keep an
    *  exclusive lock on sessions.sqlite. Idempotent. */
   close(): void {
-    try { this.goals.close(); } catch { /* best-effort */ }
+    try { this._goals?.close(); } catch { /* best-effort */ }
   }
 
   /** Reset active conversation session. */
@@ -295,9 +390,12 @@ export class Runtime {
     } catch { /* best effort */ }
   }
 
-  /** List all tools available in this runtime, returning lightweight metadata. */
+  /** List all tools available in this runtime, returning lightweight metadata.
+   *  tools/index.js is loaded lazily (sync require(esm) channel on the built
+   *  dist) — light commands never pay its ~120ms compile. */
   listTools(): Array<{ name: string; description: string; permission?: string; dangerous?: boolean }> {
-    const tools = buildTools(this.config);
+    const { buildTools: bt } = requireToolsModule();
+    const tools = bt(this.config);
     return Array.from(tools.values()).map((t) => ({
       name: t.def.name,
       description: t.def.description,
@@ -308,7 +406,8 @@ export class Runtime {
 
   /** Return just the names of available tools (model-aware). */
   getToolNames(): string[] {
-    const tools = buildTools(this.config);
+    const { buildTools: bt } = requireToolsModule();
+    const tools = bt(this.config);
     return Array.from(tools.keys());
   }
 
@@ -336,20 +435,22 @@ export class Runtime {
    *  a session (editors, daemon jobs) or show the task DAG (an ACP plan) use
    *  this. */
   async runGoal(objective: string, constraints: string[] = [], opts?: { enhance?: boolean; enhanceMode?: string; journalRunId?: string }, signal?: AbortSignal): Promise<{ goalId: string; tasks: import('./types.js').Task[]; summary: string; tokensUsed: number; costUsd: number; durationMs: number; status: string }> {
-    const goal = await this.goals.createGoal(objective, constraints);
-    const tasks = await this.goals.decompose(goal);
+    const goals = await this.ensureGoals();
+    const goal = await goals.createGoal(objective, constraints);
+    const tasks = await goals.decompose(goal);
     const { summary, result } = await this.runGoalTraced(goal, tasks, objective, opts, this.config.planMode, signal);
     return { goalId: goal.id, tasks, summary, tokensUsed: result.tokensUsed, costUsd: result.costUsd, durationMs: result.durationMs, status: result.goal?.status ?? goal.status };
   }
 
   /** Shared execution: records a run trace, then delegates to GoalEngine. */
   private async runGoalTraced(goal: import('./types.js').Goal, tasks: import('./types.js').Task[], objective: string, opts?: { enhance?: boolean; enhanceMode?: string; journalRunId?: string }, isPlan = this.config.planMode, signal?: AbortSignal): Promise<{ summary: string; result: import('./goals/goal.js').GoalResult }> {
+    const goals = await this.ensureGoals();
     const { TraceRecorder } = await import('./observability/trace.js');
     const recorder = new TraceRecorder(this.workspace.dir, goal.id).attach(this.events);
     try {
       const extra = await this.enhancedCtx(objective, opts);
-      const sessionId = this.activeSessionId ?? (this.activeSessionId = this.goals['store'].begin({ goalId: goal.id, objective: objective.slice(0, 80) }));
-      const result = await this.goals.runGoal(goal, tasks, extra, signal ?? this.abortSignal, sessionId, opts?.journalRunId);
+      const sessionId = this.activeSessionId ?? (this.activeSessionId = goals['store'].begin({ goalId: goal.id, objective: objective.slice(0, 80) }));
+      const result = await goals.runGoal(goal, tasks, extra, signal ?? this.abortSignal, sessionId, opts?.journalRunId);
       this.recordUsage(objective, result);
       recorder.log({ t: Date.now(), kind: 'goal:summary', status: result.goal?.status ?? 'unknown', tokensUsed: result.tokensUsed, costUsd: result.costUsd, durationMs: result.durationMs });
       // Plan mode: the agents' plan text is the deliverable.
@@ -558,13 +659,14 @@ export class Runtime {
   async team(objective: string, opts?: { enhance?: boolean; enhanceMode?: string }): Promise<string> {
     // Real team run: decompose, assign specialist roles (coder/tester/
     // reviewer/...), and execute through the scheduler concurrently.
+    const goals = await this.ensureGoals();
     const { runTeam } = await import('./teams/team.js');
     const { TraceRecorder } = await import('./observability/trace.js');
-    const goal = await this.goals.createGoal(objective);
+    const goal = await goals.createGoal(objective);
     const recorder = new TraceRecorder(this.workspace.dir, goal.id).attach(this.events);
     try {
       const extra = await this.enhancedCtx(objective, opts);
-      const { summary, status } = await runTeam(this.goals, goal, { signal: this.abortSignal, extras: extra });
+      const { summary, status } = await runTeam(goals, goal, { signal: this.abortSignal, extras: extra });
       recorder.log({ t: Date.now(), kind: 'team:summary', status, summary: summary.slice(0, 500) });
       return summary;
     } finally {
@@ -573,8 +675,9 @@ export class Runtime {
   }
 
   async plan(objective: string): Promise<string> {
-    const goal = await this.goals.createGoal(objective);
-    const tasks = await this.goals.decompose(goal);
+    const goals = await this.ensureGoals();
+    const goal = await goals.createGoal(objective);
+    const tasks = await goals.decompose(goal);
     const lines = [`Plan for: ${goal.objective}\n`];
     for (const t of tasks) {
       lines.push(`- [ ] ${t.title} (${t.role})`);
@@ -592,9 +695,10 @@ export class Runtime {
   async approvePlan(): Promise<string> {
     const pending = this.workspace.readJson<{ id: string; objective: string; planMode?: boolean }>('state/pending-goal.json');
     if (!pending) return 'No pending plan. Run /plan first.';
-    const goal = this.workspace.loadGoal(pending.id) ?? await this.goals.createGoal(pending.objective);
+    const goals = await this.ensureGoals();
+    const goal = this.workspace.loadGoal(pending.id) ?? await goals.createGoal(pending.objective);
     const savedTasks = this.workspace.loadTasks(pending.id);
-    let tasks = savedTasks.length ? savedTasks : await this.goals.decompose(goal);
+    let tasks = savedTasks.length ? savedTasks : await goals.decompose(goal);
     // Approval is an explicit execution transition. A runtime left in plan
     // mode (TUI Tab, --plan, ACP plan mode) would otherwise veto every
     // mutation and return another plan. Run this pending goal as act, then
@@ -610,9 +714,9 @@ export class Runtime {
         // Explicitly executable saved tasks are preserved.
         goal.tasks = [];
         this.workspace.saveGoal(goal);
-        tasks = await this.goals.decompose(goal);
+        tasks = await goals.decompose(goal);
       }
-      const result = await this.goals.runGoal(goal, tasks, [], this.abortSignal);
+      const result = await goals.runGoal(goal, tasks, [], this.abortSignal);
       this.recordUsage(pending.objective, result);
       this.workspace.writeJson('state/pending-goal.json', {});
       return result.summary;
@@ -640,9 +744,11 @@ export class Runtime {
     goal.status = 'active';
     this.workspace.saveGoal(goal);
     this.workspace.saveTasks(goal.id, tasks);
+    const goals = await this.ensureGoals();
+    const { TraceRecorder } = await import('./observability/trace.js');
     const recorder = new TraceRecorder(this.workspace.dir, goal.id).attach(this.events);
     try {
-      const result = await this.goals.runGoal(goal, tasks, [], this.abortSignal);
+      const result = await goals.runGoal(goal, tasks, [], this.abortSignal);
       this.recordUsage(goal.objective, result);
       recorder.log({ t: Date.now(), kind: 'goal:summary', status: goal.status, tokensUsed: result.tokensUsed, costUsd: result.costUsd, durationMs: result.durationMs });
       return result.summary;
@@ -687,7 +793,8 @@ export class Runtime {
     if (opts?.sessionId) {
       this.activeSessionId = opts.sessionId;
     } else if (!this.activeSessionId) {
-      this.activeSessionId = this.goals['store'].begin({ objective: prompt.slice(0, 80) });
+      const goals = await this.ensureGoals();
+      this.activeSessionId = goals['store'].begin({ objective: prompt.slice(0, 80) });
     }
     const sessionId = this.activeSessionId;
     // Auto-anchor: if running at home directory and prompt targets an existing project subfolder, anchor to it
@@ -701,17 +808,19 @@ export class Runtime {
           const projectRoot = detected;
           this.workspace = new Workspace(projectRoot, this.config.projectDir);
           this.workspace.ensure();
-          this.goals = new GoalEngine(this.config, this.workspace, this.events, projectRoot);
+          this._projectRoot = projectRoot;
+          this._goals = null; // rebuild against the anchored workspace below
+          await this.ensureGoals();
           this.hooks = new HookManager(this.workspace.dir);
           this.usage = new UsageStore(this.workspace.dir);
-          this.syncEngines();
           this.events.emit({ type: 'agent:log', agentId: 'runtime', message: `[workspace] Anchored project workspace to ${detected}` });
         }
       }
     } catch { /* best-effort project anchoring */ }
     // Single-agent one-shot task: create task directly without waiting for decompose LLM call.
+    const goals = await this.ensureGoals();
     const { createTask } = await import('./goals/task.js');
-    const goal = await this.goals.createGoal(prompt);
+    const goal = await goals.createGoal(prompt);
     // Chat tasks use the coder profile (profiles.get falls back to coder for
     // unknown roles anyway); 'coder' here keeps the type honest with zero
     // behavior change.
@@ -723,7 +832,7 @@ export class Runtime {
     const { TraceRecorder } = await import('./observability/trace.js');
     const recorder = new TraceRecorder(this.workspace.dir, goal.id).attach(this.events);
     try {
-      const result = await this.goals.runGoal(goal, [task], [], opts?.signal ?? this.abortSignal, sessionId);
+      const result = await goals.runGoal(goal, [task], [], opts?.signal ?? this.abortSignal, sessionId);
       this.recordUsage(prompt, result);
       recorder.log({ t: Date.now(), kind: 'goal:summary', status: goal.status, tokensUsed: result.tokensUsed, costUsd: result.costUsd, durationMs: result.durationMs });
       let summary = result.summary;
@@ -778,8 +887,9 @@ export class Runtime {
    * parses structured findings with pipeline.parseFindings.
    */
   async review(input: string): Promise<string> {
+    const goals = await this.ensureGoals();
     const { createTask } = await import('./goals/task.js');
-    const goal = await this.goals.createGoal('Review the provided input and report issues.');
+    const goal = await goals.createGoal('Review the provided input and report issues.');
     const task = createTask(
       'Review input',
       `Review the following input (a diff, crash log, or code snippet) for correctness, security, and regressions. Respond with structured findings, one per line: [SEVERITY] file:line message, where SEVERITY is HIGH, MEDIUM, LOW, or INFO. Be specific and cite the file (or '(unknown)' when no file applies).\n\nINPUT:\n${input.slice(0, 120_000)}`,
@@ -788,7 +898,7 @@ export class Runtime {
     const { TraceRecorder } = await import('./observability/trace.js');
     const recorder = new TraceRecorder(this.workspace.dir, goal.id).attach(this.events);
     try {
-      const result = await this.goals.runGoal(goal, [task], [], this.abortSignal);
+      const result = await goals.runGoal(goal, [task], [], this.abortSignal);
       this.recordUsage('review', result);
       const output = result.completedTasks.map((t) => t.output).filter((o) => o && o.trim()).join('\n');
       return output || result.summary || '(no findings)';
@@ -799,13 +909,14 @@ export class Runtime {
 
   /** Run a fix task over piped input (crash log / failing test output). */
   async fix(input: string): Promise<string> {
-    const goal = await this.goals.createGoal('Fix the issue described by the provided input.');
-    const task = (await this.goals.decompose(goal))[0];
+    const goals = await this.ensureGoals();
+    const goal = await goals.createGoal('Fix the issue described by the provided input.');
+    const task = (await goals.decompose(goal))[0];
     task.description = `${task.description}\n\nCONTEXT FROM PIPE:\n${input.slice(0, 120_000)}`;
     const { TraceRecorder } = await import('./observability/trace.js');
     const recorder = new TraceRecorder(this.workspace.dir, goal.id).attach(this.events);
     try {
-      const result = await this.goals.runGoal(goal, [task], [], this.abortSignal);
+      const result = await goals.runGoal(goal, [task], [], this.abortSignal);
       this.recordUsage(input.slice(0, 100), result);
       return result.summary;
     } finally {
@@ -925,31 +1036,34 @@ export class Runtime {
    *  this.config but the engines still pointed at the old object — so /model
    *  looked applied while every run silently used the stale model. */
   private syncEngines() {
-    (this.goals as unknown as { config: MochiConfig }).config = this.config;
-    this.goals.promptUser = this.promptUser;
-    this.goals.approvalHandler = this.approvalHandler;
-    this.goals.permPolicy = this.permPolicy;
-    this.goals.extraTools = this.extraTools;
+    // No engine built yet: nothing to propagate — the values live on the
+    // runtime fields and buildGoalsFromModule applies them at build time.
+    if (!this._goals) return;
+    (this._goals as unknown as { config: MochiConfig }).config = this.config;
+    this._goals.promptUser = this.promptUser;
+    this._goals.approvalHandler = this.approvalHandler;
+    this._goals.permPolicy = this.permPolicy;
+    this._goals.extraTools = this.extraTools;
   }
 
   /** Attach the interactive user-prompt resolver (TUI option menu) and
    *  propagate it to the engines that spawn agents. */
   setPromptUser(fn?: import('./tools/user-prompt.js').PromptUserFn): void {
     this.promptUser = fn;
-    this.goals.promptUser = fn;
+    if (this._goals) this._goals.promptUser = fn;
   }
 
   /** Attach the interactive approval resolver (TUI allow/deny menu). */
   setApprovalHandler(fn?: import('./security/approval.js').ApprovalHandler): void {
     this.approvalHandler = fn;
-    this.goals.approvalHandler = fn;
+    if (this._goals) this._goals.approvalHandler = fn;
   }
 
   /** Set the permission tier and propagate it to the engines that spawn
    *  agents. Prefer over assigning runtime.permPolicy directly. */
   setPermPolicy(p?: string): void {
     this.permPolicy = p;
-    this.goals.permPolicy = p;
+    if (this._goals) this._goals.permPolicy = p;
   }
 
   /** Register an in-process tool on top of the built-ins, available to every
@@ -959,7 +1073,7 @@ export class Runtime {
     const name = tool.def.name;
     const prev = this.extraTools.get(name);
     this.extraTools.set(name, tool);
-    this.goals.extraTools = this.extraTools;
+    if (this._goals) this._goals.extraTools = this.extraTools;
     return () => {
       if (prev) this.extraTools.set(name, prev);
       else this.extraTools.delete(name);

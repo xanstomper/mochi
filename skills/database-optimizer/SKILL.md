@@ -1,7 +1,7 @@
 ---
 name: database-optimizer
 description: Database optimization workflow — EXPLAIN ANALYZE inspection, index design, N+1 detection, query plan reading, and schema tuning. Use when a query or schema is slow or when asked to optimize persistence.
-tools: [read, glob, search, shell, sql_codebase_query]
+allowed-tools: read glob search shell sql_codebase_query
 ---
 
 # Database Optimizer Skill

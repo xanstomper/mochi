@@ -51,7 +51,8 @@ describe('validateSkillName', () => {
     expect(long.some((e) => e.includes('exceeds 64 chars'))).toBe(true);
     const bad = validateSkillName('Has Spaces_Underscore');
     expect(bad).toContain('name must be lowercase a-z, 0-9, hyphens only');
-    expect(bad.length).toBe(1); // length fine, charset not
+    expect(bad).toContain('name must be lowercase');
+    expect(bad.length).toBe(2); // lowercase + charset; length fine
   });
 });
 
@@ -121,7 +122,13 @@ describe('lintSkillSource', () => {
 
 describe('loadSkillFile', () => {
   it('loads name, description, tools, and disable-model-invocation', () => {
-    const dir = mkdtempSync(join(root, 'lsf-'));
+    // The skill dir must match the frontmatter name (Agent Skills spec:
+    // name↔directory match is a conformance rule, and loadSkillFile surfaces
+    // spec violations as diagnostics). mkdtemp appends random chars, so the
+    // skill root is a fixed-name child of a temp parent.
+    const parent = mkdtempSync(join(root, 'lsf-'));
+    const dir = join(parent, 'ship-it');
+    mkdirSync(dir, { recursive: true });
     const p = join(dir, 'SKILL.md');
     writeFileSync(p, '---\nname: ship-it\ndescription: how we ship\ntools: read, write shell\ndisable-model-invocation: true\n---\nbody\n');
     const { skill: s, diagnostics } = loadSkillFile(p);

@@ -1,6 +1,6 @@
 // Wave S4 — structured verifier objection units.
 import { describe, it, expect } from 'vitest';
-import { buildObjection, renderObjection, renderObjectionClosed, objectionDigestLine, OBJECTION_MARKER } from './verifier-objection.js';
+import { buildObjection, renderObjection, renderObjectionClosed, objectionDigestLine, salientFailureLines, OBJECTION_MARKER } from './verifier-objection.js';
 
 const FAIL_SUMMARY = [
   'Check failed: npm test',
@@ -73,5 +73,33 @@ describe('buildObjection', () => {
     expect(line).toContain('npm test');
     expect(line).toContain('add(2,3)=-1');
     expect(line.length).toBeLessThanOrEqual(220);
+  });
+});
+
+// P3 gun 6 (self-poisoning class): Mochi's own harness annotations — the
+// fast-lane marker and the PARTIAL targeted pre-check suffix — must never
+// enter the evidence channel or pollute the failing-command the remedy names.
+describe('buildObjection harness-annotation hygiene', () => {
+  it('a fast-lane failure names the check and keeps the lane header out of the evidence', () => {
+    const summary = 'Check failed (fast lane): npm test\nAssertionError: expected 42 to be 0';
+    const o = buildObjection({ status: 'FAIL', summary, attempt: 1 });
+    expect(o.failedChecks).toEqual(['npm test']);
+    expect(o.remedy).toContain('`npm test`');
+    expect(o.salientLines).not.toContain('Check failed (fast lane): npm test');
+    expect(o.salientLines.some((l) => l.includes('AssertionError'))).toBe(true);
+  });
+
+  it('the PARTIAL targeted pre-check annotation never becomes part of the failing command', () => {
+    const summary = 'Check failed: npm test (PARTIAL targeted pre-check: budget guard)\nError: expected 5 to be 6';
+    const o = buildObjection({ status: 'FAIL', summary, attempt: 1 });
+    expect(o.failedChecks).toEqual(['npm test']);
+    expect(o.remedy).toContain('`npm test`');
+    expect(o.remedy).not.toContain('PARTIAL');
+    expect(o.salientLines.every((l) => !l.startsWith('Check failed:'))).toBe(true);
+  });
+
+  it('salientFailureLines keeps both header shapes out of the evidence lines', () => {
+    expect(salientFailureLines('Check failed: npm test\nError: boom')).not.toContain('Check failed: npm test');
+    expect(salientFailureLines('Check failed (fast lane): npm test\nError: boom')).not.toContain('Check failed (fast lane): npm test');
   });
 });

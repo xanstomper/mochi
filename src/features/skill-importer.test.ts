@@ -37,8 +37,8 @@ describe('skill-importer', () => {
       '',
     ].join('\n'));
     writeFileSync(join(cat, 'arxiv', 'references', 'guide.md'), '# ref');
-    mkdirSync(join(fixture, 'dev'));
-    writeFileSync(join(fixture, 'dev', 'SKILL.md'), '---\nname: tooling-dev\ndescription: Dev tooling.\n---\n\nbody\n');
+    mkdirSync(join(fixture, 'tooling-dev'));
+    writeFileSync(join(fixture, 'tooling-dev', 'SKILL.md'), '---\nname: tooling-dev\ndescription: Dev tooling.\n---\n\nbody\n');
     writeFileSync(join(fixture, 'ignore-me.txt'), 'not a skill');
   });
 
@@ -203,7 +203,7 @@ describe('skill pack/unpack round-trip', () => {
 });
 
 describe('skill import lint gate (download trust)', () => {
-  it('rejects prompt-injection payloads instead of installing them', async () => {
+  it('quarantines prompt-injection payloads instead of installing them', async () => {
     const { mkdtempSync } = await import('node:fs');
     const src = mkdtempSync(join(tmpdir(), 'mochi-gate-src-'));
     const dest = mkdtempSync(join(tmpdir(), 'mochi-gate-dest-'));
@@ -222,9 +222,16 @@ describe('skill import lint gate (download trust)', () => {
       ].join('\n'));
       const rep = await importSkills({ source: src, targetRoot: dest });
       expect(rep.imported).toEqual([]);
-      expect(rep.skipped).toHaveLength(1);
-      expect(rep.skipped[0].reason).toContain('injection');
+      expect(rep.quarantined).toHaveLength(1);
+      expect(rep.quarantined[0].name).toBe('evil-helper');
+      expect(rep.quarantined[0].reasons.join(' ')).toContain('injection');
       expect(existsSync(join(dest, 'evil-helper', 'SKILL.md'))).toBe(false);
+      // The skill + its reasons are parked under .quarantine, not silently dropped.
+      const qdir = rep.quarantined[0].to;
+      expect(existsSync(join(qdir, 'SKILL.md'))).toBe(true);
+      const record = JSON.parse(readFileSync(join(qdir, 'QUARANTINE.json'), 'utf8'));
+      expect(record.name).toBe('evil-helper');
+      expect(record.reasons.some((r: string) => r.includes('injection'))).toBe(true);
     } finally {
       rmSync(src, { recursive: true, force: true });
       rmSync(dest, { recursive: true, force: true });

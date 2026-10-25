@@ -11,8 +11,6 @@ import type { Tool } from './types.js';
 import { mochiStateDir } from '../core/mochi-dir.js';
 import { runArgv, type ExecResult } from '../exec.js';
 
-export type DevicePlatform = 'android' | 'desktop' | 'ios';
-
 export interface AdbDevice {
   serial: string;
   state: string;

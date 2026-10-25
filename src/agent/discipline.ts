@@ -183,6 +183,12 @@ export function failureClassOf(summary: string): string {
         })
         .join(' ')
         .replace(/\(fast lane\)/g, '')
+        // Same class-splitting poison as '(fast lane)': the PARTIAL targeted
+        // pre-check annotation is harness framing on the SAME failure — a
+        // failure seen through the pre-check lane and through the full gate
+        // must share a class, or the same-approach streak resets and the x3
+        // strategy switch never fires.
+        .replace(/\(PARTIAL targeted pre-check:[^)]*\)/g, '')
         .replace(/:\d+(:\d+)?/g, ':L')
         .replace(/[+-]?\d+(\.\d+)?/g, '#')
         .replace(/\s+/g, ' ')
@@ -204,24 +210,30 @@ const TRIVIAL_VERIFY_COMMANDS = new Set(['true', ':', 'exit 0', 'echo', 'echo pa
  *  exactly the case self-review exists for (e.g. a wrong constant no test
  *  can see). */
 export function verifySummaryEvidenced(summary: string): boolean {
+  // The fast lane appends ' [fast lane — targeted set]' AFTER the command
+  // list. Left in place, a trivial `true` becomes 'true [fast lane …]' which
+  // misses TRIVIAL_VERIFY_COMMANDS — a vacuous pass then counts as evidenced
+  // and decisive finish wrongly skips self-review. Strip bracketed
+  // suffix annotations before parsing the command list.
+  const s = summary.replace(/\s*\[[^\]]*\]\s*$/, '');
   // Manual-check recognition (loop.ts isManualCheckPass) can only mint this
   // prefix for a check-looking command, but the summary text itself is
   // model-written — apply the same trivial-command filter so a fabricated
   // `Manual check passed: \`echo ok\` (exit 0)` is not evidenced. Only the
   // backticked command segment is the evidence, same first-line rule as the
   // 'All checks passed:' shape.
-  if (summary.startsWith('Manual check passed')) {
-    const m = summary.split('\n')[0].match(/`([^`]+)`/);
+  if (s.startsWith('Manual check passed')) {
+    const m = s.split('\n')[0].match(/`([^`]+)`/);
     if (!m) return false;
     const c = m[1].trim().toLowerCase();
     return !TRIVIAL_VERIFY_COMMANDS.has(c) && !c.startsWith('echo ');
   }
-  if (!summary.startsWith('All checks passed:')) return false;
+  if (!s.startsWith('All checks passed:')) return false;
   // Only the first line is the command list — FLAKY-PASS appends a flaky
   // report on subsequent lines; without this, `All checks passed: true\nFlaky: …`
   // parses as the non-trivial chunk 'true\nflaky: …' and a coin-flip pass
   // counts as evidenced (skips self-review).
-  const cmds = summary
+  const cmds = s
     .slice('All checks passed:'.length)
     .split('\n')[0]
     // Lane markers (`[fast lane — targeted set]`) are presentation, not

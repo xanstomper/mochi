@@ -50,7 +50,7 @@ export const semanticSearchTool: Tool = {
     }
     // Rank FILES (aggregated over their chunks — file discovery is the
     // point of the tool), showing each file's best chunk.
-    const fileHits = aggregateHitsToFiles(result.hits, limit);
+    const fileHits = aggregateHitsToFiles(result.hits, limit, { embedderKind: result.embedderKind });
     const lines = fileHits.map((f) => {
       const h = f.best;
       const loc = h.symbol ? `${h.rel}:${h.startLine}-${h.endLine} \`${h.symbol}\` (${h.kind})` : `${h.rel}:${h.startLine}-${h.endLine} (${h.kind})`;
