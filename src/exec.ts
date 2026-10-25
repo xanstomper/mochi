@@ -5,30 +5,19 @@
 // API for shell-free execution, and an audit hook for risk logging.
 // Long-lived processes (background tasks, daemons, PTY) keep their own
 // lifecycle owners and are intentionally OUT of scope.
-import { matchHardline } from './security/hardline.js';
-import { wrapWithSandbox, type SandboxMode, type WrappedCommand } from './security/sandbox.js';
 import { spawn, spawnSync, execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { resolve, delimiter } from 'node:path';
+import { accessSync, constants } from 'node:fs';
 
 export interface SandboxOptions {
-  /** 'off' (default) runs directly. 'bubblewrap'/'unshare' force that OS
-   *  backend (throw when unavailable — an explicit request never degrades
-   *  silently). 'auto' uses the best OS backend (bubblewrap, then unshare
-   *  namespaces), else the SOFT jail (env scrub + cwd clamp, reported as
-   *  level 'soft' — never a silent direct run). See security/sandbox.ts. */
-  mode: SandboxMode;
-  /** Allow network inside the sandbox. When false, OS backends isolate
-   *  the network namespace. Undefined keeps each backend's historical
-   *  default (shared network); the shell tool's tier policy always passes
-   *  an explicit value (default OFF — see resolveShellSandboxPolicy). */
+  /** 'off' (default) runs directly; 'bubblewrap' forces bwrap (fails if
+   *  missing); 'auto' uses bwrap when available, else runs directly. */
+  mode: 'off' | 'auto' | 'bubblewrap';
+  /** Allow network inside the sandbox. Default true (npm/tests need it). */
   network?: boolean;
   /** Extra read-write paths beyond cwd + tmpdir + devtool caches. */
   writablePaths?: string[];
-  /** Workspace root the sandbox confines writes to. Default: the exec
-   *  cwd. The soft jail clamps the cwd into this root. */
-  workspaceDir?: string;
-  /** Strip secret-looking variables from the child environment. */
-  envScrub?: boolean;
 }
 
 export interface ExecOptions {
@@ -42,15 +31,6 @@ export interface ExecOptions {
   signal?: AbortSignal;
   /** Grace period between SIGTERM and SIGKILL. Default 1500ms. */
   killGraceMs?: number;
-  /** Per-exec CPU-time ceiling in seconds (RLIMIT_CPU). Opt-in; applied via
-   *  `prlimit` (util-linux) on Linux — the whole child TREE inherits the
-   *  rlimit. When prlimit is unavailable the result reports ceilings NOT
-   *  applied (never silent). A limit kill is clean (process-tree SIGKILL
-   *  sweep) and LABELED in the result (ceilings.ceilingHit) — see exec.test. */
-  cpuLimitSeconds?: number;
-  /** Per-exec address-space ceiling in MB (RLIMIT_AS). Same semantics as
-   *  cpuLimitSeconds. */
-  memoryLimitMb?: number;
   /** Called once with the outcome for audit/risk logging. Never throws. */
   onAudit?: (info: { cmd: string; code: number | null; timedOut: boolean; durationMs: number }) => void;
   /** OS-level sandbox (bubblewrap). Default off — opt in per call or via
@@ -65,174 +45,21 @@ export interface ExecResult {
   timedOut: boolean;
   cancelled: boolean;
   durationMs: number;
-  /** Resource ceilings requested for this exec and their outcome. Present
-   *  only when at least one ceiling was requested. `applied: false` means
-   *  the host cannot enforce them (no prlimit / not Linux) — callers must
-   *  surface that, never let a requested ceiling silently vanish.
-   *  `ceilingHit` names the ceiling that KILLED the child (SIGXCPU/SIGKILL
-   *  under RLIMIT_CPU, or an allocation abort under RLIMIT_AS). */
-  ceilings?: {
-    cpuLimitSeconds?: number;
-    memoryLimitMb?: number;
-    applied: boolean;
-    ceilingHit?: 'cpu' | 'memory';
-  };
-  /** Sandbox actually applied, when a sandbox was requested: level 'os'
-   *  (real namespace confinement) or 'soft' (env scrub + cwd clamp ONLY —
-   *  not OS confinement). Absent when no sandbox was requested. */
-  sandboxLevel?: 'os' | 'soft';
-  sandboxBackend?: string;
 }
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_OUTPUT = 2_000_000;
 
-/** Per-stream accumulation with keep-ends truncation. A firehose stream that
- *  overflows the cap keeps the HEAD half (startup context, first error) AND
- *  a rolling TAIL half (build/test failure summaries print at the END —
- *  head-only truncation made models re-run failed commands to see the tail),
- *  eliding the middle with a dropped-bytes marker. Bounded memory: the tail
- *  is re-trimmed per chunk; the stream is NOT destroyed on overflow, so the
- *  tail keeps arriving (timeouts still bound runaway children). */
-interface StreamAcc {
-  total: number;
-  head: string;
-  tail: string;
-  truncated: boolean;
-}
-
-function newStreamAcc(): StreamAcc {
-  return { total: 0, head: '', tail: '', truncated: false };
-}
-
-function pushStream(acc: StreamAcc, chunk: string, cap: number): void {
-  acc.total += chunk.length;
-  if (!acc.truncated) {
-    acc.head += chunk;
-    if (acc.head.length > cap) {
-      acc.truncated = true;
-      const keep = Math.max(0, Math.floor(cap / 2));
-      acc.tail = acc.head.slice(keep);
-      acc.head = acc.head.slice(0, keep);
-      if (acc.tail.length > keep) acc.tail = acc.tail.slice(-keep);
-    }
-    return;
-  }
-  acc.tail += chunk;
-  const keep = Math.max(0, Math.floor(cap / 2));
-  if (acc.tail.length > keep) acc.tail = acc.tail.slice(-keep);
-}
-
-function streamText(acc: StreamAcc): string {
-  if (!acc.truncated) return acc.head;
-  const dropped = acc.total - acc.head.length - acc.tail.length;
-  // The literal `[truncated]` anchor is part of the observable contract —
-  // consumers (and tests) grep for it — so it stays intact with the detail
-  // appended after it.
-  return `${acc.head}\n... [truncated] (${dropped} bytes in the middle elided — output ends below) ...\n${acc.tail}`;
-}
-
-// ------------------------------------------------------------- ceilings -----
-// W3-5 exec ceilings: per-exec CPU (RLIMIT_CPU) and address-space (RLIMIT_AS)
-// limits, applied by prefixing the command with `prlimit` (util-linux) on
-// Linux. The rlimits are INHERITED by the whole child tree, so a ceiling
-// bounds descendants too. A limit kill is (a) CLEAN — finishSpawn sweeps the
-// process group on a ceiling death — and (b) LABELED — the result carries
-// `ceilings.ceilingHit` and the shell tool appends a visible label; output is
-// never silently truncated by a ceiling.
-
-interface CeilingRequest { cpuLimitSeconds?: number; memoryLimitMb?: number }
-
-interface CeilingWrap {
-  cmd: string;
-  args: string[];
-  /** false = the host cannot enforce ceilings (no prlimit / not Linux) —
-   *  the result must say so (never silent). */
-  applied: boolean;
-}
-
-let prlimitCache: { pathEnv: string; value: string | null } | undefined;
-
-function detectPrlimit(): string | null {
-  const pathEnv = process.env.PATH ?? '';
-  if (prlimitCache && prlimitCache.pathEnv === pathEnv) return prlimitCache.value;
-  let value: string | null = null;
-  if (process.platform === 'linux') {
-    for (const dir of pathEnv.split(':')) {
-      if (!dir) continue;
-      const candidate = `${dir}/prlimit`;
-      try {
-        if (existsSync(candidate)) { value = candidate; break; }
-      } catch { /* unreadable PATH entry: skip */ }
-    }
-  }
-  if (pathEnv === (process.env.PATH ?? '')) prlimitCache = { pathEnv, value };
-  return value;
-}
-
-/** Test hook: forget the cached prlimit probe (PATH mutated in tests). */
-export function _resetExecCeilingProbeForTests(): void {
-  prlimitCache = undefined;
-}
-
-/** Prefix [cmd, args] with prlimit when ceilings are requested. Zero/negative
- *  ceilings are treated as absent (no wrap). */
-function wrapWithCeilings(cmd: string, args: readonly string[], req: CeilingRequest): CeilingWrap {
-  const cpu = req.cpuLimitSeconds && req.cpuLimitSeconds > 0 ? Math.floor(req.cpuLimitSeconds) : 0;
-  const mem = req.memoryLimitMb && req.memoryLimitMb > 0 ? Math.floor(req.memoryLimitMb) : 0;
-  if (!cpu && !mem) return { cmd, args: [...args], applied: false };
-  const prlimit = detectPrlimit();
-  if (!prlimit) return { cmd, args: [...args], applied: false };
-  // prlimit's limit options take OPTIONAL arguments — only the `--opt=value`
-  // form binds the value; `--opt value` makes value the COMMAND (measured:
-  // "prlimit: failed to execute 10").
-  const argv = [prlimit];
-  if (cpu) argv.push(`--cpu=${cpu}`);
-  if (mem) argv.push(`--as=${mem * 1024 * 1024}`);
-  argv.push('--', cmd, ...args);
-  return { cmd: argv[0], args: argv.slice(1), applied: true };
-}
-
-/** Attribute a child death to a requested ceiling. Evidence (pinned by
- *  exec.test.ts against prlimit 2.37.4):
- *  - RLIMIT_CPU with soft==hard: SIGKILL (shell exit 137); when the kernel
- *    sends SIGXCPU first (soft<hard configs), signal SIGXCPU.
- *  - RLIMIT_AS: allocation failures abort the runtime — SIGTRAP (V8 OOM,
- *    exit 133), SIGABRT (glibc, exit 134), SIGSEGV (exit 139), or a nonzero
- *    exit with an ENOMEM-flavored message.
- *  Our OWN kills are excluded: timeouts/cancels are flagged before this runs.
- *  With BOTH ceilings set, the signals disambiguate (RLIMIT_AS never
- *  produces SIGKILL/137 — malloc fails instead). */
-function detectCeilingHit(
-  code: number | null,
-  signal: NodeJS.Signals | null | undefined,
-  timedOut: boolean,
-  cancelled: boolean,
-  req: CeilingRequest,
-): 'cpu' | 'memory' | undefined {
-  if (timedOut || cancelled) return undefined; // our own kills, not the ceiling
-  if (signal === 'SIGXCPU' && req.cpuLimitSeconds) return 'cpu';
-  if ((code === 137 || signal === 'SIGKILL') && req.cpuLimitSeconds) return 'cpu';
-  if (req.memoryLimitMb) {
-    if (signal === 'SIGTRAP' || signal === 'SIGABRT' || signal === 'SIGSEGV') return 'memory';
-    if (code === 133 || code === 134 || code === 139) return 'memory';
-  }
-  return undefined;
-}
-
 function finishSpawn(
   child: ReturnType<typeof spawn>,
   cmd: string,
   opts: ExecOptions,
-  stdoutAcc: StreamAcc,
-  stderrAcc: StreamAcc,
+  stdoutRef: { text: string; truncated: boolean },
+  stderrRef: { text: string; truncated: boolean },
   startedAt: number,
-  ceilings?: { cpuLimitSeconds?: number; memoryLimitMb?: number; applied: boolean },
 ): Promise<ExecResult> {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const killGraceMs = opts.killGraceMs ?? 1500;
-  const stdoutCap = opts.maxOutput ?? DEFAULT_MAX_OUTPUT;
-  const stderrCap = opts.maxOutput ?? DEFAULT_MAX_OUTPUT;
   // MOCHI_EXEC_TRACE=1 logs every spawn and outcome — the ONLY way to see
   // WHICH command a hung run is stuck on (a hang prints start, never done).
   if (process.env.MOCHI_EXEC_TRACE === '1') {
@@ -242,7 +69,7 @@ function finishSpawn(
     let settled = false;
     let timedOut = false;
     let cancelled = false;
-    const done = (code: number | null, extra?: { timedOut?: boolean; cancelled?: boolean; signal?: NodeJS.Signals | null }) => {
+    const done = (code: number | null, extra?: { timedOut?: boolean; cancelled?: boolean }) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -255,31 +82,19 @@ function finishSpawn(
       // the timeout/cancel truth.
       const wasTimedOut = extra?.timedOut ?? timedOut;
       const wasCancelled = extra?.cancelled ?? cancelled;
-      // W3-5 exec ceilings: attribute a death caused by a requested rlimit.
-      // Never silent — the result carries the label, callers surface it.
-      const ceilingHit = ceilings?.applied
-        ? detectCeilingHit(code, extra?.signal ?? null, wasTimedOut, wasCancelled, ceilings)
-        : undefined;
-      if (ceilingHit) {
-        // Clean kill: the rlimit terminated (at least) the main process;
-        // sweep the whole tree so no descendant outlives the ceiling.
-        // (killTree is defined below; done() only ever runs after it exists.)
-        killTree('SIGKILL');
-      }
       if (process.env.MOCHI_EXEC_TRACE === '1') {
-        console.warn(`[exec] done  :: ${Math.round(durationMs)}ms code=${code}${wasTimedOut ? ' TIMEOUT' : ''}${wasCancelled ? ' CANCELLED' : ''}${ceilingHit ? ` CEILING=${ceilingHit}` : ''} :: ${cmd.slice(0, 160)}`);
+        console.warn(`[exec] done  :: ${Math.round(durationMs)}ms code=${code}${wasTimedOut ? ' TIMEOUT' : ''}${wasCancelled ? ' CANCELLED' : ''} :: ${cmd.slice(0, 160)}`);
       }
       try {
         opts.onAudit?.({ cmd: cmd.slice(0, 200), code, timedOut: wasTimedOut, durationMs });
       } catch { /* audit must never break execution */ }
       resolve({
-        stdout: streamText(stdoutAcc),
-        stderr: streamText(stderrAcc),
+        stdout: stdoutRef.text,
+        stderr: stderrRef.text,
         code,
         timedOut: wasTimedOut,
         cancelled: wasCancelled,
         durationMs,
-        ...(ceilings ? { ceilings: { ...ceilings, ceilingHit } } : {}),
       });
     };
     // Kill the WHOLE process tree, not just the direct child. A shell command
@@ -301,11 +116,7 @@ function finishSpawn(
       }
       try {
         // Negative pid = the child's process group (it is the group leader).
-        // Only while the child is STILL RUNNING: once it has exited, its pid
-        // may already have been recycled, and a negative-pid kill would then
-        // signal an unrelated process group (a sibling's, or — worst case —
-        // the host's own). An exited child needs no signal at all.
-        if (child.pid && child.exitCode === null && child.signalCode === null) process.kill(-child.pid, sig);
+        if (child.pid) process.kill(-child.pid, sig);
         else child.kill(sig);
       } catch {
         try { child.kill(sig); } catch { /* already dead */ }
@@ -333,15 +144,20 @@ function finishSpawn(
     try { child.stdin?.end(); } catch { /* already closed */ }
     void timedOut; void cancelled;
     child.stdout?.on('data', (chunk) => {
-      // Keep-ends accumulation: on overflow the head AND a rolling tail are
-      // retained (build/test failure summaries print at the END — head-only
-      // truncation hid them and made models re-run failed commands). The
-      // stream stays open so the tail keeps arriving; memory is bounded by
-      // the per-chunk re-trim in pushStream.
-      pushStream(stdoutAcc, String(chunk), stdoutCap);
+      stdoutRef.text += String(chunk);
+      if (stdoutRef.text.length > (opts.maxOutput ?? DEFAULT_MAX_OUTPUT)) {
+        stdoutRef.text = stdoutRef.text.slice(0, opts.maxOutput ?? DEFAULT_MAX_OUTPUT) + '\n... [truncated]';
+        stdoutRef.truncated = true;
+        child.stdout?.destroy();
+      }
     });
     child.stderr?.on('data', (chunk) => {
-      pushStream(stderrAcc, String(chunk), stderrCap);
+      stderrRef.text += String(chunk);
+      if (stderrRef.text.length > (opts.maxOutput ?? DEFAULT_MAX_OUTPUT)) {
+        stderrRef.text = stderrRef.text.slice(0, opts.maxOutput ?? DEFAULT_MAX_OUTPUT) + '\n... [truncated]';
+        stderrRef.truncated = true;
+        child.stderr?.destroy();
+      }
     });
     child.on('error', (err) => {
       if (settled) return;
@@ -350,7 +166,7 @@ function finishSpawn(
       opts.signal?.removeEventListener('abort', onAbort);
       reject(err);
     });
-    child.on('close', (code, signal) => done(code, { signal }));
+    child.on('close', (code) => done(code));
     // Already-aborted: run the abort path AFTER the listeners exist. The old
     // early-return skipped 'error'/'close' attachment — a spawn that fails
     // while already aborted (nonexistent cwd, deleted shell) then emitted
@@ -361,42 +177,21 @@ function finishSpawn(
   });
 }
 
-/** Ceiling wrap shared by runArgv/runShellString: sandbox first (the sandbox
- *  executable becomes the command), then prlimit around it — rlimits are
- *  inherited, so the sandboxed tree is bounded too. `info` is undefined when
- *  no ceiling was requested (result shape unchanged), else carries the
- *  request + whether the host could enforce it. */
-function prepareCeilings(
-  opts: ExecOptions,
-  wrapped: WrappedCommand,
-): { spawnCmd: string; spawnArgs: string[]; info?: { cpuLimitSeconds?: number; memoryLimitMb?: number; applied: boolean } } {
-  const requested = (opts.cpuLimitSeconds ?? 0) > 0 || (opts.memoryLimitMb ?? 0) > 0;
-  const wrap = wrapWithCeilings(wrapped.cmd, wrapped.args, opts);
-  return {
-    spawnCmd: wrap.cmd,
-    spawnArgs: wrap.args,
-    info: requested
-      ? { cpuLimitSeconds: opts.cpuLimitSeconds, memoryLimitMb: opts.memoryLimitMb, applied: wrap.applied }
-      : undefined,
-  };
-}
-
 /** Run a command WITHOUT a shell: argv array only, no interpolation.
  *  Prefer this for every harness-internal invocation (git, probes, notify). */
 export function runArgv(cmd: string, args: readonly string[], opts: ExecOptions = {}): Promise<ExecResult> {
   const startedAt = Date.now();
-  const wrapped = wrapForExec(cmd, args, opts);
-  const ceilings = prepareCeilings(opts, wrapped);
-  const child = spawn(ceilings.spawnCmd, ceilings.spawnArgs, {
-    cwd: wrapped.cwd ?? opts.cwd,
-    env: wrapped.env ?? opts.env ?? process.env,
+  const wrapped = maybeSandbox(cmd, args, opts);
+  const child = spawn(wrapped.cmd, wrapped.args, {
+    cwd: opts.cwd,
+    env: opts.env ?? process.env,
     stdio: 'pipe',
     windowsHide: true,
     // POSIX: make the child a process-group leader so a timeout/cancel can
     // signal the entire tree (see killTree). No-op on Windows.
     detached: process.platform !== 'win32',
   });
-  return withSandboxInfo(finishSpawn(child, [cmd, ...args].join(' '), opts, newStreamAcc(), newStreamAcc(), startedAt, ceilings.info), wrapped);
+  return finishSpawn(child, [cmd, ...args].join(' '), opts, { text: '', truncated: false }, { text: '', truncated: false }, startedAt);
 }
 
 /** Run a shell string (`sh -c`-class) under policy. Reserved for the agent's
@@ -404,22 +199,6 @@ export function runArgv(cmd: string, args: readonly string[], opts: ExecOptions 
  *  composition (pipes, redirects) is the feature. Harness internals must
  *  use runArgv instead. */
 export function runShellString(command: string, opts: ExecOptions & { shellBin?: string } = {}): Promise<ExecResult> {
-  // Hardline floor (security/hardline.ts): catastrophic commands are refused
-  // here — the one function every shell-string execution flows through — so
-  // no caller, policy, or mode (yolo included) can run them. Returned as a
-  // 126 result (shell's "cannot execute") instead of a throw, matching this
-  // function's result-envelope contract.
-  const hardline = matchHardline(command);
-  if (hardline) {
-    return Promise.resolve({
-      stdout: '',
-      stderr: `Blocked by hardline safety floor (${hardline}): catastrophic commands are refused under every permission policy, including yolo/unattended. Command: ${command.slice(0, 200)}`,
-      code: 126,
-      timedOut: false,
-      cancelled: false,
-      durationMs: 0,
-    });
-  }
   const startedAt = Date.now();
   const isWin = process.platform === 'win32';
   const shellBin = opts.shellBin ?? (isWin ? (process.env.ComSpec || 'cmd.exe') : (process.env.SHELL || '/bin/bash'));
@@ -431,18 +210,17 @@ export function runShellString(command: string, opts: ExecOptions & { shellBin?:
   // one quote pair and run the rest verbatim; windowsVerbatimArguments keeps
   // Node from re-quoting the already-quoted command.
   const shellArgs = isWin ? ['/d', '/s', '/c', `"${command}"`] : ['-c', command];
-  const wrapped = wrapForExec(shellBin, shellArgs, opts);
-  const ceilings = prepareCeilings(opts, wrapped);
-  const child = spawn(ceilings.spawnCmd, ceilings.spawnArgs, {
-    cwd: wrapped.cwd ?? opts.cwd,
-    env: wrapped.env ?? opts.env ?? process.env,
+  const wrapped = maybeSandbox(shellBin, shellArgs, opts);
+  const child = spawn(wrapped.cmd, wrapped.args, {
+    cwd: opts.cwd,
+    env: opts.env ?? process.env,
     stdio: 'pipe',
     windowsHide: true,
     // POSIX: own process group so timeout/cancel kills the whole tree.
     detached: process.platform !== 'win32',
     ...(isWin ? { windowsVerbatimArguments: true } : {}),
   });
-  return withSandboxInfo(finishSpawn(child, command, opts, newStreamAcc(), newStreamAcc(), startedAt, ceilings.info), wrapped);
+  return finishSpawn(child, command, opts, { text: '', truncated: false }, { text: '', truncated: false }, startedAt);
 }
 
 /** execFile-style convenience for short harness probes with a string result.
@@ -460,60 +238,98 @@ export function execArgvText(cmd: string, args: readonly string[], opts: { cwd?:
   });
 }
 
-/** Sandbox machinery lives in security/sandbox.ts (backends: bubblewrap,
- *  unshare namespaces, soft jail; tier policy resolution). Re-exported here
- *  so existing importers (doctor, background-tasks, tests) keep their
- *  surface. NOTE: no win32 special-casing anywhere in the wrap path —
- *  bubblewrap/unshare are POSIX-only, so a forced request on Windows must
- *  throw the loud "not found" error instead of silently running
- *  unsandboxed; 'auto' on Windows resolves to the labeled SOFT jail. */
-export {
-  detectBubblewrapBin as detectBubblewrap,
-  buildBubblewrapArgs,
-  detectUnshare,
-  buildUnshareArgs,
-  probeSandboxCapabilities,
-  resetSandboxProbeCache as resetBubblewrapCache,
-} from './security/sandbox.js';
-
-/** Full wrap for the exec paths: resolves the backend AND the env/cwd the
- *  spawn must use (env scrub / soft-jail cwd clamp travel with the wrap). */
-function wrapForExec(cmd: string, args: readonly string[], opts: ExecOptions): WrappedCommand {
-  const sb = opts.sandbox;
-  if (!sb || sb.mode === 'off') return { cmd, args: [...args], level: 'off', backend: 'none' };
-  return wrapWithSandbox(cmd, args, {
-    mode: sb.mode,
-    cwd: opts.cwd,
-    env: opts.env,
-    policy: {
-      workspaceDir: sb.workspaceDir ?? opts.cwd ?? process.cwd(),
-      writablePaths: sb.writablePaths,
-      network: sb.network,
-      envScrub: sb.envScrub,
-    },
-  });
+/** Default writable locations inside a bubblewrap sandbox: the task cwd, the
+ *  OS tmpdir, and the dev-tool caches npm/cargo/pip need to function. The
+ *  rest of the filesystem (including $HOME dotfiles and SSH keys) is
+ *  read-only; /tmp and /dev+/proc are fresh private mounts. */
+function defaultSandboxWritable(cwd?: string): string[] {
+  const home = homedir();
+  const out = [cwd ?? process.cwd(), tmpdir()];
+  for (const d of ['.npm', '.cache', '.cargo']) {
+    const p = resolve(home, d);
+    try {
+      accessSync(p, constants.R_OK);
+      out.push(p);
+    } catch { /* cache dir absent: skip rather than create it inside the sandbox */ }
+  }
+  return [...new Set(out)];
 }
 
-/** Attach the applied sandbox level/backend to a finished result (only
- *  when a sandbox actually engaged — off/absent leaves the result shape
- *  exactly as it was). */
-function withSandboxInfo(p: Promise<ExecResult>, wrapped: WrappedCommand): Promise<ExecResult> {
-  const level = wrapped.level;
-  if (level === 'off') return p;
-  return p.then((r) => ({ ...r, sandboxLevel: level, sandboxBackend: wrapped.backend }));
+let cachedBwrap: string | null | undefined;
+
+/** Test seam: forget the cached bwrap probe. detectBubblewrap() caches by
+ *  comparing its pathEnv argument to the CURRENT process.env.PATH, so a test
+ *  that mutates PATH (to simulate "no bwrap installed") must reset the cache
+ *  before AND after, or the poisoned null survives the restore. */
+export function resetBubblewrapCache(): void {
+  cachedBwrap = undefined;
+}
+
+/** Absolute path to `bwrap`, or null when unavailable. Cached. Testable via
+ *  explicit pathEnv (production callers omit it). */
+export function detectBubblewrap(pathEnv = process.env.PATH ?? ''): string | null {
+  if (cachedBwrap !== undefined && pathEnv === (process.env.PATH ?? '')) return cachedBwrap;
+  let found: string | null = null;
+  for (const dir of pathEnv.split(delimiter).filter(Boolean)) {
+    const full = resolve(dir, 'bwrap');
+    try {
+      accessSync(full, constants.X_OK);
+      found = full;
+      break;
+    } catch { /* not here */ }
+  }
+  if (pathEnv === (process.env.PATH ?? '')) cachedBwrap = found;
+  return found;
+}
+
+/** Pure argv builder: wrap [cmd, ...args] in a bubblewrap invocation.
+ *  Exported for tests; runArgv/runShellString call it via maybeSandbox. */
+export function buildBubblewrapArgs(
+  bwrapBin: string,
+  cmd: string,
+  args: readonly string[],
+  opts: { cwd?: string; network?: boolean; writablePaths?: string[] } = {},
+): string[] {
+  const cwd = opts.cwd ?? process.cwd();
+  const argv: string[] = [
+    '--ro-bind', '/', '/',
+    '--dev', '/dev',
+    '--proc', '/proc',
+    '--tmpfs', '/tmp',
+  ];
+  const writable = [...defaultSandboxWritable(cwd), ...(opts.writablePaths ?? [])];
+  for (const p of new Set(writable)) {
+    argv.push('--bind', p, p);
+  }
+  if (opts.network === false) argv.push('--unshare-net');
+  argv.push('--chdir', cwd, '--', cmd, ...args);
+  return [bwrapBin, ...argv];
 }
 
 /** Wrap [cmd, args] per opts.sandbox. Returns the command unchanged when the
- *  sandbox is off or unavailable in auto mode — or throws in `bubblewrap`/
- *  `unshare` mode when the requested binary is missing (explicit request,
- *  fail loudly, never silently run unsandboxed). NOTE: no win32 early-return
- *  — both backends are POSIX-only, so a forced request on Windows must throw
- *  the loud "not found" error instead of silently running unsandboxed. */
+ *  sandbox is off or unavailable in auto mode — or throws in `bubblewrap` mode
+ *  when bwrap is missing (explicit request, fail loudly, never silently run
+ *  unsandboxed). NOTE: no win32 early-return — bubblewrap is POSIX-only, so a
+ *  forced request on Windows must throw the loud "bwrap not found" error
+ *  instead of silently running unsandboxed. */
 export function maybeSandbox(
   cmd: string,
   args: readonly string[],
   opts: ExecOptions,
 ): { cmd: string; args: string[] } {
-  const w = wrapForExec(cmd, args, opts);
-  return { cmd: w.cmd, args: w.args };
+  const sb = opts.sandbox;
+  if (!sb || sb.mode === 'off') return { cmd, args: [...args] };
+  const bwrap = detectBubblewrap();
+  if (!bwrap) {
+    if (sb.mode === 'bubblewrap') {
+      throw new Error('Sandbox requested (bubblewrap) but `bwrap` was not found on PATH. Install bubblewrap or use sandbox mode "off".');
+    }
+    return { cmd, args: [...args] };
+  }
+  const full = buildBubblewrapArgs(bwrap, cmd, args, {
+    cwd: opts.cwd,
+    network: sb.network,
+    writablePaths: sb.writablePaths,
+  });
+  return { cmd: full[0], args: full.slice(1) };
 }
