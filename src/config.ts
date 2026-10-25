@@ -4,7 +4,9 @@ import { resolve, dirname } from 'node:path';
 import type { MochiConfig, ModelProfile } from './types.js';
 import { PROVIDERS } from './model/providers.js';
 import { warnPlaintextKeysOnce } from './config-plaintext-keys.js';
-import { normalizeModelName } from './model/router.js';
+// Light import (P2 speed): normalizeModelName is pure — importing it from
+// model/router.js pulled the four provider SDKs into every config load.
+import { normalizeModelName } from './model/model-name.js';
 
 const defaultConfig = (): MochiConfig => ({
   model: {
