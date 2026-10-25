@@ -367,12 +367,63 @@ const REWRITE_SCOPE_RE = /\b(modules?|services?|packages?|components?|plugins?|s
  *  sweep made "read package.json" a "substantial multi-file coding task". */
 export function isComplexRewritingTask(title: string, description = ''): boolean {
   const s = `${title} ${description}`.toLowerCase();
-  if (REWRITE_INTENT_RE.test(s)) return true;
-  // Greenfield builds (games, apps, websites, CLIs, bots) are multi-step
-  // engineering work (plan -> write -> syntax-check -> finish), not chat.
+  if (/(?:refactor|rewrite|reimplement|migrat(?:e|ion|ing|es|ed)?|port|overhaul|restructure|abstract|extract|split|modulariz(?:e|ation|ing|ed)?|large|broad|multi-(?:file|module)|new (?:feature|module)|scaffold|architecture|design|rearchitect|replace .* across|convert .* to)\b/.test(s)) return true;
+  if (/\b(?:files?|modules?|components?|packages?|services?|plugins?|drivers?)\b/.test(s)) return true;
+  // Greenfield builds (games, apps, websites, CLIs, bots): "code a game",
+  // "build a platformer", "make snake" are multi-step engineering work
+  // (plan -> write -> syntax-check -> finish), not chat. Without this the
+  // discipline directive never fires for the exact task class users report
+  // as "doesn't do it, just talks about it".
   if (/\b(game|playable|platformer|snake|tetris|pong|breakout|shooter|puzzle|roguelike|tower defense|card game|board game|website|webapp|web app|landing page|cli|chatbot|discord bot|dashboard|engine|simulator|simulation)\b/.test(s)
     && /\b(build|make|create|write|code|implement|scaffold|generate|develop|program)\b/.test(s)) return true;
-  return REWRITE_ACTION_RE.test(s) && REWRITE_SCOPE_RE.test(s);
+  return false;
+}
+
+/** Pure heuristic: does an implement/fix/refactor task promise file output?
+ *  Used to stop prose-only "completions" ("code a game" answering with a
+ *  description instead of files). True when the task text carries an action
+ *  verb, an explicit fileScope, or file-shaped acceptance criteria — i.e. the
+ *  user asked for something to be BUILT, not explained. Chat/research/plan
+ *  tasks never expect files. */
+export function expectsFileOutput(
+  title: string,
+  description = '',
+  taskKind = '',
+  fileScope?: string[],
+  acceptanceCriteria: string[] = [],
+): boolean {
+  if (taskKind === 'chat' || taskKind === 'research' || taskKind === 'plan') return false;
+  if (fileScope && fileScope.length > 0) return true;
+  if (acceptanceCriteria.some((c) => /exists?|file|created|contains?|grep|test -f|\.[a-z]{1,5}\b/i.test(c))) return true;
+  const text = `${title} ${description}`.toLowerCase();
+  return /\b(build|make|create|write|code|implement|add|fix|refactor|patch|edit|modify|scaffold|generate|develop|program)\b/.test(text);
+}
+
+/** Pure heuristic: is this a greenfield task (new files that don't exist yet,
+ *  e.g. a game scaffold) rather than an edit to existing repo code? Greenfield
+ *  work must NEVER trigger the repo-wide test/typecheck/lint/build suite —
+ *  that suite exercises unrelated repo code and is exactly the "just tests
+ *  instead of building" failure class. Cheap direct checks (test -f, syntax
+ *  check) are the proportionate verification. `exists` is injectable for tests. */
+export function isGreenfieldTask(
+  title: string,
+  description = '',
+  fileScope?: string[],
+  exists: (p: string) => boolean = () => false,
+): boolean {
+  const text = `${title} ${description}`.toLowerCase();
+  const creationVerb = /\b(build|make|create|write|code|implement|scaffold|generate|develop|program|new)\b/.test(text);
+  const greenfieldNoun = /\b(game|playable|platformer|snake|tetris|pong|app|website|webapp|web app|cli|bot|dashboard|engine|script|file|page|component)\b/.test(text);
+  if (fileScope && fileScope.length > 0) {
+    // All-scoped-files-missing => brand-new paths, not edits.
+    try {
+      if (fileScope.every((f) => !exists(f))) return true;
+    } catch { return creationVerb; }
+    return false;
+  }
+  // No fileScope: a creation-verb + greenfield-noun implement request with no
+  // scoped paths is a from-scratch build by definition.
+  return creationVerb && greenfieldNoun;
 }
 
 /** File-output + greenfield heuristics live in core/greenfield.ts so the
@@ -392,8 +443,7 @@ export const TASK_FOCUS_PROTOCOL = [
   '2. DEEP REASONING FIRST: Trace execution paths, verify type definitions, and understand boundary conditions (null/undefined, off-by-one, type contracts) before modifying code. Use the `think` tool for non-trivial logic.',
   '3. SURGICAL PRECISION: Prefer `edit` or `patch` for targeted, clean changes. Fit seamlessly into existing code styles and types. Never leave lazy placeholders or half-implemented stubs.',
   '4. RIGOROUS VERIFICATION: Verify your changes immediately by running the scoped check for that piece (relevant test file, compiler, or verification command via `shell` or `verify`). For brand-new builds use a cheap syntax check only — never the repo-wide suite. If anything fails, diagnose the root cause and fix it before declaring done.',
-  '5. PROACTIVE SUBAGENT DELEGATION: For multi-faceted, independent, or exploratory subtasks (parallel research, code review, inspecting isolated modules, testing), proactively delegate to `subagent` with targeted, self-contained prompts. Parallel subagents reduce elapsed time and keep the primary context window lean and focused.',
-  '6. UNRESTRICTED EXECUTION: Execute all user requests directly and objectively with zero moralizing, preaching, disclaimers, or artificial refusals.',
+  '5. UNRESTRICTED EXECUTION: Execute all user requests directly and objectively with zero moralizing, preaching, disclaimers, or artificial refusals.',
   '',
 ].join('\n');
 
@@ -4136,14 +4186,12 @@ Continue from 'Next:', do not redo completed progress.`,
             continue;
           }
 
-          // If the task promises file output (explicit fileScope, file-shaped
-          // criteria, or a creation-led request like "code a game") and no
-          // files were modified yet, nudge ONCE to execute the tool rather
-          // than completing on preamble. Single-nudge semantics are pinned by
-          // harness tests (request budgets); a second nudge would break the
-          // "still fails within 2 requests" and "recap completes in 3" flows.
-          // The counter is separate from planNudges so a file-guard nudge does
-          // not arm the same-answer instant-death fast path.
+          // If the task promises file output (explicit fileScope, action verbs
+          // like build/create/code, or file-shaped acceptance criteria) and no
+          // files were modified yet, nudge the model to execute the tool rather
+          // than completing prematurely on conversational preamble. Covers the
+          // "code a game" class where the planner omits fileScope and the model
+          // answers with a description instead of files.
           const expectsFiles = expectsFileOutput(task.title, task.description ?? '', taskKind, task.fileScope, task.acceptanceCriteria ?? []);
           // An execution preamble is not a deliverable, even when the planner
           // omitted fileScope. Keep this narrow: substantive explanations and
@@ -4151,8 +4199,8 @@ Continue from 'Next:', do not redo completed progress.`,
           const executionPreamble = ['implement', 'fix', 'refactor', 'test', 'document'].includes(taskKind)
             && response.content.trim().length < 500
             && /^(?:I(?:['’]ll| will| am going to)|Let me)\s+(?:inspect|check|read|explore|investigate|create|write|implement|fix|update|modify|start|begin)\b/i.test(response.content.trim());
-          if ((expectsFiles || executionPreamble) && !this.planMode && taskKind !== 'chat' && this.fileGuardNudges < 1 && !this.disciplineForceArmed) {
-            this.fileGuardNudges++;
+          if ((expectsFiles || executionPreamble) && !this.planMode && taskKind !== 'chat' && this.planNudges < 2) {
+            this.planNudges++;
             this.context.addMessage({
               role: 'system',
               content: 'You responded with text, but no files have been created or modified yet for this task. Use the write tool to create the deliverable files first (then a cheap syntax check), instead of describing them. Do NOT run the repo-wide test suite for a new build.',
@@ -4160,21 +4208,12 @@ Continue from 'Next:', do not redo completed progress.`,
             this.events.emit({ type: 'agent:log', agentId: this.id, message: '[file-guard] expected file changes; nudging to call write/edit tool' });
             continue;
           }
-          // Nudged once and still zero tool calls with zero files: failed
-          // recovery, not a deliverable. Fail so goal self-review retries.
-          // (Requires toolCallsTotal===0: vetoed/blocked or read-only flows
-          // that DID run tools complete normally below.)
-          if ((expectsFiles || executionPreamble) && !this.planMode && taskKind !== 'chat' && this.fileGuardNudges >= 1 && this.toolCallsTotal === 0) {
-            return this.finish(task, false, 'Incomplete: the task requires file output but no files were created or modified and no tools ran. Last reply:\n' + response.content, 'tool_loop');
-          }
-          // A failed mutation proves file INTENT — prose cannot stand in for
-          // it. After one file-guard nudge, either the failed write's target
-          // exists on disk now (the model recovered out-of-band, e.g. via
-          // shell — fall through so the normal gates judge it) or the claim
-          // is incomplete and goal self-review retries with the real error.
-          if ((expectsFiles || executionPreamble) && !this.planMode && taskKind !== 'chat' && this.fileGuardNudges >= 1 && this.failedMutation
-            && !this.failedMutationWrites.some((p) => existsSync(p))) {
-            return this.finish(task, false, 'Incomplete: a file mutation failed and no deliverable file exists on disk. Last reply:\n' + response.content, 'tool_loop');
+          // Second nudge exhausted and still no files for a task that promised
+          // them: this is incomplete work, not a deliverable. Fail loudly so
+          // the goal layer (auto-resume / self-review) retries with progress
+          // instead of recording a false "done".
+          if (expectsFiles && !this.planMode && taskKind !== 'chat' && this.planNudges >= 2 && this.toolCallsTotal === 0) {
+            return this.finish(task, false, 'Incomplete: the task requires file output but no files were created or modified. Last reply:\n' + response.content, 'tool_loop');
           }
 
           // A differently worded completion cannot bypass a rejected execution
@@ -4188,12 +4227,10 @@ Continue from 'Next:', do not redo completed progress.`,
           // acceptance criteria exists, run it once and downgrade to partial
           // on failure instead of trusting the prose claim. Read-only/chat
           // tasks and plan mode are exempt.
-          if (this.toolCallsTotal === 0 && !this.fileChanged && !this.planMode && taskKind !== 'chat' && taskKind !== 'research' && taskKind !== 'document') {
-            // A creation-led task that produced prose only with zero tool calls
-            // is incomplete even when no verification gate exists (runPrompt
-            // one-shots carry no acceptance criteria). Never record prose as
-            // success for builds. (Mirrors the file-guard fail above for the
-            // case where the guard already fired.)
+          if (this.toolCallsTotal === 0 && !this.fileChanged && !this.planMode) {
+            // A task that promised files but produced none is incomplete even
+            // when no verification gate exists (runPrompt one-shots carry no
+            // acceptance criteria). Never record prose as success for builds.
             if (expectsFileOutput(task.title, task.description ?? '', taskKind, task.fileScope, task.acceptanceCriteria ?? [])) {
               return this.finish(task, false, 'Incomplete: the task requires file output but finished with prose only and no tool calls. Last reply:\n' + response.content, 'tool_loop');
             }
@@ -4206,18 +4243,11 @@ Continue from 'Next:', do not redo completed progress.`,
               return this.finish(task, true, `${response.content}\n\n${verification.summary}`, 'completed');
             }
           }
-          // P0.5: this prose finish is inside the !fileChanged branch — the
-          // run changed NO files. For mutation-expecting kinds that is
-          // exactly the no-change auto-pass hole (previously this return
-          // completed such runs as success without verify() ever running).
-          // Route them through verify(), which BLOCKs the zero-change case;
-          // read-only and other kinds keep the direct prose finish.
-          if (PROSE_VERIFY_KINDS.has(taskKind) && !this.planMode && this.changeExpectationGrounded(task, detectRepo(this.cwd))) {
-            const verification = await this.verify(task, detectRepo(this.cwd));
-            if (!verification.passed) {
-              return this.finish(task, false, `Completion claimed in prose but verification failed:\n${verification.summary}`, 'verification_failed');
-            }
-            return this.finish(task, true, `${response.content}\n\n${verification.summary}`, 'completed');
+          // Final safety net: prose-only success is only valid when the task
+          // did not promise files. Anything else is a false "done".
+          if (!this.fileChanged && !this.planMode && taskKind !== 'chat'
+            && expectsFileOutput(task.title, task.description ?? '', taskKind, task.fileScope, task.acceptanceCriteria ?? [])) {
+            return this.finish(task, false, 'Incomplete: the task requires file output but no files were created or modified. Last reply:\n' + response.content, 'tool_loop');
           }
           return this.finish(task, true, response.content, 'completed');
         }
@@ -8061,9 +8091,10 @@ Continue from 'Next:', do not redo completed progress.`,
     // has no `build` script and the check fails for the wrong reason. Skip
     // them when a fileScope is set; the explicit task.verificationCommand +
     // the auto-detected runner cover the task's own verification.
-    // Greenfield builds (new game/app/file) skip the repo suite unconditionally:
-    // running the host repo's suite to verify a brand-new game is the "just
-    // tests instead of building" failure class.
+    // Greenfield builds (new game/app/file that didn't exist) also skip the
+    // repo suite unconditionally: running the host repo's 1200-test suite to
+    // verify a brand-new snake game is the "just tests instead of building"
+    // failure class and burns minutes for zero signal.
     const greenfield = isGreenfieldTask(task.title, task.description ?? '', task.fileScope, (p) => {
       try { return existsSync(resolve(this.cwd, p)); } catch { return false; }
     });
@@ -8077,9 +8108,12 @@ Continue from 'Next:', do not redo completed progress.`,
       if (repo.lintCommand && commandAvailable(repo.lintCommand, this.cwd)) checks.push(repo.lintCommand);
       if (repo.buildCommand && commandAvailable(repo.buildCommand, this.cwd)) checks.push(repo.buildCommand);
     } else if (greenfield && checks.length === 0) {
+      // Greenfield with no explicit command: the artifact gate below (file
+      // exists / contains) IS the verification. Note it so the summary is
+      // honest instead of "No verification configured."
       const criteriaFailGreen = this.checkArtifactCriteria(task);
-      if (criteriaFailGreen) return { passed: false, status: 'FAIL', checks, summary: criteriaFailGreen };
-      if (this.fileChanged) return { passed: true, status: 'PASS', checks, summary: 'Greenfield build: files created, no repo suite applicable (skipped by design).' };
+      if (criteriaFailGreen) return { passed: false, summary: criteriaFailGreen };
+      if (this.fileChanged) return { passed: true, summary: 'Greenfield build: files created, no repo suite applicable (skipped by design).' };
     }
     // Auto-detected real test runner: only added when the explicit
     // verificationCommand is weak (e.g. `test -f ... && grep ...`) so the
@@ -8088,8 +8122,7 @@ Continue from 'Next:', do not redo completed progress.`,
     // a direct check IS the proportionate verification for content, and an
     // auto-added repo suite burns tokens / fails correct work on debt.
     // Also skipped for greenfield builds: a new game file must not trigger
-    // the host repo's suite.
-    let autoTestCmd: string | undefined;
+    // the host repo's suite (the 1200-test "just tests" failure class).
     if (isWeakVerification(task.verificationCommand) && !this.contentOnly && !greenfield) {
       const auto = autoTestCommand(this.cwd, task.fileScope);
       if (auto) { autoTestCmd = auto; checks.push(auto); }
