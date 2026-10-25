@@ -317,3 +317,30 @@ injected-fault scenarios, 0 lost runs; G11 8/8 decision-matrix verdicts,
 ## AAIF Agent Skills alignment — WooWop independent verification (2026-10-25)
 Coder COMPLETE on ~/mochi-aaif, branch feat/aaif-skills, base f9861d9. Commits: 17afb86 (spec conformance gate — validateAaifSkill, spec-exact name rules, line-pinned diagnostics), 870095f (published-skill ingestion — security screen reusing scanPromptInjection plus invisible-unicode / hidden-html / concealed-directive / credential-exfiltration / obfuscated-blob rules, fetch-execute warn-tier; quarantine under <root>/.quarantine/<name>/ with QUARANTINE.json naming every rule + line, never installed, never silently dropped; .origin.json provenance with source + git commit/tag), 742baf5 (authoring guide docs/AAIF_SKILL_AUTHORING.md).
 Independent verification in a fresh worktree at 742baf5, Node 26.12.1: tsc CLEAN; full suite **3,494 passed / 0 failed / 12 skipped** (431 files passed, 4 skipped). The coder's own gate showed 1 failure (pre-existing agent-loop e2e) that did NOT reproduce in this independent full suite — consistent with the coder's A/B on the pristine f9861d9 tree, so it is not an AAIF regression. Proof metrics: spec pinned live (agentskills.io/specification + canonical repo 69ef37e, 2026-08-09; skills-ref v0.1.0 normative validator); bundled conformance **150/150** (skills lint clean, exit 0); ingestion fixtures **7/7** (1 good installed with provenance, 3 malformed + 3 malicious quarantined with named rules; isolated-HOME CLI smoke confirmed both paths on disk). Bonus fix in the tree: the frontmatter parser's silent hoisting of nested metadata: keys is fixed and regression-tested. AAIF CLOSED. Note from the coder, recorded not fixed here: this VM's 60 user-dir external skills (Hermes dialect) are flagged 60/60 by the new strict gate — correct gate behavior, rig-side work outside this repo. Verified chain: 3,269/2 -> 3,271 -> 3,285 -> 3,328 -> 3,384 -> 3,401 -> 3,445 -> 3,450 -> 3,454 -> 3,476 -> 3,494, zero failures at the tip. Nothing pushed to origin — home merges, as usual.
+
+
+## Decision memory across sessions — WooWop independent verification (2026-10-25)
+Coder COMPLETE on ~/mochi-decision-memory, branch feat/decision-memory,
+base dba091e (post-merge main). Single commit 01cf7589: rejected-approach
+records + task-start retrieval hook (770 insertions, 5 files). The first
+coder run was cut by a freeinference 429 after the commit; the resumed run
+filled the standing gate and the report (~/campaign/decision-memory-report.md).
+Proof metrics (coder, re-verified in the independent run): fixture bench
+repeat rate 1.00 -> 0.00, precision 1.00, recall 1.00; decision-memory tests
+13/13 green (10 unit + 3 multi-session fixture).
+Independent verification in a fresh worktree at 01cf7589, Node 26.12.1:
+tsc CLEAN; full suite **65 failed / 3,462 passed / 15 skipped** (465 files:
+20 failed, 440 passed, 5 skipped).
+Adjudication — the 65 failures are PRE-EXISTING at base dba091e, not a
+regression: an independent base comparison ran the same 20 failing files
+at dba091e and got the same 65 failed tests with an EMPTY failing-name
+diff (one tip-only line was a stderr artifact of the known flaky test, not
+a failure). Zero-decline: no test passing at base fails at tip, and the
+extra passing tests at the tip are exactly the 13 new decision-memory
+tests. The coder's own resumed session ran the same base comparison with
+the same result. One genuine discovery, environment-only: the sandbox
+canary test ("credential canary in $HOME/.ssh is NOT readable") fails
+from any /home/opc checkout at base AND tip — runShellString still uses
+the legacy unmasked bubblewrap builder in exec.ts. Not a regression,
+noted for a future fix, not blocking this landing. Decision memory
+CLOSED. Nothing pushed; home merges.
