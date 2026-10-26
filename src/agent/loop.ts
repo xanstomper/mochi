@@ -176,7 +176,7 @@ import { AnchorEngine } from '../cognitive/anchor.js';
 import { summarize, resolveRunStatus } from '../summary/engine.js';
 import { compactSession, compactToPrompt } from '../summary/compact.js';
 import { buildDigestInput } from '../summary/digest-input.js';
-import { buildSummaryLineage, renderSummaryLineage } from '../summary/verified-compaction.js';
+import { buildSummaryLineage, renderSummaryLineage, verifyDigestText } from '../summary/verified-compaction.js';
 import { ExecutionRegistry } from '../core/execution-registry.js';
 import { RunJournal, isJournalableTool, modelTurnFingerprint } from './run-journal.js';
 import { RunResultCache } from './result-cache.js';
@@ -4931,13 +4931,21 @@ Continue from 'Next:', do not redo completed progress.`,
       );
       const digest = (resp.content ?? '').trim();
       if (!digest) return;
+      // P1 slice 2: the digest is a model summary — verify it kept the
+      // probe facts from the replaced slice, and re-include anything it
+      // dropped, before the splice. Without this the run continued on a
+      // degraded digest with no record of what was lost.
+      const verified = verifyDigestText(old, digest);
       const before = est();
       // C7 lineage: the digest is a summary — stamp it with the parent
       // pointers to the messages it replaces so a later compaction of this
       // digest can chain back to the raw history.
-      msgs.splice(0, oldCount, { role: 'user' as const, content: `[digest of ${oldCount} earlier messages]\n${digest}\n${renderSummaryLineage(buildSummaryLineage(old))}` } as ChatMessage);
+      msgs.splice(0, oldCount, { role: 'user' as const, content: `[digest of ${oldCount} earlier messages]\n${verified.text}\n${renderSummaryLineage(buildSummaryLineage(old))}` } as ChatMessage);
       const after = est();
-      this.events.emit({ type: 'agent:log', agentId: this.id, message: `[context] MCH-32 digest: ${oldCount} old messages -> ${digest.length} chars (~${Math.max(0, before - after)} tokens saved)` });
+      this.events.emit({ type: 'agent:log', agentId: this.id, message: `[context] MCH-32 digest: ${oldCount} old messages -> ${verified.text.length} chars (~${Math.max(0, before - after)} tokens saved)` });
+      if (verified.escalations.length > 0) {
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: `[context] digest retention: ${verified.facts.length} facts probed, ${verified.initial.missing.length} recovered via re-include` });
+      }
       // S4: a digest rewrites history exactly like a compaction does —
       // the same stub/objection invalidation applies.
       this.clearReadStub();
