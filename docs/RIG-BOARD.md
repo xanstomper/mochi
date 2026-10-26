@@ -367,3 +367,26 @@ repairs. The remaining 64 failures are pre-existing at base
 (environmental: no bubblewrap, no RLIMIT enforcement, antigravity 503,
 no browser daemon; architectural: P2 sync lazy-load vs vitest src-graph),
 none touching the jury. Routed juries CLOSED. Nothing pushed; home merges.
+
+## Verification-first default mode — coder, independently verified (2026-10-26)
+Coder (branch feat/verification-first, base dba091e): commits fb089612
+(recorded reproductions + evidence critic as the fix-task default) +
+9a2828fd (opt-out seam for the scripted degenerate-provider harnesses).
+Proof metrics (coder, real loop + injected bugs, scripted archetypes):
+false-fix rate ON 0/18 vs OFF 6/18 (33%) — every false-fix archetype
+run completed as "success" with the reproduction still failing when the
+mode was off; all 12 adversarial runs are caught with it on; every ON
+completion carries a recorded reproduction (6/6 vs 0/18 off); tokens
+identical on scripted accounting, harness wall time +17% (critic re-runs
++ A/B); live-LLM deltas UNMEASURED (no provider configured; keys untouched).
+Independent verification in a fresh worktree at 9a2828fd, Node 26.12.1:
+tsc CLEAN; full suite **65 failed / 3,480 passed / 15 skipped** (466
+files: 20 failed, 441 passed, 5 skipped).
+Adjudication — zero-decline vs base dba091e: the failing-name diff
+against the independent base comparison (65 failures, 20 files) is
+TIP_ONLY empty and BASE_ONLY empty — the identical pre-existing failure
+set (environmental + architectural, same classes as prior landings),
+none introduced by this item. Note: the coder gate reported 3,484
+passed vs 3,480 independently — a 4-test counting difference with an
+identical failure set, not a regression. Verification-first CLOSED.
+Nothing pushed; home merges.
