@@ -303,6 +303,15 @@ export const FORCE_AT = 3;
 export const DRIFT_AT = 3;
 /** Snap-backs per run (a snap-back is guidance, never a block). */
 export const MAX_SNAPBACKS = 2;
+/** Stray edits without a convergence signal at which drift escalates from
+ *  guidance to a forced decisive finish: two snap-backs' worth of guidance
+ *  ignored (DRIFT_AT edits each), then the next stray edit escalates. */
+export const DRIFT_FORCE_AT = 6;
+/** Generic container segments that carry no task meaning. A scope file
+ *  under src/ must not make every src/ path count as on-contract. Goal
+ *  and checklist words are NOT filtered: only scope-file stems lose
+ *  generic segments. */
+const GENERIC_PATH_SEGMENTS = new Set(['src', 'lib', 'app', 'pkg', 'cmd', 'internal', 'dist', 'build', 'out', 'bin']);
 
 export class DisciplineTracker {
   readonly flags: DisciplineFlags;
@@ -324,6 +333,10 @@ export class DisciplineTracker {
   private editedPaths = new Set<string>();
   private driftStreak = 0;
   private driftPaths: string[] = [];
+  /** Stray edits since the last convergence signal (a relevant edit or a
+   *  verify pass). Unlike driftStreak, this is NOT reset by a snap-back:
+   *  guidance ignored twice, then escalation. */
+  private strayTotal = 0;
 
   /** Evidence ledger for the replan gate: a key counts as evidence only
    *  the FIRST time it is seen (a repeated identical failure is not new
@@ -334,6 +347,14 @@ export class DisciplineTracker {
   private deliberationStreak = 0;
   private lastDeliberationTokens: Set<string> | null = null;
   private commitFiredAtStreak = -1;
+  /** Deliberative turns since the last convergence signal. The consecutive
+   *  streak resets on any non-deliberative turn (so debate/edit/debate
+   *  escapes force); this count resets only on real work — a work-tool
+   *  turn, a non-mutating turn that covers new ground, a relevant edit,
+   *  or a verify pass — so deliberation without progress forces even when
+   *  interleaved with bare edits, while genuine acting (checks, agents,
+   *  new reads, on-contract edits) keeps the clock clear. */
+  private deliberativeTotal = 0;
 
   private failures = new Map<string, FailureRecord>();
 
@@ -351,7 +372,7 @@ export class DisciplineTracker {
 
   private addPathTokens(path: string): void {
     for (const seg of path.toLowerCase().split(/[^a-z0-9]+/)) {
-      if (seg.length >= 3 && !STOPWORDS.has(seg)) this.relevanceTokens.add(seg);
+      if (seg.length >= 3 && !STOPWORDS.has(seg) && !GENERIC_PATH_SEGMENTS.has(seg)) this.relevanceTokens.add(seg);
     }
   }
 
@@ -438,12 +459,18 @@ export class DisciplineTracker {
     if (!deliberative) {
       this.deliberationStreak = 0;
       this.commitFiredAtStreak = -1;
+      // Real work clears the cumulative count: a work-tool turn (a check,
+      // an agent, git) or a non-mutating turn that covers new ground. A
+      // bare mutating turn does not — its convergence is judged by
+      // noteEdit (relevant resets, stray escalates) instead.
+      if (obs.workTool || (!obs.mutating && obs.progress)) this.deliberativeTotal = 0;
       if (obs.mutating || obs.progress) this.lastDeliberationTokens = null;
       return { action: 'none', streak: 0, deliberative: false };
     }
     this.deliberationStreak++;
+    this.deliberativeTotal++;
     this.lastDeliberationTokens = tokens;
-    if (this.deliberationStreak >= FORCE_AT) {
+    if (this.deliberationStreak >= FORCE_AT || this.deliberativeTotal >= FORCE_AT) {
       return { action: 'force', streak: this.deliberationStreak, deliberative: true };
     }
     if (this.deliberationStreak >= COMMIT_AT && this.commitFiredAtStreak !== this.deliberationStreak) {
@@ -467,29 +494,35 @@ export class DisciplineTracker {
 
   /** Feed one successful mutating edit (workspace-relative path). Returns
    *  snapback=true when the edit is the DRIFT_AT-th consecutive edit that
-   *  touches nothing the contract names (bounded per run). */
-  noteEdit(relPath: string): { snapback: boolean; streak: number } {
+   *  touches nothing the contract names (bounded per run), and
+   *  escalate=true once stray edits without a convergence signal reach
+   *  DRIFT_FORCE_AT: guidance has been ignored twice, so the loop must
+   *  finish decisively instead of issuing a third guidance note. */
+  noteEdit(relPath: string): { snapback: boolean; streak: number; escalate: boolean } {
     const norm = (relPath ?? '').replace(/\\/g, '/').toLowerCase();
     if (!norm || norm.startsWith('../') || norm === '.mochi' || norm.startsWith('.mochi/') || norm.includes('/.mochi/')) {
-      return { snapback: false, streak: this.driftStreak };
+      return { snapback: false, streak: this.driftStreak, escalate: false };
     }
     if (this.isRelevantPath(norm)) {
       this.driftStreak = 0;
+      this.strayTotal = 0;
+      this.deliberativeTotal = 0;
       this.editedPaths.add(norm);
-      return { snapback: false, streak: this.driftStreak };
+      return { snapback: false, streak: this.driftStreak, escalate: false };
     }
     // Every unrelated edit counts — including re-edits of a file the model
     // is fixating on (fixation on a wrong file IS drift). The per-run
     // snapback cap + streak reset on firing keep this from spamming.
     this.editedPaths.add(norm);
     this.driftStreak++;
+    this.strayTotal++;
     this.driftPaths = [...this.driftPaths.slice(-(DRIFT_AT - 1)), relPath];
     if (this.driftStreak >= DRIFT_AT && this.stats.snapbacks < MAX_SNAPBACKS) {
       this.stats.snapbacks++;
       this.driftStreak = 0;
-      return { snapback: true, streak: DRIFT_AT };
+      return { snapback: true, streak: DRIFT_AT, escalate: this.strayTotal >= DRIFT_FORCE_AT };
     }
-    return { snapback: false, streak: this.driftStreak };
+    return { snapback: false, streak: this.driftStreak, escalate: this.strayTotal >= DRIFT_FORCE_AT };
   }
 
   private isRelevantPath(normPath: string): boolean {
@@ -604,10 +637,15 @@ export class DisciplineTracker {
     }
   }
 
-  /** Verification passed: the evidence state is fresh — reset the offset. */
+  /** Verification passed: the evidence state is fresh — reset the offset,
+   *  and clear the drift/deliberation counters: a pass is a convergence
+   *  signal, so stray and deliberative counts restart from here. */
   noteVerifyPass(): void {
     this.effortOffsetValue = 0;
     this.cleanStreak = 0;
+    this.driftStreak = 0;
+    this.strayTotal = 0;
+    this.deliberativeTotal = 0;
   }
 
   /** Apply the current offset to a base tier. Floor: adaptation never

@@ -1173,6 +1173,11 @@ export class Agent {
    *  final (continue-nudges suppressed; read-only batches execute, then the
    *  run finishes decisively). Cleared by any mutating/progress turn. */
   private disciplineForceArmed = false;
+  /** Drift escalation pending: stray edits reached DRIFT_FORCE_AT with no
+   *  convergence since. Unlike disciplineForceArmed, this is NOT cleared
+   *  by mutating turns — a mutating thrash loop is exactly what it stops.
+   *  Consumed by the decisive-finish gate after tool execution. */
+  private disciplineDriftForcePending = false;
   /** Whether the most recent model turn contained a mutating call. */
   private disciplineTurnMutating = false;
   /** Files mutated since the last verification attempt, tracked directly
@@ -2130,6 +2135,7 @@ Continue from 'Next:', do not redo completed progress.`,
     this.effortCalibrationLogged = false;
     this.disciplineSnap = { read: 0, edited: 0, verifyPass: 0 };
     this.disciplineForceArmed = false;
+    this.disciplineDriftForcePending = false;
     this.disciplineTurnMutating = false;
     this.disciplineEditedSinceVerify = [];
     this.disciplineShellRanSinceVerify = false;
@@ -4067,6 +4073,9 @@ Continue from 'Next:', do not redo completed progress.`,
         // batch STILL did not mutate — the deliberation ends here, with
         // the batch's results already in context. Finish decisively with
         // the current best state instead of looping.
+        if (this.disciplineDriftForcePending) {
+          return this.disciplineForceFinish(task, repo, response.content);
+        }
         if (this.disciplineForceArmed && !this.disciplineTurnMutating) {
           return this.disciplineForceFinish(task, repo, response.content);
         }
@@ -5454,6 +5463,10 @@ Continue from 'Next:', do not redo completed progress.`,
         if (dv.snapback) {
           this.context.addMessage({ role: 'system', content: this.discipline.snapbackMessage() });
           this.events.emit({ type: 'agent:log', agentId: this.id, message: `[discipline] drift snap-back (edits strayed from the task contract)` });
+        }
+        if (dv.escalate) {
+          this.disciplineDriftForcePending = true;
+          this.events.emit({ type: 'agent:log', agentId: this.id, message: `[discipline] drift escalation: stray edits past guidance cap — decisive finish pending` });
         }
       }
       // Just-in-time trust nudge (latency): models waste a full round-trip
