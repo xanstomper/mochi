@@ -54,6 +54,18 @@ export interface PermissionConfig {
 
 export interface SafetyConfig {
   mode: 'safe' | 'ask' | 'auto' | 'uncensored';
+  /** Routed jury (src/agent/routed-jury.ts): a second, content-aware gate for
+   *  high-stakes (destructive/irreversible/credential-adjacent) actions — two
+   *  cheap independent passes must agree before the action executes. Routing
+   *  is a data-driven table; unclassified actions default to GATED. Default
+   *  OFF; env MOCHI_ROUTED_JURY=1 forces it on. */
+  routedJury?: {
+    /** Master switch: true engages the jury for gated action classes. */
+    enabled?: boolean;
+    /** Hard deadline for the two passes (ms). On expiry: escalate to the
+     *  approval handler when one is attached, otherwise DENY. Default 3000. */
+    timeoutMs?: number;
+  };
   allowedCommands?: string[];
   deniedCommands?: string[];
   commandTimeoutSeconds: number;
