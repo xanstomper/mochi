@@ -9,7 +9,13 @@ import { startFakeOpenAI, type FakeOpenAI } from './testutil/fake-openai.js';
 import type { MochiConfig } from './types.js';
 
 function makeConfig(url: string): Partial<MochiConfig> {
-  return { model: { provider: 'openai', baseUrl: url, apiKey: 'k', model: 'fake-model' } as MochiConfig['model'] };
+  return {
+    model: { provider: 'openai', baseUrl: url, apiKey: 'k', model: 'fake-model' } as MochiConfig['model'],
+    // The SDK plumbing tests script fixed model turns; the scripted models
+    // cannot adapt to a reproduce-first veto or satisfy the evidence
+    // critic — the documented scripted-e2e seam opts these runs out.
+    safety: { mode: 'auto', commandTimeoutSeconds: 30, maxIterations: 40, maxRuntimeMinutes: 5, maxConcurrentAgents: 1, contextBudgetTokens: 8000, skipReproGate: true },
+  };
 }
 
 let fake: FakeOpenAI | null = null;
