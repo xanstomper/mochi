@@ -27,10 +27,10 @@ import type { MochiConfig } from '../types.js';
 const MATH_BUGGY = 'function add(a, b) { return a - b; }\nmodule.exports = { add };\n';
 const REPRO_JS = 'const { add } = require("./math.js");\nif (add(2, 3) !== 5) { console.log("WRONG: add(2,3)=" + add(2, 3)); process.exit(1); }\nconsole.log("OK");\n';
 
-function makeConfig(dir: string, url: string): MochiConfig {
+function makeConfig(dir: string, url: string, extraSafety: Record<string, unknown> = {}): MochiConfig {
   return {
     model: { provider: 'openai', baseUrl: url, model: 'fake-model' },
-    safety: { mode: 'auto', commandTimeoutSeconds: 10, maxIterations: 40, maxRuntimeMinutes: 5, maxConcurrentAgents: 1, contextBudgetTokens: 8000 },
+    safety: { mode: 'auto', commandTimeoutSeconds: 10, maxIterations: 40, maxRuntimeMinutes: 5, maxConcurrentAgents: 1, contextBudgetTokens: 8000, ...extraSafety },
     permissions: { read: true, write: true, shell: true, network: true, gitDestructive: true },
     telemetry: false,
     projectDir: '.mochi',
@@ -64,10 +64,10 @@ function wireBus(): { bus: EventBus; cap: RunCapture } {
   return { bus, cap };
 }
 
-async function runScripted(dir: string, taskTitle: string, taskDesc: string, script: FakeScriptResponse[], bus: EventBus = new EventBus()) {
+async function runScripted(dir: string, taskTitle: string, taskDesc: string, script: FakeScriptResponse[], bus: EventBus = new EventBus(), configExtras: Record<string, unknown> = {}) {
   const fake = await startFakeOpenAI(script);
   try {
-    const config = makeConfig(dir, fake.url);
+    const config = makeConfig(dir, fake.url, configExtras);
     const workspace = new Workspace(dir, '.mochi');
     workspace.ensure();
     const context = new ContextEngine(config, dir);
@@ -119,21 +119,27 @@ describe('reproduce-first gate', () => {
     }
   }, 120_000);
 
-  it('lets a second mutation through without a repro (one veto only, bypass logged)', async () => {
+  it('lets a second mutation through (one veto, bypass logged) but the critic blocks the evidence-free conclusion', async () => {
     dir = makeRepo();
     const { bus, cap } = wireBus();
     {
       const { result, toolMessages } = await runScripted(dir, FIX_TITLE, FIX_DESC, [
         { finishReason: 'tool_calls', toolCalls: [{ id: 'e1', function: { name: 'edit', arguments: EDIT_ARGS } }] },
-        // Model insists WITHOUT reproducing: allowed (never trap the run).
+        // Model insists WITHOUT reproducing: allowed (never trap the run)...
         { finishReason: 'tool_calls', toolCalls: [{ id: 'e2', function: { name: 'edit', arguments: EDIT_ARGS } }] },
         { content: 'Fixed add() to return a + b.', finishReason: 'stop' },
-      ], bus);
+      ], bus, { maxVerifyRetries: 0 });
 
       expect(toolMessages.some((m) => m.includes('REPRODUCE FIRST'))).toBe(true);
       expect(cap.logs.some((m) => m.includes('[repro-first] model mutated without reproducing'))).toBe(true);
-      expect(readFileSync(resolve(dir, 'math.js'), 'utf8')).toContain('return a + b');
-      expect(result.success).toBe(true);
+      // ...verification-first: the CONCLUSION is not taken on the model's
+      // word — with no reproduction recorded, the critic blocks it, and at
+      // retry exhaustion the harness rolls the unevidenced edit back (the
+      // work is not recorded as done, and it does not survive as "fixed").
+      expect(result.success).toBe(false);
+      expect(result.stopReason).toBe('verification_failed');
+      expect(result.summary).toContain('VERIFICATION CRITIC');
+      expect(readFileSync(resolve(dir, 'math.js'), 'utf8')).toContain('return a - b');
     }
   }, 120_000);
 
@@ -171,19 +177,20 @@ describe('reproduce-first gate', () => {
         // this goes through as the recorded bypass and the edit lands.
         { finishReason: 'tool_calls', toolCalls: [{ id: 'e2', function: { name: 'edit', arguments: EDIT_ARGS } }] },
         { content: 'Created notes.txt and fixed add() to return a + b.', finishReason: 'stop' },
-      ], bus);
+      ], bus, { maxVerifyRetries: 0 });
 
-      // The new file was created...
-      expect(existsSync(resolve(dir, 'notes.txt'))).toBe(true);
-      expect(readFileSync(resolve(dir, 'notes.txt'), 'utf8')).toContain('diagnosis notes');
       // ...with exactly ONE veto in the whole run, spent on the existing-
       // file edit (turn 2), not on the creation (turn 1).
       expect(toolMessages.filter((m) => m.includes('REPRODUCE FIRST'))).toHaveLength(1);
       expect(cap.logs.filter((m) => m.includes('[repro-first] vetoed first mutating call'))).toHaveLength(1);
       // The bypass belongs to the post-veto existing-file edit in turn 3.
       expect(cap.logs.some((m) => m.includes('[repro-first] model mutated without reproducing'))).toBe(true);
-      expect(readFileSync(resolve(dir, 'math.js'), 'utf8')).toContain('return a + b');
-      expect(result.success).toBe(true);
+      // Verification-first: the bypassed conclusion cannot complete — no
+      // reproduction exists, so the critic blocks it; at retry exhaustion
+      // the rollback wipes both the edit and the untracked notes file.
+      expect(result.success).toBe(false);
+      expect(result.summary).toContain('VERIFICATION CRITIC');
+      expect(readFileSync(resolve(dir, 'math.js'), 'utf8')).toContain('return a - b');
     }
   }, 120_000);
 

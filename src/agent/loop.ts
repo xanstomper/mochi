@@ -62,6 +62,12 @@ import { learnedWindowBudget, recordContextRejection } from '../model/window-mem
 import { matchesBaseline, type FlakyTestRef, type VerificationBaseline, type VerificationStatus } from '../verification.js';
 import { diagnoseFile, renderDiagnostics } from '../observability/diagnostics.js';
 import { synthesizeRepro, reproSynthEnabled } from '../observability/repro-synth.js';
+import {
+  deriveCriticVerdict, isSafeToRerun, loadReproLedgerRecord, parseToolExit, pickReproCandidates,
+  REPRO_EVIDENCE_TOOLS, renderCriticBlocked, reproObservationCommand,
+  saveReproLedgerRecord, verificationFirstEnabled,
+  type CriticVerdict, type ReproObservation,
+} from './verification-critic.js';
 import { captureCorrection, promoteCorrectionToLesson } from '../observability/corrections.js';
 import type { AgentProfile } from '../types.js';
 import type { PromptUserFn } from '../tools/user-prompt.js';
@@ -164,7 +170,7 @@ import { classifyContentOnly } from '../core/one-shot.js';
 import { workspaceListMessage } from '../core/workspace-list.js';
 import { issuesContextBlock, classifyHarnessFailure, recordHarnessIssue } from '../core/harness-issues.js';
 import { buildMcpTools, inflateMcpToolSchemas, mcpLazySchemasEnabled } from '../mcp/tools.js';
-import { preEditSnapshot as gitPreEditSnapshot, rollbackToSnapshot as gitRollback, type CheckpointResult } from '../repo/git.js';
+import { preEditSnapshot as gitPreEditSnapshot, rollbackToSnapshot as gitRollback, status as gitStatusShort, type CheckpointResult } from '../repo/git.js';
 import { applyToolOutputPolicy } from '../core/tool-output.js';
 import { scrubAnsiFragments } from '../tui/ansi-hygiene.js';
 import { nativeStripThinkTags } from '../native/core.js';
@@ -1160,6 +1166,16 @@ export class Agent {
    *  has been attempted for this run — synthesis is tried at most once, at
    *  the moment the veto fires, and never blocks the gate on failure. */
   private reproSynthTried = false;
+  /** Verification-first (verification-critic.ts): the recorded reproduction
+   *  ledger for this run. Pre-phase observations (before this run's first
+   *  executed mutating call) are recorded at the tool-execution site; the
+   *  completion verify's critic gate re-runs the recorded commands and
+   *  re-derives the conclusion from the pair. */
+  private reproObservations: ReproObservation[] = [];
+  /** Verification-first: flipped once a mutating tool call has actually
+   *  EXECUTED this run — observations after it are post-fix, not before-fix
+   *  evidence. */
+  private reproPhaseMutated = false;
   /** Reasoning discipline (src/agent/discipline.ts): per-run tracker +
    *  resolved kill-switch flags. The tracker is created in run() for
    *  non-chat kinds; every consult is optional-chained so bare agents
@@ -1828,6 +1844,23 @@ export class Agent {
     this.reproGateBypassed = false;
     this.reproSynthTried = false;
     this.reproFileChangedAtRunStart = this.fileChanged;
+    // Verification-first: a fresh ledger per run, seeded with the task's
+    // persisted record so a resumed run re-runs the SAME reproduction the
+    // earlier run recorded (the reproduction is kept with the task).
+    this.reproObservations = [];
+    this.reproPhaseMutated = false;
+    if (verificationFirstEnabled(this.config)) {
+      const prior = loadReproLedgerRecord(this.workspace, task.id);
+      if (prior) this.reproObservations = [...prior.observations];
+    }
+    // Verification-first opt-out logging (countable, never silent): a fix
+    // task that will not be gated names WHY, once, at run start.
+    if (classifyTaskKind(task) === 'fix') {
+      const optOut = this.reproGateExemption(task);
+      if (optOut !== null) {
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: `[verification-first] not enforced on fix task: ${optOut}` });
+      }
+    }
     // Complexity must be computed here — BEFORE resolveReasoning (line ~799)
     // and the tool-advertising gate — so both hard-task levers (max reasoning
     // + full toolset) see a `complex` task. Conservative: only strong
@@ -6744,6 +6777,11 @@ Continue from 'Next:', do not redo completed progress.`,
           // replayed mutation restores fileChanged (its effect is already
           // on disk) so the completion gate sees the run's true state.
           if (toolName === 'shell' || toolName === 'verify') this.reproAttempted = true;
+          // Verification-first parity: a replayed evidence call is recorded
+          // (its historical output is honest before-fix evidence), and a
+          // replayed mutation flips the phase.
+          this.recordReproObservation(toolName, jArgs, replayOutput, false);
+          if (MUTATING_TOOLS.has(toolName)) this.reproPhaseMutated = true;
           this.trackFileChange(toolName, jArgs, { output: replayOutput });
           return;
         }
@@ -6811,7 +6849,7 @@ Continue from 'Next:', do not redo completed progress.`,
         // the task (repro-synth.ts). Best-effort: on any failure the veto
         // message is exactly the historical one.
         const synthesized = await this.trySynthesizeRepro();
-        this.vetoToolCall(tc, 'REPRODUCE FIRST: this is a fix/debug task and you have not yet observed the failure. Before editing any code, reproduce it: run the failing test/command or a minimal repro script (shell or verify tool) and look at the actual failure output. Then edit, and re-run the same check to prove the fix. If no runnable check exists for this failure, attempt the closest one you can (e.g. run the affected module/test file directly) — after that attempt, or if you retry this edit, the edit will be allowed through.' + (synthesized ? `\n\n${synthesized}` : ''));
+        this.vetoToolCall(tc, 'REPRODUCE FIRST: this is a fix/debug task and you have not yet observed the failure. Before editing any code, reproduce it: run the failing test/command or a minimal repro script (shell or verify tool) and look at the actual failure output. The command you run becomes this task\u2019s RECORDED reproduction — after your fix, the harness re-runs the SAME command, and it must pass. Then edit, and re-run the same check to prove the fix. If no runnable check exists for this failure, attempt the closest one you can (e.g. run the affected module/test file directly) — after that attempt, or if you retry this edit, the edit will be allowed through.' + (synthesized ? `\n\n${synthesized}` : ''));
         return;
       }
       if (!this.reproGateBypassed) {
@@ -7398,6 +7436,11 @@ Continue from 'Next:', do not redo completed progress.`,
     if (!this.reproAttempted && (toolName === 'shell' || toolName === 'verify' || (toolName === 'bg_task' && !error))) {
       this.reproAttempted = true;
     }
+    // Verification-first: record the executed observation as before-fix
+    // evidence (pre-phase only — the flag below guards it), and flip the
+    // phase once a mutating call has actually executed.
+    this.recordReproObservation(toolName, args, output, error);
+    if (MUTATING_TOOLS.has(toolName)) this.reproPhaseMutated = true;
     // MCH-91: `load_tools` mutated the live toolset — re-advertise defs so the
     // newly loaded tools appear in the next packet.
     if (!error && toolName === 'load_tools') {
@@ -7942,8 +7985,22 @@ Continue from 'Next:', do not redo completed progress.`,
    *  word rather than re-deriving it from success booleans. */
   private async verify(task: Task, repo: ReturnType<typeof detectRepo>): Promise<LoopVerification> {
     const v = await this.verifyGate(task, repo);
-    this.lastVerifyStatus = v.status;
-    return v;
+    if (!v.passed) {
+      this.lastVerifyStatus = v.status;
+      return v;
+    }
+    // Verification-first critic: the claim just passed the gate's checks —
+    // now it is re-derived from the recorded evidence (reproduction pair)
+    // before it may stand. Best-effort: a critic fault degrades to the
+    // gate's verdict, never fails verification by itself.
+    let criticized = v;
+    try {
+      criticized = await this.criticGate(task, v);
+    } catch (err) {
+      this.events.emit({ type: 'agent:log', agentId: this.id, message: `[verification-first] critic fault (verification stands unelevated): ${err instanceof Error ? err.message : String(err)}` });
+    }
+    this.lastVerifyStatus = criticized.status;
+    return criticized;
   }
 
   /** The run's final verdict for skill attribution, in trajectory
@@ -8507,6 +8564,19 @@ Continue from 'Next:', do not redo completed progress.`,
       }, { inPlace: true, timeoutMs: 30_000 });
       if (result.outcome === 'validated') {
         this.events.emit({ type: 'agent:log', agentId: this.id, message: `[repro-synth] synthesised + validated a repro for this task: ${result.candidate.command}` });
+        // The synthesised repro FAILED on the run-start tree — that is
+        // exactly before-fix evidence. Record it so the critic can pair it
+        // with the post-fix re-run even if the model never runs the command
+        // by hand.
+        this.reproObservations.push({
+          tool: 'shell',
+          command: result.candidate.command,
+          code: result.validation.exitCode ?? 1,
+          failed: true,
+          at: Date.now(),
+          phase: 'pre',
+          origin: 'synth',
+        });
         const sig = result.validation.signature;
         return `A minimal reproduction was synthesised and verified against the current tree — run it (shell) to observe the failure, then re-run it after your fix to prove the fix:\n  ${result.candidate.command}${sig ? `\nIt currently fails with: ${sig}` : ''}`;
       }
@@ -8515,21 +8585,32 @@ Continue from 'Next:', do not redo completed progress.`,
     } catch { return null; }
   }
 
-  private reproGateApplies(): boolean {
-    if (process.env.MOCHI_REPRO_FIRST === '0') return false;
+  /** WHY the reproduce-first gate / critic does not apply to this task, or
+   *  null when it does (verification-first is enforced). Every non-null
+   *  reason is a NAMED exemption or opt-out — they are logged for fix tasks
+   *  at run start and recorded in the repro ledger, so the report can count
+   *  how often the default was bypassed and why. */
+  private reproGateExemption(task?: Task): string | null {
+    if (!verificationFirstEnabled(this.config, process.env)) {
+      return process.env.MOCHI_REPRO_FIRST === '0'
+        ? 'MOCHI_REPRO_FIRST=0 (operator opt-out)'
+        : ((this.config.safety as { skipReproGate?: boolean } | undefined)?.skipReproGate
+          ? 'safety.skipReproGate config (scripted-e2e seam)'
+          : 'safety.verificationFirst=false (operator opt-out)');
+    }
+    if (task?.reproExempt) return 'task annotation reproExempt (operator opt-out)';
     // Test seam: scripted-fake harnesses can't adapt to a one-shot veto, so
     // scripted-e2e configs disable the gate explicitly.
-    if ((this.config.safety as { skipReproGate?: boolean } | undefined)?.skipReproGate) return false;
-    if (this.planMode || this.contentOnly || this.reproFileChangedAtRunStart) return false;
-    const kind = this.taskKind;
-    if (kind !== 'fix') return false;
-    const task = this.activeTask;
-    if (!task) return false;
+    if (this.planMode || this.contentOnly) return this.planMode ? 'plan mode (no edits expected)' : 'content-only deliverable';
+    if (this.reproFileChangedAtRunStart) return 'warm start (this run\'s changes predate it — the run that made them was gated)';
+    const kind = this.taskKind ?? (task ? classifyTaskKind(task) : undefined);
+    if (kind !== 'fix') return `task kind is ${kind ?? 'unknown'} (the gate guards fix tasks only)`;
+    if (!task) return 'no active task';
     // The classifier's 'fix' lane also catches pure-logic one-shot script
     // fixes ("fix sum.js, run node run.js") — those ARE create-and-run tasks
     // whose "repro" is the run after the edit, so the gate would only tax
     // them. Same exemption the reasoning tiers already grant this shape.
-    if (isSimpleScriptTask(task)) return false;
+    if (isSimpleScriptTask(task)) return 'simple create-and-run script task (the run IS the check)';
     // NOTE: no isGreenfieldTask exemption here, deliberately. That heuristic
     // (creation-verb + greenfield-noun) misfires on genuine fix tasks —
     // "diagnose the existing CODE" + "the repro SCRIPT fails" trips both
@@ -8537,8 +8618,202 @@ Continue from 'Next:', do not redo completed progress.`,
     // definition about existing behavior. Greenfield creation tasks
     // classify as implement/content kinds, never fix, and content-only
     // deliverables are exempted above.
-    return true;
+    return null;
   }
+
+  private reproGateApplies(): boolean {
+    return this.reproGateExemption(this.activeTask ?? undefined) === null;
+  }
+
+  /** Record one executed evidence-tool call as a reproduction observation.
+   *  Only PRE-mutation calls are recorded here (the phase flag guards it):
+   *  after the first mutating call executes, observations stop being
+   *  before-fix evidence. Best-effort — never breaks the tool path. */
+  private recordReproObservation(toolName: string, args: Record<string, unknown>, output: unknown, error: unknown): void {
+    try {
+      if (this.reproPhaseMutated) return;
+      if (!REPRO_EVIDENCE_TOOLS.has(toolName)) return;
+      if (this.reproGateExemption(this.activeTask ?? undefined) !== null) return;
+      const command = reproObservationCommand(toolName, args);
+      if (!command) return;
+      const { code, failed } = parseToolExit(toolName, typeof output === 'string' ? output : '', Boolean(error));
+      this.reproObservations.push({ tool: toolName, command, code, failed, at: Date.now(), phase: 'pre', origin: 'model' });
+    } catch { /* the ledger must never break the tool path */ }
+  }
+
+  /**
+   * The critic gate: after the verify gate PASSES a completion claim, the
+   * claim is re-derived from the recorded evidence alone (deterministic —
+   * no model call). On a gated fix task this requires a reproduction PAIR:
+   * the same command that failed before the fix must run green after it.
+   * The recorded reproduction commands are re-run here (bounded), so the
+   * after-half is about the SAME reproduction rather than whatever checks
+   * the run picked post hoc. When the model never produced the before-half
+   * (the insistence-bypass path), a bounded git-stash A/B produces it:
+   * the candidate is run on the original tree and on the fixed tree.
+   *
+   * A blocked verdict returns a failed verification carrying the gap — it
+   * flows through the normal verify-retry path (objection pinning, bounded
+   * retries, honest verification_failed at exhaustion), never a silent
+   * softening into a passing claim. The verdict and the evidence are
+   * persisted per task (.mochi/state/repro-ledger.json).
+   */
+  private async criticGate(task: Task, v: LoopVerification): Promise<LoopVerification> {
+    if (!verificationFirstEnabled(this.config)) return v;
+    const exemption = this.reproGateExemption(task);
+    if (exemption !== null) {
+      this.persistCriticRecord(task, { verdict: 'exempt', exempt: exemption });
+      return v;
+    }
+    let verdict: CriticVerdict;
+    const preFailing = this.reproObservations.some((o) => o.phase === 'pre' && o.failed);
+    if (preFailing) {
+      // Normal path: re-run the recorded reproduction (most recent failing
+      // command first, capped) and stop at the first pass — the pair.
+      // Mutating commands are never replayed by the critic.
+      const candidates = pickReproCandidates(this.reproObservations, 3).filter(isSafeToRerun);
+      for (const command of candidates) {
+        const out = await this.runShell(command, 120);
+        const { code, failed } = parseToolExit('shell', out, false);
+        this.reproObservations.push({ tool: 'shell', command, code, failed, at: Date.now(), phase: 'post', origin: 'critic-rerun' });
+        if (!failed) break;
+      }
+      verdict = deriveCriticVerdict({
+        exemption: null,
+        vetoFired: this.reproVetoFired,
+        bypassed: this.reproGateBypassed,
+        observations: this.reproObservations,
+        gateGreenChecks: v.checks,
+      });
+    } else {
+      // The model never produced the before-half. Try to produce it with a
+      // bounded git-stash A/B instead of taking the model's word.
+      const abPair = await this.criticABPair(task);
+      if (abPair === 'indeterminate') {
+        verdict = { verdict: 'indeterminate', reason: 'critic A/B could not restore the working tree — the claim was not judged' };
+      } else {
+        verdict = deriveCriticVerdict({
+          exemption: null,
+          vetoFired: this.reproVetoFired,
+          bypassed: this.reproGateBypassed,
+          observations: this.reproObservations,
+          gateGreenChecks: v.checks,
+          abPair,
+        });
+      }
+    }
+    this.persistCriticRecord(task, { verdict: verdict.verdict === 'indeterminate' ? 'indeterminate' : verdict.verdict, gaps: verdict.verdict === 'blocked' ? verdict.gaps : undefined, exempt: exemption ?? undefined });
+    this.events.emit({ type: 'agent:log', agentId: this.id, message: `[verification-first] critic verdict: ${verdict.verdict}${verdict.verdict === 'supported' ? ` — ${verdict.note}` : ''}${verdict.verdict === 'blocked' ? ` — ${verdict.gaps.join('; ')}` : ''}` });
+    if (verdict.verdict === 'blocked') {
+      return {
+        passed: false,
+        status: 'BLOCKED',
+        checks: v.checks,
+        summary: renderCriticBlocked(verdict.gaps),
+      };
+    }
+    if (verdict.verdict === 'indeterminate') {
+      this.events.emit({ type: 'agent:log', agentId: this.id, message: `[verification-first] ${verdict.reason}` });
+      return v;
+    }
+    if (verdict.verdict === 'supported') {
+      // The critic's evidence line rides the summary: provenance the
+      // transcript (and the trajectory) can show.
+      return { ...v, summary: `${v.summary}\nCritic: ${verdict.note}.` };
+    }
+    return v;
+  }
+
+  /** Persist this run's critic outcome for the task (best-effort). */
+  private persistCriticRecord(task: Task, patch: { verdict: 'supported' | 'blocked' | 'exempt' | 'indeterminate'; gaps?: string[]; exempt?: string }): void {
+    try {
+      saveReproLedgerRecord(this.workspace, {
+        taskId: task.id,
+        observations: this.reproObservations,
+        vetoFired: this.reproVetoFired,
+        bypassed: this.reproGateBypassed,
+        exempt: patch.exempt,
+        verdict: patch.verdict,
+        gaps: patch.gaps,
+        updatedAt: Date.now(),
+      });
+    } catch { /* persistence is best-effort */ }
+  }
+
+  /**
+   * Bounded A/B for the missing before-half: stash the run's tracked
+   * changes, run the candidate on the ORIGINAL tree, restore, run it on
+   * the FIXED tree. A candidate that fails on the original tree and passes
+   * on the fixed tree IS the reproduction pair — produced by the harness
+   * from real executions, not taken from the model's word.
+   *
+   * Safety: the work lives in the git stash for the seconds of the A/B and
+   * is restored unconditionally afterwards; the A/B only runs on a git
+   * workspace with tracked modifications (the fix). Any machinery failure
+   * returns 'indeterminate' — a critic fault never fails a verification by
+   * itself — and the model's work stays recoverable in the stash, loudly
+   * logged if the restore itself failed.
+   */
+  private async criticABPair(task: Task): Promise<{ command: string } | 'indeterminate' | null> {
+    if (!this.isGitWorkspace()) return null;
+    // Candidates: every failing non-keyword observation (model re-runs after
+    // a previous critic block), then the task's declared check.
+    const seen = new Set<string>();
+    const candidates: string[] = [];
+    for (const o of [...this.reproObservations].reverse()) {
+      if (!o.failed || o.command.startsWith('verify(') || seen.has(o.command)) continue;
+      seen.add(o.command);
+      candidates.push(o.command);
+      if (candidates.length >= 2) break;
+    }
+    if (task.verificationCommand && !seen.has(task.verificationCommand)) candidates.push(task.verificationCommand);
+    if (candidates.length === 0) return null;
+    // Mutating commands are never replayed by the A/B either.
+    const safe = candidates.filter(isSafeToRerun);
+    if (safe.length === 0) return null;
+    // The A/B needs tracked modifications (the fix) to exist, or both
+    // halves run on the same tree.
+    try {
+      const st = await gitStatusShort(this.cwd);
+      const tracked = st.split('\n').filter((l) => l.trim() && !l.startsWith('??') && !/not a git repository/i.test(l));
+      if (tracked.length === 0) return null;
+    } catch {
+      return null;
+    }
+    for (const command of safe.slice(0, 2)) {
+      const pushOut = await this.runShell('git stash push -q -m "mochi-critic-ab"', 30);
+      const pushed = !parseToolExit('shell', pushOut, false).failed;
+      if (!pushed) continue;
+      let beforeOut: string;
+      try {
+        beforeOut = await this.runShell(command, 120);
+      } finally {
+        const popOut = await this.runShell('git stash pop -q', 30);
+        if (parseToolExit('shell', popOut, false).failed) {
+          // Bounded recovery: the repro run may have written to tracked
+          // files and conflicted the pop; the model's work is safe in the
+          // stash. Discard the working tree's tracked state and re-apply.
+          await this.runShell('git checkout -- .', 30);
+          const retry = await this.runShell('git stash pop -q', 30);
+          if (parseToolExit('shell', retry, false).failed) {
+            this.events.emit({
+              type: 'agent:log', agentId: this.id,
+              message: `[verification-first] CRITIC A/B could not restore the working tree (push out: ${pushOut.slice(0, 60)}; pop out: ${popOut.slice(0, 60)}; retry out: ${retry.slice(0, 60)}). The run's changes are preserved in the git stash — "git stash pop" restores them.`,
+            });
+            return 'indeterminate';
+          }
+        }
+      }
+      const afterOut = await this.runShell(command, 120);
+      const before = parseToolExit('shell', beforeOut, false);
+      const after = parseToolExit('shell', afterOut, false);
+      this.reproObservations.push({ tool: 'shell', command, code: before.code, failed: before.failed, at: Date.now(), phase: 'post', origin: 'ab' });
+      this.reproObservations.push({ tool: 'shell', command, code: after.code, failed: after.failed, at: Date.now(), phase: 'post', origin: 'ab' });
+      if (before.failed && !after.failed) return { command };
+    }
+    return null;
+  }
+
 
   /**
    * Speculative reasoning preflight gate. The SpeculativeEngine builds its

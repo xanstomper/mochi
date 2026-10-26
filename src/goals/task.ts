@@ -18,6 +18,7 @@ export function createTask(
     fileScope: opts.fileScope,
     acceptanceCriteria: opts.acceptanceCriteria ?? [],
     verificationCommand: opts.verificationCommand,
+    reproExempt: opts.reproExempt,
     attempts: opts.attempts ?? [],
     output: opts.output,
     assignedTo: opts.assignedTo,
