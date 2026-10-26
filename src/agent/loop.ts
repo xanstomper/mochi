@@ -790,6 +790,10 @@ export class Agent {
   private seenPatterns = new Set<string>();
   private hooks: HookManager;
   private toolCallsTotal = 0;
+  /** ask_question calls this run (P1 slice 3 telemetry): ask_question is
+   *  deliberately NOT journaled, so the count lives here and is reported
+   *  at finish — the prerequisite for act-first calibration. */
+  private askQuestionTotal = 0;
   private streamLoopNudges = 0;
   private triedFallbackModels = new Set<string>();
   private triedFallbackProviders = new Set<string>();
@@ -3945,6 +3949,15 @@ Continue from 'Next:', do not redo completed progress.`,
           for (const c of response.toolCalls) {
             if ((TOOL_ALIASES[c.function.name] || c.function.name) === 'load_tools') this.fastLaneLoadToolsCalls++;
           }
+        }
+        // P1 slice 3: ask telemetry — count ask_question calls per run so
+        // the ask rate becomes measurable. Mirrors the fast-lane counting
+        // above; it runs at response processing, so it covers every ask
+        // regardless of how the call resolves (interactive or headless
+        // default). ask_question is never vetoed (read permission, always
+        // allowed), so response-level counting equals asks made.
+        for (const c of response.toolCalls ?? []) {
+          if ((TOOL_ALIASES[c.function.name] || c.function.name) === 'ask_question') this.askQuestionTotal++;
         }
         this.toolCallsTotal++;
         // Cumulative repeated-tool-name breaker. Previously: ANY 4 calls to the
@@ -9980,11 +9993,15 @@ Continue from 'Next:', do not redo completed progress.`,
       taskKind: this.taskKind ?? 'unknown',
       durationMs,
       toolCallsTotal: this.toolCallsTotal,
+      askQuestionTotal: this.askQuestionTotal,
       tokensUsed: this.tokensUsed,
       filesModified: [...new Set(this.context['state'].filesModified)],
       summary,
       doc,
     });
+    // P1 slice 3: report the ask rate at finish — the number calibration
+    // needs. Exactly once: finishOnce is the single exit.
+    this.events.emit({ type: 'agent:log', agentId: this.id, message: `[ask-telemetry] ask_question calls: ${this.askQuestionTotal} (of ${this.toolCallsTotal} tool calls)` });
     const _runDigestParts: string[] = [];
     const _read = Array.from(this.readCache.keys())
       .map((k) => (k.startsWith(this.cwd) ? k.slice(this.cwd.length + 1) : k))

@@ -549,6 +549,8 @@ export type MochiEvent =
       taskKind?: string;
       durationMs: number;
       toolCallsTotal: number;
+      /** P1 slice 3: ask_question calls this run (ask-rate telemetry). */
+      askQuestionTotal?: number;
       tokensUsed?: number;
       filesModified: string[];
       summary: string;
