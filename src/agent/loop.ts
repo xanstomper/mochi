@@ -103,6 +103,7 @@ import {
   type DisciplineFlags,
   type FailureVerdict,
 } from './discipline.js';
+import { InterventionPolicy } from './intervention-policy.js';
 import {
   MilestoneTracker,
   buildMilestonePlan,
@@ -1173,6 +1174,8 @@ export class Agent {
    *  final (continue-nudges suppressed; read-only batches execute, then the
    *  run finishes decisively). Cleared by any mutating/progress turn. */
   private disciplineForceArmed = false;
+  /** Soft-nudge gate: struggle + commit directives compete per model call. */
+  private interventions = new InterventionPolicy();
   /** Whether the most recent model turn contained a mutating call. */
   private disciplineTurnMutating = false;
   /** Files mutated since the last verification attempt, tracked directly
@@ -2686,6 +2689,21 @@ Continue from 'Next:', do not redo completed progress.`,
         this.context.addMessage({ role: 'system', content: pulse.message });
       }
 
+      // Intervention policy: at most one soft nudge per model call. The
+      // struggle summary queued at turn top and the commit directive queued
+      // after the previous response compete here; the highest-priority one
+      // wins and the rest are dropped (logged). Hard directives (contract,
+      // finish, verify, complexity escalation) bypass the policy entirely.
+      const won = this.interventions.flush();
+      if (won) {
+        this.context.addMessage({ role: 'system', content: won.content });
+        if (won.tag === 'struggle') {
+          this.lastStruggleInjectIter = i;
+          this.events.emit({ type: 'agent:log', agentId: this.id, message: `[struggle] injected state summary (${won.signals} signal(s))` });
+        } else {
+          this.events.emit({ type: 'agent:log', agentId: this.id, message: '[intervention] flushed commit directive' });
+        }
+      }
       const packet = this.context.buildPacket(this.toolDefs, task, repo);
       // P5: surface prefix breaks as they happen — a changed stable prefix
       // or an in-place history rewrite means the provider cache re-warms
@@ -3692,8 +3710,8 @@ Continue from 'Next:', do not redo completed progress.`,
           content: response.content ?? '',
         });
         if (verdict.action === 'commit') {
-          this.context.addMessage({ role: 'system', content: this.discipline.commitDirective(verdict.streak) });
-          this.events.emit({ type: 'agent:log', agentId: this.id, message: `[discipline] commit directive injected (deliberation streak ${verdict.streak})` });
+          this.interventions.queue('commit', this.discipline.commitDirective(verdict.streak));
+          this.events.emit({ type: 'agent:log', agentId: this.id, message: `[discipline] commit directive queued (deliberation streak ${verdict.streak}; policy flush decides)` });
         } else if (verdict.action === 'force' && !this.disciplineForceArmed) {
           this.disciplineForceArmed = true;
           this.events.emit({ type: 'agent:log', agentId: this.id, message: `[discipline] progress forcing: ${verdict.streak} deliberation turns without acting — decisive path forced` });
@@ -9035,13 +9053,13 @@ Continue from 'Next:', do not redo completed progress.`,
       `(3) reduce scope or report a concrete blocker.`;
 
     try {
-      this.context.addMessage({ role: 'system', content: summary });
-      this.lastStruggleInjectIter = iter;
-      this.events.emit({
-        type: 'agent:log',
-        agentId: this.id,
-        message: `[struggle] injected state summary (${parts.length} signal(s))`,
-      });
+      // Soft nudge: queued for the policy flush before the next model call
+      // (competes with the commit directive; the once-per-2-iters throttle
+      // still counts actual injections, updated at flush time).
+      const res = this.interventions.queue('struggle', summary, parts.length);
+      if (res === 'suppressed') {
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: '[intervention] struggle summary suppressed (policy: higher-priority nudge or run budget)' });
+      }
     } catch { /* never block the loop on injection */ }
   }
 
@@ -9985,6 +10003,13 @@ Continue from 'Next:', do not redo completed progress.`,
       recordFastLaneOutcome(this.workspace, this.fastLaneEscalated
         ? (success ? 'completed-after-escalation' : 'failed-after-escalation')
         : (success ? 'completed-in-lane' : 'failed-in-lane'));
+    }
+
+    // Intervention telemetry: how many soft nudges fired vs were suppressed
+    // by the per-call policy (exactly once — finishOnce is the single exit).
+    {
+      const s = this.interventions.stats;
+      this.events.emit({ type: 'agent:log', agentId: this.id, message: `[intervention-telemetry] soft nudges fired: ${s.fired} (struggle ${s.firedByTag.struggle ?? 0}, commit ${s.firedByTag.commit ?? 0}), suppressed: ${s.suppressed}` });
     }
 
     return {
