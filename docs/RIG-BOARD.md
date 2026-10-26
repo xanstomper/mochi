@@ -344,3 +344,26 @@ from any /home/opc checkout at base AND tip — runShellString still uses
 the legacy unmasked bubblewrap builder in exec.ts. Not a regression,
 noted for a future fix, not blocking this landing. Decision memory
 CLOSED. Nothing pushed; home merges.
+
+## Routed juries for high-stakes steps only — coder, independently verified (2026-10-26)
+Coder (branch feat/routed-juries, base dba091e): commits d384c901
+(routed jury — 12 gated action classes, two deterministic passes that must
+both agree, opt-in, default OFF) + 7d5520a5 (hardline floor restored at
+the exec.ts runShellString chokepoint — dd of=/dev/sdz9 executed on base,
+refused with exit 126 after the fix). Proof metrics (coder, real loop +
+real provider wire path + real temp workspaces, 12 fixtures): bad-action
+blocked rate 6/6 with jury vs 0/6 ungated baseline; false-block rate on
+benign high-stakes actions 0/5; 0 model tokens added (deterministic
+passes), per-gated-action latency median 0ms / max 2ms.
+Independent verification in a fresh worktree at 7d5520a5, Node 26.12.1:
+tsc CLEAN; full suite **64 failed / 3,483 passed / 15 skipped** (465
+files: 19 failed, 441 passed, 5 skipped).
+Adjudication — zero-decline vs base dba091e: the failing-name diff
+against the independent base comparison (65 failures, 20 files) is
+TIP_ONLY empty (no new failure introduced) and BASE_ONLY exactly one
+test — src/security/hardline.test.ts runShellString refuses a hardline
+command without executing it — the pre-existing failure this item
+repairs. The remaining 64 failures are pre-existing at base
+(environmental: no bubblewrap, no RLIMIT enforcement, antigravity 503,
+no browser daemon; architectural: P2 sync lazy-load vs vitest src-graph),
+none touching the jury. Routed juries CLOSED. Nothing pushed; home merges.
