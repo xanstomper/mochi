@@ -3,6 +3,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import type { MochiConfig, ModelProfile } from './types.js';
 import { PROVIDERS } from './model/providers.js';
+// Local-first model tier (item 19) — pure policy module, keeps config.ts's
+// light import graph intact.
+import { isLocalTierPrimary, isLocalTierProvider, offlineMode, remoteFallbackAllowed, resolveLocalEndpoint } from './model/local.js';
 import { warnPlaintextKeysOnce } from './config-plaintext-keys.js';
 // Light import (P2 speed): normalizeModelName is pure — importing it from
 // model/router.js pulled the four provider SDKs into every config load.
@@ -246,9 +249,19 @@ if (envKey) {
 // OTHER registered providers whose API key is present in the environment.
 // Locals (ollama/llamacpp, no envKey) and providers without keys never enter
 // the chain. Explicit user config always wins: if config.model.failover is
-// already set, leave it untouched.
+// already set, leave it untouched (recorded in userSetFailover — a user-set
+// chain is the opt-in for local-tier remote fallback).
+const userSetFailover = Boolean(cfg.model.failover?.length);
 if (!cfg.model.failover || cfg.model.failover.length === 0) {
   const primary = cfg.model.provider.toLowerCase();
+  // Item 19 (local-first tier): when the LOCAL tier is primary, remote
+  // providers may not enter the auto-built failover chain — a dead local
+  // endpoint would otherwise silently ship task content off-machine. Remote
+  // fallback requires the explicit opt-in (model.local.allowRemoteFallback /
+  // MOCHI_LOCAL_ALLOW_REMOTE). NOTE: the env merge (MOCHI_PROVIDER) happens
+  // AFTER this block, so the post-merge strip below re-applies the same rule
+  // against the FINAL provider.
+  const localPrimaryNoRemote = isLocalTierPrimary(cfg.model) && !remoteFallbackAllowed(cfg.model);
   const keyFor = (providerId: string): string | undefined => {
     const probe = envKeyMap[providerId];
     if (!probe) return undefined;
@@ -259,6 +272,7 @@ if (!cfg.model.failover || cfg.model.failover.length === 0) {
   const failover: NonNullable<MochiConfig['model']['failover']> = [];
   for (const prov of PROVIDERS) {
     if (prov.id === primary) continue;
+    if (localPrimaryNoRemote && !isLocalTierProvider(prov.id)) continue;
     if (primary.includes(prov.id) || prov.id.includes(primary)) continue; // same-provider aliases
     const key = keyFor(prov.id);
     if (!key) continue;
@@ -275,6 +289,39 @@ if (!cfg.model.failover || cfg.model.failover.length === 0) {
 }
 
   merge(cfg as unknown as Record<string, unknown>, { model: envModelConfig() });
+
+// Item 19: OFFLINE mode strips remote entries even from an explicit user
+// failover chain — a local-tier offline run refuses remote routes rather than
+// leaking. Runs AFTER the env merge so MOCHI_PROVIDER=local / MOCHI_OFFLINE
+// are in effect. The strip is loud (console.warn) so the config change is
+// visible. A remote-primary run with the offline flag set is contradictory
+// config; the flag only gates the local tier, so warn once and leave routing
+// untouched.
+if (offlineMode(cfg.model)) {
+  if (isLocalTierPrimary(cfg.model) && cfg.model.failover?.length) {
+    const before = cfg.model.failover.length;
+    cfg.model.failover = cfg.model.failover.filter((f) => isLocalTierProvider(f.provider));
+    const removed = before - cfg.model.failover.length;
+    if (removed > 0) {
+      console.warn(`[config] offline mode (local tier): removed ${removed} remote failover entr${removed === 1 ? 'y' : 'ies'} — task content must not leave the machine (model.local.offline / MOCHI_OFFLINE).`);
+    }
+  } else if (!isLocalTierPrimary(cfg.model)) {
+    console.warn('[config] model.local.offline (MOCHI_OFFLINE) is set but the selected provider is not the local tier — offline egress gating only applies to local-tier runs.');
+  }
+}
+// Item 19, post-merge (non-offline): the env merge above can switch the FINAL
+// provider to the local tier (MOCHI_PROVIDER=local) AFTER the auto-chain was
+// built against the config-file provider. Re-apply the same rule: no remote
+// entries in an AUTO-BUILT chain for a local-tier primary without opt-in.
+// A user-set chain is the opt-in and stays untouched.
+if (!offlineMode(cfg.model) && isLocalTierPrimary(cfg.model) && !remoteFallbackAllowed(cfg.model) && !userSetFailover && cfg.model.failover?.length) {
+  const before = cfg.model.failover.length;
+  cfg.model.failover = cfg.model.failover.filter((f) => isLocalTierProvider(f.provider));
+  const removed = before - cfg.model.failover.length;
+  if (removed > 0) {
+    console.warn(`[config] local tier active: removed ${removed} auto-built remote failover entr${removed === 1 ? 'y' : 'ies'} — remote fallback is opt-in (model.local.allowRemoteFallback / MOCHI_LOCAL_ALLOW_REMOTE=1); task content must not leave the machine by default.`);
+  }
+}
   // Measured routing may only override a DEFAULT model choice. If any layer
   // set the model explicitly — SDK overrides, user config, project config, or
   // MOCHI_MODEL — the user has pinned it and routing must defer.
@@ -475,8 +522,24 @@ export function validateConfig(config: MochiConfig): string[] {
   if (!config.model.provider) {
     problems.push('model.provider is empty — set provider in config or MOCHI_PROVIDER env var');
   }
-  if (!config.model.baseUrl && config.model.provider && !config.model.provider.startsWith('openrouter')) {
+  // Item 19: the local tier always resolves an endpoint (model.local.endpoint
+  // > MOCHI_LOCAL_ENDPOINT > baseUrl > default), so a missing generic baseUrl
+  // is not a problem there.
+  const localTierSelected = isLocalTierProvider(config.model.provider);
+  if (!config.model.baseUrl && config.model.provider && !config.model.provider.startsWith('openrouter') && !localTierSelected) {
     problems.push('model.baseUrl should be set for the selected provider');
+  }
+  if (localTierSelected) {
+    const endpoint = resolveLocalEndpoint(config.model);
+    try {
+      const u = new URL(endpoint);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error(`bad protocol ${u.protocol}`);
+    } catch {
+      problems.push(`model.local.endpoint "${endpoint}" is not a valid http(s) URL — set model.local.endpoint or MOCHI_LOCAL_ENDPOINT`);
+    }
+    if (offlineMode(config.model) && config.model.local?.allowRemoteFallback) {
+      problems.push('model.local.offline and model.local.allowRemoteFallback are contradictory — offline mode refuses ALL remote fallback by design');
+    }
   }
   if (!config.model.model) {
     problems.push('model.model is empty — set a default model');

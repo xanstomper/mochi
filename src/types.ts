@@ -2,6 +2,27 @@ import type { IterationTrace } from './agent/loop-state.js';
 
 export type ModelProfile = 'fast' | 'coding' | 'reasoning' | 'review';
 
+/** Local-first model tier policy (campaign item 19). Lives on ModelConfig
+ *  (`model.local` in config.json). Resolution + enforcement live in
+ *  src/model/local.ts; env equivalents: MOCHI_LOCAL_ENDPOINT,
+ *  MOCHI_LOCAL_MODEL, MOCHI_LOCAL_ALLOW_REMOTE, MOCHI_OFFLINE. */
+export interface LocalTierConfig {
+  /** Base URL of the local OpenAI-compatible model server
+   *  (e.g. http://localhost:11434/v1 for ollama). */
+  endpoint?: string;
+  /** Model id served by that endpoint (e.g. 'qwen2.5-coder'). */
+  model?: string;
+  /** Opt-in: allow the configured remote failover providers to be tried when
+   *  the local endpoint fails. Default OFF — task content never leaves the
+   *  machine unless this is set (or an explicit `failover` chain is user-
+   *  configured). Fallback is never silent: it is logged when it happens. */
+  allowRemoteFallback?: boolean;
+  /** Offline mode: refuse ALL remote fallback (even explicit failover
+   *  entries) — a remote route on this run's model path throws a clear
+   *  error before any network call instead of leaking. */
+  offline?: boolean;
+}
+
 export interface ModelConfig {
   provider: string;
   baseUrl: string;
@@ -19,6 +40,11 @@ export interface ModelConfig {
    *  model); profiles fall back to the primary's when unset. Mid-stream
    *  failures are NOT retried on a fallback (partial output can't be replayed). */
   failover?: ModelConfig[];
+  /** Local-first model tier (campaign item 19). When the PRIMARY provider is
+   *  the local tier (provider id 'local', or a localhost server like
+   *  ollama/llamacpp/lmstudio), this block configures the endpoint/model and
+   *  the egress policy for the run. See src/model/local.ts. */
+  local?: LocalTierConfig;
   /** Speculative reasoning preflight (DeepSeek/Cline-style "think before
    *  acting"). When enabled, hard non-chat tasks run the SpeculativeEngine
    *  once before the main model call and inject its chosen approach + pitfall
