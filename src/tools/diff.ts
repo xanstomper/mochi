@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Tool } from './types.js';
 import { nativeUnifiedDiff } from '../native/core.js';
+import { lazyDiff, lazyDiffEnabled } from '../core/lazy-diff.js';
 
 function computeDiff(original: string, modified: string, labelA = 'a', labelB = 'b'): string {
   if (original === modified) return 'No changes.';
@@ -42,11 +43,12 @@ function computeDiff(original: string, modified: string, labelA = 'a', labelB = 
 export const diffTool: Tool = {
   def: {
     name: 'diff',
-    description: 'Compute a unified diff between two files, or between a file and provided content. Returns the diff or "No changes."',
+    description: 'Compute a unified diff between two files, or between a file and provided content. Defaults to a LAZY compact summary (files changed, hunk count, per-file line deltas) with marked lines sampled; pass full: true to expand to the complete hunks.',
     parameters: [
       { name: 'path', type: 'string', description: 'Path to the first (or only) file', required: true },
       { name: 'path_b', type: 'string', description: 'Path to the second file (mutually exclusive with content)', required: false },
       { name: 'content', type: 'string', description: 'String content to compare against path (mutually exclusive with path_b)', required: false },
+      { name: 'full', type: 'boolean', description: 'Return the complete hunks instead of the lazy summary', required: false },
     ],
     permission: 'read',
   },
@@ -57,15 +59,26 @@ export const diffTool: Tool = {
     if (!existsSync(fullA)) throw new Error(`File not found: ${pathA}`);
     const textA = readFileSync(fullA, 'utf8');
 
+    let diff: string;
     if (args.path_b) {
       const fullB = resolve(ctx.cwd, String(args.path_b));
       if (!existsSync(fullB)) throw new Error(`File not found: ${args.path_b}`);
       const textB = readFileSync(fullB, 'utf8');
-      return computeDiff(textA, textB, pathA, String(args.path_b));
+      diff = computeDiff(textA, textB, pathA, String(args.path_b));
     } else if (args.content !== undefined) {
-      return computeDiff(textA, String(args.content), pathA, '<provided content>');
+      diff = computeDiff(textA, String(args.content), pathA, '<provided content>');
     } else {
       throw new Error('Either path_b or content must be provided');
     }
+    if (diff === 'No changes.' || !lazyDiffEnabled() || args.full === true) return diff;
+    // MCH-lazy 14.2: summary by default, full hunks one call away — the diff
+    // is recomputed deterministically from the same files, so expansion can
+    // never serve stale content. A summary never silently drops a hunk
+    // carrying a failure/request marker (lazy-diff.ts states it instead).
+    const lz = lazyDiff(diff, {
+      full: false,
+      recoveryHint: `expand on demand: re-run diff with full: true (diff recomputes from the same files — never stale)`,
+    });
+    return lz.text;
   },
 };

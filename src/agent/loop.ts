@@ -6702,6 +6702,11 @@ Continue from 'Next:', do not redo completed progress.`,
         readCache: this.readCache,
         taskKind: this.taskKind,
         callerEmittedEvent: true,
+        // MCH-lazy 14.1: free-text task hint so lazy file slices pick the
+        // region relevant to the task instead of a head-only window.
+        goalHint: this.activeTask
+          ? `${this.activeTask.title} ${this.activeTask.description ?? ''}`
+          : this.context.initialUserPrompt ?? '',
         // Interactive questions are a top-level affordance: subagents were
         // promised "the child cannot ask questions", so they resolve defaults.
         ...(this.subagentDepth === 0 && this.promptUser ? { promptUser: this.promptUser } : {}),
@@ -7395,6 +7400,11 @@ Continue from 'Next:', do not redo completed progress.`,
       readCache: this.readCache,
       taskKind: this.taskKind,
       toolAllowlist: this.toolAllowlist,
+      // MCH-lazy 14.1: task hint for lazy file slices (same rule as the
+      // speculative executor above).
+      goalHint: this.activeTask
+        ? `${this.activeTask.title} ${this.activeTask.description ?? ''}`
+        : this.context.initialUserPrompt ?? '',
       // Delegation bundle (sync + background spawn/collect/cancel + review
       // fleets), present only while this agent may still delegate —
       // depth < safety.maxSubagentDepth (default 2).

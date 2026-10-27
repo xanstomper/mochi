@@ -51,9 +51,11 @@ function saveEntries(workspaceDir: string, entries: ToolOutputArchiveEntry[]): v
 /**
  * Archive a full tool output. Call when a tool result is about to be
  * truncated or folded. Returns the archive id for the recall_output tool.
+ * `opts.minChars` lowers/raises the worth-indexing threshold (verify passes
+ * 0 so a deferred test log is ALWAYS retrievable); default 1000.
  */
-export function archiveToolOutput(workspaceDir: string, tool: string, text: string): string | null {
-  if (typeof text !== 'string' || text.length < 1000) return null; // not worth indexing
+export function archiveToolOutput(workspaceDir: string, tool: string, text: string, opts?: { minChars?: number }): string | null {
+  if (typeof text !== 'string' || text.length < (opts?.minChars ?? 1000)) return null; // not worth indexing
   const entries = loadEntries(workspaceDir);
   counter = Math.max(counter, entries.length);
   const id = `out-${Date.now().toString(36)}-${(counter++).toString(36)}`;
