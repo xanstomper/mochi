@@ -104,6 +104,7 @@ import {
   type FailureVerdict,
 } from './discipline.js';
 import { InterventionPolicy } from './intervention-policy.js';
+import { TaskStateTracker } from './task-state-tracker.js';
 import {
   MilestoneTracker,
   buildMilestonePlan,
@@ -1211,6 +1212,8 @@ export class Agent {
   private disciplineForceArmed = false;
   /** Soft-nudge gate: struggle + commit directives compete per model call. */
   private interventions = new InterventionPolicy();
+  /** Explicit task-state observation (STATE-1): advises via the policy, never restarts. */
+  private taskState = new TaskStateTracker();
   /** Whether the most recent model turn contained a mutating call. */
   private disciplineTurnMutating = false;
   /** Files mutated since the last verification attempt, tracked directly
@@ -2749,6 +2752,16 @@ Continue from 'Next:', do not redo completed progress.`,
       // compete here; the highest-priority one
       // wins and the rest are dropped (logged). Hard directives (contract,
       // finish, verify, complexity escalation) bypass the policy entirely.
+      // STATE-1: a detected no-progress cycle advises through the policy
+      // (competes normally; plan-mode runs deliberate by design, so they
+      // never get cycle nudges).
+      if (!this.planMode) {
+        const cycle = this.taskState.checkCycle();
+        if (cycle) {
+          this.interventions.queue('struggle', cycle.message);
+          this.events.emit({ type: 'agent:log', agentId: this.id, message: `[task-state] no-progress cycle: ${cycle.kind} (cycle ${this.taskState.stats.cycleCount})` });
+        }
+      }
       const won = this.interventions.flush();
       if (won) {
         this.context.addMessage({ role: 'system', content: won.content });
@@ -4083,6 +4096,18 @@ Continue from 'Next:', do not redo completed progress.`,
         // A truly runaway model is already caught by the signature/breaker above.
         if (this.toolCallsTotal > 200) {
           return this.finish(task, false, 'Too many tool calls; stopping to avoid an infinite loop.', 'tool_loop');
+        }
+        // STATE-1: classify this turn's action for the state tracker.
+        // A turn with no tool calls is deliberation (PLAN); a batch that
+        // is entirely read-only is exploration (INSPECT); anything
+        // mutating is action (EXECUTE). Reuses the loop's own isReadOnly
+        // predicate, the same one the mutating-turn check uses.
+        if (response.toolCalls.length === 0) {
+          this.taskState.observe('plan');
+        } else if (response.toolCalls.every((c) => this.isReadOnly(c.function.name, this.parseArgs(c.function.arguments || '{}')))) {
+          this.taskState.observe('read');
+        } else {
+          this.taskState.observe('write');
         }
         await this.executeToolCalls(response.toolCalls);
         // Long-task: if this batch ran the current milestone's own check
@@ -8014,6 +8039,7 @@ Continue from 'Next:', do not redo completed progress.`,
    *  skill lifecycle evidence, trajectory export — reads the GATE's final
    *  word rather than re-deriving it from success booleans. */
   private async verify(task: Task, repo: ReturnType<typeof detectRepo>): Promise<LoopVerification> {
+    this.taskState.observe('verify');
     const v = await this.verifyGate(task, repo);
     this.lastVerifyStatus = v.status;
     return v;
@@ -9126,6 +9152,7 @@ Continue from 'Next:', do not redo completed progress.`,
       // (competes with the commit directive; the once-per-2-iters throttle
       // still counts actual injections, updated at flush time).
       const res = this.interventions.queue('struggle', summary, parts.length);
+      this.taskState.observe('struggle', String(this.lastToolError ?? '').slice(0, 200));
       if (res === 'suppressed') {
         this.events.emit({ type: 'agent:log', agentId: this.id, message: '[intervention] struggle summary suppressed (policy: higher-priority nudge or run budget)' });
       }
@@ -9658,6 +9685,7 @@ Continue from 'Next:', do not redo completed progress.`,
   }
 
   private async finishOnce(task: Task, success: boolean, summary: string, stopReason: AgentStopReason = success ? 'completed' : 'aborted'): Promise<AgentResult> {
+    this.taskState.observe(success ? 'finish-success' : 'finish-failure');
     // The summary is what the user reads: clean it once here (single exit)
     // so every finish path — claims, force-finishes, errors — renders the
     // same tidy text instead of raw prose + raw verify output.
