@@ -125,7 +125,7 @@ describe('mochi sleeptime (production wiring)', () => {
     }).find((r) => r?.kind === 'mochi-sleeptime-report');
     expect(reportJson).toBeDefined();
     const report = reportJson!;
-    expect(report.steps.map((s) => s.id)).toEqual(['repair', 'curator', 'gate', 'health', 'induction', 'curriculum', 'routing-stats']);
+    expect(report.steps.map((s) => s.id)).toEqual(['repair', 'curator', 'gate', 'health', 'induction', 'self-writing', 'curriculum', 'routing-stats']);
 
     // Repair: a real patch attempt happened (the stub's detail confessed
     // "STUB repair"; the unavailable port could not patch at all).
@@ -138,7 +138,7 @@ describe('mochi sleeptime (production wiring)', () => {
 
     // Curriculum: a real validated task was generated (the no-op port
     // planned [] forever).
-    const curriculum = report.steps[5];
+    const curriculum = report.steps[6];
     expect(curriculum.units).toHaveLength(1);
     expect(curriculum.units[0].status).toBe('completed');
     expect(curriculum.units[0].detail).toContain('generated validated practice task');
