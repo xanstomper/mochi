@@ -164,12 +164,31 @@ export function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
  * THIS failure before", not "is this byte-identical to baseline".
  */
 export function failureClassOf(summary: string): string {
-  const salient = summary
+  // Gate rationale lines (item 15) are harness framing on the SAME failure:
+  // whether the gate ran selected or full — and which fail-safe rule it
+  // printed — must not split the class, or the same-approach streak resets
+  // and the x3 strategy switch never fires. (Same precedent as the
+  // '(PARTIAL targeted pre-check)' strip below.) The rationale is a
+  // contiguous block: a '[GATE-…]' head line followed by two-space-indented
+  // detail lines.
+  let scanned = summary;
+  if (scanned.includes('[GATE-')) {
+    const kept: string[] = [];
+    let inGate = false;
+    for (const l of scanned.split('\n')) {
+      if (l.startsWith('[GATE-')) { inGate = true; continue; }
+      if (inGate && (l.startsWith('  ') || l.trim() === '')) continue;
+      inGate = false;
+      kept.push(l);
+    }
+    scanned = kept.join('\n');
+  }
+  const salient = scanned
     .split('\n')
     .map((l) => l.trim())
     .filter((l) => /fail|error|expected|assert|wrong|✕|×|✗/i.test(l))
     .slice(0, 3);
-  const lines = salient.length > 0 ? salient : summary.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 2);
+  const lines = salient.length > 0 ? salient : scanned.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 2);
   const norm = lines
     .map((l) =>
       l

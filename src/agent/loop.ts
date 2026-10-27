@@ -151,7 +151,7 @@ import { statSync, existsSync, readFileSync } from 'node:fs';
 import { stat, readFile } from 'node:fs/promises';
 import { condenseOutput } from '../core/output-condenser.js';
 import { autoTestCommand, isWeakVerification, cwdForScope, withCwd } from '../core/testdetect.js';
-import { planVerificationTests } from '../core/test-selection.js';
+import { planGateTests, formatGateRationale, type GatePlan } from '../core/gate.js';
 import { planTargetedTests } from '../core/test-select.js';
 import { runMutationCheck } from '../core/mutation.js';
 import {
@@ -8169,35 +8169,36 @@ Continue from 'Next:', do not redo completed progress.`,
       `${task.title} ${task.description} ${(task.acceptanceCriteria ?? []).join(' ')}`,
     );
 
-    // Fast-fail with the blast-radius subset for the changed files before
-    // paying for the full suite. A targeted failure is breakage in the code
-    // the agent just touched, so surface it now and skip the slow checks this
-    // iteration; on a targeted pass we still run the authoritative full set
-    // below (a narrow pass never stands in for the real gate — the subset is
-    // a PARTIAL result, labeled as such in the summary).
-    if (repo.testCommand && checks.includes(repo.testCommand)) {
+    // Item 15 — blast-radius selection is the DEFAULT gate. In selected mode
+    // the repo's test command IS the blast-radius subset (∪ the always-run
+    // core set): same runner, same config, same assertions, same exit codes —
+    // only WHICH test files run changes. The full suite remains the verdict
+    // whenever a fail-safe fires (shared/core surface, fan-out threshold,
+    // selection failure/timeout, undeterminable change set) or when forced
+    // (MOCHI_GATE_FULL=1, the before-merge path). The old separate targeted
+    // pre-check is gone — its job (fail fast before the ~10-minute suite) is
+    // subsumed by the suite itself being proportional. The rationale rides
+    // the event bus AND the returned summary on every run.
+    let gatePlan: GatePlan | undefined;
+    const repoTestCommand = repo.testCommand;
+    if (repoTestCommand && checks.includes(repoTestCommand)) {
       try {
-        const plan = await planVerificationTests(this.cwd, repo, repo.testCommand, { cadence: false });
-        if (plan.command) {
-          const out = await this.runShell(plan.command, 180);
-          const exitLine = out.match(/^exit_code: (\d+)/);
-          const failedNow = !((exitLine && Number(exitLine[1]) === 0) || out.trim().endsWith('PASS'));
-          if (failedNow && (wantsGreen || !matchesBaseline(baseline, plan.command, out))) {
-            // Flake classification before the fast-fail: a targeted failure
-            // that goes green on a bounded re-run of the unchanged command
-            // is a flake — fall through to the authoritative full set rather
-            // than failing the run on a coin flip.
-            const flake = await resolveFlakyFailure(plan.command, out);
-            if (flake.kind === 'fail') {
-              const condensed = condenseOutput(flake.output, { maxLines: 60, preserveContext: 3 });
-              return { passed: false, status: 'FAIL', checks: [plan.command], summary: `Check failed: ${plan.command} (PARTIAL targeted pre-check: ${plan.reason})\n${condensed.condensed}${flake.note ? `\n${flake.note}` : ''}` };
-            }
-          }
-        }
+        gatePlan = await planGateTests(this.cwd, repo, {});
       } catch {
-        /* selection is best-effort; the full suite still runs below */
+        gatePlan = undefined; // gate planning failed → the full test command stays in checks
       }
     }
+    if (gatePlan) {
+      this.events.emit({
+        type: 'agent:log', agentId: this.id,
+        message: formatGateRationale(gatePlan.rationale),
+      });
+      if (gatePlan.mode === 'selected' && gatePlan.command && repoTestCommand) {
+        const idx = checks.indexOf(repoTestCommand);
+        if (idx >= 0) checks[idx] = gatePlan.command;
+      }
+    }
+    const gateNote = gatePlan ? `\n${formatGateRationale(gatePlan.rationale)}` : '';
 
     // Independent commands run in PARALLEL: test/typecheck/lint/build share no
     // state, so wall-clock per verification is the slowest check, not the sum.
@@ -8233,7 +8234,7 @@ Continue from 'Next:', do not redo completed progress.`,
       const flake = await resolveFlakyFailure(cmd, out);
       if (flake.kind === 'flaky') continue;
       const condensed = condenseOutput(flake.output, { maxLines: 60, preserveContext: 3 });
-      return { passed: false, status: 'FAIL', checks, summary: `Check failed: ${cmd}\n${condensed.condensed}${flake.note ? `\n${flake.note}` : ''}` };
+      return { passed: false, status: 'FAIL', checks, summary: `Check failed: ${cmd}\n${condensed.condensed}${flake.note ? `\n${flake.note}` : ''}${gateNote}` };
     }
 
     // P0.5 — adversarial mutation check (VerifierEngine parity). A suite
@@ -8251,6 +8252,7 @@ Continue from 'Next:', do not redo completed progress.`,
     if (!this.contentOnly && !greenfield && !this.greenfieldTask) {
       const mutationCmd =
         (autoTestCmd && genuinePasses.includes(autoTestCmd) ? autoTestCmd : undefined) ??
+        (gatePlan?.mode === 'selected' && gatePlan.command && genuinePasses.includes(gatePlan.command) && !isWeakVerification(repo.testCommand) ? gatePlan.command : undefined) ??
         (repo.testCommand && genuinePasses.includes(repo.testCommand) && !isWeakVerification(repo.testCommand) ? repo.testCommand : undefined) ??
         (pushedTaskCmd && genuinePasses.includes(pushedTaskCmd) && !isWeakVerification(task.verificationCommand) ? pushedTaskCmd : undefined);
       // Flaky commands are excluded from the mutation check (VerifierEngine
@@ -8291,7 +8293,7 @@ Continue from 'Next:', do not redo completed progress.`,
           if (mutation.applied && mutation.survived) {
             return {
               passed: false, status: 'PARTIAL', checks,
-              summary: `All checks passed (${checks.join(', ')}), but the mutation check failed: ${mutation.note ?? 'an injected logic bug was NOT caught by the tests'} — the tests do not guard the changed logic. Harden the tests to cover this path, then finish.`,
+              summary: `All checks passed (${checks.join(', ')}), but the mutation check failed: ${mutation.note ?? 'an injected logic bug was NOT caught by the tests'} — the tests do not guard the changed logic. Harden the tests to cover this path, then finish.${gateNote}`,
             };
           }
         } catch {
@@ -8313,10 +8315,10 @@ Continue from 'Next:', do not redo completed progress.`,
       const flakyNote = [...byCommand.entries()].map(([cmd, hits]) => formatFlakyHits(hits, cmd)).join('\n');
       return {
         passed: true, status: 'FLAKY-PASS', checks, flaky: flakyRefs,
-        summary: `All checks passed: ${checks.join(', ')}\n${flakyNote}`,
+        summary: `All checks passed: ${checks.join(', ')}\n${flakyNote}${gateNote}`,
       };
     }
-    return { passed: true, status: 'PASS', checks, summary: `All checks passed: ${checks.join(', ')}` };
+    return { passed: true, status: 'PASS', checks, summary: `All checks passed: ${checks.join(', ')}${gateNote}` };
   }
 
   /**
