@@ -1743,6 +1743,19 @@ describe('injectStruggleState (quality slice — agent must surface its struggle
     return (agent as any).context.messages as Array<{ role: string; content: string }>;
   }
 
+  /**
+   * Mirror the loop's policy flush (before the model packet): drain the
+   * queued soft nudge into context, advancing the struggle throttle on
+   * actual injection exactly as the production flush site does.
+   */
+  function flushSoft(agent: any, iter: number) {
+    const won = agent.interventions.flush();
+    if (won) {
+      agent.context.addMessage({ role: 'system', content: won.content });
+      if (won.tag === 'struggle') agent.lastStruggleInjectIter = iter;
+    }
+  }
+
   it('is a no-op on a healthy run (no signals)', async () => {
     const { agent, dir } = makeBareAgent();
     try {
@@ -1764,6 +1777,7 @@ describe('injectStruggleState (quality slice — agent must surface its struggle
       // Simulate 3 consecutive failures of the same tool.
       (agent as any).consecutiveToolErrors.set('edit', { error: 'oldText not found', count: 3 });
       await (agent as any).injectStruggleState(0);
+      flushSoft(agent, 0);
       const msgs = messagesOf(agent);
       const struggleMsgs = msgs.filter((m) =>
         m.role === 'system' && m.content.includes('STRUGGLE STATE'));
@@ -1780,6 +1794,7 @@ describe('injectStruggleState (quality slice — agent must surface its struggle
     try {
       (agent as any).emptyResponseCount = 3;
       await (agent as any).injectStruggleState(0);
+      flushSoft(agent, 0);
       const msgs = messagesOf(agent);
       const struggleMsgs = msgs.filter((m) =>
         m.role === 'system' && m.content.includes('STRUGGLE STATE'));
@@ -1795,12 +1810,15 @@ describe('injectStruggleState (quality slice — agent must surface its struggle
     try {
       (agent as any).emptyResponseCount = 3;
       await (agent as any).injectStruggleState(0);
+      flushSoft(agent, 0);
       await (agent as any).injectStruggleState(1); // rate-limited: should be no-op
+      flushSoft(agent, 1);
       const msgs = messagesOf(agent);
       const struggleMsgs = msgs.filter((m) =>
         m.role === 'system' && m.content.includes('STRUGGLE STATE'));
       expect(struggleMsgs.length).toBe(1);
       await (agent as any).injectStruggleState(2); // 2 iterations later: ok
+      flushSoft(agent, 2);
       const struggleMsgs2 = msgs.filter((m) =>
         m.role === 'system' && m.content.includes('STRUGGLE STATE'));
       expect(struggleMsgs2.length).toBe(2);
@@ -1821,6 +1839,7 @@ describe('injectStruggleState (quality slice — agent must surface its struggle
       (agent as any).toolCallsTotal = 25;
       (agent as any).context.addKnownError('verification failed: test_x broke');
       await (agent as any).injectStruggleState(0);
+      flushSoft(agent, 0);
       const msg = messagesOf(agent)
         .filter((m) => m.role === 'system' && m.content.includes('STRUGGLE STATE'))
         .pop();
@@ -2175,6 +2194,19 @@ describe('repeated tool result detection (quality slice 5 — flag when the mode
     return { agent, dir };
   }
 
+  /**
+   * Mirror the loop's policy flush (before the model packet): drain the
+   * queued soft nudge into context, advancing the struggle throttle on
+   * actual injection exactly as the production flush site does.
+   */
+  function flushSoft(agent: any, iter: number) {
+    const won = agent.interventions.flush();
+    if (won) {
+      agent.context.addMessage({ role: 'system', content: won.content });
+      if (won.tag === 'struggle') agent.lastStruggleInjectIter = iter;
+    }
+  }
+
   it('same output 3x from the same tool surfaces as STRUGGLE STATE', async () => {
     const { agent, dir } = makeBareAgent();
     try {
@@ -2188,6 +2220,7 @@ describe('repeated tool result detection (quality slice 5 — flag when the mode
       // Force a 2-iteration gap so the rate-limit doesn't drop the injection.
       (agent as any).lastStruggleInjectIter = -10;
       await (agent as any).injectStruggleState(0);
+      flushSoft(agent, 0);
       const msgs = (agent as any).context.messages as Array<{ role: string; content: string }>;
       const struggle = msgs.find((m) => m.role === 'system' && m.content.includes('STRUGGLE STATE'));
       expect(struggle).toBeDefined();
@@ -2223,6 +2256,7 @@ describe('repeated tool result detection (quality slice 5 — flag when the mode
       (agent as any).trackToolResultHash('grep', out);
       (agent as any).lastStruggleInjectIter = -10;
       await (agent as any).injectStruggleState(0);
+      flushSoft(agent, 0);
       const msgs = (agent as any).context.messages as Array<{ role: string; content: string }>;
       const struggle = msgs.find((m) => m.role === 'system' && m.content.includes('STRUGGLE STATE'));
       expect(struggle).toBeDefined();
