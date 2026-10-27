@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { mochiStateDir } from '../core/mochi-dir.js';
 import { fileURLToPath } from 'node:url';
 import { lintSkillDoc, type SkillLintResult } from './skill-lint.js';
@@ -865,7 +866,46 @@ export function matchSkillToError(
   }
 }
 
-/** loadProjectSkills plus the bundled catalog appended last (so project and
+/** Bounded walk fingerprint of a directory tree: relative path + size +
+ *  mtimeMs per entry, hashed. Catches edits INSIDE nested skill dirs that a
+ *  plain dir-level size:mtime fingerprint misses. Exported for the warm
+ *  daemon's invalidation snapshot (src/daemon/warm.ts). */
+export function walkFingerprint(dir: string, maxEntries = 4000): string {
+  if (!existsSync(dir)) return 'none';
+  let out = '';
+  let n = 0;
+  const walk = (d: string, rel: string, depth: number): void => {
+    if (depth > 8 || n >= maxEntries) return;
+    let entries: import('node:fs').Dirent[];
+    try { entries = readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (n >= maxEntries) return;
+      const full = join(d, e.name);
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      try {
+        const st = statSync(full);
+        if (st.isDirectory()) { walk(full, r, depth + 1); continue; }
+        out += `${r}:${st.size}:${st.mtimeMs};`;
+        n++;
+      } catch { /* vanished mid-walk: skip */ }
+    }
+  };
+  walk(dir, '', 0);
+  return createHash('sha1').update(out).digest('hex').slice(0, 16);
+}
+
+// Warm-daemon skills parse cache (feat/warm-daemon): loadAllSkills re-walks
+// and re-parses every skill source dir on EVERY call — measured at ~77-97ms
+// per call for the 233-skill bundled catalog + user dirs on the reference
+// machine, paid by the FIRST buildPacket of every fresh ContextEngine (i.e.
+// every task). The cache is keyed on the walked-tree fingerprint of every
+// source dir, so any skill add/edit/remove invalidates it by construction;
+// callers get shallow-copied skill objects so the cached originals can never
+// be mutated through a returned value.
+interface AllSkillsCache { key: string; skills: Skill[]; diagnostics: string[] }
+let allSkillsCache: AllSkillsCache | null = null;
+
+/** loadAllSkills plus the bundled catalog appended last (so project and
  *  user skills shadow bundled ones by name). */
 export function loadAllSkills(projectDir: string, userDir?: string): { skills: Skill[]; diagnostics: string[] } {
   // Correct precedence: bundled (lowest) < external cross-agent skills < project < user (highest). loadAll
@@ -882,17 +922,27 @@ export function loadAllSkills(projectDir: string, userDir?: string): { skills: S
     }
   };
   const bundled = bundledSkillsDir();
+  const bridgeDirs = (!userDir && !process.env.VITEST) ? additionalUserSkillDirs() : [];
+  const effectiveUser = userDir || defaultUserSkillsDir();
+  // Cache key: every input dir plus the flags that change the dir set. The
+  // walked fingerprints make any skill file add/edit/remove a cache miss.
+  const cacheKey = JSON.stringify([
+    projectDir, userDir ?? '', process.env.VITEST ?? '',
+    ...(bundled ? [bundled] : []), ...bridgeDirs, join(projectDir, '.mochi', 'skills'),
+    ...(effectiveUser ? [effectiveUser] : []),
+  ].map((d) => [d, walkFingerprint(d)]));
+  if (allSkillsCache && allSkillsCache.key === cacheKey) {
+    return { skills: allSkillsCache.skills.map((s) => ({ ...s })), diagnostics: [...allSkillsCache.diagnostics] };
+  }
   if (bundled) add(bundled);      // lowest precedence
   // If userDir is not explicitly passed (e.g. not in an isolated test), bridge external skills
-  if (!userDir && !process.env.VITEST) {
-    for (const d of additionalUserSkillDirs()) {
-      add(d);
-    }
+  for (const d of bridgeDirs) {
+    add(d);
   }
   add(join(projectDir, '.mochi', 'skills'));
-  const effectiveUser = userDir || defaultUserSkillsDir();
   if (effectiveUser) add(effectiveUser); // highest precedence — global memory
-  return { skills: [...map.values()], diagnostics };
+  allSkillsCache = { key: cacheKey, skills: [...map.values()], diagnostics: [...diagnostics] };
+  return { skills: [...map.values()].map((s) => ({ ...s })), diagnostics: [...diagnostics] };
 }
 /** Minimum raw relevance (tokenOverlap base score) for a skill in each
  *  lifecycle state to be ADVERTISED for a task. The normal floor is

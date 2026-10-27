@@ -148,7 +148,7 @@ Usage:
   mochi pr review <number> [--focus security] [--post] [--json]  # review a GitHub PR (needs gh)
   mochi fix [--auto-commit]                        # cat crash.log | mochi fix
   mochi acp                          # editor-native stdio server (Agent Client Protocol)
-  mochi daemon start [--port <n>] [--token <t>]
+  mochi daemon start [--port <n>] [--token <t>] [--warm]
   mochi daemon status
   mochi daemon rotate               # issue a fresh bearer token (old one dies immediately)
   mochi daemon jobs
@@ -397,9 +397,16 @@ async function main() {
   // `mochi daemon ...` — persistent agent over localhost HTTP.
   if (first === 'daemon') {
     const action = positional[1];
-    const { startDaemon, daemonRunning, readDaemonInfo, daemonInfoPath } = await import('./daemon/daemon.js');
+    const { startDaemon, daemonRunning, readDaemonInfo, daemonInfoPath, daemonCrashed, clearStaleDaemonState } = await import('./daemon/daemon.js');
     const wsDir = runtime.workspace.dir;
     const info = readDaemonInfo(wsDir);
+    // Crash recovery (lifecycle): an info file whose pid is dead means the
+    // daemon died — report it, clear the stale state, and let callers fall
+    // back to cold. Never silently serve a dead pid.
+    if (info && daemonCrashed(wsDir) && action !== 'start') {
+      console.log(`Daemon for this workspace CRASHED (pid ${info.pid} not running). Clearing stale daemon state.`);
+      clearStaleDaemonState(wsDir);
+    }
     if (action === 'start') {
       if (daemonRunning(wsDir)) {
         console.log(`Daemon already running on 127.0.0.1:${info?.port} (pid ${info?.pid}).`);
@@ -408,9 +415,11 @@ async function main() {
       const port = Number(flags.port ?? (flags['port'] as string | undefined) ?? 9470);
       const token = typeof flags.token === 'string' && flags.token ? flags.token : undefined;
       const host = typeof flags.host === 'string' && flags.host ? flags.host : undefined;
-      const r = await startDaemon({ cwd, port, token, host, config: configOverrides });
+      // Opt-in warm start: flag beats config (config.warmDaemon).
+      const warm = flags.warm === true || runtime.config.warmDaemon === true;
+      const r = await startDaemon({ cwd, port, token, host, config: configOverrides, warm });
       if (r.ok) {
-        console.log(`Daemon started on ${host ?? '127.0.0.1'}:${r.port}. Info: ${daemonInfoPath(wsDir)}`);
+        console.log(`Daemon started on ${host ?? '127.0.0.1'}:${r.port}${warm ? ' (warm: goal engine, tools and skills pre-loaded)' : ''}. Info: ${daemonInfoPath(wsDir)}`);
       } else {
         console.error(`Daemon failed to start: ${r.error}`);
         process.exit(1);
@@ -424,6 +433,23 @@ async function main() {
       }
       const expiry = info?.expiresAt ? `, token expires ${new Date(info.expiresAt).toLocaleDateString()}` : '';
       console.log(`Daemon running on 127.0.0.1:${info?.port} (pid ${info?.pid}, started ${info?.startedAt}${expiry}).`);
+      // Warm state (when the daemon serves it): preload state, RSS, idle CPU.
+      try {
+        const res = await fetch(`http://127.0.0.1:${info?.port}/api/warm`, {
+          method: 'GET', headers: { authorization: `Bearer ${info?.token}` },
+        });
+        if (res.ok) {
+          const data = (await res.json()) as { warm?: { enabled: boolean; state: string; preloadMs?: number | null; rewarmCount?: number; rssBytes?: number; idleCpuPct?: number; idleSec?: number; invalidations?: Array<{ reason: string }> } };
+          const w = data.warm;
+          if (w?.enabled) {
+            const inv = w.invalidations?.length ? `; last invalidation: ${w.invalidations[0].reason}` : '';
+            console.log(`Warm: ${w.state} (preload ${w.preloadMs ?? '?'}ms, rewarms ${w.rewarmCount ?? 0}${inv})`);
+            console.log(`Resources: rss ${(w.rssBytes ? (w.rssBytes / 1024 / 1024).toFixed(1) : '?')}MB, idle CPU ${w.idleCpuPct ?? '?'}%, idle ${w.idleSec ?? '?'}s`);
+          } else {
+            console.log('Warm: off (cold daemon — first task pays lazy module loading).');
+          }
+        }
+      } catch { /* status must not fail over a warm probe */ }
       return;
     }
     if (action === 'rotate') {
@@ -472,7 +498,8 @@ async function main() {
       }
       // restart: start a fresh daemon on the same port/token.
       await new Promise((r) => setTimeout(r, 400));
-      const r = await startDaemon({ cwd, port: info.port, token: info.token, config: configOverrides });
+      const warmRestart = flags.warm === true || runtime.config.warmDaemon === true;
+      const r = await startDaemon({ cwd, port: info.port, token: info.token, config: configOverrides, warm: warmRestart });
       console.log(r.ok ? `Daemon restarted on 127.0.0.1:${r.port}.` : `Restart failed: ${r.error}`);
       return;
     }

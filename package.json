@@ -37,6 +37,7 @@
     "test:verbose": "vitest run --reporter=dot",
     "bench": "node bench/startup.mjs",
     "bench:startup-phases": "node bench/startup-phases.mjs",
+    "bench:warm-ttft": "node bench/warm-ttft.mjs",
     "bench:failover": "tsx bench/failover-latency.mjs",
     "bench:efficiency": "node bench/efficiency.mjs",
     "bench:task": "node bench/task.mjs",

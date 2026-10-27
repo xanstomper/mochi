@@ -8,7 +8,7 @@
 // (0600). The info file carries port + token + pid so clients can discover both
 // from the workspace without scanning.
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFileSync, existsSync, mkdirSync, unlinkSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, unlinkSync, openSync, writeSync, closeSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
@@ -17,6 +17,7 @@ import type { MochiConfig } from '../types.js';
 import { Runtime } from '../runtime.js';
 import { addJob, listJobs, removeJob, getJob, setJobPaused, setJobEnabled, runJobNow, runDueCronJobs } from './cron.js';
 import { truncateMiddle } from '../util.js';
+import { startWarm, noWarm, type WarmHandle } from './warm.js';
 
 export interface DaemonInfo {
   port: number;
@@ -111,6 +112,66 @@ export function daemonRunning(workspaceDir: string): boolean {
   return Boolean(info && pidAlive(info.pid));
 }
 
+/** True when an info file exists but its pid is DEAD: the daemon crashed (or
+ *  was SIGKILLed) and left discovery state behind. Such a daemon must never
+ *  be silently served — callers detect this and fall back to cold. */
+export function daemonCrashed(workspaceDir: string): boolean {
+  const info = readDaemonInfo(workspaceDir);
+  return Boolean(info && !pidAlive(info.pid));
+}
+
+/** Remove stale discovery state (info.json + lock.json) left by a dead daemon.
+ *  Crash recovery half of the lifecycle: the NEXT start starts clean instead
+ *  of tripping over a stale lock, and status can report the crash honestly. */
+export function clearStaleDaemonState(workspaceDir: string): void {
+  for (const p of [daemonInfoPath(workspaceDir), daemonLockPath(workspaceDir)]) {
+    try { if (existsSync(p)) unlinkSync(p); } catch { /* best-effort */ }
+  }
+}
+
+export function daemonLockPath(workspaceDir: string): string {
+  return resolve(workspaceDir, 'daemon', 'lock.json');
+}
+
+/** Serialize daemon starts per workspace: O_EXCL-create the lock file, or
+ *  reclaim it when the recorded owner is dead (crash recovery). The lock is
+ *  what makes "two starts -> one daemon" hold even when two starts race
+ *  before either writes its info file. */
+function acquireDaemonLock(workspaceDir: string): { ok: true } | { ok: false; error: string } {
+  const p = daemonLockPath(workspaceDir);
+  mkdirSync(dirname(p), { recursive: true });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const fd = openSync(p, 'wx');
+      try { writeSync(fd, JSON.stringify({ pid: process.pid, acquiredAt: Date.now() })); } finally { closeSync(fd); }
+      return { ok: true };
+    } catch (err) {
+      const e = err as NodeJS.ErrnoException;
+      if (e?.code !== 'EEXIST') return { ok: false, error: String(e?.message ?? err) };
+      // Lock exists: a duplicate while the owner lives (including THIS process
+      // — a live in-process daemon never releases its lock except via close()),
+      // stale after a crash.
+      let ownerPid = 0;
+      try { ownerPid = Number(JSON.parse(readFileSync(p, 'utf8'))?.pid) || 0; } catch { /* torn file */ }
+      if (ownerPid && pidAlive(ownerPid)) {
+        return { ok: false, error: `another daemon holds the lock (pid ${ownerPid})` };
+      }
+      try { unlinkSync(p); } catch { /* gone already */ }
+    }
+  }
+  return { ok: false, error: 'could not acquire the daemon lock' };
+}
+
+/** Release the start lock — only when this process owns it. */
+function releaseDaemonLock(workspaceDir: string): void {
+  const p = daemonLockPath(workspaceDir);
+  try {
+    const owner = Number(JSON.parse(readFileSync(p, 'utf8'))?.pid) || 0;
+    if (owner && owner !== process.pid) return; // never release someone else's lock
+  } catch { /* already gone */ }
+  try { unlinkSync(p); } catch { /* already gone */ }
+}
+
 function writeInfo(workspaceDir: string, info: DaemonInfo): void {
   const p = daemonInfoPath(workspaceDir);
   mkdirSync(dirname(p), { recursive: true });
@@ -124,6 +185,9 @@ function writeInfo(workspaceDir: string, info: DaemonInfo): void {
 /**
  * Spawn the daemon as a detached background process and wait for it to listen.
  * The child is `dist/daemon-server.mjs <port> <token> <cwd>`.
+ * Single-daemon guarantee: an already-running daemon makes this return a
+ * duplicate error; state left by a crashed daemon is cleaned up first.
+ * opts.warm pre-loads the goal engine/tools/skills in the child (see warm.ts).
  */
 export async function startDaemon(opts: {
   cwd: string;
@@ -131,11 +195,24 @@ export async function startDaemon(opts: {
   config?: Partial<MochiConfig>;
   token?: string;
   host?: string;
+  /** Opt-in warm start: the child pre-loads the lazy goal engine, tools
+   *  registry and skills before the first task arrives. */
+  warm?: boolean;
 }): Promise<{ ok: boolean; port: number; token: string; error?: string }> {
   const port = opts.port ?? 9470;
   const host = opts.host ?? '127.0.0.1';
   const token = opts.token ?? randomBytes(24).toString('hex');
   const wsDir = resolve(opts.cwd, '.mochi');
+  // Crash recovery + duplicate guard. A live daemon (info + live pid) is a
+  // hard duplicate; a dead daemon's stale info file is cleaned so the new
+  // start and later discovery never serve a dead process.
+  const existing = readDaemonInfo(wsDir);
+  if (existing && pidAlive(existing.pid)) {
+    return { ok: false, port, token, error: `daemon already running for this workspace (pid ${existing.pid}, port ${existing.port})` };
+  }
+  if (existing) {
+    try { unlinkSync(daemonInfoPath(wsDir)); } catch { /* stale file already gone */ }
+  }
   const { spawn } = await import('node:child_process');
   // Module dir resolved HERE (not at module top): fileURLToPath throws inside
   // bun-compiled Windows binaries, which must not break unrelated commands at
@@ -148,7 +225,7 @@ export async function startDaemon(opts: {
   const child = spawn(process.execPath, [serverModule, String(port), token, opts.cwd, host], {
     detached: true,
     stdio: 'ignore',
-    env: { ...process.env, FORCE_COLOR: '0' },
+    env: { ...process.env, FORCE_COLOR: '0', ...(opts.warm ? { MOCHI_WARM_DAEMON: '1' } : {}) },
   });
   child.unref();
 
@@ -164,7 +241,12 @@ export async function startDaemon(opts: {
   return { ok: false, port, token, error: 'Timed out waiting for daemon to listen.' };
 }
 
-/** In-process entry used by tests and by the server module itself: no fork. */
+/** In-process entry used by tests and by the server module itself: no fork.
+ *  Single-daemon guarantee: acquiring the per-workspace start lock rejects a
+ *  second daemon for the same workspace (duplicate start, even racing); a
+ *  lock/info left by a crashed daemon is reclaimed. opts.warm pre-loads the
+ *  goal engine, tools registry and skills, and gates every task submission
+ *  through warm invalidation (see warm.ts). */
 export async function startDaemonInProcess(opts: {
   cwd: string;
   port?: number;
@@ -174,12 +256,25 @@ export async function startDaemonInProcess(opts: {
   expiresAt?: number | null;
   /** Bind address. Defaults to 127.0.0.1; containers set '0.0.0.0'. */
   host?: string;
-}): Promise<{ info: DaemonInfo; close: () => Promise<void>; runtime: Runtime }> {
+  /** Opt-in warm start (preload + invalidation gate). */
+  warm?: boolean;
+}): Promise<{ info: DaemonInfo; close: () => Promise<void>; runtime: Runtime; warm?: WarmHandle }> {
   const port = opts.port ?? 0;
   const token = opts.token ?? randomBytes(24).toString('hex');
   const now = Date.now();
   const auth: DaemonAuth = { token, expiresAt: opts.expiresAt === undefined ? now + DAEMON_TOKEN_TTL_MS : opts.expiresAt };
   const wsDir = resolve(opts.cwd, '.mochi');
+  // Duplicate guard first (friendlier error than a raw lock failure), then the
+  // atomic lock for the race the info file alone cannot serialize.
+  const existingInfo = readDaemonInfo(wsDir);
+  if (existingInfo && pidAlive(existingInfo.pid) && existingInfo.pid !== process.pid) {
+    throw new Error(`daemon already running for this workspace (pid ${existingInfo.pid}, port ${existingInfo.port})`);
+  }
+  if (existingInfo && !pidAlive(existingInfo.pid)) {
+    try { unlinkSync(daemonInfoPath(wsDir)); } catch { /* stale file already gone */ }
+  }
+  const lock = acquireDaemonLock(wsDir);
+  if (!lock.ok) throw new Error(`daemon already running for this workspace (${lock.error})`);
   const runtime = Runtime.create({ cwd: opts.cwd, config: opts.config });
 
   const persist = () => {
@@ -193,8 +288,11 @@ export async function startDaemonInProcess(opts: {
     };
     writeInfo(wsDir, info);
   };
+  // Warm state (opt-in): preload + invalidation gate. When off, a no-op handle
+  // keeps the request path uniform.
+  const warm: WarmHandle = opts.warm ? await startWarm(runtime) : noWarm();
   const server = createServer(async (req, res) => {
-    await handleRequest(req, res, auth, runtime, { onRotate: persist });
+    await handleRequest(req, res, auth, runtime, { onRotate: persist, warm });
   });
   const host = opts.host ?? '127.0.0.1';
   await new Promise<void>((resolve) => server.listen(port, host, () => resolve()));
@@ -251,6 +349,7 @@ export async function startDaemonInProcess(opts: {
   return {
     info,
     close: async () => {
+      warm.close();
       if (ticker) clearInterval(ticker);
       server.close();
       // Release process-owned resources (open SQLite session handles lock the
@@ -260,8 +359,10 @@ export async function startDaemonInProcess(opts: {
       if (existsSync(p)) {
         try { unlinkSync(p); } catch { /* already gone */ }
       }
+      releaseDaemonLock(wsDir);
     },
     runtime,
+    warm: opts.warm ? warm : undefined,
   };
 }
 
@@ -523,7 +624,7 @@ async function handleRequest(
   res: ServerResponse,
   auth: DaemonAuth,
   runtime: Runtime,
-  opts?: { onRotate?: () => void },
+  opts?: { onRotate?: () => void; warm?: WarmHandle },
 ): Promise<void> {
   const cors = corsHeadersForOrigin(req.headers.origin);
   const send = (code: number, body: unknown) => {
@@ -538,6 +639,9 @@ async function handleRequest(
   const reqToken = authHeader || queryToken;
   const tokenOk = Boolean(reqToken) && timingSafeEqualStr(reqToken, auth.token);
   const expired = isTokenExpired(auth);
+  // Warm-idle accounting: every authenticated request counts as activity so
+  // the idle policy never re-warms (or exits) while the daemon is in use.
+  if (tokenOk) opts?.warm?.touchActivity();
 
   // Serve Web UI Dashboard on GET / or /dashboard
   if (req.method === 'GET' && (path === '/' || path === '/dashboard')) {
@@ -619,6 +723,21 @@ async function handleRequest(
       send(500, { ok: false, error: (e as Error).message });
     }
     return;
+  }
+  // Warm state (feat/warm-daemon). GET: preload/invalidation/RSS/CPU status.
+  // POST {action:'rewarm'}: force a validate+re-warm cycle now.
+  if (path === '/api/warm') {
+    if (req.method === 'GET') {
+      send(200, { ok: true, warm: (opts?.warm ?? noWarm()).status() });
+      return;
+    }
+    if (req.method === 'POST') {
+      const w = opts?.warm;
+      if (!w) { send(200, { ok: true, warm: noWarm().status() }); return; }
+      try { await w.maybeRewarm(); } catch { /* never fail the daemon over warm bookkeeping */ }
+      send(200, { ok: true, warm: w.status() });
+      return;
+    }
   }
   if (req.method !== 'POST') {
     send(405, { error: 'method not allowed' });
@@ -748,6 +867,9 @@ async function handleRequest(
       send(200, { ok: true, out });
     } else if (path === '/api/goal') {
       const objective = String(body.objective ?? '');
+      // Warm gate: validate + re-warm BEFORE the task so a warm daemon never
+      // serves against stale config/skills/repo state. No-op when warm is off.
+      await opts?.warm?.gate();
       const wantsStream = String(req.headers.accept ?? '').includes('text/event-stream');
       if (wantsStream) {
         res.writeHead(200, {
@@ -781,11 +903,16 @@ async function handleRequest(
       // One-shot prompt → full agent run → structured result (SDK remote mode).
       const task = String(body.task ?? '');
       if (!task) { send(400, { ok: false, error: 'task required' }); return; }
+      // Warm gate (see /api/goal): re-warm before serving so warm == cold
+      // behavior, just faster.
+      await opts?.warm?.gate();
       const r = await runtime.runPromptDetailed(task);
       send(200, { ok: true, ...r });
     } else if (path === '/v1/chat/completions') {
       // OpenAI-compatible chat completions: map the conversation to a single
       // Mochi goal/prompt run. Supports non-streaming and basic SSE streaming.
+      // Warm gate (see /api/goal).
+      await opts?.warm?.gate();
       const messages = Array.isArray(body.messages) ? body.messages as Array<{ role?: string; content?: string }> : [];
       const model = String(body.model ?? runtime.config.model.model);
       const lastUser = [...messages].reverse().find((m) => m?.role === 'user')?.content ?? messages.map((m) => m?.content ?? '').join('\n');
@@ -874,21 +1001,49 @@ async function handleRequest(
   }
 }
 
-/** The detached child entry. argv: child, module, <port> <token> <cwd> */
+/** The detached child entry. argv: child, module, <port> <token> <cwd> [<host>]
+ *  Env MOCHI_WARM_DAEMON=1 opts into warm preloading + invalidation. */
 export async function serverMain(argv: string[]): Promise<void> {
   const [, , port, token, cwd, host = '127.0.0.1'] = argv;
   if (!port || !token || !cwd) {
     throw new Error('daemon-server <port> <token> <cwd> [host]');
   }
+  const wsDir = resolve(cwd, '.mochi');
+  // Single-daemon lock (child side): the parent pre-checks, but only the
+  // O_EXCL lock here serializes two starts that race. Losing the lock exits
+  // early so the parent reports failure instead of silently running a second
+  // daemon for the same workspace.
+  const lock = acquireDaemonLock(wsDir);
+  if (!lock.ok) throw new Error(`daemon lock: ${lock.error}`);
   const rt = Runtime.create({ cwd, config: {} });
   const now = Date.now();
   const auth: DaemonAuth = { token, expiresAt: now + DAEMON_TOKEN_TTL_MS };
-  const persist = (port: number) => {
-    writeInfo(resolve(cwd, '.mochi'), { port, token: auth.token, pid: process.pid, startedAt: new Date().toISOString(), createdAt: now, expiresAt: auth.expiresAt });
+  const persist = (p: number) => {
+    writeInfo(wsDir, { port: p, token: auth.token, pid: process.pid, startedAt: new Date().toISOString(), createdAt: now, expiresAt: auth.expiresAt });
   };
+  // Clean shutdown: `mochi daemon stop` SIGTERMs this process; unlink the
+  // discovery state and release the lock so the next start never mistakes
+  // this daemon for a crashed one — and never serves a dead pid.
+  let closing = false;
+  const shutdown = (_why: string) => {
+    if (closing) return;
+    closing = true;
+    warm?.close();
+    server.close();
+    try { rt.close(); } catch { /* best-effort */ }
+    try { if (existsSync(daemonInfoPath(wsDir))) unlinkSync(daemonInfoPath(wsDir)); } catch { /* best-effort */ }
+    releaseDaemonLock(wsDir);
+    process.exit(0);
+  };
+  // Warm state (opt-in via env): preload + invalidation gate + idle policy.
+  const warm: WarmHandle | null = process.env.MOCHI_WARM_DAEMON === '1'
+    ? await startWarm(rt, { onIdleExit: () => shutdown('idle exit') })
+    : null;
   const server = createServer(async (req, res) => {
-    await handleRequest(req, res, auth, rt, { onRotate: () => persist((server.address() as { port: number }).port) });
+    await handleRequest(req, res, auth, rt, { onRotate: () => persist((server.address() as { port: number }).port), warm: warm ?? undefined });
   });
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
   // Cron ticker for the detached server too.
   let processing = false;
   setInterval(async () => {

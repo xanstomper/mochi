@@ -45,6 +45,13 @@ it('starts, writes info, serves status with the token', async () => {
     method: 'POST', headers: { authorization: 'Bearer nope' },
   });
   expect(bad.status).toBe(401);
+
+  // Single-daemon-per-project: this handle owns the workspace lock. Close it
+  // HERE so the later tests that start daemons on this same workspace don't
+  // hit the duplicate-start lock (they previously relied on duplicates being
+  // allowed — the lifecycle now forbids two daemons per project).
+  await handle.close();
+  handle = undefined;
 }, 60_000);
 
 it('rotates the bearer token: old dies, new works, info persists', async () => {
