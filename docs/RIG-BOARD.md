@@ -395,3 +395,24 @@ Nothing pushed; home merges.
 WooWop-direct (branch feat/intervention-policy, base dba091e): commits 8ee23e46 (InterventionPolicy queue+flush — at most one soft nudge per model call, commit outranks struggle, run budget 30, finish telemetry) + 146c125a (6 loop.test.ts struggle tests updated to the queue+flush contract; assertions unchanged, none weakened) + cc8f16f9 (pulse nudge routed through the policy as a new tag, priority 20, lowest; telemetry reports pulse count; background-task notices, toolset note and empty-response instruction classified HARD and left direct).
 Proof metrics (targeted): slice 1: 7 unit + 1 loop test + discipline suites 43/43 green; slice 2: 19/19 across 3 files (12 policy incl. 5 new pulse-priority cases, 5 bare-agent pulse cases, 2 loop incl. a new 12-iteration heartbeat-delivery case); tsc clean throughout.
 Independent verification in fresh worktrees, Node 26.12.1: slice 1 at 8ee23e46: tsc CLEAN; full suite 71 failed / 3,451 passed / 15 skipped (465 files: 21 failed, 439 passed, 5 skipped) — failing-name diff vs base dba091e: TIP_ONLY exactly the 6 loop.test.ts struggle tests (the intentional contract change), BASE_ONLY empty. Slice 2 at cc8f16f9: tsc CLEAN; full suite 65 failed / 3,468 passed / 15 skipped (466 files: 20 failed, 441 passed, 5 skipped) — failing-name diff vs base dba091e: TIP_ONLY empty and BASE_ONLY empty, zero regressions; all failures pre-existing (same environmental + architectural classes as prior landings, incl. the known flaky shell-ceiling tests). Loop intervention policy slices 1-2 VERIFIED, ready for home's merge. Nothing pushed; home merges. Lean profile + phase split + ablations remain as follow-ups.
+
+## Warm daemon per project — coder, independently verified (2026-10-27)
+Coder (branch feat/warm-daemon, base dba091e): commit 25e9e9ec
+(per-project warm daemon: preload + invalidation + single-daemon lock,
+measured 4.8x TTFT).
+Proof metrics (coder, scripted provider): TTFT cold-cli 610ms ->
+warm-daemon 128ms median (4.77x), preload 203ms one-time, idle RSS
+144MB / 0% CPU; 12 new warm.test.ts tests; lifecycle gates covered
+(daemon-crash detection + recovery, clean shutdown, HEAD-move re-warm,
+working-tree/config/skills invalidation, warm-task parity, skills-cache
+copy isolation).
+Independent verification in a fresh worktree at 25e9e9ec, Node 26.12.1:
+tsc CLEAN; full suite **65 failed / 3,461 passed / 15 skipped** (464
+files: 20 failed, 439 passed, 5 skipped).
+Adjudication — zero-decline vs base dba091e: the failing-name diff
+against the independent base comparison (65 failures, 20 files) is
+TIP_ONLY empty and BASE_ONLY empty — the identical pre-existing failure
+set, none introduced by this item. Note: the coder gate reported 3,465
+passed vs 3,461 independently — a 4-test counting difference with an
+identical failure set, not a regression. Warm daemon CLOSED. Nothing
+pushed; home merges.
