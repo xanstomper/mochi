@@ -481,3 +481,27 @@ pristine base from a home-adjacent checkout); new self-writing suites pass
 gate (same 3,565 total) is a counting difference with an identical failure
 set, not a regression. Self-writing skills CLOSED. Nothing pushed; home
 merges.
+
+## Evidence-graded output - coder, independently verified (2026-10-27)
+Coder (branch feat/evidence-graded-output, base a9b9de9): commit 05f6bca1
+(claim-grading seam src/summary/claim-grade.ts + default citations on the
+finish path; per-run shell ledger at the two execution chokepoints; Evidence
+block plus structured ClaimGradeReport on AgentResult, the summary:rendered
+event, and doc.evidence; failed runs skip grading; no-claims summaries
+byte-identical; no new model round-trips).
+Proof metric (coder, fixed probe set claim-grade-probe.test.ts):
+user-verifiable claims per response 27% (4/15) -> 73% (11/15); task success
+6/6 -> 6/6; no-fabrication pinned (an unresolvable path:line stays visibly
+ungrounded; a test named but never run stays ungrounded).
+Independent verification in a fresh worktree at 05f6bca1, Node 26.12.1:
+tsc CLEAN; full suite **48 failed / 3,498 passed / 15 skipped** (466
+files: 19 failed, 442 passed, 5 skipped).
+Adjudication - zero evidence-graded regressions: the failing-name set (49
+names incl. file-level routing-ab) equals the item 16 independent set plus
+exactly the AAIF conformance failure; that failure is base-pre-existing
+(item 17 branches directly from a9b9de9, not from item 16s branch, so it
+does not contain item 16s opencode-mimo SKILL.md fix, which awaits home
+merge); vs base a9b9de9 the only delta is the sandbox credential canary,
+proven environmental; new claim-grade/probe/finish-path suites pass 26/26
+independently (21+2+3). Evidence-graded output CLOSED. Nothing pushed;
+home merges.
