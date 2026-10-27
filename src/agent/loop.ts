@@ -185,6 +185,32 @@ import { buildObjection, renderObjection, renderObjectionClosed, objectionDigest
 import { calibratedBaseTier, recordEffortOutcome } from './effort-calibration.js';
 import { evaluateTestDensity } from '../core/test-density.js';
 
+/**
+ * Finish-summary hygiene (what the user actually reads): the finish()
+ * call sites concatenate raw model prose with raw verify output, so ANSI
+ * escapes and stray formatting went straight into the summary card.
+ * Strip both, trim, and collapse blank runs — content is unchanged, only
+ * the presentation is cleaned. Pure: tested in finish-summary.test.ts.
+ */
+export function cleanFinishSummary(summary: string): string {
+  return scrubAnsiFragments(stripThinkTags(summary ?? '')).trim().replace(/\n{3,}/g, '\n\n');
+}
+
+/**
+ * Run-digest builder (finishOnce): changed/read lists plus the errors the
+ * run hit. knownErrors is run HISTORY — on a successful run those errors
+ * were encountered and overcome, so listing them reads as failure. Only
+ * failed runs carry the errors part. Callers pass already-capped lists
+ * (25/25/6) matching the previous inline behavior.
+ */
+export function buildRunDigest(changed: string[], read: string[], errs: string[], success: boolean): string | undefined {
+  const parts: string[] = [];
+  if (changed.length) parts.push(`changed=[${changed.join(', ')}]`);
+  if (read.length) parts.push(`read=[${read.join(', ')}]`);
+  if (errs.length && !success) parts.push(`errors=[${errs.join('; ').slice(0, 300)}]`);
+  return parts.length ? `[run-digest] ${parts.join(' | ')}`.slice(0, 800) : undefined;
+}
+
 export function stripThinkTags(text: string): string {
   if (!text) return '';
   // Strip an unclosed LEADING think block (open `` / ` thinking ` with no
@@ -2647,7 +2673,6 @@ Continue from 'Next:', do not redo completed progress.`,
       }
 
       if (i === 0 && this.taskKind !== 'chat') await this.loadMcpInRun();
-      if (i > 0 && i % 8 === 0) await this.checkpointAndCompact('periodic');
 
       // Compact-first context floor: once the live transcript grows past a
       // fraction of the context budget, roll up old turns so the packet never
@@ -2663,6 +2688,11 @@ Continue from 'Next:', do not redo completed progress.`,
       // Batch token count via the Rust runtime (1 stdio round-trip instead of
       // N FFI calls); falls back to the sync estimate when native is absent.
       const ctxTokens = await this.context.estimateTokensAsync();
+      // Periodic compaction is pressure-gated, not calendared: compacting
+      // every 8 turns even when the context fits burns a model summarizer
+      // call and rewrites history for nothing. The floor block below still
+      // handles genuine pressure every turn.
+      if (i > 0 && i % 8 === 0 && ctxTokens > floor) await this.checkpointAndCompact('periodic');
       if (i > 0 && msgCount >= 10 && ctxTokens > floor) {
         // MCH-30: CC-style two-stage pressure response. Stage 1 (cheap):
         // shrink old tool outputs in place — keeps every turn's structure, no
@@ -9594,6 +9624,10 @@ Continue from 'Next:', do not redo completed progress.`,
   }
 
   private async finishOnce(task: Task, success: boolean, summary: string, stopReason: AgentStopReason = success ? 'completed' : 'aborted'): Promise<AgentResult> {
+    // The summary is what the user reads: clean it once here (single exit)
+    // so every finish path — claims, force-finishes, errors — renders the
+    // same tidy text instead of raw prose + raw verify output.
+    summary = cleanFinishSummary(summary);
     // MCH-33: tear down MCP server connections on every finish path.
     try {
       const { closeMcpConnections } = await import('../tools/mcp.js');
@@ -9987,16 +10021,12 @@ Continue from 'Next:', do not redo completed progress.`,
       summary,
       doc,
     });
-    const _runDigestParts: string[] = [];
     const _read = Array.from(this.readCache.keys())
       .map((k) => (k.startsWith(this.cwd) ? k.slice(this.cwd.length + 1) : k))
       .slice(-25);
     const _changed = [...new Set(this.context.state.filesModified ?? [])].map((p) => (p.startsWith(this.cwd) ? p.slice(this.cwd.length + 1) : p)).slice(0, 25);
     const _errs = (this.context.state.knownErrors ?? []).slice(0, 6);
-    if (_changed.length) _runDigestParts.push(`changed=[${_changed.join(', ')}]`);
-    if (_read.length) _runDigestParts.push(`read=[${_read.join(', ')}]`);
-    if (_errs.length) _runDigestParts.push(`errors=[${_errs.join('; ').slice(0, 300)}]`);
-    const _runDigest = _runDigestParts.length ? `[run-digest] ${_runDigestParts.join(' | ')}`.slice(0, 800) : undefined;
+    const _runDigest = buildRunDigest(_changed, _read, _errs, success);
     await this.maybeRecordHarnessIssue(task, success, summary, stopReason);
     const cacheRatio = cacheHitRatio(this.cacheCalls);
 
