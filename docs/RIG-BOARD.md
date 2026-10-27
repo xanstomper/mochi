@@ -457,3 +457,27 @@ with BASE_ONLY exactly the AAIF conformance failure this item fixes (the
 standing gate already failed at base); AAIF conformance does not fail at
 the tip independently; new gate tests pass 16/16 independently. Blast-radius
 default gate CLOSED. Nothing pushed; home merges.
+
+## Self-writing skills with a test gate - coder, independently verified (2026-10-27)
+Coder (branch feat/self-writing-skills, base a9b9de9): commit 03628e6d
+(curator loop drafts a skill from any repeated 3+ step pattern, tests it on a
+held-out task, installs only on pass; held-out gate requires success no worse
+than skill-off and no time/cost regression; drafts staged outside the skill
+loader path; AAIF catalog-violation fix for skills/opencode-mimo/SKILL.md).
+Proof metrics (coder, bench fixtures): adoption 2 installed / 5 drafted
+(40%); installed skills held-out 480ms/$0.016 vs 800ms/$0.029 skill-off
+(-320ms); detection pass 40ms wall, 0 model tokens; rejected drafts stay
+visible with verdicts, never silently installed.
+Independent verification in a fresh worktree at 03628e6d, Node 26.12.1:
+tsc CLEAN; full suite **47 failed / 3,503 passed / 15 skipped** (466
+files: 18 failed, 443 passed, 5 skipped).
+Adjudication - zero self-writing regressions vs base a9b9de9: the
+independent failing-name set (48 names) is identical to the coder tip gate
+(IND_ONLY empty, TIP_ONLY empty); vs base the only delta is the AAIF
+conformance failure this item fixes (absent at the tip independently) plus
+the sandbox credential canary, proven environmental (fails identically at
+pristine base from a home-adjacent checkout); new self-writing suites pass
+30/30 independently. The 4-test passed-to-skipped net difference vs the coder
+gate (same 3,565 total) is a counting difference with an identical failure
+set, not a regression. Self-writing skills CLOSED. Nothing pushed; home
+merges.
