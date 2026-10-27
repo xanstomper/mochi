@@ -4278,9 +4278,12 @@ Continue from 'Next:', do not redo completed progress.`,
           // run changed NO files. For mutation-expecting kinds that is
           // exactly the no-change auto-pass hole (previously this return
           // completed such runs as success without verify() ever running).
-          // Route them through verify(), which BLOCKs the zero-change case;
-          // read-only and other kinds keep the direct prose finish.
-          if (PROSE_VERIFY_KINDS.has(taskKind) && !this.planMode && this.changeExpectationGrounded(task, detectRepo(this.cwd))) {
+          // Route them through verify() REGARDLESS of grounding (EDIT-1,
+          // 2026-10-27): an ungrounded prose completion reaches the gate,
+          // which now BLOCKs the zero-change case instead of trusting the
+          // prose claim; read-only and other kinds keep the direct prose
+          // finish.
+          if (PROSE_VERIFY_KINDS.has(taskKind) && !this.planMode) {
             const verification = await this.verify(task, detectRepo(this.cwd));
             if (!verification.passed) {
               return this.finish(task, false, `Completion claimed in prose but verification failed:\n${verification.summary}`, 'verification_failed');
@@ -7914,37 +7917,12 @@ Continue from 'Next:', do not redo completed progress.`,
   // the run's model budget on its judge. The judge remains a goals-layer
   // step, run once per task on top of this gate.
 
-  /** P0.5 grounding for the no-change BLOCK: the completion gate only
-   *  demands file changes when the workspace/task actually ground that
-   *  expectation — a git repo, a detected repo check, an explicit
-   *  verification command / criteria / fileScope, or a task that names a
-   *  file that exists. A mutation-kind task in a completely empty scratch
-   *  directory (no repo, no files, nothing runnable) has nothing to mutate
-   *  and nothing to check against; prose remains its only possible
-   *  deliverable and keeps the historical pass. */
-  private changeExpectationGrounded(task: Task, repo: ReturnType<typeof detectRepo>): boolean {
-    return this.isGitWorkspace()
-      || Boolean(repo.testCommand || repo.buildCommand)
-      || Boolean(task.verificationCommand)
-      || (task.acceptanceCriteria?.length ?? 0) > 0
-      || (task.fileScope?.length ?? 0) > 0
-      || this.taskMentionsExistingFile(task);
-  }
-
   /** File-path tokens named by the task text (title + description). */
   private taskFileTokens(task: Task): string[] {
     const text = `${task.title} ${task.description ?? ''}`;
     return (text.match(/[\w./-]+\.[a-z]{1,6}\b/g) ?? [])
       .map((t) => t.replace(/^\.\//, '').replace(/[.,;:)]+$/, ''))
       .filter((t) => t && !t.includes('://'));
-  }
-
-  /** Does the task text name a file that exists in the workspace? */
-  private taskMentionsExistingFile(task: Task): boolean {
-    for (const token of this.taskFileTokens(task)) {
-      try { if (existsSync(resolve(this.cwd, token))) return true; } catch { /* keep looking */ }
-    }
-    return false;
   }
 
   /** Was the run's own verification attempt vetoed by policy (approval
@@ -8058,12 +8036,19 @@ Continue from 'Next:', do not redo completed progress.`,
       // label) that "did nothing" == "resolved". It now returns the
       // VerifierEngine's BLOCKED verdict as a failed verify, so the run
       // retries and ends verification_failed instead of completed.
+      // EDIT-1 (2026-10-27): the old changeExpectationGrounded escape is
+      // gone — grounding no longer gates the BLOCK. A mutation-kind run
+      // with zero changes and zero checks in a completely ungrounded
+      // workspace (no git repo, no detected repo check, nothing named by
+      // the task) has produced NO evidence either; "there was nothing to
+      // check against" is not evidence the deliverable exists. It BLOCKs
+      // exactly like the grounded no-checks case.
       // Exemptions mirror the reproduce-first gate's, for the same reasons:
       // warm starts (this run's changes predate it — reproFileChangedAtRunStart
       // — and were judged by the run that made them) and simple-script tasks
       // (create-and-run shape; the run itself is the deliverable check).
       // Read-only kinds (chat/research/plan, review→research) returned above.
-      if (MUTATION_KINDS.has(taskKind) && task.role !== 'reviewer' && task.role !== 'pr_reviewer' && !this.verifyWasPolicyDenied() && !this.reproFileChangedAtRunStart && !isSimpleScriptTask(task) && this.changeExpectationGrounded(task, repo)) {
+      if (MUTATION_KINDS.has(taskKind) && task.role !== 'reviewer' && task.role !== 'pr_reviewer' && !this.verifyWasPolicyDenied() && !this.reproFileChangedAtRunStart && !isSimpleScriptTask(task)) {
         if (!repo.testCommand && !repo.buildCommand) {
           return {
             passed: false, status: 'BLOCKED', checks: [],

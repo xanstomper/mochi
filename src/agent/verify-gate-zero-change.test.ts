@@ -92,3 +92,105 @@ describe('verifyGate zero-change', () => {
     }
   }, 60_000);
 });
+
+// EDIT-1 (2026-10-27): the ungrounded escape is closed. The old gate only
+// BLOCKed a zero-change mutation run when the workspace/task GROUNDED the
+// change expectation (git repo, detected repo check, verification command,
+// criteria, fileScope, or a named existing file) — everything else fell
+// through to the historical PASS 'No changes made to verify.' A mutation-kind
+// task with zero changes, zero checks, and NO grounding signal now BLOCKs
+// like the grounded no-checks case; only the real exemptions keep the pass.
+describe('verifyGate zero-change, ungrounded (EDIT-1)', () => {
+  // Vague wording: no file path named anywhere in the text, no fileScope,
+  // no acceptance criteria, no verification command. Empty non-git scratch
+  // dir: no git workspace, no detectable repo check. Every grounding signal
+  // is absent — the exact shape that used to auto-pass.
+  const VAGUE_TITLE = 'Fix the bug';
+  const VAGUE_DESC = 'Correct the behavior so the function returns the specified result.';
+
+  it('ungrounded mutation-kind zero-change run BLOCKS instead of passing', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-edit1-ungrounded-'));
+    try {
+      const agent = makeBareAgent(dir);
+      const task = createTask(VAGUE_TITLE, VAGUE_DESC);
+      const result = await (agent as any).verifyGate(task, detectRepo(dir));
+      expect(result.passed).toBe(false);
+      expect(result.status).toBe('BLOCKED');
+      expect(result.checks).toEqual([]);
+      expect(result.summary).toContain('requires file changes');
+      expect(result.summary).toContain('changed no files');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('reviewer roles keep the zero-change pass', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-edit1-reviewer-'));
+    try {
+      for (const role of ['reviewer', 'pr_reviewer'] as const) {
+        const agent = makeBareAgent(dir);
+        // Force the mutation kind so the read-only early return is NOT what
+        // saves the run — the role exemption in the zero-change branch is.
+        (agent as any).taskKind = 'fix';
+        const task = createTask(VAGUE_TITLE, VAGUE_DESC, { role });
+        const result = await (agent as any).verifyGate(task, detectRepo(dir));
+        expect(result.passed).toBe(true);
+        expect(result.status).toBe('PASS');
+        expect(result.summary).toBe('No changes made to verify.');
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('a policy-denied verify keeps the zero-change pass', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-edit1-denied-'));
+    try {
+      const agent = makeBareAgent(dir);
+      // The run's verification attempt was vetoed by policy: the gate must
+      // not BLOCK for missing evidence the policy forbade gathering.
+      (agent as any).vetoLog.push({ tool: 'verify', reason: 'denied by policy' });
+      const task = createTask(VAGUE_TITLE, VAGUE_DESC);
+      const result = await (agent as any).verifyGate(task, detectRepo(dir));
+      expect(result.passed).toBe(true);
+      expect(result.status).toBe('PASS');
+      expect(result.summary).toBe('No changes made to verify.');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('warm starts keep the zero-change pass', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-edit1-warm-'));
+    try {
+      const agent = makeBareAgent(dir);
+      // This run's changes predate it (a previous run did the changing and
+      // was judged then): the no-change BLOCK must not fire.
+      (agent as any).reproFileChangedAtRunStart = true;
+      const task = createTask(VAGUE_TITLE, VAGUE_DESC);
+      const result = await (agent as any).verifyGate(task, detectRepo(dir));
+      expect(result.passed).toBe(true);
+      expect(result.status).toBe('PASS');
+      expect(result.summary).toBe('No changes made to verify.');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('simple-script tasks keep the zero-change pass', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-edit1-script-'));
+    try {
+      const agent = makeBareAgent(dir);
+      // Create-and-run shape (isSimpleScriptTask): the run itself is the
+      // deliverable check. 'add.js' does NOT exist in the dir, so without
+      // the exemption this task would BLOCK.
+      const task = createTask('Create add.js', 'Create add.js that prints the sum of two numbers, then run node add.js.');
+      const result = await (agent as any).verifyGate(task, detectRepo(dir));
+      expect(result.passed).toBe(true);
+      expect(result.status).toBe('PASS');
+      expect(result.summary).toBe('No changes made to verify.');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+});
