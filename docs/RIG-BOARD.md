@@ -435,3 +435,25 @@ environmental (security code byte-identical base-to-tip; base fails it from
 a HOME-adjacent cwd, and the tip worktree is HOME-adjacent). BASE_ONLY
 empty. New lazy suites (36 tests) all pass. Lazy everything CLOSED.
 Nothing pushed; home merges.
+
+## Blast-radius test selection as the DEFAULT gate — coder, independently verified (2026-10-27)
+Coder (branch feat/blast-radius-gate, base a9b9de9): commits f60f62d4 + 5464aa8a
+(the default verification gate now runs the blast-radius selected test set;
+full suite only via fail-safe rules: core-surface, selection failure/timeout,
+empty selection for a non-empty change, undeterminable change set, plus
+MOCHI_GATE_FULL=1 / full:true / beforeMerge overrides; every run prints a
+[GATE-SELECTED]/[GATE-FULL] rationale block).
+Proof metrics (coder, same machine): leaf change selective gate 5.2s vs
+611.4s full base (~117x); medium change 243.8s with all 16 failures inside
+the base failure set; core change forces FULL; seeded failure caught in
+5.2s; gate.test.ts 16/16; consumer suites 107 tests green.
+Independent verification in a fresh worktree at 5464aa8a, Node 26.12.1:
+tsc CLEAN; full suite **47 failed / 3,489 passed / 15 skipped** (464
+files: 18 failed, 441 passed, 5 skipped).
+Adjudication — zero blast-radius regressions vs base a9b9de9: the
+independent failing-name set (48 names) is identical to the coder tip gate
+(IND_ONLY empty, CODER_TIP_ONLY empty); the coder base diff is TIP_ONLY 0
+with BASE_ONLY exactly the AAIF conformance failure this item fixes (the
+standing gate already failed at base); AAIF conformance does not fail at
+the tip independently; new gate tests pass 16/16 independently. Blast-radius
+default gate CLOSED. Nothing pushed; home merges.
