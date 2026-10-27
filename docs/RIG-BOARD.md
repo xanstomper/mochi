@@ -532,3 +532,31 @@ fix, which awaits home merge); the sandbox credential canary is proven
 environmental. New a11y suites pass 29/29 independently (handoff 7,
 tree 11, unified-surface 11). Browser + desktop as one surface CLOSED.
 Nothing pushed; home merges.
+
+## Local-first model tier - coder, independently verified (2026-10-27)
+Coder (branch feat/local-first-model-tier, base a9b9de9): commit 3993c5a4
+(first-class local provider route src/model/local.ts + registration in the
+provider table, router resolution, config/env chain, offline egress guard,
+opt-in remote fallback that is never silent; no parallel router invented).
+Proof metric (coder, bench:local-first, fixed 6-task set, canned
+OpenAI-compatible stub on 127.0.0.1 since no real local model is installed
+on the VM): 6/6 on every leg with 0 remote fetches - local up, offline up,
+down+no-fallback fast visible errors, down+opt-in exactly 6 loud warns,
+OFFLINE+remote entry 6 visible refusals. The bench measures routing/egress,
+not model quality; two draft bugs were fixed (failover warn fired on fully
+successful local runs; egress guard dropped routing metadata).
+Independent verification in a fresh worktree at 3993c5a4, Node 26.12.1:
+tsc CLEAN; full suite **49 failed / 3,500 passed / 15 skipped** (464
+files: 20 failed, 439 passed, 5 skipped; 3,564 tests).
+Adjudication - zero deterministic local-first regressions vs base a9b9de9:
+the independent failing-name set (50 names = 49 failed tests + the
+file-level routing-ab entry) equals the derived base set (item 16
+independent set + the AAIF failure) plus exactly one extra name, the
+class-scorecard end-to-end test, and BASE_ONLY is empty. The AAIF
+conformance failure is base-pre-existing (this branch forks from a9b9de9,
+not from item 16s branch, so it does not contain item 16s opencode-mimo
+SKILL.md fix, which awaits home merge); the sandbox credential canary is
+proven environmental. The class-scorecard failure is a full-suite load
+flake: complex class passRate 23/24 in the full suite, while an isolated
+re-run at the same tip passes 13/13. New local suite passes 29/29
+independently. Local-first model tier CLOSED. Nothing pushed; home merges.
