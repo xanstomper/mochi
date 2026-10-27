@@ -4,7 +4,7 @@ import { resolve, dirname } from 'node:path';
 import type { MochiConfig } from '../types.js';
 import { warnPlaintextKeysOnce } from '../config-plaintext-keys.js';
 
-export type ProviderKind = 'openai' | 'anthropic' | 'gemini';
+export type ProviderKind = 'openai' | 'anthropic' | 'gemini' | 'vertex';
 
 export interface Provider {
   id: string;
@@ -32,6 +32,7 @@ export const PROVIDERS: Provider[] = [
   { id: 'openai', name: 'OpenAI', kind: 'openai', baseUrl: 'https://api.openai.com/v1', envKey: 'OPENAI_API_KEY', models: ['gpt-4o', 'gpt-4o-mini', 'gpt-5', 'gpt-5-nano', 'gpt-5.4', 'gpt-5.4-nano', 'o3', 'o4-mini'], defaultModel: 'gpt-5.4', consoleUrl: 'https://platform.openai.com/api-keys' },
   { id: 'anthropic', name: 'Anthropic', kind: 'anthropic', baseUrl: 'https://api.anthropic.com', envKey: 'ANTHROPIC_API_KEY', models: ['claude-sonnet-4-5', 'claude-opus-4-1', 'claude-haiku-4-5', 'claude-sonnet-4-6'], defaultModel: 'claude-sonnet-4-5', consoleUrl: 'https://console.anthropic.com/settings/keys' },
   { id: 'gemini', name: 'Google Gemini', kind: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com', envKey: 'GEMINI_API_KEY', models: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'], defaultModel: 'gemini-2.5-flash', consoleUrl: 'https://aistudio.google.com/apikey' },
+  { id: 'vertex', name: 'Google Vertex AI', kind: 'vertex', baseUrl: 'https://us-central1-aiplatform.googleapis.com', envKey: '', models: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash', 'claude-sonnet-4-5@vertex'], defaultModel: 'gemini-2.5-flash', keyHelp: 'Auth via GOOGLE_APPLICATION_CREDENTIALS (service-account JSON), GOOGLE_SERVICE_ACCOUNT_KEY, or gcloud ADC. Project: GOOGLE_CLOUD_PROJECT, region: GOOGLE_CLOUD_LOCATION (default us-central1).' },
   { id: 'antigravity', name: 'Google Antigravity', kind: 'gemini', baseUrl: 'https://daily-cloudcode-pa.googleapis.com', envKey: 'ANTIGRAVITY_API_KEY', models: ['gemini-3.8-flash', 'claude-sonnet-4-6', 'claude-opus-4-6', 'gemini-3.7-flash', 'claude-sonnet-4-5', 'claude-opus-4-5', 'gemini-3.5-flash', 'gemini-3-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gpt-oss-120b', 'gemini-4-argon-disabled', 'tab_flash_lite_preview', 'tab_jump_flash_lite_preview'], defaultModel: 'gemini-3.8-flash', contextWindow: 1_048_576, consoleUrl: 'https://daily-cloudcode-pa.googleapis.com', keyHelp: 'Login via `mochi login antigravity` (OAuth browser flow) or ambient omp credentials.' },
   { id: 'deepseek', name: 'DeepSeek', kind: 'openai', baseUrl: 'https://api.deepseek.com/v1', envKey: 'DEEPSEEK_API_KEY', models: ['deepseek-chat', 'deepseek-reasoner'], defaultModel: 'deepseek-chat', consoleUrl: 'https://platform.deepseek.com/api_keys' },
   { id: 'openrouter', name: 'OpenRouter', kind: 'openai', baseUrl: 'https://openrouter.ai/api/v1', envKey: 'OPENROUTER_API_KEY', models: ['anthropic/claude-3.5-sonnet', 'openai/gpt-4o', 'google/gemini-2.0-flash'], defaultModel: 'anthropic/claude-3.5-sonnet', consoleUrl: 'https://openrouter.ai/keys' },

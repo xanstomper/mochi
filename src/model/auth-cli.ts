@@ -47,7 +47,7 @@ export function authStatusLines(
 /** Live-verify one configured credential (stubbed in tests, real in CLI). */
 export async function probeKeyState(
   verify: typeof verifyApiKey,
-  opts: { provider: string; baseUrl: string; apiKey: string; kind: 'openai' | 'anthropic' | 'gemini' },
+  opts: { provider: string; baseUrl: string; apiKey: string; kind: 'openai' | 'anthropic' | 'gemini' | 'vertex' },
 ): Promise<'verified' | 'REJECTED' | 'unreachable'> {
   try {
     const v = await verify({ ...opts, timeoutMs: 8000 });

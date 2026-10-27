@@ -357,6 +357,7 @@ export async function handleRpc(
             const goal = session.runtime.workspace.loadGoal(session.loadedGoal.goalId);
             const tasks = session.runtime.workspace.loadTasks(session.loadedGoal.goalId);
             if (goal && tasks.length > 0) {
+              await session.runtime.ensureGoals();
               await session.runtime.goals.runGoal(goal, tasks, [], session.runtime.signal);
             } else {
               await session.runtime.goal(text, constraints);

@@ -178,6 +178,15 @@ function statePath(workspace: Pick<Workspace, 'stateDir'>, taskId: string): stri
   return join(milestonesDir(workspace), `${safe}.json`);
 }
 
+/** Workspace-relative state-file path for a task's milestone plan, as the
+ *  Workspace JSON API addresses it: `state/milestones-<sanitized taskId>.json`
+ *  (i.e. `<projectDir>/state/milestones-*.json` on disk). Exported so
+ *  external inspections (tests, dogfood harnesses) can read the file
+ *  without duplicating the sanitization rule. */
+export function milestoneStateRelPath(taskId: string): string {
+  return `state/milestones-${taskId.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 120) || 'task'}.json`;
+}
+
 /** Restore a persisted plan for this task, or null. */
 export function loadMilestoneState(workspace: Pick<Workspace, 'stateDir'>, taskId: string): MilestoneState | null {
   const p = statePath(workspace, taskId);

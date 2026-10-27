@@ -19,7 +19,7 @@ export interface VerifyKeyOpts {
   provider: string;
   baseUrl: string;
   apiKey: string;
-  kind: 'openai' | 'anthropic' | 'gemini';
+  kind: 'openai' | 'anthropic' | 'gemini' | 'vertex';
   timeoutMs?: number;
 }
 
@@ -91,6 +91,10 @@ export async function verifyApiKey(opts: VerifyKeyOpts): Promise<KeyVerdict> {
         return { ok: false, reason: 'auth', message: `endpoint rejected the key (HTTP ${r.status})` };
       }
       return { ok: false, reason: 'network', message: `endpoint answered HTTP ${r.status} (not a key verdict)` };
+    }
+    if (opts.kind === 'vertex') {
+      // Vertex uses cloud credentials, not an API key — nothing to probe here.
+      return { ok: true, note: 'vertex uses cloud credentials (no key probe)' } as { ok: true };
     }
     if (opts.kind === 'gemini') {
       const target = joinUrl(opts.baseUrl, '/v1beta/models');

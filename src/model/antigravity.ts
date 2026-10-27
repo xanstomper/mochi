@@ -139,7 +139,7 @@ export const ANTIGRAVITY_PRICING_TABLE: Record<string, { in: number; out: number
 /** Exact-id rates for the Antigravity-hosted models that the shared price
  *  table deliberately excludes (host-dependent 3.x ids; Wave G policy). The
  *  Claude rows live in pricing.ts and are resolved THERE, not duplicated. */
-export function computeAntigravityCost(model: string, inTokens: number, outTokens: number, cachedTokens = 0): number {
+export function computeAntigravityCost(model: string, inTokens: number, outTokens: number, cachedTokens = 0): number | null {
   // 1. Shared table of record (+ operator overrides) wins. pricing.ts knows
   //    the Claude ids and Gemini 2.5; its dollars are tracked as ESTIMATED.
   const shared = estimateCostUsd(model, {
@@ -153,7 +153,7 @@ export function computeAntigravityCost(model: string, inTokens: number, outToken
   //    fallback invented a price for any unknown model (`my-model` →
   //    gemini-3.8-flash rates), which is a fabricated measurement.
   const rates = ANTIGRAVITY_PRICING_TABLE[model.toLowerCase()];
-  if (!rates) return 0; // unpriced, not guessed
+  if (!rates) return null; // unpriced, not guessed
 
   const inRate = rates.in / 1_000_000;
   const outRate = rates.out / 1_000_000;

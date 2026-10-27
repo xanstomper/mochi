@@ -3,6 +3,7 @@ import { PROVIDERS } from './providers.js';
 import { createOpenAIProvider, type ProviderConfig } from './openai.js';
 import { createAnthropicProvider } from './anthropic.js';
 import { createGeminiProvider } from './gemini.js';
+import { createVertexProvider } from './vertex.js';
 import { createAntigravityProvider } from './antigravity.js';
 import { CapabilityRegistry, providerKey } from './capability.js';
 // isAbort (local abort classification) lives in rate-limit.ts alongside the
@@ -30,12 +31,12 @@ const ALIASES: Record<string, { baseUrl: string; defaultModel: string }> = {
 };
 
 
-const ALIAS_KIND: Record<string, 'anthropic' | 'gemini'> = {
+const ALIAS_KIND: Record<string, 'anthropic' | 'gemini' | 'vertex'> = {
   anthropic: 'anthropic',
   claude: 'anthropic',
   gemini: 'gemini',
   google: 'gemini',
-  vertex: 'gemini',
+  vertex: 'vertex',
   antigravity: 'gemini',
   'google-antigravity': 'gemini',
 };
@@ -140,10 +141,11 @@ function createRawProvider(config: ModelConfig, profile?: ModelProfile) {
   if (name === 'antigravity' || name === 'google-antigravity') return createAntigravityProvider(resolved);
   if (kind === 'anthropic' || name === 'anthropic') return createAnthropicProvider(resolved);
   if (kind === 'gemini' || name === 'gemini' || name === 'google') return createGeminiProvider(resolved);
+  if (name === 'vertex' || kind === 'vertex') return createVertexProvider(resolved);
   return createOpenAIProvider(resolved);
 }
 
-function kindOf(id: string): 'openai' | 'anthropic' | 'gemini' | undefined {
+function kindOf(id: string): 'openai' | 'anthropic' | 'gemini' | 'vertex' | undefined {
   const fromAlias = ALIAS_KIND[id];
   if (fromAlias) return fromAlias;
   return PROVIDERS.find((p) => p.id === id)?.kind;

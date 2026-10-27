@@ -119,3 +119,27 @@ export function cacheHitRatio(calls: readonly CacheCall[]): CacheRatio {
     cachedTokens: cached,
   };
 }
+
+// ─── Volatile-field lint ─────────────────────────────────────────────────
+
+const VOLATILE_PATTERNS: Array<{ re: RegExp; label: string }> = [
+  { re: /\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/, label: 'ISO-8601 datetime' },
+  { re: /\b\d{4}-\d{2}-\d{2}\b/, label: 'calendar date (YYYY-MM-DD)' },
+  { re: /\b\d{2}:\d{2}:\d{2}\b/, label: 'wall-clock time (HH:MM:SS)' },
+  { re: /\b\d{13}\b/, label: 'epoch milliseconds' },
+  { re: /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i, label: 'UUID' },
+  { re: /\b\d+(?:\.\d+)?\s*GB free\b/i, label: 'live free-memory figure' },
+  { re: /\bfree \/ [\d.]+ GB total\b/i, label: 'live free/total memory figure' },
+];
+
+/** Lint a stable-head candidate: returns one finding per volatile pattern
+ *  present (empty = clean). Used by tests to prove the real head is clean
+ *  and to prove the lint itself has teeth on injected volatility. */
+export function lintStablePrefix(text: string): string[] {
+  const findings: string[] = [];
+  for (const { re, label } of VOLATILE_PATTERNS) {
+    const m = text.match(re);
+    if (m) findings.push(`${label}: "${m[0]}"`);
+  }
+  return findings;
+}
