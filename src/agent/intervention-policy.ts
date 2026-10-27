@@ -8,8 +8,9 @@
  * very deliberation loops the harness is trying to break.
  *
  * Design (review item 2, slice 1):
- * - Only SOFT nudges go through the policy: 'struggle' (guidance) and
- *   'commit' (decisive-action directive). Hard directives — task contract,
+ * - Only SOFT nudges go through the policy: 'struggle' (guidance),
+ *   'commit' (decisive-action directive), and 'pulse' (periodic heartbeat
+ *   / repeated-error nudge). Hard directives — task contract,
  *   finish drives, verify gates, complexity escalation (a once-only state
  *   notice) — bypass it entirely and inject directly, as today.
  * - Soft nudges are QUEUED during a turn and FLUSHED once, right before the
@@ -22,12 +23,12 @@
  *   fired vs suppressed, which is what the later ablation (review item 7)
  *   tunes against. The policy is pure (no I/O, no events); the loop logs.
  */
-export type SoftInterventionTag = 'struggle' | 'commit';
+export type SoftInterventionTag = 'struggle' | 'commit' | 'pulse';
 
 export interface QueuedIntervention {
   tag: SoftInterventionTag;
   content: string;
-  /** Signal count for the struggle summary (0 for commit). */
+  /** Signal count for the struggle summary (0 for commit/pulse). */
   signals: number;
 }
 
@@ -40,8 +41,10 @@ export interface InterventionStats {
 
 /** Higher wins when two soft nudges compete for one model call. Commit
  *  (act now) outranks struggle (guidance) because a deliberating model
- *  needs the decisive push more than the diagnosis. */
-const PRIORITY: Record<SoftInterventionTag, number> = { commit: 70, struggle: 30 };
+ *  needs the decisive push more than the diagnosis. Pulse ranks lowest:
+ *  it is generic, re-fires on its own schedule when suppressed, and must
+ *  never crowd out a specific diagnosis or a decisive push. */
+const PRIORITY: Record<SoftInterventionTag, number> = { commit: 70, struggle: 30, pulse: 20 };
 
 /** Soft nudges per run — backstop against pathological spam, not a tight cap. */
 export const INTERVENTION_RUN_BUDGET = 30;

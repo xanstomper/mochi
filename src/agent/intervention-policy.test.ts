@@ -62,4 +62,44 @@ describe('InterventionPolicy', () => {
     expect(p.flush()?.tag).toBe('commit');
     expect(p.stats).toMatchObject({ fired: 1, suppressed: 1 });
   });
+
+  it('pulse queued alone flushes', () => {
+    const p = new InterventionPolicy();
+    expect(p.queue('pulse', 'Pulse: 12 iterations', 0)).toBe('queued');
+    const won = p.flush();
+    expect(won?.tag).toBe('pulse');
+    expect(p.stats.firedByTag.pulse).toBe(1);
+  });
+
+  it('struggle displaces a queued pulse', () => {
+    const p = new InterventionPolicy();
+    expect(p.queue('pulse', 'Pulse: 12 iterations', 0)).toBe('queued');
+    expect(p.queue('struggle', 'STRUGGLE STATE', 2)).toBe('queued');
+    expect(p.flush()?.tag).toBe('struggle');
+    expect(p.stats.suppressedByTag.pulse).toBe(1);
+  });
+
+  it('commit displaces a queued pulse', () => {
+    const p = new InterventionPolicy();
+    expect(p.queue('pulse', 'Pulse: 12 iterations', 0)).toBe('queued');
+    expect(p.queue('commit', 'COMMIT', 0)).toBe('queued');
+    expect(p.flush()?.tag).toBe('commit');
+    expect(p.stats.suppressedByTag.pulse).toBe(1);
+  });
+
+  it('pulse does not displace a queued struggle', () => {
+    const p = new InterventionPolicy();
+    expect(p.queue('struggle', 'STRUGGLE STATE', 2)).toBe('queued');
+    expect(p.queue('pulse', 'Pulse: 12 iterations', 0)).toBe('suppressed');
+    expect(p.flush()?.tag).toBe('struggle');
+    expect(p.stats.suppressedByTag.pulse).toBe(1);
+  });
+
+  it('pulse does not displace a queued commit', () => {
+    const p = new InterventionPolicy();
+    expect(p.queue('commit', 'COMMIT', 0)).toBe('queued');
+    expect(p.queue('pulse', 'Pulse: 12 iterations', 0)).toBe('suppressed');
+    expect(p.flush()?.tag).toBe('commit');
+    expect(p.stats.suppressedByTag.pulse).toBe(1);
+  });
 });

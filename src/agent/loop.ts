@@ -2686,12 +2686,17 @@ Continue from 'Next:', do not redo completed progress.`,
         return this.finish(task, false, pulse.reason ?? 'Pulse abort', 'pulse_abort');
       }
       if (pulse.message) {
-        this.context.addMessage({ role: 'system', content: pulse.message });
+        // Soft nudge: competes with the queued struggle/commit at the flush
+        // below. pulse() is stateless about delivery — it re-fires on its
+        // own schedule when suppressed — so dropping one here loses
+        // nothing. Abort paths return above and never reach this queue.
+        this.interventions.queue('pulse', pulse.message);
       }
 
       // Intervention policy: at most one soft nudge per model call. The
-      // struggle summary queued at turn top and the commit directive queued
-      // after the previous response compete here; the highest-priority one
+      // struggle summary queued at turn top, the commit directive queued
+      // after the previous response, and the pulse nudge queued just above
+      // compete here; the highest-priority one
       // wins and the rest are dropped (logged). Hard directives (contract,
       // finish, verify, complexity escalation) bypass the policy entirely.
       const won = this.interventions.flush();
@@ -10009,7 +10014,7 @@ Continue from 'Next:', do not redo completed progress.`,
     // by the per-call policy (exactly once — finishOnce is the single exit).
     {
       const s = this.interventions.stats;
-      this.events.emit({ type: 'agent:log', agentId: this.id, message: `[intervention-telemetry] soft nudges fired: ${s.fired} (struggle ${s.firedByTag.struggle ?? 0}, commit ${s.firedByTag.commit ?? 0}), suppressed: ${s.suppressed}` });
+      this.events.emit({ type: 'agent:log', agentId: this.id, message: `[intervention-telemetry] soft nudges fired: ${s.fired} (struggle ${s.firedByTag.struggle ?? 0}, commit ${s.firedByTag.commit ?? 0}, pulse ${s.firedByTag.pulse ?? 0}), suppressed: ${s.suppressed}` });
     }
 
     return {

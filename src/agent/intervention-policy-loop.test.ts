@@ -126,4 +126,25 @@ describe('intervention policy (loop)', () => {
     expect(logs.some((m) => m.includes('[intervention] struggle summary suppressed'))).toBe(true);
     expect(logs.some((m) => m.includes('[intervention-telemetry]') && m.includes('suppressed: 1'))).toBe(true);
   }, 120_000);
+
+  it('the 12-iteration pulse heartbeat still reaches the model through the policy gate', async () => {
+    dir = makeRepo();
+    // Twelve distinct files: distinct reads, no repeated-output struggle,
+    // no deliberative turns — so nothing competes with the pulse at i=12.
+    for (let n = 1; n <= 12; n++) {
+      writeFileSync(resolve(dir, `f${n}.txt`), `distinct content ${n}\n`);
+    }
+    const { bus } = wireBus();
+    const read = (id: string, path: string): FakeScriptResponse => ({
+      finishReason: 'tool_calls',
+      toolCalls: [{ id, function: { name: 'read', arguments: JSON.stringify({ path }) } }],
+    });
+    const script: FakeScriptResponse[] = [shell('s1', 'node repro.js')];
+    for (let n = 1; n <= 12; n++) script.push(read(`r${n}`, `f${n}.txt`));
+    script.push(edit('e1', 'return a - b', 'return a + b'));
+    script.push(claim('Fixed add() to return a + b.'));
+    const { result, messages } = await runScripted(dir, script, bus);
+    expect(result.success).toBe(true);
+    expect(messages.filter((m) => m.includes('Pulse: 12 iterations'))).toHaveLength(1);
+  }, 120_000);
 });
