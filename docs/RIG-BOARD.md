@@ -505,3 +505,30 @@ merge); vs base a9b9de9 the only delta is the sandbox credential canary,
 proven environmental; new claim-grade/probe/finish-path suites pass 26/26
 independently (21+2+3). Evidence-graded output CLOSED. Nothing pushed;
 home merges.
+
+## Browser + desktop as one surface - coder, independently verified (2026-10-27)
+Coder (branch feat/browser-desktop-surface, base a9b9de9): commit 4da03307
+(shared a11y tree src/a11y/tree.ts + handoff src/a11y/handoff.ts + unified
+surface; CDP page + computer tool adapted at the representation layer;
+computerTool registration restored — it had been dropped in merge-vm-all2).
+Proof metric (coder, fixed cross-surface task set): 2 tasks neither tool
+alone completes — cdp alone 0/2, computer alone 0/2, unified 2/2, with
+mechanical failure assertions per single-tool run and focused-node carry
+asserted end-to-end. Handoff observation cost: 2 calls / 1058 chars /
+0 images vs re-observing from scratch: 306 calls (snapshot + nameless 19KB
+screenshot + 304 grid-probe clicks), 0 named targets.
+Independent verification in a fresh worktree at 4da03307, Node 26.12.1:
+tsc CLEAN; full suite **43 failed / 3,506 passed / 15 skipped** (466
+files: 17 failed, 444 passed, 5 skipped).
+Adjudication - zero browser-desktop regressions vs base a9b9de9: the
+independent failing-name set (44 names = 43 failed tests + the file-level
+routing-ab entry) is a strict subset of the base set (item 16 set + AAIF
+= 49 names); the only base-vs-tip delta is the 5 computer-related
+failures this item repairs (computer.test.ts 3 + computer-screenshot-inline
+2, both green independently: 13/13 and 2/2). The AAIF conformance failure
+at the tip is base-pre-existing (this branch forks from a9b9de9, not from
+item 16s branch, so it does not contain item 16s opencode-mimo SKILL.md
+fix, which awaits home merge); the sandbox credential canary is proven
+environmental. New a11y suites pass 29/29 independently (handoff 7,
+tree 11, unified-surface 11). Browser + desktop as one surface CLOSED.
+Nothing pushed; home merges.
