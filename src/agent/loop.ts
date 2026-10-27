@@ -8064,12 +8064,20 @@ Continue from 'Next:', do not redo completed progress.`,
       // (create-and-run shape; the run itself is the deliverable check).
       // Read-only kinds (chat/research/plan, review→research) returned above.
       if (MUTATION_KINDS.has(taskKind) && task.role !== 'reviewer' && task.role !== 'pr_reviewer' && !this.verifyWasPolicyDenied() && !this.reproFileChangedAtRunStart && !isSimpleScriptTask(task) && this.changeExpectationGrounded(task, repo)) {
-        return {
-          passed: false, status: 'BLOCKED', checks: [],
-          summary: `Verification blocked: this ${taskKind} task requires file changes, but the run changed no files (no write/edit/patch and no shell-side workspace changes). Do the work the task asks for, then finish — completion without changes is not verifiable.`,
-        };
+        if (!repo.testCommand && !repo.buildCommand) {
+          return {
+            passed: false, status: 'BLOCKED', checks: [],
+            summary: `Verification blocked: this ${taskKind} task requires file changes, but the run changed no files (no write/edit/patch and no shell-side workspace changes). Do the work the task asks for, then finish — completion without changes is not verifiable.`,
+          };
+        }
+        // Runnable repo checks exist: fall through to the checks below
+        // instead of blocking. Green checks PASS — the acceptance state
+        // holds even though this run changed nothing; red checks FAIL as
+        // today. The BLOCK stays for the no-evidence case only (no
+        // runnable checks at all), which is the hole P0.5 closed.
+      } else {
+        return { passed: true, status: 'PASS', checks: [], summary: 'No changes made to verify.' };
       }
-      return { passed: true, status: 'PASS', checks: [], summary: 'No changes made to verify.' };
     }
 
     const checks: string[] = [];
@@ -8305,7 +8313,13 @@ Continue from 'Next:', do not redo completed progress.`,
     // skips do not count. Content-only and greenfield runs skip it: there
     // is no behavior for a suite to guard. Best-effort like the engine's:
     // a machinery error never fails verification by itself.
-    if (!this.contentOnly && !greenfield && !this.greenfieldTask) {
+    // No changes, no changed logic to guard: the mutation check injects a
+    // bug into repo code and fails the run when tests do not catch it — on
+    // a zero-change run a surviving mutant reflects the repo's pre-existing
+    // test strength, not this run, so it must not downgrade a green verify.
+    // (Zero-change runs never reached this gate before the fall-through
+    // above, so this narrows nothing for changed runs.)
+    if (!this.contentOnly && !greenfield && !this.greenfieldTask && (this.fileChanged || this.shellWorkspaceMoved)) {
       const mutationCmd =
         (autoTestCmd && genuinePasses.includes(autoTestCmd) ? autoTestCmd : undefined) ??
         (repo.testCommand && genuinePasses.includes(repo.testCommand) && !isWeakVerification(repo.testCommand) ? repo.testCommand : undefined) ??
