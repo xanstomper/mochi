@@ -416,3 +416,22 @@ set, none introduced by this item. Note: the coder gate reported 3,465
 passed vs 3,461 independently — a 4-test counting difference with an
 identical failure set, not a regression. Warm daemon CLOSED. Nothing
 pushed; home merges.
+
+## Lazy everything, extended — coder, independently verified (2026-10-27)
+Coder (branch feat/lazy-everything, base a9b9de9): commit c07745b4
+(lazy file slices, lazy diffs, lazy test output; deferred, never dropped;
+staleness re-validation on every deferred fetch; kill-switches per surface).
+Proof metrics (coder, deterministic fixtures): per-surface per call read
+-63%, git diff -98%, diff tool -96%, verify failing -54% (all failures
+kept), verify passing -64%; whole-task T1 read -43.7% with task-success
+parity, T2 diff +56.9% (worse, honestly reported), T3 test ~flat.
+Independent verification in a fresh worktree at c07745b4, Node 26.12.1:
+tsc CLEAN; full suite **48 failed / 3,508 passed / 15 skipped** (467
+files: 19 failed, 443 passed, 5 skipped).
+Adjudication — zero laziness regressions vs base a9b9de9: the independent
+failing-name set is identical to the coder tip gate, and vs the coder base
+gate the only extra entry is the sandbox credential canary, proven
+environmental (security code byte-identical base-to-tip; base fails it from
+a HOME-adjacent cwd, and the tip worktree is HOME-adjacent). BASE_ONLY
+empty. New lazy suites (36 tests) all pass. Lazy everything CLOSED.
+Nothing pushed; home merges.
