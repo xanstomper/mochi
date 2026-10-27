@@ -3,7 +3,7 @@ import { formatToolInvocationCard, formatToolCompletedCard, renderTurnSummaryCar
 import { renderSummary } from './summary-render.js';
 import type { SummaryDocument } from '../summary/engine.js';
 
-export type LineKind = 'user' | 'assistant' | 'system' | 'error' | 'tool' | 'task' | 'goal' | 'plain' | 'thought' | 'summary';
+export type LineKind = 'user' | 'assistant' | 'system' | 'error' | 'tool' | 'task' | 'goal' | 'plain' | 'thought' | 'summary' | 'note';
 
 export interface TuiLine {
   kind: LineKind;
@@ -613,6 +613,20 @@ export function reduceEvent(state: TuiState, event: Record<string, unknown>): bo
       const opGlyph: Record<string, string> = { create: '+', write: '+', edit: '~', patch: '~', delete: '−', read: '←', move: '→', rename: '→' };
       const glyph = opGlyph[String(event.operation ?? '')] ?? '•';
       pushLine(state, 'system', `${glyph} ${event.operation}  ${event.path}`);
+      return true;
+    }
+    case 'agent:log': {
+      // Harness telemetry — guardrail vetoes, fast-lane transitions, and
+      // (most importantly) LEARNING events: skills authored, lessons recorded,
+      // memory writes. These were emitted by the loop forever but the reducer
+      // dropped them, so every act of self-improvement was invisible in chat.
+      const msg = String(event.message ?? '').trim();
+      if (!msg) return false;
+      // Collapse exact consecutive duplicates (the loop re-emits some
+      // per-iteration probes); a repeat adds no information.
+      const lastLine = state.lines[state.lines.length - 1];
+      if (lastLine && lastLine.kind === 'note' && lastLine.text === msg) return false;
+      pushLine(state, 'note', msg);
       return true;
     }
     case 'error':

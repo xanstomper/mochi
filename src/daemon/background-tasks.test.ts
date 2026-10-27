@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { startBackgroundTask, getTask, listTasks, describeTask } from './background-tasks.js';
+import { startBackgroundTask, getTask, listTasks, describeTask, buildRelayCommand, isRelayCmdline } from './background-tasks.js';
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -199,4 +199,20 @@ describe('background tasks', () => {
     await sleep(500);
     expect(probe()).toBe(0);
   }, 60_000);
+
+  it('relay command self-reaps: FIFO gone or task dead ends the loop between reopens', () => {
+    const cmd = buildRelayCommand('/tmp/x/.mochi/bg-abc.stdin', 4242);
+    // Both liveness checks precede the blocking cat open.
+    expect(cmd).toContain('[ -e "/tmp/x/.mochi/bg-abc.stdin" ] || exit 0');
+    expect(cmd).toContain('kill -0 4242 2>/dev/null || exit 0');
+    expect(cmd).toContain('cat "/tmp/x/.mochi/bg-abc.stdin" || break');
+  });
+
+  it('isRelayCmdline matches only mochi relay shapes (bg-*.stdin cat loops)', () => {
+    expect(isRelayCmdline(['sh', '-c', 'while :; do cat "/tmp/m/.mochi/bg-x.stdin" || break; done'])).toBe(true); // legacy leak shape
+    expect(isRelayCmdline(['sh', '-c', buildRelayCommand('/tmp/m/.mochi/bg-x.stdin', 9)])).toBe(true); // new shape
+    expect(isRelayCmdline(['cat', '/tmp/m/.mochi/bg-x.stdin'])).toBe(false);
+    expect(isRelayCmdline(['sh', '-c', 'while :; do cat "/var/log/app.log" || break; done'])).toBe(false); // not a relay fifo
+    expect(isRelayCmdline(['sh', '-c', 'while IFS= read -r l; do echo "$l"; done'])).toBe(false);
+  });
 });

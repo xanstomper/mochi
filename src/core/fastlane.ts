@@ -25,6 +25,27 @@ import type { TaskKind } from './taskkind.js';
 export const FASTLANE_LIMITS = {
   /** Turn cap while in the lane (the configured cap is restored on exit). */
   maxIterations: 12,
+  /** Reduced memory-block cap while in the lane (chars). The lane used to
+   *  gate memory off ENTIRELY until a struggle signal, which made most short
+   *  runs memoryless — lessons, facts, and conventions never reached the
+   *  model. A small block keeps the lean brief while memory stays real. */
+  maxMemoryChars: 1200,
+  /** Complexity-score ceiling for lane entry. A textbook one-file bug fix
+   *  scores 3 ('standard'): +2 for mutating an existing repo (the word "fix")
+   *  and +1 for a two-sentence bug report. The lane's OTHER guards (text
+   *  length, referenced files, criteria count, repo size, chameleon
+   *  difficulty) plus its mid-run escalation bound the risk, so a low
+   *  'standard' score is lane-eligible — demanding strict 'simple' locked
+   *  every ordinary fix task out of the lane entirely. */
+  maxComplexityScore: 3,
+  /** Chameleon difficulty ceiling for lane entry. The classifier's BASE
+   *  difficulty is 3 (general) and its domain floors are: frontend 4,
+   *  debugging/refactoring/database 5, systems/algorithms/security 6,
+   *  architecture 7 — so the old `> 3` guard made lane entry IMPOSSIBLE for
+   *  every fix/refactor task by construction. 5 admits the single-edit
+   *  domains at base difficulty (no high-stakes modifiers) and still
+   *  excludes systems/algorithm/security/architecture asks. */
+  maxChameleonDifficulty: 5,
   /** Task text (title + description) longer than this is not short. */
   maxTextChars: 700,
   /** More than this many referenced files means cross-file work. */
@@ -190,17 +211,17 @@ export function decideFastLane(input: FastLaneInput, enabled: boolean): FastLane
   if (input.acceptanceCriteria > FASTLANE_LIMITS.maxAcceptanceCriteria) {
     return { eligible: false, reasons: [`${input.acceptanceCriteria} acceptance criteria imply a multi-step deliverable`] };
   }
-  if (input.complexity !== 'simple') {
-    return { eligible: false, reasons: [`complexity "${input.complexity}" is not simple (score ${input.complexityScore})`] };
+  if (input.complexity === 'complex' || input.complexityScore > FASTLANE_LIMITS.maxComplexityScore) {
+    return { eligible: false, reasons: [`complexity "${input.complexity}" (score ${input.complexityScore}) exceeds the lane's small-task ceiling (${FASTLANE_LIMITS.maxComplexityScore})`] };
   }
-  if (input.chameleonDifficulty > 3) {
-    return { eligible: false, reasons: [`chameleon difficulty ${input.chameleonDifficulty}/10 is not easy`] };
+  if (input.chameleonDifficulty > FASTLANE_LIMITS.maxChameleonDifficulty) {
+    return { eligible: false, reasons: [`chameleon difficulty ${input.chameleonDifficulty}/10 exceeds the lane's ceiling (${FASTLANE_LIMITS.maxChameleonDifficulty})`] };
   }
   if (input.repoFiles > FASTLANE_LIMITS.maxRepoFiles) {
     return { eligible: false, reasons: [`repo has ${input.repoFiles}+ files (> ${FASTLANE_LIMITS.maxRepoFiles})`] };
   }
 
-  reasons.push(`kind=${input.kind}`, `complexity=simple (score ${input.complexityScore})`);
+  reasons.push(`kind=${input.kind}`, `complexity=${input.complexity} (score ${input.complexityScore})`);
   reasons.push(`text=${input.textChars} chars`, `files=${input.referencedFiles.length}`);
   if (input.repoFiles > 0) reasons.push(`repo=${input.repoFiles} files`);
   if (input.simpleScript) reasons.push('simple-script shape');

@@ -652,4 +652,25 @@ describe('spawn ledger (W3-4 subagent panel feed)', () => {
     expect(s.spawnLedger.has('child-0')).toBe(false); // oldest finished evicted
     expect(s.spawnLedger.has('child-69')).toBe(true); // newest kept
   });
+
+  it('agent:log events render as note lines (learning + guardrails are visible in chat)', () => {
+    const s = createTuiState();
+    expect(reduceEvent(s, ev({ type: 'agent:log', agentId: 'a1', message: '[memory] learned: "use vitest retry for load flakes" (saved to lessons — 3 total)' }))).toBe(true);
+    expect(reduceEvent(s, ev({ type: 'agent:log', agentId: 'a1', message: '[skills] mined skill "flaky-retry" from run trace' }))).toBe(true);
+    expect(reduceEvent(s, ev({ type: 'agent:log', agentId: 'a1', message: '[guardrail] write blocked: plan mode is active' }))).toBe(true);
+    expect(s.lines.map((l) => l.kind)).toEqual(['note', 'note', 'note']);
+    expect(s.lines[2].text).toContain('plan mode is active');
+    // Empty message is dropped.
+    expect(reduceEvent(s, ev({ type: 'agent:log', agentId: 'a1', message: '   ' }))).toBe(false);
+  });
+
+  it('consecutive duplicate agent:log lines collapse to one', () => {
+    const s = createTuiState();
+    reduceEvent(s, ev({ type: 'agent:log', agentId: 'a1', message: '[fastlane] entered for "t"' }));
+    reduceEvent(s, ev({ type: 'agent:log', agentId: 'a1', message: '[fastlane] entered for "t"' }));
+    expect(s.lines.length).toBe(1);
+    // A different message still lands.
+    reduceEvent(s, ev({ type: 'agent:log', agentId: 'a1', message: '[fastlane] memory released on struggle signal' }));
+    expect(s.lines.length).toBe(2);
+  });
 });

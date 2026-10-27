@@ -859,6 +859,45 @@ describe('Agent', () => {
     await fake.close();
   });
 
+  it('recordFailure leaves a lesson even with NO diagnosis (fallback synthesis) and announces it', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'mochi-lesson-fallback-'));
+    try {
+    const fake = await startFakeOpenAI([]);
+    const config = makeConfig(dir, fake.url);
+    const workspace = new Workspace(dir, '.mochi');
+    workspace.ensure();
+    const context = new ContextEngine(config, dir);
+    const task = createTask('Budget-aborted task', 'never got a diagnosis');
+
+    const logs: string[] = [];
+    const events = new EventBus();
+    events.on('agent:log', (e) => { logs.push(e.message); });
+    const agent = new Agent({
+      id: 'fallback-agent',
+      role: 'coder',
+      config,
+      workspace,
+      events,
+      cwd: dir,
+      context,
+    });
+
+    // No observeFailure() ever ran: this.diagnosis is unset (budget abort,
+    // pulse abort, tool-error stop). The fallback must STILL record a lesson.
+    expect((agent as unknown as { diagnosis: unknown }).diagnosis).toBeUndefined();
+    (agent as unknown as { recordFailure: (t: unknown, s: string) => void }).recordFailure(task, 'Error: ENOENT: no such file or directory, open src/missing.ts');
+    const lessons = await import('../lessons.js');
+    const all = lessons.loadLessons(workspace.dir);
+    expect(all.length).toBeGreaterThan(0);
+    expect(all.some((l) => l.lesson.startsWith('AVOID:'))).toBe(true);
+    expect((agent as unknown as { diagnosis: { kind: string } }).diagnosis.kind).toBeTruthy();
+    expect(logs.some((m) => m.startsWith('[memory] learned from failure'))).toBe(true);
+    await fake.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('isPlanShaped rejects preamble text and accepts structured plans', () => {
     expect(isPlanShaped("I'll research the codebase first to understand the project structure and")).toBe(false);
     expect(isPlanShaped('Let me look into this before proposing anything.')).toBe(false);

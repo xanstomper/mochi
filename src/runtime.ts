@@ -134,6 +134,12 @@ export class Runtime {
     // was still unassigned (SDK/daemon consumers with a different cwd silently
     // lost the target project's config).
     this.cwd = opts.cwd ?? process.cwd();
+    // Reap stdin-FIFO relay processes orphaned by a hard death of a previous
+    // mochi process (daemon or TUI) — cleanup paths never ran for them. One
+    // best-effort sweep per runtime boot; never blocks startup.
+    void import('./daemon/background-tasks.js')
+      .then(({ reapOrphanedRelays }) => { try { reapOrphanedRelays(); } catch { /* best-effort */ } })
+      .catch(() => { /* best-effort */ });
     this.config = loadConfig(opts.config, undefined, this.cwd);
     startupMark('runtime:config-loaded');
     this.events = new EventBus();

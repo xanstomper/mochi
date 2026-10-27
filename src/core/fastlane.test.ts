@@ -40,12 +40,19 @@ describe('fast lane entry (core/fastlane.ts)', () => {
     expect(decideFastLane(input(), false).eligible).toBe(false);
     expect(decideFastLane(input({ kind: 'research' }), true).eligible).toBe(false);
     expect(decideFastLane(input({ role: 'architect' }), true).eligible).toBe(false);
-    expect(decideFastLane(input({ complexity: 'moderate' }), true).eligible).toBe(false);
-    expect(decideFastLane(input({ chameleonDifficulty: 7 }), true).eligible).toBe(false);
+    expect(decideFastLane(input({ complexity: 'complex' }), true).eligible).toBe(false);
+    expect(decideFastLane(input({ complexity: 'standard', complexityScore: FASTLANE_LIMITS.maxComplexityScore + 1 }), true).eligible).toBe(false);
+    expect(decideFastLane(input({ chameleonDifficulty: FASTLANE_LIMITS.maxChameleonDifficulty + 1 }), true).eligible).toBe(false);
     expect(decideFastLane(input({ acceptanceCriteria: 5 }), true).eligible).toBe(false);
     expect(decideFastLane(input({ repoFiles: FASTLANE_LIMITS.maxRepoFiles + 1 }), true).eligible).toBe(false);
     expect(decideFastLane(input({ textChars: FASTLANE_LIMITS.maxTextChars + 1 }), true).eligible).toBe(false);
     expect(decideFastLane(input({ referencedFiles: ['a.ts', 'b.ts', 'c.ts'] }), true).eligible).toBe(false);
+  });
+
+  it('a low "standard" score is lane-eligible (textbook one-file fixes score 3: +2 mutate-repo, +1 multi-sentence)', () => {
+    const d = decideFastLane(input({ complexity: 'standard', complexityScore: 3 }), true);
+    expect(d.eligible).toBe(true);
+    expect(d.reasons.join(' ')).toContain('complexity=standard (score 3)');
   });
 
   it('extracts referenced paths from title, description and criteria', () => {

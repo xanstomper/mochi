@@ -26,6 +26,7 @@ export const memoryTool: Tool = {
       const body = String(args.body ?? '').trim();
       if (!title || !body) throw new Error('memory add requires title and body');
       const created = store.add({ kind, title, body, source: args.source ? String(args.source) : undefined });
+      ctx.events?.emit({ type: 'agent:log', agentId: ctx.agentId ?? 'agent', message: created ? `[memory] recorded ${kind}: ${title}` : `[memory] already known: ${kind} "${title}"` });
       return created ? `Recorded ${kind}: ${title}` : `Memory already contains ${kind}: ${title}`;
     }
     throw new Error(`Unknown memory action: ${action}`);

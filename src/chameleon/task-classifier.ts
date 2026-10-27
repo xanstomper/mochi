@@ -28,52 +28,58 @@ export interface TaskClassification {
 
 export function classifyTask(task: string): TaskClassification {
   const text = task.toLowerCase();
+  // Domain/difficulty scoring runs on the PROSE, not filenames: a task that
+  // names "crypto.ts", "kernel.c", "math.js" or "matrix.py" must not inherit
+  // +3 difficulty from its file's name. (Measured misfire: a one-line
+  // arithmetic bug fix in math.js scored 6/10 and was locked out of the
+  // fast lane by the "not easy" guard — the filename did the scoring.)
+  const prose = text.replace(/\b[\w@.~/\\-]+\.\w{1,5}\b/g, ' ');
   const keywords: string[] = [];
 
   let domain: TaskDomain = 'general';
   let difficulty = 3;
 
   // Domain detection
-  if (/\b(rust|c\+\+|kernel|memory|concurrency|thread|async|mutex|simd|assembly|driver)\b/.test(text)) {
+  if (/\b(rust|c\+\+|kernel|memory|concurrency|thread|async|mutex|simd|assembly|driver)\b/.test(prose)) {
     domain = 'systems_programming';
     difficulty += 3;
     keywords.push('systems');
-  } else if (/\b(algorithm|graph|tree|dynamic programming|dp|math|matrix|proof|crypto|optimize)\b/.test(text)) {
+  } else if (/\b(algorithm|graph|tree|dynamic programming|dp|math|matrix|proof|crypto|optimize)\b/.test(prose)) {
     domain = 'algorithms_math';
     difficulty += 3;
     keywords.push('algorithms');
-  } else if (/\b(security|vulnerability|exploit|sanitize|injection|xss|csrf|auth|crypto|jwt)\b/.test(text)) {
+  } else if (/\b(security|vulnerability|exploit|sanitize|injection|xss|csrf|auth|crypto|jwt)\b/.test(prose)) {
     domain = 'security_audit';
     difficulty += 3;
     keywords.push('security');
-  } else if (/\b(architect|system design|distributed|microservice|event-driven|scale|cluster|raft)\b/.test(text)) {
+  } else if (/\b(architect|system design|distributed|microservice|event-driven|scale|cluster|raft)\b/.test(prose)) {
     domain = 'architecture_design';
     difficulty += 4;
     keywords.push('architecture');
-  } else if (/\b(bug|fix|error|crash|panic|segfault|race condition|deadlock|leak)\b/.test(text)) {
+  } else if (/\b(bug|fix|error|crash|panic|segfault|race condition|deadlock|leak)\b/.test(prose)) {
     domain = 'debugging_fixing';
     difficulty += 2;
     keywords.push('debugging');
-  } else if (/\b(refactor|cleanup|migrate|rewrite|restructure|decouple|rename)\b/.test(text)) {
+  } else if (/\b(refactor|cleanup|migrate|rewrite|restructure|decouple|rename)\b/.test(prose)) {
     domain = 'refactoring';
     difficulty += 2;
     keywords.push('refactor');
-  } else if (/\b(css|html|ui|tui|react|svelte|component|layout|color|theme)\b/.test(text)) {
+  } else if (/\b(css|html|ui|tui|react|svelte|component|layout|color|theme)\b/.test(prose)) {
     domain = 'frontend_ui';
     difficulty += 1;
     keywords.push('ui');
-  } else if (/\b(sql|database|query|postgres|sqlite|redis|schema|index|migration)\b/.test(text)) {
+  } else if (/\b(sql|database|query|postgres|sqlite|redis|schema|index|migration)\b/.test(prose)) {
     domain = 'database_infra';
     difficulty += 2;
     keywords.push('database');
   }
 
   // Modifiers
-  if (/\b(extreme|critical|production|massive|hardest|complex|distributed)\b/.test(text)) {
+  if (/\b(extreme|critical|production|massive|hardest|complex|distributed)\b/.test(prose)) {
     difficulty += 2;
     keywords.push('high-stakes');
   }
-  if (/\b(quick|simple|typo|rename variable|small|tldr)\b/.test(text)) {
+  if (/\b(quick|simple|typo|rename variable|small|tldr)\b/.test(prose)) {
     difficulty = Math.max(1, difficulty - 3);
     keywords.push('low-complexity');
   }

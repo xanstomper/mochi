@@ -16,6 +16,7 @@ import { atomicWriteFileSync } from '../core/atomic-fs.js';
 import type { MochiConfig } from '../types.js';
 import { Runtime } from '../runtime.js';
 import { addJob, listJobs, removeJob, getJob, setJobPaused, setJobEnabled, runJobNow, runDueCronJobs } from './cron.js';
+import { reapOrphanedRelays } from './background-tasks.js';
 import { truncateMiddle } from '../util.js';
 
 export interface DaemonInfo {
@@ -898,6 +899,12 @@ export async function serverMain(argv: string[]): Promise<void> {
       await runDueCronJobs(cwd, (prompt, signal) => rt.goal(prompt, [], undefined, signal));
     } finally { processing = false; }
   }, 10_000);
+  // Relay orphans: a previous daemon that died hard left its detached stdin
+  // FIFO relays alive (cleanup never ran). Sweep once at startup.
+  try {
+    const n = reapOrphanedRelays();
+    if (n > 0) console.error(`[bg] reaped ${n} orphaned stdin relay(s) from a previous daemon`);
+  } catch { /* sweep is best-effort */ }
   server.listen(Number(port), host, () => {
     const addr = server.address() as { port: number };
     persist(addr.port);

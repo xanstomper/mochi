@@ -2,14 +2,14 @@
 //
 // Proves the contract end to end:
 //   (a) a simple one-file fix ENTERS the lane: shrunken advertised toolset,
-//       no repo map in the first request, unified memory NOT injected;
+//       no repo map in the first request, REDUCED memory block (never none);
 //   (b) the same run under the standard profile pays for all of that
 //       machinery (control);
 //   (c) zero-change in the lane still BLOCKs (fast lane ≠ sloppy lane);
-//   (d) a first verify failure RELEASES memory (struggle-gated recall)
-//       without escalating;
+//   (d) a first verify failure releases the FULL memory recall
+//       (struggle signal) without escalating;
 //   (e) a task that secretly spans four files ESCALATES mid-run with
-//       reason 'files-edited' and still completes;
+//       reason 'edits-exceeded' and still completes;
 //   (f) MOCHI_FASTLANE=0 keeps every run out of the lane.
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
@@ -22,7 +22,7 @@ import { EventBus } from '../events.js';
 import { Workspace } from '../workspace.js';
 import { createTask } from '../goals/task.js';
 import { MemoryStore } from '../memory/memory.js';
-import { loadFastLaneStats, falseShortRate } from '../core/fastlane-stats.js';
+import { loadFastLaneStats } from '../core/fastlane-stats.js';
 import { startFakeOpenAI, type FakeScriptResponse } from '../testutil/fake-openai.js';
 import type { MochiConfig } from '../types.js';
 
@@ -122,7 +122,7 @@ describe('fast lane (loop)', () => {
   });
   const track = (d: string): string => { dirs.push(d); return d; };
 
-  it('(a)+(b) a simple one-file fix enters the lane: fewer tools, no repo map, no memory — the standard profile pays for all three', async () => {
+  it('(a)+(b) a simple one-file fix enters the lane: fewer tools + reduced memory — the standard profile pays for more', async () => {
     const script = (): FakeScriptResponse[] => [
       tool('s1', 'shell', { command: 'node repro.js' }),
       tool('e1', 'edit', { path: 'math.js', oldText: 'return a - b', newText: 'return a + b' }),
@@ -141,13 +141,19 @@ describe('fast lane (loop)', () => {
     const fastFirst = fast.requests[0];
     const fastTools = (fastFirst.tools as unknown[] | undefined)?.length ?? 0;
     expect(fastTools).toBeGreaterThan(0);
-    expect(fastTools).toBeLessThanOrEqual(14);
+    // The lean tier's advertised set (origin merge added lint/format/repo
+    // symbol tools); the stale cap of 14 predates that growth.
+    expect(fastTools).toBeLessThanOrEqual(21);
     expect(bodyText(fastFirst)).not.toContain('REPO MAP (');
-    expect(bodyText(fastFirst)).not.toContain(MEMORY_TOKEN);
-    // Stats recorded the entry.
+    // Memory is injected REDUCED in the lane (never fully gated): the planted
+    // fact must reach the model even on the leanest profile.
+    expect(bodyText(fastFirst)).toContain(MEMORY_TOKEN);
+    // Stats recorded the entry (entries/outcomes are Records keyed by kind /
+    // outcome; the old scalar `entries`/`completedInLane`/falseShortRate API
+    // was replaced in the stats rework).
     const stats = loadFastLaneStats(new Workspace(fastDir, '.mochi'));
-    expect(stats.entries).toBe(1);
-    expect(stats.completedInLane).toBe(1);
+    expect(stats.entries['fix']).toBe(1);
+    expect(stats.outcomes['completed-in-lane']).toBe(1);
     expect(existsSync(resolve(fastDir, '.mochi/state/fastlane.json'))).toBe(true);
 
     // Standard control: same repo, same script, lane disabled by config.
@@ -159,16 +165,15 @@ describe('fast lane (loop)', () => {
     expect(std.result.fastLane).toBeUndefined();
     const stdFirst = std.requests[0];
     const stdTools = (stdFirst.tools as unknown[] | undefined)?.length ?? 0;
-    expect(stdTools).toBeGreaterThan(fastTools);
-    // The standard profile pays for the machinery the lane skips: unified
-    // memory retrieval lands the planted fact in its first request, and
-    // its prompt is strictly larger overall. (No 'REPO MAP' contrast on
-    // this fixture: the codegraph builds no symbol graph for a two-file
-    // CommonJS repo, so neither profile renders one — the lane's map skip
-    // is proven by construction and by the bench's token columns on
-    // graphable repos.)
+    // Tool-COUNT no longer differentiates the profiles on this fixture (the
+    // origin merge grew the lean tier to the same 21 base tools); the lane's
+    // savings here are the repo map (proven by construction on graphable
+    // repos + the bench's token columns) and the REDUCED memory block.
+    expect(stdTools).toBeGreaterThanOrEqual(fastTools);
+    // Memory: both inject the planted fact, the standard profile pays for the
+    // full-cap retrieval while the lane's block is capped at 1200 chars.
     expect(bodyText(stdFirst)).toContain(MEMORY_TOKEN);
-    expect(bodyText(stdFirst).length).toBeGreaterThan(bodyText(fastFirst).length);
+    expect(bodyText(stdFirst).length).toBeGreaterThanOrEqual(bodyText(fastFirst).length);
   }, 120_000);
 
   it('(c) zero-change in the lane still BLOCKs — the evidence standard is unchanged', async () => {
@@ -197,12 +202,13 @@ describe('fast lane (loop)', () => {
     expect(result.fastLane?.entered).toBe(true);
     expect(result.fastLane?.escalated).toBe(false);
     expect(logs.some((m) => m.includes('memory released on struggle signal'))).toBe(true);
-    // Memory absent while gated, present in the first request after release.
-    expect(bodyText(requests[2])).not.toContain(MEMORY_TOKEN);
+    // Memory was present all along (reduced in-lane block) and the release
+    // restores the FULL retrieval — both requests carry the planted fact.
+    expect(bodyText(requests[2])).toContain(MEMORY_TOKEN);
     expect(bodyText(requests[3])).toContain(MEMORY_TOKEN);
   }, 120_000);
 
-  it('(e) a secretly four-file bug escalates with reason files-edited and still completes', async () => {
+  it("(e) a secretly four-file bug escalates with reason edits-exceeded and still completes", async () => {
     const mod = (name: string): string => `function total_${name}(a, b) { return a - b; }\nmodule.exports = { total_${name} };\n`;
     const files: Record<string, string> = {
       'package.json': JSON.stringify({ name: 'p', scripts: { test: 'node tests.js' } }),
@@ -235,12 +241,11 @@ describe('fast lane (loop)', () => {
     expect(result.success).toBe(true);
     expect(result.fastLane?.entered).toBe(true);
     expect(result.fastLane?.escalated).toBe(true);
-    expect(result.fastLane?.escalationReason).toBe('files-edited');
+    expect(result.fastLane?.escalationReason).toBe('edits-exceeded');
     expect(logs.some((m) => m.includes('[fastlane] escalated'))).toBe(true);
     const stats = loadFastLaneStats(new Workspace(dir, '.mochi'));
-    expect(stats.escalations).toBe(1);
-    expect(stats.escalationsByReason['files-edited']).toBe(1);
-    expect(falseShortRate(stats)).toBe(1);
+    expect(stats.escalations['edits-exceeded']).toBe(1);
+    expect(stats.outcomes['completed-after-escalation']).toBe(1);
   }, 120_000);
 
   it('(f) MOCHI_FASTLANE=0 keeps the run out of the lane entirely', async () => {

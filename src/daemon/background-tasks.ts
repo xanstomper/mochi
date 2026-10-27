@@ -14,7 +14,7 @@
 // the on-disk ledger (with owner-pid liveness checks for stale 'running').
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, unlinkSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { atomicWriteFileSync } from '../core/atomic-fs.js';
@@ -36,6 +36,22 @@ export interface BackgroundTask {
   fifoPath?: string;
 }
 
+/** The relay command for a task's stdin FIFO (MCH-218b). Between reopens it
+ *  self-checks: FIFO gone (cleanup unlinked it) or task PID dead → exit, so a
+ *  relay orphaned by a hard daemon death reaps itself instead of holding the
+ *  FIFO (and a forked `cat`) forever. */
+export function buildRelayCommand(fifoPath: string, taskPid: number): string {
+  return `while :; do [ -e "${fifoPath}" ] || exit 0; kill -0 ${taskPid} 2>/dev/null || exit 0; cat "${fifoPath}" || break; done`;
+}
+
+/** Matches BOTH relay command shapes (legacy leak-prone + self-reaping) in a
+ *  /proc/<pid>/cmdline vector. Requires the bg-*.stdin fifo path — a plain
+ *  `cat` loop over any other file never matches. */
+export function isRelayCmdline(parts: string[]): boolean {
+  if (parts[0] !== 'sh' || parts[1] !== '-c' || parts.length !== 3) return false;
+  return /^while :; do (?:\[ -e "[^"]*bg-[^"]*\.stdin" \] \|\| exit 0; kill -0 \d+ 2>\/dev\/null \|\| exit 0; )?cat "[^"]*bg-[^"]*\.stdin" \|\| break; done$/.test(parts[2]);
+}
+
 const tasks = new Map<string, BackgroundTask>();
 /** Owning cwd per task id — each task's ledger record lives in the directory
  *  it was started in (B22). */
@@ -44,6 +60,58 @@ const processes = new Map<string, import('node:child_process').ChildProcess>();
 /** MCH-218: per-task FIFO relay process (reads the stdin FIFO, writes the
  *  child's stdin). Killed + unlinked when the task exits or is killed. */
 const relays = new Map<string, import('node:child_process').ChildProcess>();
+
+/** Reap relay processes orphaned by a hard daemon death. The four per-task
+ *  cleanup paths only run while the daemon lives; when it dies by SIGKILL/OOM
+ *  its detached relay groups survive, holding FIFOs open forever (measured
+ *  leak: 4 pairs at 9h+ age). Walks /proc for relay-shaped cmdlines, skips our
+ *  own live relays and anything younger than PROTECT_AGE (a concurrent
+ *  daemon's active tasks), and group-kills the rest. Returns the reaped count.
+ *  Safe to call at every daemon/server startup; a clean box reaps 0. */
+const RELAY_PROTECT_AGE_MS = 10 * 60_000;
+
+export function reapOrphanedRelays(): number {
+  let reaped = 0;
+  let procDir: string[] = [];
+  try {
+    procDir = readdirSync('/proc').filter((d) => /^\d+$/.test(d));
+  } catch {
+    return 0; // not Linux — nothing to walk
+  }
+  const ownPids = new Set<number>();
+  for (const r of relays.values()) {
+    if (r.pid) ownPids.add(r.pid);
+  }
+  for (const d of procDir) {
+    const pid = Number(d);
+    if (ownPids.has(pid) || pid === process.pid) continue;
+    let cmdline: string[] = [];
+    try {
+      cmdline = readFileSync(`/proc/${d}/cmdline`, 'utf8').split('\0').filter(Boolean);
+    } catch {
+      continue; // process vanished mid-walk
+    }
+    if (!isRelayCmdline(cmdline)) continue;
+    // Age guard via /proc/<pid>/stat starttime (field 22 after the comm).
+    try {
+      const stat = readFileSync(`/proc/${d}/stat`, 'utf8');
+      const after = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+      const ticks = Number(after[19]);
+      if (Number.isFinite(ticks) && ticks > 0) {
+        const uptimeS = Number(readFileSync('/proc/uptime', 'utf8').split(' ')[0]);
+        const ageMs = (uptimeS - ticks / 100) * 1000;
+        if (ageMs < RELAY_PROTECT_AGE_MS) continue;
+      }
+    } catch {
+      continue;
+    }
+    try { if (pid > 1) process.kill(-pid, 'SIGKILL'); } catch { /* group gone */ }
+    try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ }
+    reaped++;
+  }
+  return reaped;
+}
+
 const MAX_COMPLETED = 20;
 /** Output cap per task IN THE LEDGER (in-memory buffer stays at 200KB). */
 const PERSIST_OUTPUT_CAP = 100_000;
@@ -171,7 +239,15 @@ export function startBackgroundTask(
     // process group, so every cleanup kills sh AND its cat children in one
     // signal. (Node kills only the direct child; the negative pid targets
     // the group.)
-    const relay = spawn('sh', ['-c', `while :; do cat "${fifoPath}" || break; done`], { cwd, detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    // SELF-REAPING: the four cleanup paths (exit/error/timeout/kill) cover a
+    // LIVING daemon, but a daemon that dies hard (SIGKILL, OOM, crash) never
+    // runs them — real leak evidence: 4 orphaned relay pairs found at 9h+ age.
+    // The loop now checks, between reopens: (1) the FIFO still exists (cleanup
+    // unlinks it) and (2) the task's PID is alive (kill -0). Either failing
+    // ends the relay within one cycle, so an orphaned relay reaps itself even
+    // when every cleanup path was skipped. Both checks run BEFORE cat blocks
+    // on open, so steering latency is unchanged.
+    const relay = spawn('sh', ['-c', child.pid !== undefined ? buildRelayCommand(fifoPath, child.pid) : `while :; do cat "${fifoPath}" || break; done`], { cwd, detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
     relays.set(id, relay);
     relay.stdout?.on('data', (d: Buffer) => {
       if (child.stdin && !child.stdin.destroyed) child.stdin.write(d);

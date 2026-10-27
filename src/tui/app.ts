@@ -64,7 +64,7 @@ const RESET = '\x1b[0m';
 const OSC_BG_BLACK = '\x1b]11;#1a1a1a\x07';
 const OSC_BG_RESET = '\x1b]111\x07';
 
-type LineKind = 'user' | 'assistant' | 'system' | 'error' | 'tool' | 'task' | 'goal' | 'plain' | 'thought' | 'summary';
+type LineKind = 'user' | 'assistant' | 'system' | 'error' | 'tool' | 'task' | 'goal' | 'plain' | 'thought' | 'summary' | 'note';
 
 interface Line {
   kind: LineKind;
@@ -988,6 +988,26 @@ export async function launchTui(runtime: Runtime, initialPrompt?: string): Promi
         const wrapped = wrap(cleanText, Math.max(10, maxWidth - 4));
         for (const w of wrapped) {
           rows.push(`${T.dim}${R.systemText}${w}${T.reset}`);
+        }
+        break;
+      }
+      case 'note': {
+        // Harness telemetry: learning events (skills authored, lessons and
+        // memory writes), guardrail vetoes, and lane transitions. Learning
+        // gets the accent mark; guardrails get a warning tone; everything
+        // else stays muted so the transcript keeps its signal density.
+        const isLearning = /^\[(skills|memory|learned)\]/.test(line.text);
+        const isGuardrail = /^\[guardrail\]/.test(line.text);
+        const wrapped = wrap(cleanText, Math.max(10, maxWidth - 4));
+        for (let i = 0; i < wrapped.length; i++) {
+          const w = wrapped[i];
+          if (i === 0) {
+            if (isLearning) rows.push(`${T.orange}${T.bold}✦${T.reset} ${T.orange}${w}${T.reset}`);
+            else if (isGuardrail) rows.push(`${T.warning}${T.bold}⊘${T.reset} ${T.warning}${w}${T.reset}`);
+            else rows.push(`${T.dim}· ${R.systemText}${w}${T.reset}`);
+          } else {
+            rows.push(`  ${isLearning ? T.orange : isGuardrail ? T.warning : T.dim}${w}${T.reset}`);
+          }
         }
         break;
       }

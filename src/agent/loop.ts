@@ -381,6 +381,11 @@ export function isComplexRewritingTask(title: string, description = ''): boolean
 import { expectsFileOutput, isGreenfieldTask } from '../core/greenfield.js';
 export { expectsFileOutput, isGreenfieldTask };
 
+/** Reduced memory-block cap while in the fast lane (see FASTLANE_LIMITS).
+ *  The lane used to gate memory off ENTIRELY until a struggle signal; now it
+ *  injects a small block so memory stays real on short runs. */
+const FASTLANE_MEMORY_CAP = FASTLANE_LIMITS.maxMemoryChars;
+
 /** Task Focus & Cognitive Discipline Protocol: injected once for substantive engineering
  *  work so the model maintains 100% laser focus on the user's objective, avoids wandering
  *  into sibling projects or unrelated session stores, reasons deeply before coding, and
@@ -1654,6 +1659,7 @@ export class Agent {
     if (!this.fastLaneMemoryReleased && (this.consecutiveVerifyFailures >= 1 || this.totalToolErrors() >= 2)) {
       this.fastLaneMemoryReleased = true;
       this.context.setMemoryInjectionEnabled(true);
+      this.context.setMemoryCapOverride(null);
       this.events.emit({
         type: 'agent:log', agentId: this.id,
         message: '[fastlane] memory released on struggle signal — full recall available for the rest of the run',
@@ -1695,6 +1701,7 @@ export class Agent {
     }
     // Memory back on (it may already be, via the struggle release above).
     this.context.setMemoryInjectionEnabled(true);
+    this.context.setMemoryCapOverride(null);
     this.fastLaneMemoryReleased = true;
     // The repo map the lane skipped: build and inject it now.
     let mapText = '';
@@ -1871,16 +1878,21 @@ export class Agent {
       if (!decision.eligible) {
         // A reused ContextEngine must never inherit a previous run's gate.
         this.context.setMemoryInjectionEnabled(true);
+        this.context.setMemoryCapOverride(null);
       }
       if (decision.eligible) {
         this.fastLane = true;
         recordFastLaneEntry(this.workspace, kind);
-        // Struggle-gated recall (B19): the lane starts from a minimal
-        // brief; memory is released on struggle or escalation.
-        this.context.setMemoryInjectionEnabled(false);
+        // Memory is NEVER fully gated off anymore (the old struggle-gate made
+        // most runs memoryless — the lane's whole point was fewer tokens, and
+        // it traded away the one thing that makes the agent feel like it
+        // remembers). Fast-lane injects a REDUCED memory block instead;
+        // struggle/escalation restores the full-cap retrieval.
+        this.context.setMemoryInjectionEnabled(true);
+        this.context.setMemoryCapOverride(FASTLANE_MEMORY_CAP);
         this.events.emit({
           type: 'agent:log', agentId: this.id,
-          message: `[fastlane] entered for "${task.title}" (${decision.reasons.join('; ')}) — lean profile: ≤${FASTLANE_LIMITS.maxIterations} turns, targeted verify only, memory gated until struggle`,
+          message: `[fastlane] entered for "${task.title}" (${decision.reasons.join('; ')}) — lean profile: ≤${FASTLANE_LIMITS.maxIterations} turns, targeted verify only, reduced memory (${FASTLANE_MEMORY_CAP} chars; full recall on struggle)`,
         });
       }
     }
@@ -5377,6 +5389,10 @@ Continue from 'Next:', do not redo completed progress.`,
     this.context.addMessage({ role: 'tool', tool_call_id: c.id, content: `Blocked: ${reason}`, name: c.function.name });
     this.vetoLog.push({ tool: c.function.name, reason });
     if (this.vetoLog.length > 20) this.vetoLog.shift();
+    // Surface the veto in chat: a blocked call the user cannot see looks like
+    // the model "arguing with itself" — the guardrail is the other party in
+    // that argument and the user deserves to see its side.
+    this.events.emit({ type: 'agent:log', agentId: this.id, message: `[guardrail] ${c.function.name} blocked: ${reason}` });
   }
 
   /** Mark a tool result as "file changed" and track the affected paths.
@@ -9177,8 +9193,14 @@ Continue from 'Next:', do not redo completed progress.`,
     if (!changed.length) return;
     try {
       const store = new MemoryStore(this.workspace.dir);
+      const title = `Completed: ${task.title}`.slice(0, 80);
       const body = `Completed "${task.title}". Files changed: ${changed.slice(0, 6).join(', ')}${changed.length > 6 ? ` (+${changed.length - 6} more)` : ''}.`;
-      store.add({ kind: 'decision', title: `Completed: ${task.title}`.slice(0, 80), body, source: 'mochi-session' });
+      const created = store.add({ kind: 'decision', title, body, source: 'mochi-session' });
+      // Make the memory write visible: a silent store.add() is why "it saved
+      // to memory" was never observable from chat.
+      if (created) {
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: `[memory] decision recorded: ${title}` });
+      }
     } catch { /* durable-state write is best-effort */ }
   }
 
@@ -9209,13 +9231,14 @@ Continue from 'Next:', do not redo completed progress.`,
     if (this.diagnosis && this.hypotheses.length) {
       const top = this.hypotheses[this.hypotheses.length - 1] ?? this.hypotheses[0];
       if (top) {
-        recordLesson(this.workspace.dir, {
+        const all = recordLesson(this.workspace.dir, {
           id: `${this.diagnosis.kind}:${top.id}`,
           signature: (this.diagnosis.signals[0] ?? this.diagnosis.kind).slice(0, 80),
           kind: this.diagnosis.kind,
           lesson: top.description,
           sourceAutopsy: this.autopsy?.taskId,
         });
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: `[memory] learned: "${top.description.slice(0, 120)}" (saved to lessons — ${all.length} total)` });
       }
     }
   }
@@ -9228,6 +9251,21 @@ Continue from 'Next:', do not redo completed progress.`,
   private recordFailure(task: Task, summary: string): void {
     if (this.autopsy) {
       this.autopsy = finalizeAutopsy(this.workspace.dir, this.autopsy, { outcome: 'unresolved' });
+    }
+    // Every failed run must leave a lesson. The old gate required a full
+    // observeFailure() diagnosis to exist (verify-retry paths only); runs that
+    // failed outside that path — budget abort, pulse abort, tool-error stop —
+    // silently recorded NOTHING, which is why the flywheel looked dead. When
+    // no diagnosis exists, synthesize the lightest honest one from the failure
+    // summary so the failure signature still lands in lessons.json.
+    if (!this.diagnosis) {
+      const { kind, signals } = classifyFailure(summary || `task ${task.title} failed`);
+      this.diagnosis = {
+        kind,
+        signals,
+        hypotheses: this.hypotheses.length ? this.hypotheses : formInitialHypotheses(kind, []),
+        summary: summary.slice(0, 600),
+      };
     }
     // Speculation memory: mark the preflight's strategy class as stalled so
     // future preflights de-prioritize it for this task family.
@@ -9245,13 +9283,14 @@ Continue from 'Next:', do not redo completed progress.`,
         const verdict = /PARTIAL|Mutation check: injected logic bug was NOT caught/i.test(summary)
           ? 'weak-verification (string check, not runtime) lets mutations survive; use a real runner'
           : 'verify kept failing across attempts; next time pick a different hypothesis sooner';
-        recordLesson(this.workspace.dir, {
+        const all = recordLesson(this.workspace.dir, {
           id: `${this.diagnosis.kind}:${top.id}:fail`,
           signature: (this.diagnosis.signals[0] ?? this.diagnosis.kind).slice(0, 80),
           kind: this.diagnosis.kind,
           lesson: `AVOID: ${top.description}. ${verdict}`,
           sourceAutopsy: this.autopsy?.taskId,
         });
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: `[memory] learned from failure: "${`AVOID: ${top.description}`.slice(0, 110)}" (saved to lessons — ${all.length} total)` });
       }
     }
   }

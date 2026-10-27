@@ -601,6 +601,7 @@ export const skillManageTool: Tool = {
       // archive, consolidation, regression doctor) — writeSkill only records
       // usage, which left agentCreated=false and made them invisible to it.
       try { markUsed(targetDir, name, { agentCreated: true, category: category === 'global' || category === 'user' ? undefined : category }); } catch { /* best-effort */ }
+      ctx.events?.emit({ type: 'agent:log', agentId: ctx.agentId ?? 'agent', message: `[skills] learned new skill "${name}" (${category === 'global' || category === 'user' ? 'global' : 'project'}) — available to every future session` });
       return `Created skill '${name}' at ${r.path}. It is advertised to every future session in this scope; the user can read it with 'mochi skills ${name}'.`;
     }
     if (action === 'edit') {
@@ -619,6 +620,7 @@ export const skillManageTool: Tool = {
       });
       if (!r.ok) return JSON.stringify(r);
       bumpPatch(projectDir, name);
+      ctx.events?.emit({ type: 'agent:log', agentId: ctx.agentId ?? 'agent', message: `[skills] updated skill "${name}" (quality ${r.quality?.score ?? 0}/100) — patch saved` });
       return r.state === 'probation'
         ? `Updated skill '${name}' (quality ${r.quality?.score ?? 0}/100). The rewrite re-enters PROBATION until verifier-passed runs re-earn activation.`
         : `Updated skill '${name}' (quality ${r.quality?.score ?? 0}/100).`;

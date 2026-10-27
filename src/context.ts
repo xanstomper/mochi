@@ -897,8 +897,19 @@ export class ContextEngine {
    *  hard 2,000-char slice predates unified ranking — with hits ranked
    *  across all four stores, a 4,000 default buys signal, not dump. */
   private memoryInjectionCap(): number {
+    if (this.memoryCapOverride !== null) return this.memoryCapOverride;
     const n = this.config?.memory?.injectionChars;
     return typeof n === 'number' && Number.isFinite(n) && n > 0 ? Math.floor(n) : 4000;
+  }
+
+  /** Transient cap override (fast lane injects a REDUCED memory block instead
+   *  of gating memory off entirely). null restores the configured cap. */
+  private memoryCapOverride: number | null = null;
+
+  setMemoryCapOverride(chars: number | null): void {
+    this.memoryCapOverride = typeof chars === 'number' && chars > 0 ? Math.floor(chars) : null;
+    // A cap change alters the packet: force re-selection on the next build.
+    this.memoryFingerprint = '';
   }
 
   private loadMemory(query = ''): string {
