@@ -13,6 +13,16 @@
 // exercise the exact action→screenshot path the X11 backend serves.
 
 import { keysymForName, type DisplayBackend, type DisplayInfo, type PointerState } from './display.js';
+import { FakeAppWidgets } from './fake-app.js';
+import type { DesktopAxNode } from '../a11y/tree.js';
+
+export interface FakeDisplayOptions {
+  /** Opt-in interactive fake app (see fake-app.ts): adds a fixed widget
+   *  layout with hit-tested clicks, keyboard focus, an a11y() tree, and
+   *  deterministic widget rendering. Default OFF — without it this backend
+   *  is byte-for-byte the passive surface it always was. */
+  app?: boolean | { receiptUrl?: string };
+}
 
 export class FakeDisplayBackend implements DisplayBackend {
   readonly kind = 'fake' as const;
@@ -24,17 +34,21 @@ export class FakeDisplayBackend implements DisplayBackend {
   private buttonsDown = new Set<number>();
   private actions = 0;
   private typed = '';
+  private readonly app?: FakeAppWidgets;
 
   /** Test introspection: every key press/release as "name:down"/"name:up". */
   readonly keyLog: string[] = [];
   /** Test introspection: every button event as "b<n>:down"/"b<n>:up". */
   readonly buttonLog: string[] = [];
 
-  constructor(width = 800, height = 600) {
+  constructor(width = 800, height = 600, opts: FakeDisplayOptions = {}) {
     this.width = width;
     this.height = height;
     this.px = Math.floor(width / 2);
     this.py = Math.floor(height / 2);
+    if (opts.app) {
+      this.app = new FakeAppWidgets(opts.app === true ? {} : opts.app);
+    }
   }
 
   async info(): Promise<DisplayInfo> {
@@ -54,6 +68,9 @@ export class FakeDisplayBackend implements DisplayBackend {
   }
 
   async button(button: number, pressed: boolean): Promise<void> {
+    if (pressed && button === 1 && this.app) {
+      this.app.pointerDown(this.px, this.py);
+    }
     if (pressed) this.buttonsDown.add(button);
     else this.buttonsDown.delete(button);
     this.buttonLog.push(`b${button}:${pressed ? 'down' : 'up'}`);
@@ -65,14 +82,26 @@ export class FakeDisplayBackend implements DisplayBackend {
     if (keysym === null) throw new Error(`fake-display: unknown key "${name}"`);
     this.keyLog.push(`${name}:${pressed ? 'down' : 'up'}`);
     if (pressed) {
-      if (name.length === 1) this.typed += name;
-      else if (name.toLowerCase() === 'space') this.typed += ' ';
-      else if (name.toLowerCase() === 'backspace') this.typed = this.typed.slice(0, -1);
+      // The focused fake-app textbox consumes the key; without the app (or
+      // focus) the key lands in the global typed buffer as before.
+      if (!(this.app?.keyDown(name) ?? false)) {
+        if (name.length === 1) this.typed += name;
+        else if (name.toLowerCase() === 'space') this.typed += ' ';
+        else if (name.toLowerCase() === 'backspace') this.typed = this.typed.slice(0, -1);
+      }
     }
     this.actions++;
   }
 
   async close(): Promise<void> { /* nothing to release */ }
+
+  /** Desktop a11y source (DisplayBackend.a11y?): empty without the app. */
+  a11y(): DesktopAxNode[] {
+    return this.app ? this.app.a11y() : [];
+  }
+
+  /** Test introspection: the fake app, when enabled. */
+  get fakeApp(): FakeAppWidgets | undefined { return this.app; }
 
   /** What has been "typed" so far (test introspection). */
   get typedText(): string { return this.typed; }
@@ -104,6 +133,8 @@ export class FakeDisplayBackend implements DisplayBackend {
       cx += 8;
       if (cx + 8 > w - 8) { cx = 16; cy += 10; if (cy + 10 > h - 8) break; }
     }
+    // The fake app's widgets (when enabled) render under the pointer.
+    this.app?.draw(frame, w, h);
     // Pointer crosshair (drawn last so it is always visible).
     drawCrosshair(frame, w, h, this.px, this.py);
     return frame;

@@ -26,8 +26,21 @@ import type { Tool, ToolContext } from './types.js';
 import { getDisplayBackend } from '../computer/backend.js';
 import { encodePngRgba } from '../computer/png.js';
 import { parseKeyCombo, type DisplayBackend } from '../computer/display.js';
+import {
+  findNode,
+  nodeCenter,
+  renderTree,
+  treeFromDesktopNodes,
+  type SurfaceTree,
+} from '../a11y/tree.js';
+import {
+  stashHandoff,
+  takeHandoff,
+  peekHandoff,
+  carriedSection,
+} from '../a11y/handoff.js';
 
-const ACTIONS = ['screenshot', 'pointer', 'move', 'click', 'double_click', 'right_click', 'drag', 'scroll', 'type', 'key', 'wait'] as const;
+const ACTIONS = ['screenshot', 'pointer', 'move', 'click', 'double_click', 'right_click', 'drag', 'scroll', 'type', 'key', 'wait', 'tree', 'handoff'] as const;
 type ComputerAction = (typeof ACTIONS)[number];
 
 const MAX_SCREENSHOTS_KEPT = 20;
@@ -88,6 +101,84 @@ export function takeLastComputerScreenshot(stateDir: string): LastComputerScreen
   const shot = lastScreenshots.get(stateDir);
   if (shot) lastScreenshots.delete(stateDir);
   return shot ?? null;
+}
+
+// -----------------------------------------------------------------------
+// Shared a11y-tree seam (src/a11y/tree.ts): the desktop observation and
+// targeting helpers. Same tree shape, same selectors, same action vocabulary
+// as the CDP browser surface — see handoff() and tree() below for the
+// cross-surface path.
+// -----------------------------------------------------------------------
+
+/** The CURRENT desktop state as a shared tree. Backends without an a11y
+ *  source (real X11 today) produce an empty tree — reported honestly,
+ *  never invented. */
+function desktopTree(backend: DisplayBackend, info: { label: string }): { tree: SurfaceTree; hasSource: boolean } {
+  const hasSource = typeof backend.a11y === 'function';
+  const tree = treeFromDesktopNodes(hasSource ? backend.a11y!() : [], info.label);
+  return { tree, hasSource };
+}
+
+/** Resolve a shared selector (refs, role=, name=, text=) against the live
+ *  desktop tree. On a miss the error text carries the observed tree, so the
+ *  model can pick a valid target without a separate observation call. */
+async function resolveTargetOnDesktop(
+  backend: DisplayBackend,
+  target: string,
+): Promise<{ x: number; y: number; ref: string } | string> {
+  const info = await backend.info();
+  const { tree } = desktopTree(backend, info);
+  const node = findNode(tree, target);
+  if (!node) {
+    const foreign = /^e\d+$/.test(target)
+      ? `\n"${target}" is a BROWSER-surface ref — act on it with cdp_browser, or observe this desktop with action=tree.`
+      : '';
+    return `computer: no desktop node matches target="${target}" — observed tree:\n${renderTree(tree)}${foreign}`;
+  }
+  const center = nodeCenter(node);
+  if (!center) return `computer: node ${node.ref} has no bounds on this backend`;
+  return { ...center, ref: node.ref };
+}
+
+/** Adopt a pending BROWSER handoff into this observation's result (renders
+ *  the carried tree as context and consumes the stash). Empty when none is
+ *  pending — the common desktop-only case, zero output change. */
+function adoptCarriedBrowser(ctx: ToolContext): string[] {
+  const h = peekHandoff(ctx.cwd);
+  if (!h || h.from !== 'browser') return [];
+  takeHandoff(ctx.cwd);
+  return [carriedSection(h)];
+}
+
+/** The tree / handoff actions: observe the desktop as the shared tree, and
+ *  (handoff) stash it for the browser side. Both keep the screenshot-after-
+ *  action contract — the frame rides under the tree text. */
+async function treeAction(
+  ctx: ToolContext,
+  backend: DisplayBackend,
+  action: 'tree' | 'handoff',
+): Promise<string> {
+  const info = await backend.info();
+  const { tree, hasSource } = desktopTree(backend, info);
+  const focus = tree.focusedRef ? `, focused ${tree.focusedRef}` : '';
+  let head: string;
+  if (action === 'handoff') {
+    stashHandoff(ctx.cwd, {
+      from: 'desktop',
+      tree,
+      ...(tree.focusedRef ? { focusedRef: tree.focusedRef } : {}),
+      handedAt: Date.now(),
+    });
+    head = `observed ${tree.nodes.length} node(s)${focus} — stashed; the next cdp_browser open/snapshot adopts this context (no re-observation needed)`;
+  } else {
+    head = hasSource
+      ? `observed ${tree.nodes.length} node(s)${focus}`
+      : 'no a11y source on this backend — no interactive nodes reported (coordinates only)';
+  }
+  const carried = action === 'tree' ? adoptCarriedBrowser(ctx) : [];
+  const report = await captureAndReport(ctx, backend, action, head);
+  const [first, ...rest] = report.split('\n');
+  return [[first, ...carried, renderTree(tree)].join('\n'), ...rest].join('\n');
 }
 
 async function captureAndReport(
@@ -230,6 +321,11 @@ async function performAction(backend: DisplayBackend, action: ComputerAction, ar
       await new Promise((r) => setTimeout(r, ms));
       return `waited ${ms}ms`;
     }
+    case 'tree':
+    case 'handoff':
+      // Unreachable: execute() routes these to treeAction() before
+      // performAction (they observe/carry the tree, not pixels).
+      throw new Error(`${action}: handled by the a11y seam, not the input path`);
   }
 }
 
@@ -239,10 +335,14 @@ export const computerTool: Tool = {
     description:
       'Control the desktop (Linux/X11): take screenshots, move/click/drag the pointer, scroll, type text, and press keys. ' +
       `Actions: ${ACTIONS.join(', ')}. EVERY action returns a fresh screenshot (saved to the workspace state dir) so you can see the result before acting again. ` +
+      'tree — observe the desktop as an accessibility tree (stable d<N> refs with role/name/bounds, the same shape as cdp_browser snapshots) and adopt any context handed off from the browser; ' +
+      'handoff — stash the desktop tree (and focused node) for the browser surface so a task can move between desktop and browser without re-observation; ' +
+      'click/type accept target=<ref|role=...|name="..."|text=...> resolved against the live tree (coordinates still work). ' +
       'Requires explicit opt-in (permission tier "computer", stricter than shell): permissions.computer=true in config or MOCHI_COMPUTER=1 for the session; denied by default, never auto-approved headless. ' +
       'Coordinates are absolute pixels with (0,0) at the top-left.',
     parameters: [
       { name: 'action', type: 'string', description: `Action: ${ACTIONS.join('|')}`, required: true },
+      { name: 'target', type: 'string', description: 'Node target for click/type: d<N> ref from action=tree, role=button, role=button[name="Submit"], name="...", or text=needle', required: false },
       { name: 'x', type: 'number', description: 'Target X pixel (move/click/drag start)', required: false },
       { name: 'y', type: 'number', description: 'Target Y pixel (move/click/drag start)', required: false },
       { name: 'x2', type: 'number', description: 'Drag end X pixel', required: false },
@@ -271,7 +371,32 @@ export const computerTool: Tool = {
       return `computer: ${err instanceof Error ? err.message : String(err)}`;
     }
     try {
-      const detail = await performAction(backend, action, args);
+      // Tree / handoff: observe or carry the shared a11y tree (the
+      // cross-surface seam). Everything else acts on pixels/keys.
+      if (action === 'tree' || action === 'handoff') {
+        return await treeAction(ctx, backend, action);
+      }
+
+      // Shared-selector targeting: `target` resolves against the LIVE desktop
+      // tree to concrete coordinates (refs, role=, name=, text= — the same
+      // vocabulary cdp_browser refs come from). Coordinate args stay exactly
+      // as before; `target` is purely additive.
+      const targetSel = typeof args.target === 'string' ? args.target.trim() : '';
+      let effectiveArgs = args;
+      if (targetSel && (action === 'click' || action === 'double_click' || action === 'right_click' || action === 'type')) {
+        const resolved = await resolveTargetOnDesktop(backend, targetSel);
+        if (typeof resolved === 'string') return resolved; // observation-carrying miss
+        if (action === 'type') {
+          // Focus the node with a real click at its center, then type below.
+          await backend.movePointer(resolved.x, resolved.y);
+          await backend.button(1, true);
+          await backend.button(1, false);
+        } else {
+          effectiveArgs = { ...args, x: resolved.x, y: resolved.y };
+        }
+      }
+
+      const detail = await performAction(backend, action, effectiveArgs);
       await settle(backend);
       return await captureAndReport(ctx, backend, action, detail);
     } catch (err) {
