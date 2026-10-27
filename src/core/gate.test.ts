@@ -6,7 +6,7 @@
 // on every plan).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -19,7 +19,9 @@ import {
   isCoreSurface,
 } from './gate.js';
 import type { ImportGraph } from './test-selection.js';
+import { verifyTool } from '../tools/verify.js';
 import type { RepoInfo } from '../types.js';
+import type { ToolContext, MochiConfig } from '../types.js';
 
 let dir: string;
 beforeEach(() => {
@@ -38,8 +40,8 @@ function touch(rel: string, content = ''): void {
 const repoStub = { testCommand: 'npm test' } as RepoInfo;
 
 function fixtureRepo(): void {
-  // A tiny vitest repo: leaf.ts (leaf module), hub.ts (imported by two files),
-  // and unrelated.test.ts (imports nothing changed).
+  // A tiny vitest repo: leaf.ts (leaf module) and unrelated.test.ts (imports
+  // nothing changed).
   touch('package.json', JSON.stringify({
     name: 'fixture',
     private: true,
@@ -49,6 +51,14 @@ function fixtureRepo(): void {
   touch('src/leaf.ts', 'export const double = (n: number) => n * 2;');
   touch('src/leaf.test.ts', "import { it, expect } from 'vitest';\nimport { double } from './leaf.js';\nit('doubles', () => { expect(double(2)).toBe(4); });");
   touch('src/unrelated.test.ts', "import { it, expect } from 'vitest';\nit('unrelated', () => { expect(1).toBe(1); });");
+}
+
+function gitInit(): void {
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: dir, stdio: 'pipe' });
+  execFileSync('git', ['config', 'user.email', 't@t'], { cwd: dir });
+  execFileSync('git', ['config', 'user.name', 't'], { cwd: dir });
+  execFileSync('git', ['add', '-A'], { cwd: dir });
+  execFileSync('git', ['commit', '-qm', 'base'], { cwd: dir });
 }
 
 describe('blast-radius gate: selection is the default', () => {
@@ -103,6 +113,20 @@ describe('blast-radius gate: selection is the default', () => {
     expect(plan.rationale.rule).toBe('empty-change-set');
     expect(plan.rationale.selectedTests).toEqual(['src/core/test-selection.test.ts']);
     expect(plan.command).toContain('src/core/test-selection.test.ts');
+  });
+
+  it('a REAL clean tree (git) selects only the always-run core set', async () => {
+    fixtureRepo();
+    touch('src/core/test-selection.test.ts', "import { it } from 'vitest';\nit('core', () => {});");
+    gitInit();
+    const cs = await determineChangeSet(dir);
+    expect(cs).not.toBeNull();
+    expect(cs!.files).toEqual([]);
+    const plan = await planGateTests(dir, repoStub, {});
+    expect(plan.mode).toBe('selected');
+    expect(plan.rationale.rule).toBe('empty-change-set');
+    expect(plan.rationale.changedFiles).toEqual([]);
+    expect(plan.rationale.selectedTests).toEqual(['src/core/test-selection.test.ts']);
   });
 
   it('the always-run core set joins every selected run (AAIF conformance)', async () => {
@@ -216,24 +240,16 @@ describe('blast-radius gate: fail-safe rules force the FULL suite', () => {
 });
 
 describe('blast-radius gate: change-set determination (real git)', () => {
-  function git(args: string[]): void {
-    execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
-  }
-
   it('includes uncommitted AND committed-since-merge-base files', async () => {
     fixtureRepo();
-    git(['init', '-q', '-b', 'main']);
-    git(['config', 'user.email', 't@t']);
-    git(['config', 'user.name', 't']);
-    git(['add', '-A']);
-    git(['commit', '-qm', 'base']);
+    gitInit();
 
     // Committed change on a FEATURE branch (clean status) + an uncommitted
     // one; the merge base against main is the base commit.
-    git(['checkout', '-qb', 'feature']);
+    execFileSync('git', ['checkout', '-qb', 'feature'], { cwd: dir, stdio: 'pipe' });
     touch('src/leaf.ts', 'export const double = (n: number) => n * 3;');
-    git(['add', 'src/leaf.ts']);
-    git(['commit', '-qm', 'change leaf']);
+    execFileSync('git', ['add', 'src/leaf.ts'], { cwd: dir, stdio: 'pipe' });
+    execFileSync('git', ['commit', '-qm', 'change leaf'], { cwd: dir, stdio: 'pipe' });
     touch('src/unrelated.test.ts', "import { it, expect } from 'vitest';\nit('changed on the working tree', () => {});");
 
     const cs = await determineChangeSet(dir);
@@ -251,15 +267,56 @@ describe('blast-radius gate: change-set determination (real git)', () => {
 
   it('mergeBaseOf returns null when no base ref exists', async () => {
     fixtureRepo();
-    git(['init', '-q', '-b', 'main']);
-    git(['config', 'user.email', 't@t']);
-    git(['config', 'user.name', 't']);
-    git(['add', '-A']);
-    git(['commit', '-qm', 'base']);
-    // "main" IS the current branch — merge-base HEAD main resolves; delete it
-    // from the candidate list by renaming: an orphan branch with no main.
-    git(['checkout', '-q', '--orphan', 'solo']);
-    git(['branch', '-D', 'main']);
+    gitInit();
+    // An orphan branch with no main/master and no upstream: no merge base.
+    execFileSync('git', ['checkout', '-q', '--orphan', 'solo'], { cwd: dir, stdio: 'pipe' });
+    execFileSync('git', ['branch', '-D', 'main'], { cwd: dir, stdio: 'pipe' });
     expect(await mergeBaseOf(dir)).toBeNull();
+  });
+});
+
+describe('blast-radius gate: forced-full surfaces (verify tool + env)', () => {
+  it('the verify tool honors full:true over selection', async () => {
+    fixtureRepo();
+    symlinkSync(join(process.cwd(), 'node_modules'), join(dir, 'node_modules'), 'dir');
+    gitInit();
+    // Uncommitted leaf change — selection WOULD narrow without the override.
+    touch('src/leaf.ts', 'export const double = (n: number) => n * 2;');
+    const ctx: ToolContext = {
+      cwd: dir,
+      workspace: { dir, root: dir } as unknown as ToolContext['workspace'],
+      config: {} as MochiConfig,
+      events: {} as ToolContext['events'],
+      agentId: 'test',
+    };
+    const out = await verifyTool.execute({ command: 'test', full: true }, ctx);
+    expect(out).toContain('[FULL]');
+    expect(out).toContain('full parameter');
+    expect(out).not.toContain('[PARTIAL]');
+  });
+
+  it('the verify tool honors MOCHI_GATE_FULL=1 over selection', async () => {
+    fixtureRepo();
+    symlinkSync(join(process.cwd(), 'node_modules'), join(dir, 'node_modules'), 'dir');
+    gitInit();
+    touch('src/leaf.ts', 'export const double = (n: number) => n * 2;');
+    const prev = process.env.MOCHI_GATE_FULL;
+    process.env.MOCHI_GATE_FULL = '1';
+    try {
+      const ctx: ToolContext = {
+        cwd: dir,
+        workspace: { dir, root: dir } as unknown as ToolContext['workspace'],
+        config: {} as MochiConfig,
+        events: {} as ToolContext['events'],
+        agentId: 'test',
+      };
+      const out = await verifyTool.execute({ command: 'test' }, ctx);
+      expect(out).toContain('[FULL]');
+      expect(out).toContain('MOCHI_GATE_FULL=1');
+      expect(out).not.toContain('[PARTIAL]');
+    } finally {
+      if (prev === undefined) delete process.env.MOCHI_GATE_FULL;
+      else process.env.MOCHI_GATE_FULL = prev;
+    }
   });
 });
