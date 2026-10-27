@@ -177,6 +177,16 @@ import { summarize, resolveRunStatus } from '../summary/engine.js';
 import { compactSession, compactToPrompt } from '../summary/compact.js';
 import { buildDigestInput } from '../summary/digest-input.js';
 import { buildSummaryLineage, renderSummaryLineage } from '../summary/verified-compaction.js';
+// Item 17 (evidence-graded output): the claim-grading seam — classifies the
+// summary's substantive claims as cited / test-backed / ungrounded against
+// what this run actually observed, with a hard no-fabrication rule.
+import {
+  appendEvidenceGrade,
+  collectRunEvidence,
+  evidenceFooterItems,
+  gradeClaims,
+  type ClaimGradeReport,
+} from '../summary/claim-grade.js';
 import { ExecutionRegistry } from '../core/execution-registry.js';
 import { RunJournal, isJournalableTool, modelTurnFingerprint } from './run-journal.js';
 import { RunResultCache } from './result-cache.js';
@@ -583,6 +593,13 @@ export interface AgentResult {
   /** Fast-lane record for this run (absent when the lane was not entered):
    *  whether it escalated to the standard profile mid-run, and why. */
   fastLane?: { entered: boolean; escalated: boolean; escalationReason?: string };
+  /** Item 17: evidence grade of the summary's substantive claims — how many
+   *  carry a verified file:line / file citation or a test result observed
+   *  this run, and which claims are visibly ungrounded. Absent for failed
+   *  runs (their summaries quote verification output directly) and when the
+   *  summary holds no substantive claims. The structured record of the grade
+   *  on the run — not just prose in the summary. */
+  claimGrade?: ClaimGradeReport;
 }
 
 /** Spec for one child run, shared by the sync delegate path and the
@@ -800,6 +817,12 @@ export class Agent {
   private triedFallbackProviders = new Set<string>();
   private consecutiveToolErrorsCount = 0;
   private verifyCount = 0;
+  /** Item 17: per-run ledger of shell commands this run actually executed —
+   *  the test-backing evidence for claim grading at finish. Fed from the two
+   *  execution chokepoints (model-initiated shell calls in runMoolCall and
+   *  harness-initiated runShell); a command only lands here when it RAN, so
+   *  the grader can never cite a check that never happened. */
+  private shellLedger: Array<{ command: string; exitCode: number | null; failed: boolean }> = [];
   private consecutiveVerifyFailures = 0;
   private escalatedThisTask = false;
   /** Cost-per-solve routing (B22): per-run ladder state. The routing table
@@ -1806,6 +1829,8 @@ export class Agent {
     // B2: each run() gets exactly one finish(). A previous run's guard entry
     // must not swallow this run's teardown (auto-resume reuses the instance).
     this.finishPromise = null;
+    // Item 17: shell evidence is per-run — a resume's ledger starts empty.
+    this.shellLedger = [];
     // The gate verdict is per-run evidence: a reused instance must not
     // attribute a previous run's PASS to this run's skill loads.
     this.lastVerifyStatus = null;
@@ -7533,6 +7558,12 @@ Continue from 'Next:', do not redo completed progress.`,
       error: err,
       durationMs,
     };
+    // Item 17: model-initiated shell runs join the run's evidence ledger (the
+    // harness-initiated ones enter via runShell). Command + parsed exit code —
+    // the only entries the finish-time claim grader may cite as test results.
+    if ((TOOL_ALIASES[toolName] || toolName) === 'shell') {
+      try { this.recordShellEvidence(String(args.command ?? ''), result.output, Boolean(err)); } catch { /* evidence is best-effort */ }
+    }
     // Uniform output policy (Harness V2): dual-limit truncation preserving
     // head+tail whole lines, with the FULL output spilled to a temp file the
     // model can re-read. Replaces the old 6k-char fold that could lose the
@@ -9306,7 +9337,24 @@ Continue from 'Next:', do not redo completed progress.`,
       readCache: this.readCache,
     };
     const { output, error } = await executeTool('shell', { command, timeout }, ctx, this.tools);
+    // Item 17: harness-initiated shell runs (verify gate, milestone checks,
+    // mutation checks) join the run's evidence ledger — these are exactly the
+    // commands a summary's "the suite passes" claims refer to.
+    try { this.recordShellEvidence(command, output, Boolean(error)); } catch { /* evidence is best-effort */ }
     return error ? `Error: ${error}\n${output}` : output;
+  }
+
+  /** Item 17: record one executed shell command in the run's evidence ledger.
+   *  A command only enters the ledger when it RAN (and its outcome is
+   *  parseable) — the property that makes the finish-time grade
+   *  non-fabricable: the grader can only ever cite a check that happened. */
+  private recordShellEvidence(command: string, output: string, errored: boolean): void {
+    if (this.shellLedger.length >= 60 || !command.trim()) return;
+    const m = /(?:^|\n)exit_code: (\d+)/.exec(output);
+    const exitCode = m ? Number(m[1]) : null;
+    if (exitCode === null && !errored) return; // outcome unknown — evidence for neither direction
+    const failed = errored || exitCode !== 0;
+    this.shellLedger.push({ command: command.slice(0, 200), exitCode, failed });
   }
 
   /** MCH-100: extract the run command a simple-script task explicitly asks
@@ -9957,15 +10005,18 @@ Continue from 'Next:', do not redo completed progress.`,
     const durationMs = Math.round(performance.now() - this.startTime);
     this.events.emit({ type: 'agent:completed', id: this.id, taskId: task.id });
     let doc;
+    // Item 17: the run's own event slice, shared by the summarizer and the
+    // claim grader below. snapshot() is in-memory and total; hoisted so both
+    // consumers see the SAME slice.
+    const hist = this.events.snapshot();
+    const runEvents: readonly MochiEvent[] = this.runStartMarker !== undefined
+      ? (() => { const i = hist.indexOf(this.runStartMarker as MochiEvent); return i >= 0 ? hist.slice(i + 1) : hist; })()
+      : hist;
     try {
       // Summarize THIS run only: the bus is session-scoped, so slice off
       // everything before the run-start marker — otherwise turn N's card
       // inherits turn N-1's files/checks/failures. A trimmed-away marker (or
       // no marker) falls back to the full snapshot.
-      const hist = this.events.snapshot();
-      const runEvents = this.runStartMarker !== undefined
-        ? (() => { const i = hist.indexOf(this.runStartMarker as MochiEvent); return i >= 0 ? hist.slice(i + 1) : hist; })()
-        : hist;
       doc = summarize(runEvents, { goal: task.title });
       // Fold the KNOWN outcome in: summarize() alone reports 'partial' for a
       // clean Q&A turn (no task:completed event exists yet at this point).
@@ -9990,6 +10041,59 @@ Continue from 'Next:', do not redo completed progress.`,
         /* narrative is optional */
       }
     }
+    // Item 17 (evidence-graded output): grade the summary's substantive
+    // claims against what THIS run actually observed — files touched, shell
+    // commands that completed (green or failed), the completion gate's
+    // verdict — and attach the grade to the user-facing output. Completed
+    // runs get an Evidence block appended to the summary: claims sourced from
+    // code or verification carry their citation / test result there; claims
+    // with no source in the run are marked [ungrounded] in the same block
+    // instead of silently standing as fact. The seam is pure + sync + bounded
+    // (no model round-trips, no fabrication: a path:line that does not resolve
+    // on disk is never upgraded, and a run-activity citation is file-level —
+    // never an invented line number). Failed runs skip grading: their
+    // summaries quote the verification output (the evidence) directly.
+    // Best-effort; claim grading must never affect task completion.
+    let claimGrade: ClaimGradeReport | undefined;
+    if (success) {
+      try {
+        // Test evidence, first-hand: commands THIS run actually executed (the
+        // shell ledger — both model- and harness-initiated runs), joined with
+        // anything the event stream recorded (command:completed is a defined
+        // event type that external drivers may emit; the loop itself does not).
+        const ledgerGreen = this.shellLedger.filter((c) => !c.failed).map((c) => c.command);
+        const ledgerFailed = this.shellLedger.filter((c) => c.failed).map((c) => c.command);
+        const eventGreen = runEvents
+          .filter((e): e is Extract<MochiEvent, { type: 'command:completed' }> => e.type === 'command:completed' && e.exitCode === 0)
+          .map((e) => e.command);
+        const eventFailed = [
+          ...runEvents
+            .filter((e): e is Extract<MochiEvent, { type: 'command:completed' }> => e.type === 'command:completed' && e.exitCode !== 0)
+            .map((e) => e.command),
+          ...runEvents
+            .filter((e): e is Extract<MochiEvent, { type: 'command:failed' }> => e.type === 'command:failed')
+            .map((e) => e.command),
+        ];
+        const evidence = collectRunEvidence({
+          cwd: this.cwd,
+          filesModified: this.context['state'].filesModified as string[],
+          filesRead: Array.from(this.readCache.keys()),
+          greenCommands: [...ledgerGreen, ...eventGreen],
+          failedCommands: [...ledgerFailed, ...eventFailed],
+          verifyStatus: this.lastVerifyStatus,
+        });
+        claimGrade = gradeClaims(summary, evidence);
+        summary = appendEvidenceGrade(summary, claimGrade);
+        if (claimGrade.counts.total === 0) claimGrade = undefined;
+        if (doc && claimGrade) {
+          const evidenceItems = evidenceFooterItems(claimGrade);
+          if (evidenceItems.length > 0) {
+            doc.evidence = evidenceItems;
+            doc.populatedSections.push('evidence');
+          }
+        }
+      } catch { /* claim grading must never affect task completion */ }
+    }
     this.events.emit({
       type: 'summary:rendered',
       agentId: this.id,
@@ -10002,6 +10106,7 @@ Continue from 'Next:', do not redo completed progress.`,
       filesModified: [...new Set(this.context['state'].filesModified)],
       summary,
       doc,
+      claimGrade,
     });
     const _runDigestParts: string[] = [];
     const _read = Array.from(this.readCache.keys())
@@ -10043,6 +10148,7 @@ Continue from 'Next:', do not redo completed progress.`,
       durationMs,
       stopReason,
       runDigest: _runDigest,
+      ...(claimGrade ? { claimGrade } : {}),
       ...(this.fastLane
         ? {
           fastLane: {

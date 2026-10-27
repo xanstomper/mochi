@@ -54,6 +54,11 @@ export interface SummaryDocument {
   warnings: SummaryItem[];
   references: SummaryItem[];
   next: SummaryItem[];
+  /** Item 17 (evidence-graded output): the finished response's evidence
+   *  block — the claim grade (cited / test-backed / ungrounded) rendered as
+   *  one item per line. Set by the agent loop at finish time from the
+   *  structured ClaimGradeReport, never invented by the summarizer. */
+  evidence?: SummaryItem[];
   /** Sections actually populated (renderer iterates this, skips the rest). */
   populatedSections: string[];
 }
