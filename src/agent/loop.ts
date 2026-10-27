@@ -1004,6 +1004,15 @@ export class Agent {
   private iterationCap = 0;
   /** Scope-fence (drift guard) state: consecutive out-of-scope write vetoes. */
   private scopeVetoCount = 0;
+  /**
+   * Floor-compaction backoff: when a floor digest+checkpoint fails to
+   * meaningfully shrink the context (the overage sits in the recent
+   * window the digest cannot touch), retrying every turn burns a model
+   * digest call and a model checkpoint call per turn for nothing. Back
+   * off until this iteration; the cheap shrink-in-place still runs
+   * every turn, and the block retries once the backoff expires.
+   */
+  private floorCompactBackoffUntil = -1;
 
   /** True when `path` resolves inside one of the fileScope roots. Glob
    *  patterns are honoured when the segment count matches; plain dirs prefix-
@@ -2691,8 +2700,9 @@ Continue from 'Next:', do not redo completed progress.`,
       // Periodic compaction is pressure-gated, not calendared: compacting
       // every 8 turns even when the context fits burns a model summarizer
       // call and rewrites history for nothing. The floor block below still
-      // handles genuine pressure every turn.
-      if (i > 0 && i % 8 === 0 && ctxTokens > floor) await this.checkpointAndCompact('periodic');
+      // handles genuine pressure every turn. A floor-compaction backoff
+      // (below) also suppresses it until the backoff expires.
+      if (i > 0 && i % 8 === 0 && ctxTokens > floor && i >= this.floorCompactBackoffUntil) await this.checkpointAndCompact('periodic');
       if (i > 0 && msgCount >= 10 && ctxTokens > floor) {
         // MCH-30: CC-style two-stage pressure response. Stage 1 (cheap):
         // shrink old tool outputs in place — keeps every turn's structure, no
@@ -2704,10 +2714,20 @@ Continue from 'Next:', do not redo completed progress.`,
           this.events.emit({ type: 'agent:log', agentId: this.id, message: `[context] shrunk old tool outputs in place (~${savedTokens} tokens saved); deferring full compaction` });
         }
         if (this.context.effectiveContextTokens() > floor) {
-          await this.digestOldMessages(floor);
-        }
-        if (this.context.effectiveContextTokens() > floor) {
-          await this.checkpointAndCompact('floor');
+          if (i < this.floorCompactBackoffUntil) {
+            this.events.emit({ type: 'agent:log', agentId: this.id, message: `[context] floor compaction backed off until iteration ${this.floorCompactBackoffUntil}; shrink-in-place only` });
+          } else {
+            const beforeFloor = this.context.effectiveContextTokens();
+            await this.digestOldMessages(floor);
+            if (this.context.effectiveContextTokens() > floor) {
+              await this.checkpointAndCompact('floor');
+            }
+            const afterFloor = this.context.effectiveContextTokens();
+            if (afterFloor > floor && beforeFloor - afterFloor < 200) {
+              this.floorCompactBackoffUntil = i + 8;
+              this.events.emit({ type: 'agent:log', agentId: this.id, message: `[context] floor compaction ineffective (${beforeFloor} -> ${afterFloor} tokens, still over floor ${floor}); backing off digest+checkpoint until iteration ${this.floorCompactBackoffUntil}` });
+            }
+          }
         }
       }
 
