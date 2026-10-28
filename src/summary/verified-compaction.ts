@@ -44,6 +44,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { redact } from '../security/security.js';
 import { lineSalience } from './digest-input.js';
+import { hasAssumptionFlag } from '../status-contract.js';
 
 export interface ProbeMessageLike {
   role: string;
@@ -52,7 +53,7 @@ export interface ProbeMessageLike {
   tool_calls?: Array<{ function: { name: string; arguments: string } }>;
 }
 
-export type ProbeFactKind = 'contract' | 'goal' | 'error' | 'decision' | 'path' | 'constraint' | 'obligation' | 'fact';
+export type ProbeFactKind = 'contract' | 'assumption' | 'goal' | 'error' | 'decision' | 'path' | 'constraint' | 'obligation' | 'fact';
 
 export interface ProbeFact {
   /** Deterministic id: hash of the fact text + source index. */
@@ -189,6 +190,13 @@ function kindOf(line: string, role: string, isGoal: boolean): ProbeFactKind {
  * error-code needle, user constraints, and the first substantive user
  * message (the task statement). Ranked by score; duplicates (same text or
  * same needle set) collapse. Returned in chronological order.
+ *
+ * D3: assumption-FLAGGED lines (see status-contract.ts) are probe-worthy by
+ * construction and ride OUTSIDE `maxFacts` (own bounded cap) — a flagged
+ * claim that loses its flag at compaction comes back as an unflagged claim,
+ * which is exactly the silent-guess failure this contract forbids. Flag
+ * lines also bypass the needle-set dedup: two flagged lines may legitimately
+ * attach to the same path (two distinct unknowns about one file).
  */
 export function extractProbeFacts(
   messages: readonly ProbeMessageLike[],
@@ -208,6 +216,18 @@ export function extractProbeFacts(
     if (m.tool_calls?.length) {
       for (const tc of m.tool_calls) {
         lines.push({ line: `${tc.function.name}(${tc.function.arguments ?? ''})`, bonus: 4 });
+        // D3: an artifact's content rides INSIDE a write/edit tool_call's
+        // arguments as ONE JSON-escaped line, so its assumption-flagged
+        // lines are invisible to the per-line scan above. Unfold ONLY the
+        // flagged segments as extra candidate lines (ordinary arg lines
+        // keep the existing single-line shape — extraction behavior for
+        // flag-free args is unchanged).
+        const args = tc.function.arguments ?? '';
+        if (hasAssumptionFlag(args)) {
+          for (const seg of args.split('\\n')) {
+            if (hasAssumptionFlag(seg)) lines.push({ line: seg, bonus: 4 });
+          }
+        }
       }
     }
     for (const raw of probeTextOf(m).split('\n')) lines.push({ line: raw, bonus: 0 });
@@ -219,12 +239,14 @@ export function extractProbeFacts(
       const needles = needlesOf(text);
       const userGoal = isFirstUser && text.length >= 24 && text.split(' ').length >= 4;
       const userConstraint = m.role === 'user' && CONSTRAINT_RE.test(text);
-      if (!userGoal && !userConstraint && salience < 8 && needles.length === 0) continue;
+      const assumptionFlag = hasAssumptionFlag(text);
+      if (!userGoal && !userConstraint && !assumptionFlag && salience < 8 && needles.length === 0) continue;
       let score = salience + bonus + needles.length * 3;
       if (userGoal) score += 50;
       if (userConstraint) score += 10;
+      if (assumptionFlag) score += 100; // must-survive: outranks every ordinary line
       if (m.role === 'user') score += 2;
-      cands.push({ text, sourceIndex: index, sourceRole: m.role, score, kind: kindOf(text, m.role, userGoal) });
+      cands.push({ text, sourceIndex: index, sourceRole: m.role, score, kind: assumptionFlag ? 'assumption' : kindOf(text, m.role, userGoal) });
     }
   });
 
@@ -233,8 +255,15 @@ export function extractProbeFacts(
   const seenTexts = new Set<string>();
   const seenNeedles = new Set<string>();
   const seenSingleNeedles = new Set<string>();
+  let assumptionPicks = 0;
   for (const c of cands) {
-    if (picked.length >= maxFacts) break;
+    const isAssumption = c.kind === 'assumption';
+    if (isAssumption) {
+      // Own bounded cap: never crowds ordinary facts, never unbounded itself.
+      if (assumptionPicks >= MAX_ASSUMPTION_PROBES) continue;
+    } else if (picked.filter((p) => p.kind !== 'assumption').length >= maxFacts) {
+      break;
+    }
     const key = c.text.toLowerCase();
     if (seenTexts.has(key)) continue;
     const needles = needlesOf(c.text);
@@ -242,13 +271,17 @@ export function extractProbeFacts(
     // probe nothing beyond the first. A path-ONLY fact (its whole signal
     // is the path) is also redundant once any earlier fact carries that
     // same path needle — e.g. an edit tool-call on the file an error fact
-    // already names.
+    // already names. Assumption lines are exempt: two flagged claims may
+    // attach to the same path and remain two distinct unknowns.
     const needleKey = needles.slice().sort().join('|');
-    if (needleKey && seenNeedles.has(needleKey) && c.kind !== 'goal') continue;
-    if (c.kind === 'path' && needles.some((n) => seenSingleNeedles.has(n))) continue;
+    if (!isAssumption) {
+      if (needleKey && seenNeedles.has(needleKey) && c.kind !== 'goal') continue;
+      if (c.kind === 'path' && needles.some((n) => seenSingleNeedles.has(n))) continue;
+    }
     seenTexts.add(key);
-    if (needleKey) seenNeedles.add(needleKey);
-    for (const n of needles) seenSingleNeedles.add(n);
+    if (needleKey && !isAssumption) seenNeedles.add(needleKey);
+    if (!isAssumption) for (const n of needles) seenSingleNeedles.add(n);
+    if (isAssumption) assumptionPicks++;
     picked.push(c);
   }
 
@@ -264,6 +297,10 @@ export function extractProbeFacts(
       tokens: distinctiveTokens(c.text),
     }));
 }
+
+/** D3: max assumption-flagged lines probed per compaction, independent of
+ *  maxFacts — flags never crowd out ordinary probe facts or vice versa. */
+export const MAX_ASSUMPTION_PROBES = 8;
 
 // ── Probe facts from pinned engine state ─────────────────────────────────────
 
@@ -340,8 +377,14 @@ function normalize(text: string): string {
 
 /** Can `fact` still be answered from the post-compaction text? A needle hit
  *  (path / error code verbatim) is decisive; otherwise require >=60% of the
- *  fact's distinctive tokens to survive (a faithful paraphrase keeps them). */
+ *  fact's distinctive tokens to survive (a faithful paraphrase keeps them).
+ *  D3 exception: an ASSUMPTION fact is retained only when the flag itself is
+ *  still present (the word ASSUMPTION/UNVERIFIED in the post text) — the
+ *  claim surviving while its flag dies is the silent-guess regression this
+ *  contract forbids, and a path needle alone (the artifact filename in a
+ *  ledger line) must not launder the loss. */
 export function factRetained(fact: ProbeFact, normalizedPost: string): boolean {
+  if (fact.kind === 'assumption' && !/assumption|unverified/.test(normalizedPost)) return false;
   for (const n of fact.needles) {
     if (normalizedPost.includes(n.toLowerCase())) return true;
   }
@@ -375,18 +418,21 @@ export function runRetentionProbe(
 }
 
 /** Kind priority for bounded recovery: lower is restored first. The
- *  contract outranks everything — see buildRecoveryBlock. */
+ *  contract outranks everything — see buildRecoveryBlock. An assumption
+ *  flag ranks second: a flagged claim that dies at compaction comes back
+ *  as an UNFLAGGED claim — the silent-guess shape D3 exists to prevent. */
 const KIND_PRIORITY: Record<ProbeFactKind, number> = {
   contract: 0,
-  goal: 1,
-  error: 2,
+  assumption: 1,
+  goal: 2,
+  error: 3,
   // S4: open obligations rank with errors — losing one loses the task's
   // definition of done, which is exactly what the probe exists to catch.
-  obligation: 2,
-  decision: 3,
-  constraint: 4,
-  path: 5,
-  fact: 6,
+  obligation: 3,
+  decision: 4,
+  constraint: 5,
+  path: 6,
+  fact: 7,
 };
 
 /** Default char budget for the recovery appendix. */

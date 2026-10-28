@@ -1,5 +1,6 @@
 import type { Tool } from './types.js';
 import type { TodoItem } from '../types.js';
+import { isStepState, todoStatusChar } from '../status-contract.js';
 
 // The `todo` tool gives the model a persistent, resumable work list mid-run,
 // mirroring the planning tools in jcode / pi / claude-code. Mochi previously
@@ -12,6 +13,14 @@ import type { TodoItem } from '../types.js';
 //   - terse (ordered, status-enumerated) so echoing it is cheap
 //   - concurrency-safe via Workspace.mutateTodos (lossless under parallel runs)
 //
+// D3 status contract: the ledger doubles as the run's STATUS LEDGER. Beyond
+// the legacy pending/in_progress pair, a step is `done` (evidence cited in
+// the note), `assumed` (note MUST reference the [ASSUMPTION:…] flag recorded
+// in the artifact), `blocked` (note names the blocker), or `open`. The two
+// contract states are ENFORCED here — a status the ledger cannot trace to an
+// artifact line is rejected, not silently accepted — so a multi-step run
+// cannot bury an unknown behind a bare checkmark.
+//
 // All growth is bounded: completed items are pruned so an agent that churns
 // todos cannot grow the file without bound.
 
@@ -20,7 +29,7 @@ const MAX_ACTIVE = 64;
 function render(todos: TodoItem[]): string {
   if (todos.length === 0) return '(no todos)';
   return todos
-    .map((t) => `${t.order}. [${t.status === 'done' ? 'x' : t.status === 'in_progress' ? '-' : ' '}] ${t.title}${t.notes ? ` -- ${t.notes}` : ''}`)
+    .map((t) => `${t.order}. [${todoStatusChar(t.status)}] ${t.title}${t.notes ? ` -- ${t.notes}` : ''}`)
     .join('\n');
 }
 
@@ -32,7 +41,7 @@ export const todoTool: Tool = {
   def: {
     name: 'todo',
     description:
-      'Maintain a persistent ordered task list for this run. Use it to plan, track progress, and resume multi-step work. Operations: add <title> (deduped by title), status <title> [in_progress|pending|done], complete <title>, notes <title> <text>, list, clear-completed. Returns the current list.',
+      'Maintain a persistent ordered task list for this run — the run\'s status ledger. Operations: add <title> (deduped by title), status <title> [pending|in_progress|done|blocked|assumed|open], complete <title>, notes <title> <text>, list, clear-completed. Status contract: a `done` step carries a note citing its evidence (e.g. "evidence: src/x.ts:42"); `assumed` REQUIRES a note referencing the [ASSUMPTION:…] flag recorded in the artifact; `blocked` REQUIRES a note naming the blocker and what was searched. Returns the current list.',
     parameters: [
       { name: 'action', type: 'string', description: 'add | status | complete | notes | list | clear', required: true },
       { name: 'title', type: 'string', description: 'Todo title (required for add/status/complete/notes)', required: false },
@@ -80,11 +89,23 @@ export const todoTool: Tool = {
     }
 
     if (action === 'status' || action === 'complete') {
-      const target = action === 'complete' ? 'done' : String(args.state ?? 'in_progress');
+      const target = action === 'complete' ? 'done' : String(args.state ?? 'in_progress').trim();
+      // D3 status contract: `assumed` must trace to an artifact flag,
+      // `blocked` must name its blocker. Enforced BEFORE the mutation so an
+      // unattributed status is rejected loudly, never silently accepted.
+      if (!isStepState(target) && target !== 'pending' && target !== 'in_progress') {
+        throw new Error(`Unknown todo status "${target}". Valid: pending | in_progress | done | blocked | assumed | open.`);
+      }
+      if (target === 'assumed' && !(note && /ASSUMPTION|UNVERIFIED/i.test(note))) {
+        throw new Error('Status contract violation: "assumed" requires a note referencing the [ASSUMPTION:…] flag you recorded IN the artifact (e.g. --note "[ASSUMPTION:A-1] recorded in plan.md:12 — unverified"). Search the available evidence first; an assumption with no artifact line and no flag is a silent guess.');
+      }
+      if (target === 'blocked' && !note) {
+        throw new Error('Status contract violation: "blocked" requires a note naming the blocker (what is missing and where you already searched).');
+      }
       const ok = await ctx.workspace.mutateTodos<boolean>((todos) => {
         const it = todos.find((t) => t.title === title);
         if (!it) return false;
-        it.status = (target === 'done' || target === 'pending' || target === 'in_progress' ? target : 'in_progress') as TodoItem['status'];
+        it.status = target as TodoItem['status'];
         if (note) it.notes = note;
         return true;
       });

@@ -10,6 +10,7 @@
 
 import type { MochiEvent } from '../types.js';
 import { renderSummaryLineage, type SummaryLineage } from './verified-compaction.js';
+import { hasAssumptionFlag } from '../status-contract.js';
 
 export type { SummaryLineage } from './verified-compaction.js';
 
@@ -21,6 +22,11 @@ export interface CompactContext {
   constraints: string[];
   unresolved: string[];
   references: string[];
+  /** D3: assumption-flagged lines found in the summarized slice (assistant
+   *  reasoning, tool outputs). They are carried into the summary VERBATIM —
+   *  an assumption flag that dies with its message comes back as an
+   *  unflagged claim, the silent-guess shape the contract forbids. */
+  assumptions: string[];
   nextAction?: string;
   /** C7 lineage: parent pointers to the summaries/messages this summary
    *  replaces (see verified-compaction.ts). Supplied by the caller, which
@@ -63,6 +69,7 @@ export function compactSession(events: readonly MochiEvent[], opts: CompactOptio
     constraints: [...(opts.constraints ?? [])],
     unresolved: [],
     references: [],
+    assumptions: [],
     nextAction: undefined,
     lineage: opts.lineage,
     isEmpty: false,
@@ -91,8 +98,18 @@ export function compactSession(events: readonly MochiEvent[], opts: CompactOptio
         if (/decid|choose|approach|strategy|because/i.test(ev.content)) {
           pushBounded(out.decisions, ev.content.slice(0, 240), max);
         }
+        // D3: flagged lines ride out of the summarized slice VERBATIM —
+        // the flag must survive the summarize pass, not the claim alone.
+        for (const line of ev.content.split('\n')) {
+          if (hasAssumptionFlag(line)) pushBounded(out.assumptions, line.trim(), max);
+        }
         break;
       case 'tool:completed': {
+        // D3: tool outputs that carry flagged lines (a write result echoing
+        // the artifact, a search result) keep their flags in the summary.
+        for (const line of (ev.result.output || '').split('\n')) {
+          if (hasAssumptionFlag(line)) pushBounded(out.assumptions, line.trim(), max);
+        }
         const head = (ev.result.output || '').split('\n')[0].slice(0, 160);
         if (head) pushBounded(out.references, `${ev.tool}: ${head}`, max);
         break;
@@ -106,13 +123,15 @@ export function compactSession(events: readonly MochiEvent[], opts: CompactOptio
   }
 
   // Compaction with no signal: caller should retain the raw transcript rather
-  // than replace it with an empty summary.
+  // than replace it with an empty summary. D3: an assumption flag carried out
+  // of the slice IS signal — a summary that kept only flags is not empty.
   out.isEmpty =
     out.decisions.length === 0 &&
     out.implemented.length === 0 &&
     out.files.length === 0 &&
     out.unresolved.length === 0 &&
     out.references.length === 0 &&
+    out.assumptions.length === 0 &&
     !out.nextAction &&
     !out.goal;
 
@@ -130,6 +149,7 @@ export function compactToPrompt(ctx: CompactContext): string {
   if (ctx.implemented.length) sections.push(`IMPLEMENTED\n${ctx.implemented.map((d) => `- ${d}`).join('\n')}`);
   if (ctx.files.length) sections.push(`FILES\n${ctx.files.map((d) => `- ${d}`).join('\n')}`);
   if (ctx.constraints.length) sections.push(`CONSTRAINTS\n${ctx.constraints.map((d) => `- ${d}`).join('\n')}`);
+  if (ctx.assumptions.length) sections.push(`ASSUMPTIONS (UNVERIFIED — flags must survive; do not treat the claims as facts)\n${ctx.assumptions.map((d) => `- ${d}`).join('\n')}`);
   if (ctx.unresolved.length) sections.push(`UNRESOLVED\n${ctx.unresolved.map((d) => `- ${d}`).join('\n')}`);
   if (ctx.references.length) sections.push(`IMPORTANT REFERENCES\n${ctx.references.map((d) => `- ${d}`).join('\n')}`);
   if (ctx.nextAction) sections.push(`NEXT ACTION\n${ctx.nextAction}`);
