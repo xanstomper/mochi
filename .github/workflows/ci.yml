@@ -116,6 +116,15 @@ jobs:
         # goes through src/exec.ts (timeout + tree-kill + output cap).
         run: node scripts/check-proc-sites.mjs
 
+      - name: Byte-budget guard (prompt/tool schema ratchet, D4)
+        # Prompt/skill/tool byte budgets must only shrink: the meter composes
+        # the real system prompt + registry schemas (src/prompt/byte-budget.ts)
+        # and compares against scripts/byte-budget.baseline.json. Unix legs
+        # only: the checkout's line-ending normalization could inject phantom
+        # byte deltas on Windows.
+        if: runner.os != 'Windows'
+        run: node scripts/check-byte-budget.mjs
+
       - name: Dependency audit (shipped surface must be clean)
         # Full `npm audit` includes dev-only vitest/vite advisories whose fix
         # is a breaking vitest 5 bump (tracked separately); the SHIPPED agent

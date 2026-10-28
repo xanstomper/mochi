@@ -121,6 +121,7 @@ Usage:
   mochi gate run|baseline|freeze|check  # frozen regression gate (bench/frozen/)
   mochi sleeptime [--cap <usd>] [--dry-run]  # nightly consolidation pipeline (repair+curator+gate+health+induction+curriculum, hard spend cap)
   mochi routing [show|derive]        # measured model routing table from exported runs (.mochi/state/routing-table.json)
+  mochi bytes [--json|--check|--update-baseline]  # prompt/tool/skill byte-budget meter (D4 ratchet vs scripts/byte-budget.baseline.json)
   mochi tools forged [disable <name>|evaluate|run]  # Tool Forge audit view: self-synthesised tools, provenance + state
   mochi health [--force] [--offline]  # proactive repo health scan (tests/deps/TODOs/dead code/hotspots digest)
   mochi session list                 # list past sessions
@@ -270,6 +271,17 @@ async function main() {
     const report = await runtimeReport(VERSION);
     if (flags.json) console.log(JSON.stringify(report, null, 2));
     else console.log(formatRuntimeReport(report));
+    return;
+  }
+
+  // ── D4 byte-budget meter — `mochi bytes` ─────────────────────────────────
+  // Dumps prompt/tool/skill byte budgets (table or --json), checks them
+  // against scripts/byte-budget.baseline.json (--check), or re-records the
+  // baseline (--update-baseline). Dispatched BEFORE any engine work: the
+  // meter must read only repo state, never user config or session state.
+  if (positional[0] === 'bytes') {
+    const { runByteBudgetCli } = await import('./prompt/byte-budget.js');
+    process.exitCode = runByteBudgetCli(process.argv.slice(3));
     return;
   }
 

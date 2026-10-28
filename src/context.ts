@@ -572,6 +572,10 @@ export class ContextEngine {
   private lastSystemHash: string | null = null;
   private lastHeadText = '';
   private lastHeadSig = '';
+  /** D4 byte-budget metering: the named segment slices as last composed by
+   *  buildSystemPrompt (see prompt/byte-budget.ts — the meter reads these so
+   *  per-layer byte accounting stays on the real assembly seam). */
+  private lastSegments: PrefixSegment[] = [];
   /** Stable head inherited from a parent engine (fork inheritance). Used
    *  only when this engine's own head signature matches it exactly. */
   private inheritedHead?: { text: string; sig: string };
@@ -611,6 +615,25 @@ export class ContextEngine {
   stableHeadSnapshot(): { text: string; sig: string } | null {
     if (!this.lastHeadText) return null;
     return { text: this.lastHeadText, sig: this.lastHeadSig };
+  }
+
+  /** D4 byte-budget metering: compose the system prompt exactly as a packet
+   *  build would — the SAME buildSystemPrompt seam, not a second composer —
+   *  and hand back the composed text, the stable head, and the named segment
+   *  slices so prompt/skill/tool byte budgets can be measured per layer
+   *  (prompt/byte-budget.ts). No history walk, no token accounting. */
+  composeForByteBudget(tools: ToolDefinition[], repo?: RepoInfo): {
+    system: string;
+    head: string;
+    segments: Array<{ name: string; text: string }>;
+  } {
+    const system = this.buildSystemPrompt(tools, repo);
+    const head = this.stableHeadSnapshot();
+    return {
+      system,
+      head: head?.text ?? system,
+      segments: this.lastSegments.map((s) => ({ name: s.name, text: s.text })),
+    };
   }
 
   /** Accept a parent's stable head. It is used verbatim only when this
@@ -1172,6 +1195,9 @@ ${this.toolGuidelines(tools)}
       { name: 'memory', text: memory },
       { name: 'feedback', text: feedback },
     ];
+    // D4 metering: keep the slices so the byte-budget meter can attribute
+    // bytes per layer without a second composer (prompt/byte-budget.ts).
+    this.lastSegments = segments;
     // Stable head: contiguous leading bytes. The signature binds the head
     // to exactly the inputs that determine it (project root, tool set,
     // root-rules fingerprint, repo info) — a forked child inherits the
