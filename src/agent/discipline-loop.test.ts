@@ -266,4 +266,22 @@ describe('reasoning discipline (loop scenarios)', () => {
     expect(offRun.result.success).toBe(false);
     expect(offRun.requests).toBeGreaterThanOrEqual(onRun.requests + 8);
   }, 180_000);
+
+  it('(ask) ask_question calls are counted and reported at finish', async () => {
+    dir = makeRepo();
+    const { bus, logs } = wireBus();
+    const ask = (id: string, q: string): FakeScriptResponse => ({
+      finishReason: 'tool_calls',
+      toolCalls: [{ id, function: { name: 'ask_question', arguments: JSON.stringify({ question: q, options: [{ label: 'Fix it', description: 'apply the fix' }, { label: 'Leave it', description: 'do nothing' }] }) } }],
+    });
+    const { result } = await runScripted(dir, FIX_TITLE, FIX_DESC, [
+      shell('s1', 'node repro.js'),
+      ask('q1', 'Which approach should I take first?'),
+      ask('q2', 'Should I also update the repro?'),
+      edit('e1', 'return a - b', 'return a + b'),
+      claim('Fixed add() to return a + b.'),
+    ], bus);
+    expect(result.success).toBe(true);
+    expect(logs.some((m) => m.includes('[ask-telemetry] ask_question calls: 2'))).toBe(true);
+  }, 120_000);
 });

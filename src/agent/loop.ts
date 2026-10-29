@@ -186,7 +186,7 @@ import { AnchorEngine } from '../cognitive/anchor.js';
 import { summarize, resolveRunStatus } from '../summary/engine.js';
 import { compactSession, compactToPrompt } from '../summary/compact.js';
 import { buildDigestInput } from '../summary/digest-input.js';
-import { buildSummaryLineage, renderSummaryLineage } from '../summary/verified-compaction.js';
+import { buildSummaryLineage, renderSummaryLineage, verifyDigestText } from '../summary/verified-compaction.js';
 // Item 17 (evidence-graded output): the claim-grading seam — classifies the
 // summary's substantive claims as cited / test-backed / ungrounded against
 // what this run actually observed, with a hard no-fabrication rule.
@@ -860,6 +860,10 @@ export class Agent {
   private seenPatterns = new Set<string>();
   private hooks: HookManager;
   private toolCallsTotal = 0;
+  /** ask_question calls this run (P1 slice 3 telemetry): ask_question is
+   *  deliberately NOT journaled, so the count lives here and is reported
+   *  at finish — the prerequisite for act-first calibration. */
+  private askQuestionTotal = 0;
   private streamLoopNudges = 0;
   private triedFallbackModels = new Set<string>();
   private triedFallbackProviders = new Set<string>();
@@ -1272,6 +1276,11 @@ export class Agent {
   private interventions = new InterventionPolicy();
   /** Explicit task-state observation (STATE-1): advises via the policy, never restarts. */
   private taskState = new TaskStateTracker();
+  /** Drift escalation pending: stray edits reached DRIFT_FORCE_AT with no
+   *  convergence since. Unlike disciplineForceArmed, this is NOT cleared
+   *  by mutating turns — a mutating thrash loop is exactly what it stops.
+   *  Consumed by the decisive-finish gate after tool execution. */
+  private disciplineDriftForcePending = false;
   /** Whether the most recent model turn contained a mutating call. */
   private disciplineTurnMutating = false;
   /** Files mutated since the last verification attempt, tracked directly
@@ -2266,6 +2275,7 @@ Continue from 'Next:', do not redo completed progress.`,
     this.effortCalibrationLogged = false;
     this.disciplineSnap = { read: 0, edited: 0, verifyPass: 0 };
     this.disciplineForceArmed = false;
+    this.disciplineDriftForcePending = false;
     this.disciplineTurnMutating = false;
     this.disciplineEditedSinceVerify = [];
     this.disciplineShellRanSinceVerify = false;
@@ -4131,6 +4141,15 @@ Continue from 'Next:', do not redo completed progress.`,
             if ((TOOL_ALIASES[c.function.name] || c.function.name) === 'load_tools') this.fastLaneLoadToolsCalls++;
           }
         }
+        // P1 slice 3: ask telemetry — count ask_question calls per run so
+        // the ask rate becomes measurable. Mirrors the fast-lane counting
+        // above; it runs at response processing, so it covers every ask
+        // regardless of how the call resolves (interactive or headless
+        // default). ask_question is never vetoed (read permission, always
+        // allowed), so response-level counting equals asks made.
+        for (const c of response.toolCalls ?? []) {
+          if ((TOOL_ALIASES[c.function.name] || c.function.name) === 'ask_question') this.askQuestionTotal++;
+        }
         this.toolCallsTotal++;
         // Cumulative repeated-tool-name breaker. Previously: ANY 4 calls to the
         // same mutating tool without a file change would finish the task as a
@@ -4270,6 +4289,9 @@ Continue from 'Next:', do not redo completed progress.`,
         // batch STILL did not mutate — the deliberation ends here, with
         // the batch's results already in context. Finish decisively with
         // the current best state instead of looping.
+        if (this.disciplineDriftForcePending) {
+          return this.disciplineForceFinish(task, repo, response.content);
+        }
         if (this.disciplineForceArmed && !this.disciplineTurnMutating) {
           return this.disciplineForceFinish(task, repo, response.content);
         }
@@ -5128,13 +5150,21 @@ Continue from 'Next:', do not redo completed progress.`,
       );
       const digest = (resp.content ?? '').trim();
       if (!digest) return;
+      // P1 slice 2: the digest is a model summary — verify it kept the
+      // probe facts from the replaced slice, and re-include anything it
+      // dropped, before the splice. Without this the run continued on a
+      // degraded digest with no record of what was lost.
+      const verified = verifyDigestText(old, digest);
       const before = est();
       // C7 lineage: the digest is a summary — stamp it with the parent
       // pointers to the messages it replaces so a later compaction of this
       // digest can chain back to the raw history.
-      msgs.splice(0, oldCount, { role: 'user' as const, content: `[digest of ${oldCount} earlier messages]\n${digest}\n${renderSummaryLineage(buildSummaryLineage(old))}` } as ChatMessage);
+      msgs.splice(0, oldCount, { role: 'user' as const, content: `[digest of ${oldCount} earlier messages]\n${verified.text}\n${renderSummaryLineage(buildSummaryLineage(old))}` } as ChatMessage);
       const after = est();
-      this.events.emit({ type: 'agent:log', agentId: this.id, message: `[context] MCH-32 digest: ${oldCount} old messages -> ${digest.length} chars (~${Math.max(0, before - after)} tokens saved)` });
+      this.events.emit({ type: 'agent:log', agentId: this.id, message: `[context] MCH-32 digest: ${oldCount} old messages -> ${verified.text.length} chars (~${Math.max(0, before - after)} tokens saved)` });
+      if (verified.escalations.length > 0) {
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: `[context] digest retention: ${verified.facts.length} facts probed, ${verified.initial.missing.length} recovered via re-include` });
+      }
       // S4: a digest rewrites history exactly like a compaction does —
       // the same stub/objection invalidation applies.
       this.clearReadStub();
@@ -5664,6 +5694,10 @@ Continue from 'Next:', do not redo completed progress.`,
         if (dv.snapback) {
           this.context.addMessage({ role: 'system', content: this.discipline.snapbackMessage() });
           this.events.emit({ type: 'agent:log', agentId: this.id, message: `[discipline] drift snap-back (edits strayed from the task contract)` });
+        }
+        if (dv.escalate) {
+          this.disciplineDriftForcePending = true;
+          this.events.emit({ type: 'agent:log', agentId: this.id, message: `[discipline] drift escalation: stray edits past guidance cap — decisive finish pending` });
         }
       }
       // Just-in-time trust nudge (latency): models waste a full round-trip
@@ -10583,12 +10617,17 @@ Continue from 'Next:', do not redo completed progress.`,
       taskKind: this.taskKind ?? 'unknown',
       durationMs,
       toolCallsTotal: this.toolCallsTotal,
+      askQuestionTotal: this.askQuestionTotal,
       tokensUsed: this.tokensUsed,
       filesModified: [...new Set(this.context['state'].filesModified)],
       summary,
       doc,
       claimGrade,
     });
+    // P1 slice 3: report the ask rate at finish — the number calibration
+    // needs. Exactly once: finishOnce is the single exit.
+    this.events.emit({ type: 'agent:log', agentId: this.id, message: `[ask-telemetry] ask_question calls: ${this.askQuestionTotal} (of ${this.toolCallsTotal} tool calls)` });
+    const _runDigestParts: string[] = [];
     const _read = Array.from(this.readCache.keys())
       .map((k) => (k.startsWith(this.cwd) ? k.slice(this.cwd.length + 1) : k))
       .slice(-25);

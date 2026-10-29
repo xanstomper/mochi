@@ -499,6 +499,44 @@ export function ensureRetention(opts: {
   return { initial, final, escalations };
 }
 
+// ── Digest verification ──────────────────────────────────────────────────
+
+/**
+ * Verify a model-written digest against probe facts extracted from the
+ * messages it replaces, and re-include anything the digest dropped.
+ *
+ * The checkpoint path (context.compact) already probes + recovers; the
+ * mid-run digest splice did not — a 300-word model summary could silently
+ * drop a constraint, an obligation, or an error fix, and the run
+ * continued on the degraded digest. This closes that path with the same
+ * probe machinery: facts are extracted from the replaced slice, probed
+ * against the digest text, and missing facts are appended verbatim via
+ * buildRecoveryBlock. No widen step: the fact count is bounded (default
+ * 5) and re-included verbatim facts always satisfy the probe (their
+ * needles derive from their own text), so the re-include always proves
+ * retention — widening would only matter past the recovery budget,
+ * which a bounded fact set cannot reach.
+ */
+export function verifyDigestText(
+  oldMessages: readonly ProbeMessageLike[],
+  digestText: string,
+): { text: string; facts: ProbeFact[]; initial: RetentionReport; final: RetentionReport; escalations: Array<'re-include' | 'widen'> } {
+  const facts = extractProbeFacts(oldMessages);
+  if (facts.length === 0) {
+    const empty: RetentionReport = { total: 0, retainedIds: [], missing: [], score: 1, passed: true };
+    return { text: digestText, facts, initial: empty, final: empty, escalations: [] };
+  }
+  let text = digestText;
+  const { initial, final, escalations } = ensureRetention({
+    facts,
+    readText: () => text,
+    reinject: (missing) => {
+      text += `\n${buildRecoveryBlock(missing)}`;
+    },
+  });
+  return { text, facts, initial, final, escalations };
+}
+
 // ── Summary lineage ──────────────────────────────────────────────────────────
 
 const SUMMARY_MARKER_RE = /\[summary (sum-[0-9a-f]{8})(?: parents: ([^\]]*?))?(?: replaced: (\d+) messages)?\]/;
