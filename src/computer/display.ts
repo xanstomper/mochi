@@ -7,6 +7,8 @@
 // in-memory display for tests. This interface is also where a future Rust
 // native-core backend plugs in — the tool never talks to X11 directly.
 
+import type { DesktopAxNode } from '../a11y/tree.js';
+
 export interface DisplayInfo {
   width: number;
   height: number;
@@ -38,6 +40,12 @@ export interface DisplayBackend {
    */
   key(name: string, pressed: boolean): Promise<void>;
   close(): Promise<void>;
+  /** Optional accessibility source: the desktop's interactive nodes with
+   *  display bounds (the raw input for the shared a11y tree,
+   *  src/a11y/tree.ts). Backends without a tree source (real X11 today —
+   *  no AT-SPI wiring) OMIT this method; the computer tool reports the
+   *  absence honestly instead of inventing nodes. */
+  a11y?(): DesktopAxNode[];
 }
 
 // ---------------------------------------------------------------------------

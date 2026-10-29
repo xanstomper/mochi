@@ -26,6 +26,9 @@ export interface AxElement {
   name: string;
   value?: string;
   depth: number;
+  /** True on the node that currently has keyboard focus (carried into the
+   *  shared a11y tree so a handoff can bring the focused node across). */
+  focused?: boolean;
 }
 
 export interface PageSnapshot {
@@ -65,8 +68,20 @@ interface AxNode {
   role?: { value?: string };
   name?: { value?: unknown };
   value?: { value?: unknown };
+  /** Focus arrives here on some protocol versions… */
+  focused?: { value?: unknown };
+  /** …and in the properties list on others (measured on chrome-headless-shell
+   *  156: properties:[{name:'focused', value:{value:true}}]). */
+  properties?: Array<{ name?: unknown; value?: { value?: unknown } }>;
   childIds?: string[];
   backendDOMNodeId?: number;
+}
+
+/** True when an AX node reports keyboard focus (either field shape). */
+function axFocused(n: AxNode): boolean {
+  if (n.focused?.value === true) return true;
+  return Array.isArray(n.properties)
+    && n.properties.some((p) => p?.name === 'focused' && p.value?.value === true);
 }
 
 interface Rect { x: number; y: number; width: number; height: number }
@@ -210,7 +225,8 @@ export class CdpPage {
           this.refMap.set(ref, n.backendDOMNodeId);
         }
         if (ref || role !== 'generic' || name) {
-          elements.push({ role, name: name.slice(0, 200), depth, ...(ref ? { ref } : {}) });
+          const focused = axFocused(n);
+          elements.push({ role, name: name.slice(0, 200), depth, ...(ref ? { ref } : {}), ...(focused ? { focused: true } : {}) });
         }
         const value = str(n.value?.value);
         const label = name || value;

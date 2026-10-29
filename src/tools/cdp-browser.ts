@@ -35,13 +35,25 @@ import {
 import { resolveCdpBrowserBinary } from '../browser/cdp/manager.js';
 import { getCdpSession, closeAllCdpSessions, type CdpEngine } from '../browser/cdp/manager.js';
 import type { PageSnapshot } from '../browser/cdp/page.js';
+import { treeFromPageSnapshot, renderTree } from '../a11y/tree.js';
+import { stashHandoff, takeHandoff, peekHandoff, carriedSection } from '../a11y/handoff.js';
 import type { Tool, ToolContext } from './types.js';
 
 export type CdpBrowserAction =
   | 'open' | 'snapshot' | 'click' | 'type' | 'key' | 'scroll'
-  | 'eval' | 'screenshot' | 'wait' | 'tabs' | 'close';
+  | 'eval' | 'screenshot' | 'wait' | 'tabs' | 'close' | 'handoff';
 
-const ACTIONS: readonly CdpBrowserAction[] = ['open', 'snapshot', 'click', 'type', 'key', 'scroll', 'eval', 'screenshot', 'wait', 'tabs', 'close'];
+const ACTIONS: readonly CdpBrowserAction[] = ['open', 'snapshot', 'click', 'type', 'key', 'scroll', 'eval', 'screenshot', 'wait', 'tabs', 'close', 'handoff'];
+
+/** Adopt a pending desktop handoff into this result: render the carried
+ *  tree as context and consume the stash. Empty when nothing is pending
+ *  (the common browser-only case — zero output change). */
+function adoptCarried(ctx: ToolContext): string[] {
+  const h = peekHandoff(ctx.cwd);
+  if (!h || h.from !== 'desktop') return [];
+  takeHandoff(ctx.cwd);
+  return [carriedSection(h)];
+}
 
 /** Render a snapshot as the model-facing token-light page view. */
 export function buildSnapshotText(snap: PageSnapshot, evidence: string[]): string {
@@ -160,13 +172,14 @@ export const cdpBrowserTool: Tool = {
       'eval(js) — permission-gated (permissions.shell=true or MOCHI_CDP_ALLOW_EVAL=1); ' +
       'screenshot(path?,fullPage?) saves a PNG; wait(kind: network-idle|selector|text|ms, selector|text|ms, timeoutMs); ' +
       'tabs [switch=<index>] [url=<new-tab-url>]; close([tab=<index>]) — closing the LAST tab shuts the browser down. ' +
+      'handoff — carry the current page tree (and focused node) to the desktop surface so a task can move between browser and desktop mid-run without re-observation. ' +
       'State: cookies/logins persist under a NAMED profile shared with the browser tool (profile=<name>, never a path). ' +
       'Dialogs (alert/confirm) are auto-dismissed and reported; console/network errors attach to the next result as an [evidence] block. ' +
       'Binary: config browser.cdpExecutable → MOCHI_CDP_BROWSER → pinned cache install (mochi browser fetch-cdp-shell) → system chromium. ' +
       'Engine: chrome-headless-shell is the DEFAULT; opt-in Lightpanda fast path via browser.cdpEngine=lightpanda or MOCHI_CDP_ENGINE=lightpanda ' +
       '(binary: mochi browser fetch-lightpanda) — Lightpanda serves ONE page per process (tabs refuse) and cannot screenshot (no rendering engine).',
     parameters: [
-      { name: 'action', type: 'string', description: 'open|snapshot|click|type|key|scroll|eval|screenshot|wait|tabs|close', required: true },
+      { name: 'action', type: 'string', description: 'open|snapshot|click|type|key|scroll|eval|screenshot|wait|tabs|close|handoff', required: true },
       { name: 'url', type: 'string', description: 'URL for open (or a new tab via tabs action)', required: false },
       { name: 'ref', type: 'string', description: 'Snapshot ref (e12) for click/type/scroll', required: false },
       { name: 'text', type: 'string', description: 'Text to type; also the needle for wait kind=text', required: false },
@@ -246,6 +259,8 @@ export const cdpBrowserTool: Tool = {
             ...engineBlock(mgr),
             ...restartBlock(mgr),
             ...sandboxBlock(mgr),
+            // A pending desktop handoff rides along as trailing context.
+            ...adoptCarried(ctx),
           ].filter(Boolean).join('\n');
         }
         case 'snapshot': {
@@ -256,6 +271,29 @@ export const cdpBrowserTool: Tool = {
             ...restartBlock(mgr),
             ...sandboxBlock(mgr),
             buildSnapshotText(snap, page.drainEvidence()),
+            ...adoptCarried(ctx),
+          ].filter(Boolean).join('\n');
+        }
+        case 'handoff': {
+          // Carry the CURRENT page observation (shared tree + focused node)
+          // to the desktop surface. The tree rides in this result, so the
+          // model never re-observes the page to know what it already saw.
+          const snap = await page.snapshot();
+          const tree = treeFromPageSnapshot(snap);
+          stashHandoff(ctx.cwd, {
+            from: 'browser',
+            tree,
+            ...(tree.focusedRef ? { focusedRef: tree.focusedRef } : {}),
+            handedAt: Date.now(),
+          });
+          const focus = tree.focusedRef ? `, focused ${tree.focusedRef}` : '';
+          return [
+            `[cdp_browser handoff] task context carried to the desktop surface (${tree.nodes.length} node(s)${focus}).`,
+            renderTree(tree),
+            'continue on the desktop: computer action=tree (or any computer action) adopts this context — no re-observation of the page is needed.',
+            ...engineBlock(mgr),
+            ...restartBlock(mgr),
+            ...sandboxBlock(mgr),
           ].filter(Boolean).join('\n');
         }
         case 'click': {

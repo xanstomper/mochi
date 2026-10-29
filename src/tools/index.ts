@@ -68,6 +68,7 @@ import { compilePromptTool } from './compile-prompt.js';
 import { toolFactoryTool, RESERVED_TOOL_NAMES, loadAuthoredTools } from './tool-factory.js';
 import { loadForgedToolsSafe } from './tool-forge.js';
 import { browserTool } from './browser.js';
+import { computerTool } from './computer.js';
 import { emailTool } from './email.js';
 import { canvasTool } from './canvas.js';
 import { scheduleTool } from './schedule.js';
@@ -104,6 +105,7 @@ export const ALL_TOOLS: Tool[] = [
   notesTool, tuiBuilderTool, mcpManageTool, markdownTool, colorTool,
   toolFactoryTool,
   browserTool,
+  computerTool,
   docsQueryTool,
   emailTool,
   canvasTool,
