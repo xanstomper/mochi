@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest';
 import { lazyTestOutput, parseTestOutput } from './lazy-test-output.js';
 
-const VITEST_FAIL = `> mochi@0.31.0 test
+const VITEST_FAIL = `> mochi@0.32.0 test
 > vitest run
 
  RUN  v5.0.3 /repo
@@ -28,7 +28,7 @@ Received: 1
    Duration  1.20s (transform 120ms, setup 40ms)
 `;
 
-const VITEST_PASS = `> mochi@0.31.0 test
+const VITEST_PASS = `> mochi@0.32.0 test
 > vitest run
 
  RUN  v5.0.3 /repo
