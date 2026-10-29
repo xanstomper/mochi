@@ -70,6 +70,7 @@ import type { PermissionPolicy } from '../security/permission.js';
 import { describeApproval, normalizePolicy, normalizeApprovalDecision } from '../security/approval.js';
 import { buildEditReview, applyAcceptedHunks } from '../security/edit-review.js';
 import { matchHardline } from '../security/hardline.js';
+import { RoutedJury, type JuryDecision } from './routed-jury.js';
 import { classifyCommand, redact } from '../security/security.js';
 import { snapshotTree, rollbackTracked, resolveVerifyCommand, type PlanVerifySnapshot } from './plan-verify.js';
 import type { ApprovalHandler } from '../security/approval.js';
@@ -487,6 +488,12 @@ export interface AgentOptions {
    *  calls. Also settable via env MOCHI_UNATTENDED_ALLOW=1. YOLO policy
    *  auto-allows everything and does not need this flag. */
   unattendedAllow?: boolean;
+  /** Routed jury (src/agent/routed-jury.ts): engage the high-stakes-only
+   *  double-pass gate for this run. Default: env MOCHI_ROUTED_JURY=1 or
+   *  config safety.routedJury.enabled; explicitly false disables even when
+   *  env/config opt in. Children inherit the parent's ON/OFF (never a weaker
+   *  posture) but get their own verdict log. */
+  routedJury?: boolean;
   /** Session "allow always" memory, shared across runs by the host
    *  (GoalEngine). Defaults to a private set (single-run memory). */
   approvedAlways?: Set<string>;
@@ -796,6 +803,12 @@ export class Agent {
   private promptUser?: PromptUserFn;
   private approvalHandler?: ApprovalHandler;
   private permPolicy?: string;
+  /** Routed jury when engaged for this run (AgentOptions.routedJury / env /
+   *  config). Null = the gate is entirely absent (one table lookup avoided). */
+  private jury: RoutedJury | null;
+  /** Every jury verdict this run produced (routing + pass outcomes) — the
+   *  proof-metric record; tests and hosts read this directly. */
+  readonly juryVerdicts: JuryDecision[] = [];
   /** Explicit unattended opt-in (see AgentOptions.unattendedAllow). */
   private unattendedAllow: boolean;
   /** Session "allow always" memory: exact (tool, args) keys approved this run.
@@ -1316,6 +1329,17 @@ export class Agent {
     this.approvalHandler = opts.approvalHandler;
     this.permPolicy = opts.permPolicy;
     this.unattendedAllow = opts.unattendedAllow ?? process.env.MOCHI_UNATTENDED_ALLOW === '1';
+    // Routed jury (high-stakes-only gate): explicit option wins; otherwise
+    // env MOCHI_ROUTED_JURY=1 or config safety.routedJury.enabled engages it.
+    const juryWanted = opts.routedJury
+      ?? (process.env.MOCHI_ROUTED_JURY === '1' || this.config.safety?.routedJury?.enabled === true);
+    this.jury = juryWanted
+      ? new RoutedJury({
+          workspaceDir: this.workspace.dir,
+          timeoutMs: this.config.safety?.routedJury?.timeoutMs,
+          approvalHandler: opts.approvalHandler,
+        })
+      : null;
     this.approvedAlways = opts.approvedAlways ?? new Set<string>();
     this.journalOverride = opts.journal;
     this.journalRunId = opts.runId;
@@ -6089,6 +6113,9 @@ Continue from 'Next:', do not redo completed progress.`,
       permPolicy: this.permPolicy,
       approvedAlways: this.approvedAlways,
       unattendedAllow: this.unattendedAllow,
+      // The jury is a safety posture, not a feature flag the child may drop:
+      // ON propagates, OFF propagates (the child builds its own verdict log).
+      routedJury: this.jury !== null,
     });
     const task: Task = {
       id: `sub-${Math.random().toString(36).slice(2, 10)}`,
@@ -7064,6 +7091,31 @@ Continue from 'Next:', do not redo completed progress.`,
             return;
           }
         }
+      }
+    }
+    // ROUTED JURY (high-stakes steps only) — the content-aware gate AFTER the
+    // policy gate: everything the approval machinery just allowed (auto-allow,
+    // yolo, unattended opt-in, an interactive allow) still faces the jury when
+    // routing classifies the action high-stakes. FREE classes (reads, edits,
+    // low-risk shell) never reach past the routing table, so ordinary work
+    // pays no jury tax. Routing defaults UNCLASSIFIED → GATED: an unknown tool
+    // is shown to the jury, never silently free.
+    if (this.jury) {
+      const juryArgs = this.parseArgs(tc.function.arguments);
+      const decision = await this.jury.review({
+        tool: toolName,
+        args: juryArgs,
+        cwd: this.cwd,
+        workspaceDir: this.workspace.dir,
+        taskTitle: this.activeTask?.title,
+        goal: this.context.state.goal || undefined,
+        recentTargets: [...this.context.state.filesModified],
+      });
+      this.juryVerdicts.push(decision);
+      if (decision.verdict === 'block') {
+        const timeoutNote = decision.outcome === 'timeout-denied' ? ' (jury timeout — safe default deny)' : '';
+        this.vetoToolCall(tc, `Blocked by the routed jury [${decision.actionClass}]${timeoutNote}: ${decision.reason} This is not a policy denial — revise the action (narrow its target, state the justification in the task, or use a reversible alternative) and re-submit; do not retry the identical call.`);
+        return;
       }
     }
     // Fuzzy spam guard (windowed, per tool+target): the exact-match guard

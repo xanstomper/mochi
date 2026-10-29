@@ -9,6 +9,7 @@ import { spawn, spawnSync, execFile } from 'node:child_process';
 import { homedir, tmpdir } from 'node:os';
 import { resolve, delimiter } from 'node:path';
 import { accessSync, constants } from 'node:fs';
+import { matchHardline } from './security/hardline.js';
 
 export interface SandboxOptions {
   /** 'off' (default) runs directly; 'bubblewrap' forces bwrap (fails if
@@ -210,6 +211,25 @@ export function runArgv(cmd: string, args: readonly string[], opts: ExecOptions 
  *  use runArgv instead. */
 export function runShellString(command: string, opts: ExecOptions & { shellBin?: string } = {}): Promise<ExecResult> {
   const startedAt = Date.now();
+  // Hardline floor: catastrophic shell strings (rm -rf /, mkfs, dd to a block
+  // device, fork bombs, …) are refused WITHOUT EXECUTION under every policy —
+  // the documented contract (security/hardline.ts: "exec.ts's runShellString
+  // ... every other shell-string execution"). This chokepoint sees the shell
+  // strings that never pass the shell TOOL gate (verify commands, hooks, cron,
+  // plan-verify), so the floor must live here too. Returned as a refused
+  // ExecResult (exit 126 = command cannot execute), not a throw, so callers
+  // that treat non-zero exits as check failures surface the reason normally.
+  const hardline = matchHardline(command);
+  if (hardline) {
+    return Promise.resolve({
+      stdout: '',
+      stderr: `Blocked by the hardline safety floor (${hardline}): catastrophic commands are refused under every permission policy, including yolo/unattended. Command: ${command.slice(0, 200)}`,
+      code: 126,
+      timedOut: false,
+      cancelled: false,
+      durationMs: Date.now() - startedAt,
+    });
+  }
   const isWin = process.platform === 'win32';
   const shellBin = opts.shellBin ?? (isWin ? (process.env.ComSpec || 'cmd.exe') : (process.env.SHELL || '/bin/bash'));
   // Windows: mirror Node's own shell:true recipe (child_process.js): cmd.exe
