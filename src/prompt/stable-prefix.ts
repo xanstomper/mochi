@@ -75,44 +75,6 @@ export function sha256Hex(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
 }
 
-// ── Volatile-field lint ───────────────────────────────────────────────────
-// The stable head must not carry fields that move per run/machine — a single
-// drifting byte in the head reprices every subsequent turn (the whole point
-// of the stable tier). lintStablePrefix flags the known volatile field
-// classes in composed head text so the prefix-cache test (and humans) can
-// catch a leak the moment it lands.
-
-const VOLATILE_FIELD_PATTERNS: Array<{ re: RegExp; message: string }> = [
-  {
-    message: 'ISO-8601 datetime — renders differently every run; belongs in the volatile tier',
-    re: /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?/g,
-  },
-  {
-    message: 'UUID — per-run/session identifier; belongs in the volatile tier',
-    re: /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/g,
-  },
-  {
-    message: 'live free-memory figure — drifts between runs; the stable tier renders the static total only',
-    re: /\b\d+(?:\.\d+)?\s*[GM]i?B\s+free\b/g,
-  },
-];
-
-/**
- * Flag volatile fields (timestamps, UUIDs, live memory figures) present in
- * composed STABLE-tier text. One human-readable finding per offending match
- * (empty array when the head is clean). Pure; the prefix-cache test pins the
- * real rendered head against this lint.
- */
-export function lintStablePrefix(text: string): string[] {
-  const findings: string[] = [];
-  for (const { message, re } of VOLATILE_FIELD_PATTERNS) {
-    for (const m of text.matchAll(re)) {
-      findings.push(`${message} (matched: ${m[0]})`);
-    }
-  }
-  return findings;
-}
-
 /**
  * First segment whose hash differs between two compositions, or `null` when
  * the segment list is identical. A segment that appeared or disappeared is

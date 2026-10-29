@@ -10627,7 +10627,6 @@ Continue from 'Next:', do not redo completed progress.`,
     // P1 slice 3: report the ask rate at finish — the number calibration
     // needs. Exactly once: finishOnce is the single exit.
     this.events.emit({ type: 'agent:log', agentId: this.id, message: `[ask-telemetry] ask_question calls: ${this.askQuestionTotal} (of ${this.toolCallsTotal} tool calls)` });
-    const _runDigestParts: string[] = [];
     const _read = Array.from(this.readCache.keys())
       .map((k) => (k.startsWith(this.cwd) ? k.slice(this.cwd.length + 1) : k))
       .slice(-25);

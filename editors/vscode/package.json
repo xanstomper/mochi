@@ -3,7 +3,7 @@
   "displayName": "Mochi AI Agent",
   "description": "Autonomous coding agent in your editor. Sidebar chat, selection actions, plan/act modes over ACP (`mochi acp` stdio).",
   "publisher": "mochi",
-  "version": "0.31.0",
+  "version": "0.32.0",
   "license": "MIT",
   "icon": "resources/mochi.png",
   "galleryBanner": {
