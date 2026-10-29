@@ -4,6 +4,8 @@ import { runShellString } from '../exec.js';
 import { maybeRedact } from '../security/security.js';
 import { planVerificationTests, recordSelectionRun } from '../core/test-selection.js';
 import { gateEnvFull } from '../core/gate.js';
+import { lazyTestOutput, lazyTestOutputEnabled } from '../core/lazy-test-output.js';
+import { archiveToolOutput } from './output-archive.js';
 
 // Run project verification commands (test, build, typecheck, lint) with
 // smart command injection and result summarization.
@@ -103,15 +105,33 @@ export const verifyTool: Tool = {
           recordSelectionRun(ctx.cwd, planScope);
         } catch { /* cadence state is best-effort */ }
       }
-      const output = maybeRedact(`${r.stdout}${r.stderr ? `\n[stderr]:\n${r.stderr}` : ''}`).slice(0, 8000);
+      const fullOut = maybeRedact(`${r.stdout}${r.stderr ? `\n[stderr]:\n${r.stderr}` : ''}`);
+      // MCH-lazy 14.3: test/verification output defaults to failures + summary;
+      // passing output condenses to counts. Deferred, not dropped: the FULL
+      // raw log is archived for recall_output, so expansion never re-runs the
+      // command. The summary never hides a failure (lazy-test-output.ts
+      // backstop keeps every failure guard line). Kill-switch:
+      // MOCHI_LAZY_TEST_OUTPUT=0 restores the raw 8K slice.
+      let output: string;
+      let recallNote = '';
+      if (lazyTestOutputEnabled()) {
+        const lz = lazyTestOutput(fullOut, { exitCode: r.code ?? 1 });
+        output = lz.text;
+        try {
+          const arcId = archiveToolOutput(ctx.workspace.dir, 'verify', fullOut, { minChars: 0 });
+          if (arcId) recallNote = `\n[full verification log archived — recall_output ${arcId} retrieves it in full]`;
+        } catch { /* archive is best-effort */ }
+      } else {
+        output = fullOut.slice(0, 8000);
+      }
       if ((r.code ?? 1) === 0) {
         if (planScope === 'targeted') {
-          return `${scopeNote}[PARTIAL PASS] Verification PASSED for the targeted subset only — NOT a full-suite verdict (${Math.round(duration / 1000)}s)\n${output}`;
+          return `${scopeNote}[PARTIAL PASS] Verification PASSED for the targeted subset only — NOT a full-suite verdict (${Math.round(duration / 1000)}s)\n${output}${recallNote}`;
         }
-        return `${scopeNote}[PASS] Verification PASSED (${Math.round(duration / 1000)}s)\n${output}`;
+        return `${scopeNote}[PASS] Verification PASSED (${Math.round(duration / 1000)}s)\n${output}${recallNote}`;
       }
       const note = r.timedOut ? ' (timed out, SIGKILLed)' : '';
-      return `${scopeNote}[FAIL] Verification FAILED (exit ${r.code ?? 1}${note}, ${Math.round(duration / 1000)}s)\n${output}`;
+      return `${scopeNote}[FAIL] Verification FAILED (exit ${r.code ?? 1}${note}, ${Math.round(duration / 1000)}s)\n${output}${recallNote}`;
     } catch (err) {
       return `[ERR] Verification ERROR: ${maybeRedact(err instanceof Error ? err.message : String(err))}`;
     }

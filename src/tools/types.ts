@@ -74,6 +74,11 @@ export interface ToolContext {
    *  executeTool callers (TUI probes, harness helpers) leave it unset and
    *  their calls land in the ledger's global counts only. */
   taskKind?: string;
+  /** MCH-lazy 14.1: free-text task hint (title+description or the user
+   *  prompt) so lazy file slices can pick the region relevant to the task.
+   *  Optional: callers that don't know the task leave it unset and lazy
+   *  slicing falls back to the plain head window. */
+  goalHint?: string;
 }
 
 export interface Tool {

@@ -3,6 +3,7 @@ import { resolve, extname } from 'node:path';
 import { homedir } from 'node:os';
 import type { Tool, ReadCache } from './types.js';
 import { clipToolOutput, DEFAULT_TOOL_RESULT_MAX_CHARS } from './output-budget.js';
+import { lazyFileEnabled, lazySliceFile, extractTaskTerms } from '../core/lazy-file.js';
 import { nativeSkeletonizeSource } from '../native/core.js';
 import { extractCodeOutline } from './outline.js';
 
@@ -147,6 +148,31 @@ export const readTool: Tool = {
     }
 
     const lines = content.split('\n');
+    // MCH-lazy 14.1: when the model reads a LARGE file without an explicit
+    // range, serve a bounded slice — head + the region relevant to the task
+    // (from the run's goal hint) — instead of the plain first-N window.
+    // Deferred regions stay available on demand via read offset/limit; the
+    // slice is stamped with the file's mtime/size revision so anything
+    // fetched later re-validates freshness (lazy-file.ts guarantees a file
+    // changed after slicing is re-read, never served stale). Kill-switch:
+    // MOCHI_LAZY_FILE=0 restores the plain window.
+    const explicitRange = args.offset !== undefined || args.limit !== undefined;
+    const goalHint = ctx.goalHint?.trim();
+    if (explicitRange === false && lazyFileEnabled() && goalHint && lines.length > 300 && content.length > 6000) {
+      const terms = extractTaskTerms(goalHint);
+      if (terms.length > 0) {
+        const slice = lazySliceFile(fullPath, {
+          taskTerms: terms,
+          headLines: 40,
+          tailLines: 8,
+          contextLines: 4,
+          maxChars: Math.min(14_000, DEFAULT_TOOL_RESULT_MAX_CHARS),
+        });
+        if (slice && slice.taskRegion) {
+          return slice.text;
+        }
+      }
+    }
     const offset = args.offset ? Math.max(1, Number(args.offset)) : 1;
     // Default window: 300 lines (or explicit limit). Prevents multi-thousand-line
     // files from blowing up the prompt context on naive read calls.

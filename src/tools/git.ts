@@ -1,6 +1,8 @@
 import type { Tool } from './types.js';
 import { runArgv } from '../exec.js';
 import { clipToolOutput } from './output-budget.js';
+import { archiveToolOutput } from './output-archive.js';
+import { lazyDiff, lazyDiffEnabled } from '../core/lazy-diff.js';
 
 // Bounded kill for a hung git subprocess — a git awaiting a lock, network
 // fetch, or a huge repo must never block the loop forever (same freeze class
@@ -34,6 +36,7 @@ export const gitTool: Tool = {
       { name: 'subcommand', type: 'string', description: 'Git subcommand', required: true },
       { name: 'args', type: 'array', description: 'Additional arguments', required: false },
       { name: 'message', type: 'string', description: 'Commit message when subcommand=commit', required: false },
+      { name: 'full', type: 'boolean', description: 'For subcommand=diff: return the full hunks instead of the lazy summary', required: false },
     ],
     permission: 'read',
   },
@@ -48,6 +51,26 @@ export const gitTool: Tool = {
     }
     if (!ctx.config.permissions.read && !isUncensored) {
       throw new Error('Read permission denied');
+    }
+    // MCH-lazy 14.2: `git diff` defaults to a compact lazy summary (files
+    // changed, hunk count, per-file line deltas, marked lines sampled) with
+    // the full hunks deferred, not dropped — archived for recall_output and
+    // restorable with full: true. Explicit user filters (--stat, --name-only,
+    // --numstat) already compact, so they pass through untouched. Kill-switch:
+    // MOCHI_LAZY_DIFF=0 restores full diffs.
+    if (sub === 'diff' && lazyDiffEnabled() && args.full !== true) {
+      const userFiltered = extra.some((a) => /^(--stat|--name-only|--name-status|--numstat|--shortstat)$/.test(a));
+      if (!userFiltered) {
+        const raw = await runGit(cwd, ['diff', ...extra]);
+        if (raw.trim() === '' || /^No changes\.$/.test(raw.trim())) return raw;
+        const lz = lazyDiff(raw, { full: false, recoveryHint: `expand on demand: git { subcommand: "diff", full: true } — or recall the archived full hunks below` });
+        let note = '';
+        try {
+          const arcId = archiveToolOutput(ctx.workspace.dir, 'git-diff', raw, { minChars: 0 });
+          if (arcId) note = `\n[full hunks archived — recall_output ${arcId} retrieves them in full]`;
+        } catch { /* archive is best-effort */ }
+        return lz.text + note;
+      }
     }
     switch (sub) {
       case 'status':
