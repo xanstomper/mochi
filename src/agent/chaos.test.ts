@@ -32,6 +32,9 @@ function makeConfig(dir: string, url: string): MochiConfig {
     safety: {
       mode: 'auto', commandTimeoutSeconds: 10, maxIterations: 10,
       maxRuntimeMinutes: 5, maxConcurrentAgents: 1, contextBudgetTokens: 4000,
+      // Scripted degenerate-provider harnesses cannot adapt to a
+      // reproduce-first veto (the documented scripted-e2e seam).
+      skipReproGate: true,
     },
     permissions: { read: true, write: true, shell: true, network: true, gitDestructive: true },
     telemetry: false, projectDir: '.mochi', configDir: resolve(dir, '.config/mochi'),

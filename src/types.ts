@@ -118,6 +118,12 @@ export interface SafetyConfig {
    *  same semantics as execCpuLimitSeconds, unset = none). */
   execMemoryLimitMb?: number;
   maxVerifyRetries?: number;
+  /** Verification-first default mode (verification-critic.ts): on fix tasks
+   *  the agent must produce a recorded reproduction before editing and the
+   *  completion claim is re-derived from that evidence by a critic pass.
+   *  Default ON — this is the mode's operator-level opt-out, and every
+   *  opt-out is logged. Env: MOCHI_REPRO_FIRST=0. */
+  verificationFirst?: boolean;
   /** B27 restructure: hostnames whose POST/PUT/PATCH/DELETE endpoints are
    *  OPERATOR-DECLARED read-only (GraphQL query endpoints, search APIs that
    *  take POST bodies, internal review tools). Plan mode exempts fetch calls
@@ -292,6 +298,10 @@ export interface Task {
   fileScope?: string[];
   acceptanceCriteria: string[];
   verificationCommand?: string;
+  /** Verification-first task annotation: this task is explicitly exempt from
+   *  the reproduce-first gate and the critic pass (reproduction impossible
+   *  or meaningless for this class). Recorded opt-out — logged when honored. */
+  reproExempt?: boolean;
   attempts: Attempt[];
   output?: string;
   /** MCH-109: image attachments (paths or data URIs) bundled with the prompt. */
