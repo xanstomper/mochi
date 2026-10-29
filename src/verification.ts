@@ -12,7 +12,7 @@ import { BudgetEngine } from './budget.js';
 import { runMutationCheck, type MutationCheck } from './core/mutation.js';
 import { classifyContentOnly } from './core/one-shot.js';
 import { isGreenfieldTask } from './core/greenfield.js';
-import { planVerificationTests } from './core/test-selection.js';
+import { planGateTests, formatGateRationale, type GatePlan } from './core/gate.js';
 import {
   analyzeFailure, exitCodeOfEnvelope, flakeCommandKey, formatFlakyHits, gitChangedFiles,
   isKnownFlaky, knownFlakyCommandKeys, loadFlakyRegistry, partitionFlakes, recordCleanPass,
@@ -179,72 +179,115 @@ export class VerifierEngine {
     const greenfield = isGreenfieldTask(task.title, task.description ?? '', task.fileScope, (p) => {
       try { return existsSync(resolve(this.cwd, p)); } catch { return false; }
     });
+    // Item 15 — the gate's test command IS the blast-radius selection by
+    // default: same runner, same config, same assertions, same exit codes —
+    // only WHICH test files run changes (the change's reverse-import
+    // closure ∪ the always-run core set). The full suite remains the
+    // verdict whenever a fail-safe fires (core surface, fan-out threshold,
+    // selection failure/timeout, undeterminable change set) or when
+    // MOCHI_GATE_FULL=1 / the --full override forces it. The rationale is
+    // evidence on EVERY run — gate output, not a side log.
+    let gatePlan: GatePlan | undefined;
+    if (repo.testCommand && !contentOnly && !greenfield) {
+      try {
+        gatePlan = await planGateTests(this.cwd, repo, {});
+      } catch {
+        gatePlan = undefined; // gate planning itself failed → the loop below runs the full suite
+      }
+    }
+    if (gatePlan) {
+      evidence.push({ source: 'gate-selection', result: formatGateRationale(gatePlan.rationale), passed: true });
+    }
     const commands = [
       task.verificationCommand,
-      ...((contentOnly || greenfield) ? [] : [repo.testCommand, repo.typecheckCommand, repo.lintCommand, repo.buildCommand]),
-    ].filter((c): c is string => Boolean(c));
+      ...((contentOnly || greenfield) ? [] : [gatePlan?.command ?? repo.testCommand, repo.typecheckCommand, repo.lintCommand, repo.buildCommand]),
+    ].filter((c): c is string => Boolean(c))
+      // A task's verificationCommand equal to the test command must not run twice.
+      .filter((c, i, a) => a.indexOf(c) === i);
 
-    // Fail-fast: when the changed files map cleanly to a subset of tests, run
-    // those FIRST. A targeted failure short-circuits before the slow full
-    // suite, typecheck, lint, and build — the common case while the agent is
-    // still iterating. The full suite still runs as the authoritative gate on
-    // success, so a narrow pass can never stand in for the real verdict.
-    // The subset comes from the blast-radius planner (labeled PARTIAL in the
-    // evidence below); cadence is disabled here because this path ALWAYS
-    // follows with the full gate — cadence governs iterative verify calls.
-    const primaryTest = task.verificationCommand ?? repo.testCommand;
-    let targetedPlan: { command?: string; reason: string } | undefined;
-    if (primaryTest && !contentOnly && !greenfield) {
-      try {
-        targetedPlan = await planVerificationTests(this.cwd, repo, primaryTest, { cadence: false });
-      } catch {
-        targetedPlan = undefined;
+    // Fail-fast: the gate command runs FIRST. In selected mode it IS the
+    // verification (only the blast-radius subset + always-run core set run,
+    // labeled GATE-SELECTED with its rationale); a targeted failure
+    // short-circuits before the slow typecheck/lint/build checks. In full
+    // mode (any fail-safe fired) the whole suite runs here, exactly as the
+    // gate always did.
+    let executedTestCommand: string | undefined;
+    if (gatePlan?.command && gatePlan.mode === 'selected') {
+      this.budget.recordToolCall();
+      executedTestCommand = gatePlan.command;
+      const tRes = await this.runCommand(gatePlan.command);
+      const tExit = tRes.match(/^exit_code: (\d+)/);
+      const tCode = tExit ? Number(tExit[1]) : -1;
+      const tOk = tCode === 0;
+      if (tOk) {
+        // A clean first-attempt pass decays this command's flaky scores.
+        if (recordCleanPass(flakyRegistry, flakeCommandKey(gatePlan.command))) {
+          saveFlakyRegistry(this.workspace, flakyRegistry);
+        }
+        evidence.push({
+          source: `command:${gatePlan.command}`,
+          result: `[GATE-SELECTED] ${tRes.slice(0, 2000)}`,
+          passed: true,
+        });
+      } else if (tCode === 127 || tCode === 9009) {
+        evidence.push({
+          source: `command:${gatePlan.command}`,
+          result: `[SKIPPED: command not found] ${tRes.slice(0, 2000)}`,
+          passed: true,
+          skipped: true,
+        });
+      } else if (matchesBaseline(resolvedBaseline, gatePlan.command, tRes)) {
+        evidence.push({
+          source: `command:${gatePlan.command}`,
+          result: `[PRE-EXISTING FAILURE, identical before this task ran] ${tRes.slice(0, 2000)}`,
+          passed: true,
+          skipped: true,
+        });
+      } else {
+        // Flake check before the early FAIL: a selected-gate failure that
+        // goes green on a bounded re-run of the unchanged command is a
+        // flake, not breakage — fall through to the remaining checks (and
+        // the full suite is warranted here: the selection just proved
+        // unreliable) instead of failing good work. Own-edit flakes are
+        // denied inside resolveFailure.
+        const flake = await resolveFailure(gatePlan.command, tRes);
+        if (flake.kind === 'flaky') {
+          evidence.push({
+            source: `command:${gatePlan.command}`,
+            result: `[GATE-SELECTED] [FLAKY: failed, then passed on re-run with no code changes] ${tRes.slice(0, 1200)}`,
+            passed: true,
+            flaky: flake.hits.map((h) => h.id),
+          });
+        } else {
+          evidence.push({
+            source: `command:${gatePlan.command}`,
+            result: `[GATE-SELECTED — the verification gate for this change failed: ${gatePlan.rationale.reason}] ${flake.output.slice(0, 2000)}${flake.note ? `\n${flake.note}` : ''}`,
+            passed: false,
+          });
+          const early = this.build(
+            'FAIL',
+            [],
+            [`${gatePlan.command} failed`],
+            'The tests in the changed files\' blast radius failed. Fix them, then verify again.',
+            evidence,
+          );
+          if (flakyRefs.length > 0) early.flaky = flakyRefs;
+          await this.hooks.runAfter('after_verify', { task: task.id, status: early.status });
+          return early;
+        }
       }
+      // The gate command already ran and its evidence stands — remove it
+      // from the loop below so it is not executed twice. The full suite is
+      // NOT implied after a selected pass: that implication was the old
+      // always-full default this item removes.
+      const gateIdx = commands.indexOf(gatePlan.command);
+      if (gateIdx >= 0) commands.splice(gateIdx, 1);
+    } else if (!contentOnly && !greenfield) {
+      executedTestCommand = repo.testCommand;
     }
 
     for (const command of commands) {
       this.budget.recordToolCall();
-      if (command === primaryTest && targetedPlan?.command) {
-        this.budget.recordToolCall();
-        const tRes = await this.runCommand(targetedPlan.command);
-        const tExit = tRes.match(/^exit_code: (\d+)/);
-        const tCode = tExit ? Number(tExit[1]) : -1;
-        const tMissing = tCode === 127 || tCode === 9009;
-        const tOk = tCode === 0;
-        if (!tOk && !tMissing && !matchesBaseline(resolvedBaseline, targetedPlan.command, tRes)) {
-          // Flake check before the early FAIL: a targeted failure that goes
-          // green on a bounded re-run of the unchanged command is a flake,
-          // not breakage — fall through to the full gate instead of failing
-          // good work. Own-edit flakes are denied inside resolveFailure.
-          const flake = await resolveFailure(targetedPlan.command, tRes);
-          if (flake.kind === 'flaky') {
-            evidence.push({
-              source: `command:${targetedPlan.command}`,
-              result: `[PARTIAL — targeted pre-check: ${targetedPlan.reason}] [FLAKY: failed, then passed on re-run with no code changes] ${tRes.slice(0, 1200)}`,
-              passed: true,
-              flaky: flake.hits.map((h) => h.id),
-            });
-          } else {
-            evidence.push({
-              source: `command:${targetedPlan.command}`,
-              result: `[PARTIAL — targeted pre-check: ${targetedPlan.reason}] ${flake.output.slice(0, 2000)}${flake.note ? `\n${flake.note}` : ''}`,
-              passed: false,
-            });
-            const early = this.build(
-              'FAIL',
-              [],
-              [`${targetedPlan.command} failed`],
-              'The tests related to your changed files failed. Fix them, then verify again (the full suite runs once the targeted set is green).',
-              evidence,
-            );
-            if (flakyRefs.length > 0) early.flaky = flakyRefs;
-            await this.hooks.runAfter('after_verify', { task: task.id, status: early.status });
-            return early;
-          }
-        }
-        // Targeted passed or was inconclusive (missing tool / pre-existing
-        // failure) → fall through to the authoritative full gate below.
-      }
       const result = await this.runCommand(command);
       // A check that cannot even run (command not found: exit 127 on POSIX,
       // 9009 on cmd.exe) is an environment gap, not evidence the agent's work
@@ -325,7 +368,11 @@ export class VerifierEngine {
     // it as evidence and downgrade a naive PASS to PARTIAL so the agent knows
     // to harden its tests.
     let mutationCheck: MutationCheck = { applied: false };
-    const testCommand = task.verificationCommand ?? repo.testCommand;
+    // The mutation check keys on the test command that ACTUALLY ran as the
+    // gate: a task's custom verification command when present, else the
+    // executed gate command (blast-radius subset in selected mode, the full
+    // suite command in full mode).
+    const testCommand = task.verificationCommand ?? executedTestCommand;
     const testCmdEvidence = testCommand ? evidence.find((e) => e.source === `command:${testCommand}`) : undefined;
     const testCommandRuns = Boolean(testCommand) && testCmdEvidence?.passed === true && testCmdEvidence?.skipped !== true;
     // Flaky commands are excluded from mutation checks: a baseline that
@@ -607,8 +654,20 @@ export interface VerificationBaseline {
  *  paths, timings, and line numbers so the same underlying failure matches
  *  before and after unrelated code changes. */
 export function failureSignature(output: string): string {
-  const NOISE = new RegExp('\\b(\\d+(\\.\\d+)?\\s*(ms|s))\\b|passing|failing|\\d+\\/\\d+', 'i');
-  return output
+  const NOISE = new RegExp('\\b(\\d+(\\.\\d+)?\\s*(ms|s))\\b|passing|failing|\\d+/\\d+', 'i');
+  // Gate rationale (item 15) is framing on the same failure, not the failure:
+  // strip the [GATE-…] block so a selected-vs-full decision (or which
+  // fail-safe rule fired) never changes a command's baseline signature.
+  const stripped: string[] = [];
+  let inGate = false;
+  for (const l of output.split('\n')) {
+    if (l.startsWith('[GATE-')) { inGate = true; continue; }
+    if (inGate && (l.startsWith('  ') || l.trim() === '')) continue;
+    inGate = false;
+    stripped.push(l);
+  }
+  return stripped
+    .join('\n')
     .split('\n')
     .filter((l) => l.trim() && !NOISE.test(l))
     .map((l) => {

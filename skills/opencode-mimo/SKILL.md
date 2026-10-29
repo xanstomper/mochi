@@ -13,13 +13,12 @@ provider in Mochi config — always go through the OpenCode CLI.
 
 ## Delegate a task
 
-    opencode run "<task brief: goal, files, constraints, done-criteria>"
-
-Run it from the target workdir. For long tasks, run it in the background and
-poll the output file. Review the diff afterwards like any other worker's
-output — trust nothing unverified.
+1. Write the task brief (goal, files, constraints, done-criteria) as a single argument.
+2. Run `opencode run "<task brief>"` from the target workdir.
+3. For long tasks, run it in the background and poll the output file.
+4. Review the diff afterwards like any other worker's output — trust nothing unverified.
 
 ## Check availability
 
-    opencode --version
-    opencode auth list
+1. Run `opencode --version` to confirm the CLI is installed.
+2. Run `opencode auth list` to confirm the provider session is alive.

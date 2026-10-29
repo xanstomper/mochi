@@ -3,6 +3,7 @@ import { detectRepo } from '../repo/repo.js';
 import { runShellString } from '../exec.js';
 import { maybeRedact } from '../security/security.js';
 import { planVerificationTests, recordSelectionRun } from '../core/test-selection.js';
+import { gateEnvFull } from '../core/gate.js';
 
 // Run project verification commands (test, build, typecheck, lint) with
 // smart command injection and result summarization.
@@ -21,6 +22,7 @@ export const verifyTool: Tool = {
       { name: 'command', type: 'string', description: 'Verification command to run (e.g. "test", "build", "typecheck", "lint")', required: false },
       { name: 'target', type: 'string', description: 'Specific test file or path to target (e.g. "src/foo.test.ts")', required: false },
       { name: 'scope', type: 'string', description: 'For tests: "auto" (default; related tests only when safe), "related" (force targeted), "all" (whole suite).', required: false },
+      { name: 'full', type: 'boolean', description: 'Force the FULL test suite (equivalent of --full / MOCHI_GATE_FULL=1). Overrides blast-radius selection.', required: false },
       { name: 'timeout', type: 'integer', description: 'Timeout in seconds (default: 120)', required: false },
     ],
     permission: 'shell',
@@ -64,7 +66,12 @@ export const verifyTool: Tool = {
     let scopeNote = '';
     let planScope: 'targeted' | 'full' | null = null;
     const scope = String(args.scope ?? 'auto').toLowerCase();
-    if (!target && scope !== 'all' && (cmdType === 'test' || cmdType === 'auto') && repo.testCommand) {
+    // --full equivalents: the `full` parameter or MOCHI_GATE_FULL=1 env —
+    // either always forces the whole suite, never a subset.
+    const forcedFull = args.full === true || gateEnvFull();
+    if (forcedFull && (cmdType === 'test' || cmdType === 'auto')) {
+      scopeNote = `[FULL] ${args.full ? 'full parameter' : 'MOCHI_GATE_FULL=1'} — full suite forced, no selection.\n`;
+    } else if (!target && scope !== 'all' && (cmdType === 'test' || cmdType === 'auto') && repo.testCommand) {
       try {
         const plan = await planVerificationTests(ctx.cwd, repo, repo.testCommand, {
           forceTargeted: scope === 'related',

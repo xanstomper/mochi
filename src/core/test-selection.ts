@@ -79,6 +79,15 @@ export interface ImportGraph {
   danglingImporters: Map<string, Set<string>>;
 }
 
+/** Thrown when a selection deadline (BlastOptions.deadlineMs) is exceeded:
+ *  callers treat it as a fail-safe trigger and run the full suite. */
+export class SelectionTimeoutError extends Error {
+  constructor(message = 'selection exceeded its time budget') {
+    super(message);
+    this.name = 'SelectionTimeoutError';
+  }
+}
+
 /**
  * Build the file-level import graph by scanning relative import specifiers
  * and resolving them with test-select's stem semantics. JS/TS-family files
@@ -86,11 +95,16 @@ export interface ImportGraph {
  * still resolve) but few edges — the selector's low-confidence rules treat
  * an edgeless changed file accordingly.
  */
-export function buildImportGraph(cwd: string, opts: { maxFiles?: number } = {}): ImportGraph {
+export function buildImportGraph(cwd: string, opts: { maxFiles?: number; deadlineMs?: number } = {}): ImportGraph {
   const maxFiles = opts.maxFiles ?? 20000;
+  const deadline = opts.deadlineMs;
+  const checkDeadline = () => {
+    if (deadline !== undefined && Date.now() > deadline) throw new SelectionTimeoutError();
+  };
   const files: string[] = [];
   const stack: string[] = ['.'];
   while (stack.length > 0 && files.length < maxFiles) {
+    checkDeadline();
     const relDir = stack.pop()!;
     let entries: string[];
     try {
@@ -132,6 +146,7 @@ export function buildImportGraph(cwd: string, opts: { maxFiles?: number } = {}):
     map.set(k, set);
   };
   for (const f of files) {
+    checkDeadline();
     let content: string;
     try {
       content = readFileSync(resolve(cwd, f), 'utf8');
@@ -218,6 +233,11 @@ export interface BlastOptions {
   flakyRegistry?: Pick<FlakyRegistry, 'entries'> | null;
   /** Prebuilt graph (tests / measurement); built from `cwd` when absent. */
   graph?: ImportGraph;
+  /** Absolute wall-clock deadline for the selection computation. Exceeding
+   *  it throws SelectionTimeoutError — the gate's fail-safe then runs the
+   *  full suite. Cooperative: checked during graph build and per changed
+   *  file in the closure walk. */
+  deadlineMs?: number;
 }
 
 const EMPTY_BREAKDOWN: SelectionBreakdown = { blast: [], smoke: [], history: [], changedTests: [] };
@@ -270,7 +290,7 @@ export function selectBlastRadiusTests(cwd: string, changed: string[], opts: Bla
   const infra = files.find((f) => isTestInfraChange(f));
   if (infra) return full('low', `test-infrastructure change (${infra}) invalidates the test mapping`, 0, 0);
 
-  const graph = opts.graph ?? buildImportGraph(cwd);
+  const graph = opts.graph ?? buildImportGraph(cwd, { deadlineMs: opts.deadlineMs });
   const totalTests = graph.testFiles.length;
   const graphFiles = graph.files.length;
   if (totalTests === 0) return full('low', 'no test files found in the repo', totalTests, graphFiles);
@@ -301,7 +321,11 @@ export function selectBlastRadiusTests(cwd: string, changed: string[], opts: Bla
   const changedTests: string[] = [];
   const unmappable: string[] = [];
   const affected = new Set<string>();
+  const checkDeadline = () => {
+    if (opts.deadlineMs !== undefined && Date.now() > opts.deadlineMs) throw new SelectionTimeoutError();
+  };
   for (const f of files) {
+    checkDeadline();
     if (isTestFile(f)) {
       if (onDisk.has(f)) changedTests.push(f);
       continue;
