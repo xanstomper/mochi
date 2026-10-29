@@ -140,7 +140,7 @@ Usage:
   mochi watch [dir...] [--cmd C]    # run the repo check on every file change
   mochi serve [--port N] [--token T] [--host H] # JSON API + OpenAI-compatible (/v1); default 127.0.0.1
   mochi auth [status|accounts|switch|...]  # per-provider credentials & multi-account
-  mochi skills [list|lint|mine|report]  # list, validate, mine skills; improvement report
+  mochi skills [list|lint|mine|report|drafts]  # list, validate, mine skills; improvement report; self-written drafts
   mochi providers                   # list AI model providers
   mochi dashboard | mochi web        # open web dashboard in browser
   mochi plugin add <dir>|remove <name>|list        # spec 12-E plugin registry
@@ -1438,6 +1438,14 @@ async function main() {
         console.log('\nNo skills need attention.');
       }
       console.log(`\n${rep.selfPatched} skill(s) repaired by the curator so far.`);
+      return;
+    }
+    if (sub === 'drafts') {
+      // mochi skills drafts — item 16 observability: every self-written skill
+      // proposal (drafted / installed / rejected / uninstalled) with its
+      // evidence and held-out proof.
+      const { listSelfWrittenSkills, renderSelfWritingListing } = await import('./skills/self-writing.js');
+      console.log(renderSelfWritingListing(listSelfWrittenSkills(cwd)));
       return;
     }
     const { skills } = loadAllSkills(cwd);

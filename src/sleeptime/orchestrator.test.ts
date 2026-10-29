@@ -280,11 +280,13 @@ describe('gate step (default integrity port)', () => {
 });
 
 describe('default pipeline shape', () => {
-  it('runs repair → curator → gate → health → induction → curriculum on an empty project without failing', async () => {
+  it('runs repair → curator → gate → health → induction → self-writing → curriculum on an empty project without failing', async () => {
     const report = await runSleeptime({ projectDir: proj, spendCapUsd: 5, now: NOW, frozenDir: REAL_FROZEN });
-    expect(report.steps.map((s) => s.id)).toEqual(['repair', 'curator', 'gate', 'health', 'induction', 'curriculum', 'routing-stats']);
-    expect(report.steps.map((s) => s.status)).toEqual(['skipped', 'completed', 'completed', 'completed', 'skipped', 'skipped', 'completed']);
-    expect(report.steps[5].detail).toContain('default port is a no-op');
+    expect(report.steps.map((s) => s.id)).toEqual(['repair', 'curator', 'gate', 'health', 'induction', 'self-writing', 'curriculum', 'routing-stats']);
+    expect(report.steps.map((s) => s.status)).toEqual(['skipped', 'completed', 'completed', 'completed', 'skipped', 'skipped', 'skipped', 'completed']);
+    // The self-writing step is inert without an injected held-out runner:
+    expect(report.steps[5].detail).toContain('no held-out runner configured');
+    expect(report.steps[6].detail).toContain('default port is a no-op');
     expect(report.spend.usedCostUsd).toBe(0);
   });
 });

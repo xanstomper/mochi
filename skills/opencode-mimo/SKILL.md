@@ -13,12 +13,21 @@ provider in Mochi config — always go through the OpenCode CLI.
 
 ## Delegate a task
 
-1. Write the task brief (goal, files, constraints, done-criteria) as a single argument.
-2. Run `opencode run "<task brief>"` from the target workdir.
+1. Confirm the worker is available: `opencode --version && opencode auth list`.
+2. From the target workdir, delegate the self-contained burst:
+   `opencode run "<task brief: goal, files, constraints, done-criteria>"`.
 3. For long tasks, run it in the background and poll the output file.
-4. Review the diff afterwards like any other worker's output — trust nothing unverified.
+4. Review the diff afterwards like any other worker's output — trust nothing
+   unverified; verify with the project's own checks before relying on it.
 
-## Check availability
+## Pitfalls
 
-1. Run `opencode --version` to confirm the CLI is installed.
-2. Run `opencode auth list` to confirm the provider session is alive.
+- Never configure MiMo as a direct model provider in Mochi config — the
+  provider session-gates raw API calls; only the OpenCode CLI reaches it.
+- The Go variant currently errors with "Go requires a credential"; use the
+  default non-Go model until its login is fixed.
+
+## Verification
+
+Run `opencode --version` (clean exit) before delegating, and after the run
+verify the produced diff with the target project's own tests/typecheck.

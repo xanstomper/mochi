@@ -62,6 +62,7 @@ import { atomicWriteFileSync } from '../core/atomic-fs.js';
 import { loadSkillUsage } from '../skills/skills.js';
 import { stampSkillBirth } from '../skills/skill-manager.js';
 import { defaultCuratorConfig, runCurator } from '../skills/skill-curator.js';
+import { createSelfWritingStep, type SelfWritingPort } from './self-writing-step.js';
 import {
   attemptSkillRepair, loadExportedTrajectories, type RepairTrajectoryInput,
 } from '../skills/skill-repair.js';
@@ -776,6 +777,7 @@ export interface SleeptimePorts {
   repair?: SkillRepairPort;
   gate?: GatePort;
   curriculum?: CurriculumPort;
+  selfWriting?: SelfWritingPort;
 }
 
 /** Routing-stats step (B22): re-derive the cost-per-solve routing table
@@ -813,6 +815,10 @@ export function defaultSleeptimeSteps(opts: SleeptimeOptions = {}): SleeptimeSte
     // and the curator picks those drafts up on a following night once they
     // have evidence. Model-free, $0.
     createInductionStep(),
+    // Item 16: self-writing skills — detect → draft → held-out proof → gated
+    // install. Inert (plans no units) unless ports.selfWriting carries a
+    // held-out runner; never on the per-turn hot path. Model-free, $0.
+    createSelfWritingStep(opts.ports?.selfWriting),
     createCurriculumStep(opts.ports?.curriculum, opts.maxCurriculumTasks ?? 3),
     createRoutingStatsStep(),
   ];
