@@ -317,3 +317,252 @@ injected-fault scenarios, 0 lost runs; G11 8/8 decision-matrix verdicts,
 ## AAIF Agent Skills alignment — WooWop independent verification (2026-10-25)
 Coder COMPLETE on ~/mochi-aaif, branch feat/aaif-skills, base f9861d9. Commits: 17afb86 (spec conformance gate — validateAaifSkill, spec-exact name rules, line-pinned diagnostics), 870095f (published-skill ingestion — security screen reusing scanPromptInjection plus invisible-unicode / hidden-html / concealed-directive / credential-exfiltration / obfuscated-blob rules, fetch-execute warn-tier; quarantine under <root>/.quarantine/<name>/ with QUARANTINE.json naming every rule + line, never installed, never silently dropped; .origin.json provenance with source + git commit/tag), 742baf5 (authoring guide docs/AAIF_SKILL_AUTHORING.md).
 Independent verification in a fresh worktree at 742baf5, Node 26.12.1: tsc CLEAN; full suite **3,494 passed / 0 failed / 12 skipped** (431 files passed, 4 skipped). The coder's own gate showed 1 failure (pre-existing agent-loop e2e) that did NOT reproduce in this independent full suite — consistent with the coder's A/B on the pristine f9861d9 tree, so it is not an AAIF regression. Proof metrics: spec pinned live (agentskills.io/specification + canonical repo 69ef37e, 2026-08-09; skills-ref v0.1.0 normative validator); bundled conformance **150/150** (skills lint clean, exit 0); ingestion fixtures **7/7** (1 good installed with provenance, 3 malformed + 3 malicious quarantined with named rules; isolated-HOME CLI smoke confirmed both paths on disk). Bonus fix in the tree: the frontmatter parser's silent hoisting of nested metadata: keys is fixed and regression-tested. AAIF CLOSED. Note from the coder, recorded not fixed here: this VM's 60 user-dir external skills (Hermes dialect) are flagged 60/60 by the new strict gate — correct gate behavior, rig-side work outside this repo. Verified chain: 3,269/2 -> 3,271 -> 3,285 -> 3,328 -> 3,384 -> 3,401 -> 3,445 -> 3,450 -> 3,454 -> 3,476 -> 3,494, zero failures at the tip. Nothing pushed to origin — home merges, as usual.
+
+
+## Decision memory across sessions — WooWop independent verification (2026-10-25)
+Coder COMPLETE on ~/mochi-decision-memory, branch feat/decision-memory,
+base dba091e (post-merge main). Single commit 01cf7589: rejected-approach
+records + task-start retrieval hook (770 insertions, 5 files). The first
+coder run was cut by a freeinference 429 after the commit; the resumed run
+filled the standing gate and the report (~/campaign/decision-memory-report.md).
+Proof metrics (coder, re-verified in the independent run): fixture bench
+repeat rate 1.00 -> 0.00, precision 1.00, recall 1.00; decision-memory tests
+13/13 green (10 unit + 3 multi-session fixture).
+Independent verification in a fresh worktree at 01cf7589, Node 26.12.1:
+tsc CLEAN; full suite **65 failed / 3,462 passed / 15 skipped** (465 files:
+20 failed, 440 passed, 5 skipped).
+Adjudication — the 65 failures are PRE-EXISTING at base dba091e, not a
+regression: an independent base comparison ran the same 20 failing files
+at dba091e and got the same 65 failed tests with an EMPTY failing-name
+diff (one tip-only line was a stderr artifact of the known flaky test, not
+a failure). Zero-decline: no test passing at base fails at tip, and the
+extra passing tests at the tip are exactly the 13 new decision-memory
+tests. The coder's own resumed session ran the same base comparison with
+the same result. One genuine discovery, environment-only: the sandbox
+canary test ("credential canary in $HOME/.ssh is NOT readable") fails
+from any /home/opc checkout at base AND tip — runShellString still uses
+the legacy unmasked bubblewrap builder in exec.ts. Not a regression,
+noted for a future fix, not blocking this landing. Decision memory
+CLOSED. Nothing pushed; home merges.
+
+## Routed juries for high-stakes steps only — coder, independently verified (2026-10-26)
+Coder (branch feat/routed-juries, base dba091e): commits d384c901
+(routed jury — 12 gated action classes, two deterministic passes that must
+both agree, opt-in, default OFF) + 7d5520a5 (hardline floor restored at
+the exec.ts runShellString chokepoint — dd of=/dev/sdz9 executed on base,
+refused with exit 126 after the fix). Proof metrics (coder, real loop +
+real provider wire path + real temp workspaces, 12 fixtures): bad-action
+blocked rate 6/6 with jury vs 0/6 ungated baseline; false-block rate on
+benign high-stakes actions 0/5; 0 model tokens added (deterministic
+passes), per-gated-action latency median 0ms / max 2ms.
+Independent verification in a fresh worktree at 7d5520a5, Node 26.12.1:
+tsc CLEAN; full suite **64 failed / 3,483 passed / 15 skipped** (465
+files: 19 failed, 441 passed, 5 skipped).
+Adjudication — zero-decline vs base dba091e: the failing-name diff
+against the independent base comparison (65 failures, 20 files) is
+TIP_ONLY empty (no new failure introduced) and BASE_ONLY exactly one
+test — src/security/hardline.test.ts runShellString refuses a hardline
+command without executing it — the pre-existing failure this item
+repairs. The remaining 64 failures are pre-existing at base
+(environmental: no bubblewrap, no RLIMIT enforcement, antigravity 503,
+no browser daemon; architectural: P2 sync lazy-load vs vitest src-graph),
+none touching the jury. Routed juries CLOSED. Nothing pushed; home merges.
+
+## Verification-first default mode — coder, independently verified (2026-10-26)
+Coder (branch feat/verification-first, base dba091e): commits fb089612
+(recorded reproductions + evidence critic as the fix-task default) +
+9a2828fd (opt-out seam for the scripted degenerate-provider harnesses).
+Proof metrics (coder, real loop + injected bugs, scripted archetypes):
+false-fix rate ON 0/18 vs OFF 6/18 (33%) — every false-fix archetype
+run completed as "success" with the reproduction still failing when the
+mode was off; all 12 adversarial runs are caught with it on; every ON
+completion carries a recorded reproduction (6/6 vs 0/18 off); tokens
+identical on scripted accounting, harness wall time +17% (critic re-runs
++ A/B); live-LLM deltas UNMEASURED (no provider configured; keys untouched).
+Independent verification in a fresh worktree at 9a2828fd, Node 26.12.1:
+tsc CLEAN; full suite **65 failed / 3,480 passed / 15 skipped** (466
+files: 20 failed, 441 passed, 5 skipped).
+Adjudication — zero-decline vs base dba091e: the failing-name diff
+against the independent base comparison (65 failures, 20 files) is
+TIP_ONLY empty and BASE_ONLY empty — the identical pre-existing failure
+set (environmental + architectural, same classes as prior landings),
+none introduced by this item. Note: the coder gate reported 3,484
+passed vs 3,480 independently — a 4-test counting difference with an
+identical failure set, not a regression. Verification-first CLOSED.
+Nothing pushed; home merges.
+
+## Loop intervention policy (slices 1-2) — WooWop-direct, independently verified (2026-10-26)
+WooWop-direct (branch feat/intervention-policy, base dba091e): commits 8ee23e46 (InterventionPolicy queue+flush — at most one soft nudge per model call, commit outranks struggle, run budget 30, finish telemetry) + 146c125a (6 loop.test.ts struggle tests updated to the queue+flush contract; assertions unchanged, none weakened) + cc8f16f9 (pulse nudge routed through the policy as a new tag, priority 20, lowest; telemetry reports pulse count; background-task notices, toolset note and empty-response instruction classified HARD and left direct).
+Proof metrics (targeted): slice 1: 7 unit + 1 loop test + discipline suites 43/43 green; slice 2: 19/19 across 3 files (12 policy incl. 5 new pulse-priority cases, 5 bare-agent pulse cases, 2 loop incl. a new 12-iteration heartbeat-delivery case); tsc clean throughout.
+Independent verification in fresh worktrees, Node 26.12.1: slice 1 at 8ee23e46: tsc CLEAN; full suite 71 failed / 3,451 passed / 15 skipped (465 files: 21 failed, 439 passed, 5 skipped) — failing-name diff vs base dba091e: TIP_ONLY exactly the 6 loop.test.ts struggle tests (the intentional contract change), BASE_ONLY empty. Slice 2 at cc8f16f9: tsc CLEAN; full suite 65 failed / 3,468 passed / 15 skipped (466 files: 20 failed, 441 passed, 5 skipped) — failing-name diff vs base dba091e: TIP_ONLY empty and BASE_ONLY empty, zero regressions; all failures pre-existing (same environmental + architectural classes as prior landings, incl. the known flaky shell-ceiling tests). Loop intervention policy slices 1-2 VERIFIED, ready for home's merge. Nothing pushed; home merges. Lean profile + phase split + ablations remain as follow-ups.
+
+## Warm daemon per project — coder, independently verified (2026-10-27)
+Coder (branch feat/warm-daemon, base dba091e): commit 25e9e9ec
+(per-project warm daemon: preload + invalidation + single-daemon lock,
+measured 4.8x TTFT).
+Proof metrics (coder, scripted provider): TTFT cold-cli 610ms ->
+warm-daemon 128ms median (4.77x), preload 203ms one-time, idle RSS
+144MB / 0% CPU; 12 new warm.test.ts tests; lifecycle gates covered
+(daemon-crash detection + recovery, clean shutdown, HEAD-move re-warm,
+working-tree/config/skills invalidation, warm-task parity, skills-cache
+copy isolation).
+Independent verification in a fresh worktree at 25e9e9ec, Node 26.12.1:
+tsc CLEAN; full suite **65 failed / 3,461 passed / 15 skipped** (464
+files: 20 failed, 439 passed, 5 skipped).
+Adjudication — zero-decline vs base dba091e: the failing-name diff
+against the independent base comparison (65 failures, 20 files) is
+TIP_ONLY empty and BASE_ONLY empty — the identical pre-existing failure
+set, none introduced by this item. Note: the coder gate reported 3,465
+passed vs 3,461 independently — a 4-test counting difference with an
+identical failure set, not a regression. Warm daemon CLOSED. Nothing
+pushed; home merges.
+
+## Lazy everything, extended — coder, independently verified (2026-10-27)
+Coder (branch feat/lazy-everything, base a9b9de9): commit c07745b4
+(lazy file slices, lazy diffs, lazy test output; deferred, never dropped;
+staleness re-validation on every deferred fetch; kill-switches per surface).
+Proof metrics (coder, deterministic fixtures): per-surface per call read
+-63%, git diff -98%, diff tool -96%, verify failing -54% (all failures
+kept), verify passing -64%; whole-task T1 read -43.7% with task-success
+parity, T2 diff +56.9% (worse, honestly reported), T3 test ~flat.
+Independent verification in a fresh worktree at c07745b4, Node 26.12.1:
+tsc CLEAN; full suite **48 failed / 3,508 passed / 15 skipped** (467
+files: 19 failed, 443 passed, 5 skipped).
+Adjudication — zero laziness regressions vs base a9b9de9: the independent
+failing-name set is identical to the coder tip gate, and vs the coder base
+gate the only extra entry is the sandbox credential canary, proven
+environmental (security code byte-identical base-to-tip; base fails it from
+a HOME-adjacent cwd, and the tip worktree is HOME-adjacent). BASE_ONLY
+empty. New lazy suites (36 tests) all pass. Lazy everything CLOSED.
+Nothing pushed; home merges.
+
+## Blast-radius test selection as the DEFAULT gate — coder, independently verified (2026-10-27)
+Coder (branch feat/blast-radius-gate, base a9b9de9): commits f60f62d4 + 5464aa8a
+(the default verification gate now runs the blast-radius selected test set;
+full suite only via fail-safe rules: core-surface, selection failure/timeout,
+empty selection for a non-empty change, undeterminable change set, plus
+MOCHI_GATE_FULL=1 / full:true / beforeMerge overrides; every run prints a
+[GATE-SELECTED]/[GATE-FULL] rationale block).
+Proof metrics (coder, same machine): leaf change selective gate 5.2s vs
+611.4s full base (~117x); medium change 243.8s with all 16 failures inside
+the base failure set; core change forces FULL; seeded failure caught in
+5.2s; gate.test.ts 16/16; consumer suites 107 tests green.
+Independent verification in a fresh worktree at 5464aa8a, Node 26.12.1:
+tsc CLEAN; full suite **47 failed / 3,489 passed / 15 skipped** (464
+files: 18 failed, 441 passed, 5 skipped).
+Adjudication — zero blast-radius regressions vs base a9b9de9: the
+independent failing-name set (48 names) is identical to the coder tip gate
+(IND_ONLY empty, CODER_TIP_ONLY empty); the coder base diff is TIP_ONLY 0
+with BASE_ONLY exactly the AAIF conformance failure this item fixes (the
+standing gate already failed at base); AAIF conformance does not fail at
+the tip independently; new gate tests pass 16/16 independently. Blast-radius
+default gate CLOSED. Nothing pushed; home merges.
+
+## Self-writing skills with a test gate - coder, independently verified (2026-10-27)
+Coder (branch feat/self-writing-skills, base a9b9de9): commit 03628e6d
+(curator loop drafts a skill from any repeated 3+ step pattern, tests it on a
+held-out task, installs only on pass; held-out gate requires success no worse
+than skill-off and no time/cost regression; drafts staged outside the skill
+loader path; AAIF catalog-violation fix for skills/opencode-mimo/SKILL.md).
+Proof metrics (coder, bench fixtures): adoption 2 installed / 5 drafted
+(40%); installed skills held-out 480ms/$0.016 vs 800ms/$0.029 skill-off
+(-320ms); detection pass 40ms wall, 0 model tokens; rejected drafts stay
+visible with verdicts, never silently installed.
+Independent verification in a fresh worktree at 03628e6d, Node 26.12.1:
+tsc CLEAN; full suite **47 failed / 3,503 passed / 15 skipped** (466
+files: 18 failed, 443 passed, 5 skipped).
+Adjudication - zero self-writing regressions vs base a9b9de9: the
+independent failing-name set (48 names) is identical to the coder tip gate
+(IND_ONLY empty, TIP_ONLY empty); vs base the only delta is the AAIF
+conformance failure this item fixes (absent at the tip independently) plus
+the sandbox credential canary, proven environmental (fails identically at
+pristine base from a home-adjacent checkout); new self-writing suites pass
+30/30 independently. The 4-test passed-to-skipped net difference vs the coder
+gate (same 3,565 total) is a counting difference with an identical failure
+set, not a regression. Self-writing skills CLOSED. Nothing pushed; home
+merges.
+
+## Evidence-graded output - coder, independently verified (2026-10-27)
+Coder (branch feat/evidence-graded-output, base a9b9de9): commit 05f6bca1
+(claim-grading seam src/summary/claim-grade.ts + default citations on the
+finish path; per-run shell ledger at the two execution chokepoints; Evidence
+block plus structured ClaimGradeReport on AgentResult, the summary:rendered
+event, and doc.evidence; failed runs skip grading; no-claims summaries
+byte-identical; no new model round-trips).
+Proof metric (coder, fixed probe set claim-grade-probe.test.ts):
+user-verifiable claims per response 27% (4/15) -> 73% (11/15); task success
+6/6 -> 6/6; no-fabrication pinned (an unresolvable path:line stays visibly
+ungrounded; a test named but never run stays ungrounded).
+Independent verification in a fresh worktree at 05f6bca1, Node 26.12.1:
+tsc CLEAN; full suite **48 failed / 3,498 passed / 15 skipped** (466
+files: 19 failed, 442 passed, 5 skipped).
+Adjudication - zero evidence-graded regressions: the failing-name set (49
+names incl. file-level routing-ab) equals the item 16 independent set plus
+exactly the AAIF conformance failure; that failure is base-pre-existing
+(item 17 branches directly from a9b9de9, not from item 16s branch, so it
+does not contain item 16s opencode-mimo SKILL.md fix, which awaits home
+merge); vs base a9b9de9 the only delta is the sandbox credential canary,
+proven environmental; new claim-grade/probe/finish-path suites pass 26/26
+independently (21+2+3). Evidence-graded output CLOSED. Nothing pushed;
+home merges.
+
+## Browser + desktop as one surface - coder, independently verified (2026-10-27)
+Coder (branch feat/browser-desktop-surface, base a9b9de9): commit 4da03307
+(shared a11y tree src/a11y/tree.ts + handoff src/a11y/handoff.ts + unified
+surface; CDP page + computer tool adapted at the representation layer;
+computerTool registration restored — it had been dropped in merge-vm-all2).
+Proof metric (coder, fixed cross-surface task set): 2 tasks neither tool
+alone completes — cdp alone 0/2, computer alone 0/2, unified 2/2, with
+mechanical failure assertions per single-tool run and focused-node carry
+asserted end-to-end. Handoff observation cost: 2 calls / 1058 chars /
+0 images vs re-observing from scratch: 306 calls (snapshot + nameless 19KB
+screenshot + 304 grid-probe clicks), 0 named targets.
+Independent verification in a fresh worktree at 4da03307, Node 26.12.1:
+tsc CLEAN; full suite **43 failed / 3,506 passed / 15 skipped** (466
+files: 17 failed, 444 passed, 5 skipped).
+Adjudication - zero browser-desktop regressions vs base a9b9de9: the
+independent failing-name set (44 names = 43 failed tests + the file-level
+routing-ab entry) is a strict subset of the base set (item 16 set + AAIF
+= 49 names); the only base-vs-tip delta is the 5 computer-related
+failures this item repairs (computer.test.ts 3 + computer-screenshot-inline
+2, both green independently: 13/13 and 2/2). The AAIF conformance failure
+at the tip is base-pre-existing (this branch forks from a9b9de9, not from
+item 16s branch, so it does not contain item 16s opencode-mimo SKILL.md
+fix, which awaits home merge); the sandbox credential canary is proven
+environmental. New a11y suites pass 29/29 independently (handoff 7,
+tree 11, unified-surface 11). Browser + desktop as one surface CLOSED.
+Nothing pushed; home merges.
+
+## Local-first model tier - coder, independently verified (2026-10-27)
+Coder (branch feat/local-first-model-tier, base a9b9de9): commit 3993c5a4
+(first-class local provider route src/model/local.ts + registration in the
+provider table, router resolution, config/env chain, offline egress guard,
+opt-in remote fallback that is never silent; no parallel router invented).
+Proof metric (coder, bench:local-first, fixed 6-task set, canned
+OpenAI-compatible stub on 127.0.0.1 since no real local model is installed
+on the VM): 6/6 on every leg with 0 remote fetches - local up, offline up,
+down+no-fallback fast visible errors, down+opt-in exactly 6 loud warns,
+OFFLINE+remote entry 6 visible refusals. The bench measures routing/egress,
+not model quality; two draft bugs were fixed (failover warn fired on fully
+successful local runs; egress guard dropped routing metadata).
+Independent verification in a fresh worktree at 3993c5a4, Node 26.12.1:
+tsc CLEAN; full suite **49 failed / 3,500 passed / 15 skipped** (464
+files: 20 failed, 439 passed, 5 skipped; 3,564 tests).
+Adjudication - zero deterministic local-first regressions vs base a9b9de9:
+the independent failing-name set (50 names = 49 failed tests + the
+file-level routing-ab entry) equals the derived base set (item 16
+independent set + the AAIF failure) plus exactly one extra name, the
+class-scorecard end-to-end test, and BASE_ONLY is empty. The AAIF
+conformance failure is base-pre-existing (this branch forks from a9b9de9,
+not from item 16s branch, so it does not contain item 16s opencode-mimo
+SKILL.md fix, which awaits home merge); the sandbox credential canary is
+proven environmental. The class-scorecard failure is a full-suite load
+flake: complex class passRate 23/24 in the full suite, while an isolated
+re-run at the same tip passes 13/13. New local suite passes 29/29
+independently. Local-first model tier CLOSED. Nothing pushed; home merges.
+
+D1 per-run usage/cost telemetry sidecar (distillation fuel). New src/observability/usage-sidecar.ts: UsageSidecarRecorder attaches to the run's EventBus alongside TraceRecorder, accumulating per-call usage:updated events (main agents vs subagents) into a per-run sidecar. Proof (coder): 6/6 spawns with complete sidecars (4 real freeinference/glm-5.3-flash legs including a real gate baseline trial, 2 fixture-labeled legs); tokens/api_calls/exit/aux 6/6; cache-read 2/6 measured, 4/6 explicitly unavailable; 20,231.25 tokens/task, 21,055 tokens/solve; dollars honestly unmeasured (no billing/price entry, none invented). Coder gates: tsc clean; new suite 12/12; related ring 220/226 (6 failures runtime.test.ts x6 plus routing-ab import, proven pre-existing at base a9b9de9). Caveat from report: the sidecar surfaced the known pre-existing reports-failed-on-success bug, faithfully recorded, not fixed (out of scope). Independent verification in a fresh worktree at 19c39aa5, Node 26.12.1: tsc CLEAN; full suite 48 failed / 3,484 passed / 15 skipped (464 files: 19 failed, 440 passed, 5 skipped; 3,547 tests). Adjudication - zero D1 regressions vs base a9b9de9: the independent failing-name set (48 test names) is identical to the base-equivalent set (item 17 independent set, 48 names); TIP_ONLY empty, BASE_ONLY empty. The AAIF conformance failure is base-pre-existing (this branch forks from a9b9de9, not from item 16's branch, so it does not contain item 16's opencode-mimo SKILL.md fix, which awaits home merge); the sandbox credential canary is proven environmental. All 12 new sidecar tests pass in the full suite. D1 CLOSED. Nothing pushed; home merges.
+
+D2 compaction evidence-survival bundle (distillation fuel). Spill store (src/summary/spill-store.ts: oversized output over 200K chars spills whole to content-addressed .mochi/spill/<sha256[:16]>.txt, hash-verified on retrieval, gitignored, never truncated/evicted; in-context copy becomes head+marker+tail with the retrieval command), protected head (src/summary/protected-head.ts: root goal, next action, open TODOs, skill NAMES in play, one definition, one test per member), and bounded post-compaction re-injection hook (compact() appends one bounded system message, 6,000-char default cap, omissions named not silent; recall_output gained key= retrieval). Proof (coder, torture transcript through real ContextEngine.compact()): evidence reachable at the seam 7/12 -> 12/12, next-step packet 10/12 -> 12/12, silent drops 5 -> 0, broken pointers 0 -> 0, re-injection spend 983 / 6,000 chars (16.4%), cap enforcement proven at a 600-char override. Coder gates: tsc clean; new tests 37/37; related suites 130/132 (2 context.prefix-cache failures proven pre-existing at base a9b9de9); full suite 48 failed / 3,513 passed, 19 files failed, failed-file set identical to base. Independent verification in a fresh worktree at a41c7744, Node 26.12.1: tsc CLEAN; full suite 48 failed / 3,509 passed / 15 skipped (467 files: 19 failed, 443 passed, 5 skipped; 3,572 tests). Adjudication - zero D2 regressions vs base a9b9de9: the independent failing-name set (48 test names) is identical to the base-equivalent set (item 17 independent set, 48 names); TIP_ONLY empty, BASE_ONLY empty; coder-gate 3,513 vs independent 3,509 passed is a counting difference with an identical failure set. The 19th failed file is src/evals/routing-ab.test.ts (0 tests, file-level failure, present in base sets too). The AAIF conformance failure is base-pre-existing (this branch forks from a9b9de9, not from item 16s branch, so it does not contain item 16s fix, which awaits home merge); the sandbox credential canary is proven environmental. All 37 new D2 tests pass in the full suite. D2 CLOSED. Nothing pushed; home merges.
+
+D3 assumption-in-artifact + per-step status contract (distillation fuel). Contract at four existing seams, no parallel system: src/status-contract.ts (flag grammar, canonical artifact line, per-step status line, unflagged-guess/ledger-coverage scorers), Core Directive 12 in src/context.ts (search evidence first; unknown fact proceeds only with the assumption written INTO the artifact with flag + attaches-ref + named line), todo-tool enforcement (assumed requires a flag note, blocked requires a blocker note, unknown states name the valid set instead of silently mapping), and flag survival through compaction (flagged lines are must-survive probe facts, carried verbatim into an ASSUMPTIONS section, retention requires the flag itself to survive). Proof (coder, real agent loop with scripted provider, scored from real artifacts): assumption attribution 0% -> 100%, unflagged guesses 1 -> 0, per-step status coverage 0/2 -> 4/4; a flagged write dropped by real ContextEngine.compact() is re-injected verbatim with probe passed. Coder gates: tsc clean, build clean, new tests 26/26; full suite 48 failed / 3,499 passed / 14 skipped with a failure set byte-identical to clean base a9b9de9 (coder-verified by diff of sorted FAIL lines). Independent verification in a fresh worktree at 4635b13e, Node 26.12.1: tsc CLEAN; full suite 48 failed / 3,498 passed / 15 skipped (465 files: 19 failed, 441 passed, 5 skipped; 3,561 tests). Adjudication - zero D3 regressions vs base a9b9de9: the independent failing-name set (48 test names) is identical to the base-equivalent set (item 17 independent set, 48 names); TIP_ONLY empty, BASE_ONLY empty; coder-gate vs independent passed/skipped difference is a 1-test counting difference with an identical failure set. The AAIF conformance failure is base-pre-existing (this branch forks from a9b9de9, not from item 16s branch, so it does not contain item 16s opencode-mimo SKILL.md fix, which awaits home merge); the sandbox credential canary is proven environmental; the context.prefix-cache lint failures are base-pre-existing (lintStablePrefix undefined on clean base). All 26 new D3 tests pass in the full suite. D3 CLOSED. Nothing pushed; home merges.
