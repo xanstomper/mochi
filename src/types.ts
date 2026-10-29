@@ -295,7 +295,12 @@ export interface Task {
  *  `order`. Shared across parallel agents for one goal run. */
 export interface TodoItem {
   title: string;
-  status: 'pending' | 'in_progress' | 'done';
+  /** D3 status contract: done/blocked/assumed/open are the contract states;
+   *  pending/in_progress are the legacy planning pair (kept for existing
+   *  ledgers). `assumed` and `blocked` are contract-checked by the todo tool:
+   *  they require a note pointing at evidence or the artifact's assumption
+   *  flag (see src/status-contract.ts). */
+  status: 'pending' | 'in_progress' | 'done' | 'blocked' | 'assumed' | 'open';
   order: number;
   notes?: string;
 }

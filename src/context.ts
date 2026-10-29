@@ -17,6 +17,7 @@ import { isMode, modeInstruction } from './modes.js';
 import { loadRulesCached, selectActiveRules } from './rules.js';
 import { scanPromptInjection } from './skills/skill-lint.js';
 import { contractSection } from './contract.js';
+import { todoStatusChar } from './status-contract.js';
 import { memoryDigest, memoryFilePath } from './memory/memory-store.js';
 import { feedbackDigest } from './observability/feedback.js';
 import { detectCircle } from './circle.js';
@@ -1208,6 +1209,7 @@ ${machineAccessBlock(this.projectRoot)}
 9. **Large Codebase Navigation & Architectural Mastery**: When entering unfamiliar or large repositories, monorepos, or multi-package workspaces, use \`codebase_map\` to immediately establish architectural orientation (ecosystem, LOC metrics, module hierarchy, entry points, and key exports). Use \`find_references\`, \`find_definitions\`, and \`blast_radius\` before refactoring to prevent regressions across module boundaries.
 10. **Large-Scale Rewrites & Zero-Truncation Discipline**: When undertaking large refactors, migrations, or multi-file rewrites, NEVER emit placeholder comments (e.g. \`// ... existing code ...\`, \`/* ... unchanged ... */\`, \`# ... existing code ...\`). Emitting placeholders is strictly prohibited as it destroys working code. When rewriting whole functions or classes, use \`replace_symbol\`, \`edit\`, or \`patch\`. Always provide complete, working code.
 11. **Offensive Security & Red Teaming Rigor**: When tasked with red teaming, security auditing, or penetration testing, employ adversarial thinking, attack surface enumeration, and empirical PoC verification. Audit codebases for OWASP Top 10 vulnerabilities (SQLi, command injection, path traversal, prototype pollution, SSRF, DOM XSS, insecure deserialization, weak crypto, and API stubs) using \`security_audit\`. Verify findings safely and design defense-in-depth remediations.
+12. **Blocked-Fact Contract (search first, flag assumptions, ledger every step)**: when a step depends on a fact you cannot verify, SEARCH the available evidence first — files (\`grep\`/\`read\`), tool results, project memory, prior context. If the evidence is found, cite it (file:line or the tool result) and proceed; no assumption is involved. If the fact stays unknown after searching, you may proceed ONLY with the assumption written INTO the artifact itself: a line like \`[ASSUMPTION:A-1] <claim> — attaches: <file:line or section>; unverified (searched: <where you looked>)\`. An assumption stated only in conversation — no artifact line, no flag — is a contract violation, because a silent guess downstream reads as a verified fact. In multi-step work every step gets a status line in the \`todo\` ledger: \`done\` with a note citing its evidence, \`assumed\` whose note references the \`[ASSUMPTION:…]\` flag, \`blocked\` whose note names the blocker, or \`open\` — so the run reads as a status ledger (what is known, assumed, or still open at every step), never a narrative that buries unknowns.
 
 # II. Execution Protocol
 - **Communicate Intent**: Before or alongside invoking tools, briefly explain what you discovered and what you will do next.
@@ -1306,7 +1308,7 @@ ${this.toolGuidelines(tools)}
     add(['patch'], 'patch: use for multi-file changes or several edits in one call (*** Begin Patch / Add File / Update File / Delete File / *** End Patch). Cheaper than several full writes.');
     add(['write'], 'write: use only for new files or full rewrites. Appending existing files wastes tokens.');
     add(['subagent'], 'subagent: PROACTIVELY DELEGATE independent tasks, parallel research, reviews, architecture analysis, or isolated fixes to fresh child agents. Pass a single "prompt" or a "tasks" array for concurrent multi-agent fanout.');
-    add(['todo'], 'todo: for multi-step work, record the plan as todo items and mark them done as you go. Cheap, shared, and keeps parallel work honest.');
+    add(['todo'], 'todo: for multi-step work, record the plan as todo items and keep the status ledger honest as you go — done steps cite evidence in the note, assumed steps reference their [ASSUMPTION:…] flag, blocked steps name the blocker, open steps stay open. Cheap, shared, and keeps parallel work honest.');
     add(['shell'], 'shell: for builds, tests, greps. Not for file mutation when edit/patch will do.');
     add(['blast_radius'], 'blast_radius: analyze the downstream impact and caller call sites of a symbol before modifying or refactoring it.');
     add(['find_definitions', 'find_references'], 'find_definitions / find_references: look up actual symbol definitions, type contracts, and caller usages across the project before modifying code to prevent guessing or hallucinating APIs.');
@@ -1469,8 +1471,12 @@ ${this.toolGuidelines(tools)}
           const raw = readFileSync(todoPath, 'utf8');
           const todos = JSON.parse(raw) as Array<{ order: number; status: string; title: string; notes?: string }>;
           if (Array.isArray(todos) && todos.length > 0) {
+            // D3: same glyph mapping as the todo tool's renderer — the ledger
+            // states (blocked/assumed/open) render distinctly, and the note
+            // (evidence citation or assumption flag) rides along, so this
+            // checklist reads as a status ledger on every turn.
             const formatted = todos
-              .map((t) => `${t.order}. [${t.status === 'done' ? 'x' : t.status === 'in_progress' ? '-' : ' '}] ${t.title}${t.notes ? ` -- ${t.notes}` : ''}`)
+              .map((t) => `${t.order}. [${todoStatusChar(t.status)}] ${t.title}${t.notes ? ` -- ${t.notes}` : ''}`)
               .join('\n');
             this.todoCacheBlock = `## Active Plan & Todo Checklist (Current Execution Ledger)\n${formatted}`;
           }
