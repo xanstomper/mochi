@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { createAntigravityProvider, computeAntigravityCost } from './antigravity.js';
+import { createAntigravityProvider, computeAntigravityCost, ANTIGRAVITY_PRICING_TABLE } from './antigravity.js';
 import { estimateCostUsd } from '../pricing.js';
 import type { ChatMessage, StreamChunk } from '../types.js';
 
@@ -391,8 +391,8 @@ describe('antigravity provider', () => {
   it('returns null (unknown) for unpriced models instead of fabricating a cost (audit L-03)', () => {
     // Gemini 3.x ids are deliberately untabled in pricing.ts (host-dependent
     // rates); the old shadow table priced them — and anything else — anyway.
-    expect(computeAntigravityCost('gemini-3.8-flash', 1000, 100)).toBeNull();
-    expect(computeAntigravityCost('gemini-3.5-flash', 1000, 100)).toBeNull();
+    // 3.x ids are now EXACT-tabled in ANTIGRAVITY_PRICING_TABLE (priced, not guessed):
+    expect(computeAntigravityCost('gemini-3.8-flash', 1000, 100)).toBeCloseTo(0.001125);
     expect(computeAntigravityCost('acme-9000-turbo', 1000, 100)).toBeNull();
     expect(computeAntigravityCost('some-future-opus', 1000, 100)).toBeNull();
     // The old $0 junk entries are unknown too, not free.
@@ -449,8 +449,8 @@ describe('antigravity content mapping uses canonical splitContent', () => {
 
   it('never fabricates a price for an unknown model (L-03)', () => {
     // The old substring fallback billed every unknown id at Gemini 3.8 rates.
-    expect(computeAntigravityCost('totally-unknown-model-9000', 1_000_000, 1_000_000)).toBe(0);
-    expect(computeAntigravityCost('my-custom-flash', 1_000_000, 1_000_000)).toBe(0);
+    expect(computeAntigravityCost('totally-unknown-model-9000', 1_000_000, 1_000_000)).toBeNull();
+    expect(computeAntigravityCost('my-custom-flash', 1_000_000, 1_000_000)).toBeNull();
   });
 
   it('prices cached input at the cache-read rate, not the fresh-input rate', () => {

@@ -428,6 +428,11 @@ export class Runtime {
   /** MCH-74: steer a RUNNING goal — pushes guidance to all live agents; they
    *  inject it at their next loop iteration. Returns #agents reached. */
   steer(text: string): number {
+    // Lazy-load safety (post-1ec52cd): under vitest/src (no require(esm)) the
+    // accessor throws when the engine was never awaited. Steer is inherently
+    // best-effort during a live run (engine exists), but a stray early steer
+    // must not crash the caller.
+    if (!this._goals) return 0;
     return this.goals.steerActive(text);
   }
 
