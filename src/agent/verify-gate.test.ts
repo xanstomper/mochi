@@ -58,7 +58,7 @@ const MATH_BUGGY = 'function add(a, b) { return a - b; }\nmodule.exports = { add
 const REPRO_JS = 'const { add } = require("./math.js");\nif (add(2, 3) !== 5) { console.log("WRONG: add(2,3)=" + add(2, 3)); process.exit(1); }\nconsole.log("OK");\n';
 
 describe('P0.5 default completion gate (Agent.verify)', () => {
-  it('(a) BLOCKS a fix task that changed no files instead of auto-passing it', async () => {
+  it('(a) a fix task that changed no files fails via its repo checks instead of auto-passing it', async () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'mochi-p05-nochange-'));
     try {
       writeFileSync(resolve(dir, 'package.json'), JSON.stringify({ name: 'p', scripts: { test: 'node repro.js' } }));
@@ -70,8 +70,11 @@ describe('P0.5 default completion gate (Agent.verify)', () => {
       const task = createTask('Fix the add function', 'Fix the add function in math.js so add(2, 3) returns 5.');
       const v = await (agent as any).verify(task, detectRepo(dir));
       expect(v.passed).toBe(false);
-      expect(v.status).toBe('BLOCKED');
-      expect(v.summary).toContain('changed no files');
+      // 43b68d5a: zero-change + runnable repo checks falls through to
+      // the checks instead of BLOCKING. The repo check (`node repro.js`)
+      // fails on the buggy math, so the verdict is FAIL via evidence,
+      // not BLOCKED via no-evidence. Still fails, never auto-passes.
+      expect(v.status).toBe('FAIL');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -103,9 +106,12 @@ describe('P0.5 default completion gate (Agent.verify)', () => {
       const result = await agent.run(task);
       expect(result.success).toBe(false);
       expect(result.stopReason).toBe('verification_failed');
-      // The prose completion was routed through verify(), whose BLOCKED
-      // verdict (zero changes on a fix task) is in the finish summary.
-      expect(result.summary).toContain('changed no files');
+      // The prose completion was routed through verify(). 43b68d5a:
+      // zero-change + runnable repo checks falls through to the checks,
+      // and the failing repro check fails verification — so the run
+      // still ends verification_failed, not completed, but the finish
+      // summary no longer carries the old BLOCKED 'changed no files'
+      // message; it carries the failing-check evidence instead.
     } finally {
       await fake.close();
       rmSync(dir, { recursive: true, force: true });
@@ -206,4 +212,49 @@ describe('P0.5 default completion gate (Agent.verify)', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   }, 120_000);
+
+  // EDIT-1 (2026-10-27): the prose path no longer requires grounding to
+  // route through verify(). An implement/fix/refactor task whose prose
+  // completion changed nothing and has no grounding signal reaches the
+  // gate and BLOCKs — the run ends verification_failed, never completed.
+  describe('EDIT-1 ungrounded prose completions route through verify()', () => {
+    const UNVERIFIED_PROSE = 'The work is done. The behavior now matches the specification end to end, and the reported issue no longer reproduces with the corrected logic in place.';
+
+    const CASES: Array<[string, string, string]> = [
+      ['fix', 'Fix the bug', 'Correct the behavior so the function returns the specified result.'],
+      ['implement', 'Add logging to the pipeline', 'Improve observability so the flow is traceable end to end.'],
+      ['refactor', 'Refactor the parser module', 'Restructure the code for clarity without changing behavior.'],
+    ];
+
+    for (const [kind, title, description] of CASES) {
+      it(`an ungrounded prose completion of a ${kind} task fails instead of finishing as success`, async () => {
+        // Deliberately ungrounded: empty non-git scratch dir — no package.json
+        // (no detectable repo check), no git workspace, and the task text
+        // names no file that exists. No verificationCommand, no criteria,
+        // no fileScope.
+        const dir = mkdtempSync(resolve(tmpdir(), `mochi-edit1-prose-${kind}-`));
+        const fake = await startFakeOpenAI([
+          { sticky: true, content: UNVERIFIED_PROSE, finishReason: 'stop' },
+        ]);
+        try {
+          const config = makeConfig(dir, fake.url, { skipReproGate: true });
+          const workspace = new Workspace(dir, '.mochi');
+          workspace.ensure();
+          const context = new ContextEngine(config, dir);
+          context.setGoal(title);
+          const agent = new Agent({ id: `edit1-prose-${kind}`, role: 'coder', config, workspace, events: new EventBus(), cwd: dir, context });
+          const task = createTask(title, description);
+          const result = await agent.run(task);
+          expect(result.success).toBe(false);
+          expect(result.stopReason).toBe('verification_failed');
+          // Exactly one model turn: the prose reply went straight into the
+          // harness-side verify(), whose BLOCKED verdict failed the finish.
+          expect(fake.requests.length).toBe(1);
+        } finally {
+          await fake.close();
+          rmSync(dir, { recursive: true, force: true });
+        }
+      }, 120_000);
+    }
+  });
 });

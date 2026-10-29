@@ -103,6 +103,7 @@ import {
   type DisciplineFlags,
   type FailureVerdict,
 } from './discipline.js';
+import { InterventionPolicy } from './intervention-policy.js';
 import {
   MilestoneTracker,
   buildMilestonePlan,
@@ -183,6 +184,32 @@ import { RunResultCache } from './result-cache.js';
 import { buildObjection, renderObjection, renderObjectionClosed, objectionDigestLine, OBJECTION_MARKER, type VerifierObjection } from './verifier-objection.js';
 import { calibratedBaseTier, recordEffortOutcome } from './effort-calibration.js';
 import { evaluateTestDensity } from '../core/test-density.js';
+
+/**
+ * Finish-summary hygiene (what the user actually reads): the finish()
+ * call sites concatenate raw model prose with raw verify output, so ANSI
+ * escapes and stray formatting went straight into the summary card.
+ * Strip both, trim, and collapse blank runs — content is unchanged, only
+ * the presentation is cleaned. Pure: tested in finish-summary.test.ts.
+ */
+export function cleanFinishSummary(summary: string): string {
+  return scrubAnsiFragments(stripThinkTags(summary ?? '')).trim().replace(/\n{3,}/g, '\n\n');
+}
+
+/**
+ * Run-digest builder (finishOnce): changed/read lists plus the errors the
+ * run hit. knownErrors is run HISTORY — on a successful run those errors
+ * were encountered and overcome, so listing them reads as failure. Only
+ * failed runs carry the errors part. Callers pass already-capped lists
+ * (25/25/6) matching the previous inline behavior.
+ */
+export function buildRunDigest(changed: string[], read: string[], errs: string[], success: boolean): string | undefined {
+  const parts: string[] = [];
+  if (changed.length) parts.push(`changed=[${changed.join(', ')}]`);
+  if (read.length) parts.push(`read=[${read.join(', ')}]`);
+  if (errs.length && !success) parts.push(`errors=[${errs.join('; ').slice(0, 300)}]`);
+  return parts.length ? `[run-digest] ${parts.join(' | ')}`.slice(0, 800) : undefined;
+}
 
 export function stripThinkTags(text: string): string {
   if (!text) return '';
@@ -982,6 +1009,15 @@ export class Agent {
   private iterationCap = 0;
   /** Scope-fence (drift guard) state: consecutive out-of-scope write vetoes. */
   private scopeVetoCount = 0;
+  /**
+   * Floor-compaction backoff: when a floor digest+checkpoint fails to
+   * meaningfully shrink the context (the overage sits in the recent
+   * window the digest cannot touch), retrying every turn burns a model
+   * digest call and a model checkpoint call per turn for nothing. Back
+   * off until this iteration; the cheap shrink-in-place still runs
+   * every turn, and the block retries once the backoff expires.
+   */
+  private floorCompactBackoffUntil = -1;
 
   /** True when `path` resolves inside one of the fileScope roots. Glob
    *  patterns are honoured when the segment count matches; plain dirs prefix-
@@ -1178,6 +1214,8 @@ export class Agent {
    *  final (continue-nudges suppressed; read-only batches execute, then the
    *  run finishes decisively). Cleared by any mutating/progress turn. */
   private disciplineForceArmed = false;
+  /** Soft-nudge gate: struggle + commit directives compete per model call. */
+  private interventions = new InterventionPolicy();
   /** Whether the most recent model turn contained a mutating call. */
   private disciplineTurnMutating = false;
   /** Files mutated since the last verification attempt, tracked directly
@@ -2656,7 +2694,6 @@ Continue from 'Next:', do not redo completed progress.`,
       }
 
       if (i === 0 && this.taskKind !== 'chat') await this.loadMcpInRun();
-      if (i > 0 && i % 8 === 0) await this.checkpointAndCompact('periodic');
 
       // Compact-first context floor: once the live transcript grows past a
       // fraction of the context budget, roll up old turns so the packet never
@@ -2672,6 +2709,12 @@ Continue from 'Next:', do not redo completed progress.`,
       // Batch token count via the Rust runtime (1 stdio round-trip instead of
       // N FFI calls); falls back to the sync estimate when native is absent.
       const ctxTokens = await this.context.estimateTokensAsync();
+      // Periodic compaction is pressure-gated, not calendared: compacting
+      // every 8 turns even when the context fits burns a model summarizer
+      // call and rewrites history for nothing. The floor block below still
+      // handles genuine pressure every turn. A floor-compaction backoff
+      // (below) also suppresses it until the backoff expires.
+      if (i > 0 && i % 8 === 0 && ctxTokens > floor && i >= this.floorCompactBackoffUntil) await this.checkpointAndCompact('periodic');
       if (i > 0 && msgCount >= 10 && ctxTokens > floor) {
         // MCH-30: CC-style two-stage pressure response. Stage 1 (cheap):
         // shrink old tool outputs in place — keeps every turn's structure, no
@@ -2683,10 +2726,20 @@ Continue from 'Next:', do not redo completed progress.`,
           this.events.emit({ type: 'agent:log', agentId: this.id, message: `[context] shrunk old tool outputs in place (~${savedTokens} tokens saved); deferring full compaction` });
         }
         if (this.context.effectiveContextTokens() > floor) {
-          await this.digestOldMessages(floor);
-        }
-        if (this.context.effectiveContextTokens() > floor) {
-          await this.checkpointAndCompact('floor');
+          if (i < this.floorCompactBackoffUntil) {
+            this.events.emit({ type: 'agent:log', agentId: this.id, message: `[context] floor compaction backed off until iteration ${this.floorCompactBackoffUntil}; shrink-in-place only` });
+          } else {
+            const beforeFloor = this.context.effectiveContextTokens();
+            await this.digestOldMessages(floor);
+            if (this.context.effectiveContextTokens() > floor) {
+              await this.checkpointAndCompact('floor');
+            }
+            const afterFloor = this.context.effectiveContextTokens();
+            if (afterFloor > floor && beforeFloor - afterFloor < 200) {
+              this.floorCompactBackoffUntil = i + 8;
+              this.events.emit({ type: 'agent:log', agentId: this.id, message: `[context] floor compaction ineffective (${beforeFloor} -> ${afterFloor} tokens, still over floor ${floor}); backing off digest+checkpoint until iteration ${this.floorCompactBackoffUntil}` });
+            }
+          }
         }
       }
 
@@ -2695,9 +2748,29 @@ Continue from 'Next:', do not redo completed progress.`,
         return this.finish(task, false, pulse.reason ?? 'Pulse abort', 'pulse_abort');
       }
       if (pulse.message) {
-        this.context.addMessage({ role: 'system', content: pulse.message });
+        // Soft nudge: competes with the queued struggle/commit at the flush
+        // below. pulse() is stateless about delivery — it re-fires on its
+        // own schedule when suppressed — so dropping one here loses
+        // nothing. Abort paths return above and never reach this queue.
+        this.interventions.queue('pulse', pulse.message);
       }
 
+      // Intervention policy: at most one soft nudge per model call. The
+      // struggle summary queued at turn top, the commit directive queued
+      // after the previous response, and the pulse nudge queued just above
+      // compete here; the highest-priority one
+      // wins and the rest are dropped (logged). Hard directives (contract,
+      // finish, verify, complexity escalation) bypass the policy entirely.
+      const won = this.interventions.flush();
+      if (won) {
+        this.context.addMessage({ role: 'system', content: won.content });
+        if (won.tag === 'struggle') {
+          this.lastStruggleInjectIter = i;
+          this.events.emit({ type: 'agent:log', agentId: this.id, message: `[struggle] injected state summary (${won.signals} signal(s))` });
+        } else {
+          this.events.emit({ type: 'agent:log', agentId: this.id, message: '[intervention] flushed commit directive' });
+        }
+      }
       const packet = this.context.buildPacket(this.toolDefs, task, repo);
       // P5: surface prefix breaks as they happen — a changed stable prefix
       // or an in-place history rewrite means the provider cache re-warms
@@ -3704,8 +3777,8 @@ Continue from 'Next:', do not redo completed progress.`,
           content: response.content ?? '',
         });
         if (verdict.action === 'commit') {
-          this.context.addMessage({ role: 'system', content: this.discipline.commitDirective(verdict.streak) });
-          this.events.emit({ type: 'agent:log', agentId: this.id, message: `[discipline] commit directive injected (deliberation streak ${verdict.streak})` });
+          this.interventions.queue('commit', this.discipline.commitDirective(verdict.streak));
+          this.events.emit({ type: 'agent:log', agentId: this.id, message: `[discipline] commit directive queued (deliberation streak ${verdict.streak}; policy flush decides)` });
         } else if (verdict.action === 'force' && !this.disciplineForceArmed) {
           this.disciplineForceArmed = true;
           this.events.emit({ type: 'agent:log', agentId: this.id, message: `[discipline] progress forcing: ${verdict.streak} deliberation turns without acting — decisive path forced` });
@@ -4217,9 +4290,12 @@ Continue from 'Next:', do not redo completed progress.`,
           // run changed NO files. For mutation-expecting kinds that is
           // exactly the no-change auto-pass hole (previously this return
           // completed such runs as success without verify() ever running).
-          // Route them through verify(), which BLOCKs the zero-change case;
-          // read-only and other kinds keep the direct prose finish.
-          if (PROSE_VERIFY_KINDS.has(taskKind) && !this.planMode && this.changeExpectationGrounded(task, detectRepo(this.cwd))) {
+          // Route them through verify() REGARDLESS of grounding (EDIT-1,
+          // 2026-10-27): an ungrounded prose completion reaches the gate,
+          // which now BLOCKs the zero-change case instead of trusting the
+          // prose claim; read-only and other kinds keep the direct prose
+          // finish.
+          if (PROSE_VERIFY_KINDS.has(taskKind) && !this.planMode) {
             const verification = await this.verify(task, detectRepo(this.cwd));
             if (!verification.passed) {
               return this.finish(task, false, `Completion claimed in prose but verification failed:\n${verification.summary}`, 'verification_failed');
@@ -7857,37 +7933,12 @@ Continue from 'Next:', do not redo completed progress.`,
   // the run's model budget on its judge. The judge remains a goals-layer
   // step, run once per task on top of this gate.
 
-  /** P0.5 grounding for the no-change BLOCK: the completion gate only
-   *  demands file changes when the workspace/task actually ground that
-   *  expectation — a git repo, a detected repo check, an explicit
-   *  verification command / criteria / fileScope, or a task that names a
-   *  file that exists. A mutation-kind task in a completely empty scratch
-   *  directory (no repo, no files, nothing runnable) has nothing to mutate
-   *  and nothing to check against; prose remains its only possible
-   *  deliverable and keeps the historical pass. */
-  private changeExpectationGrounded(task: Task, repo: ReturnType<typeof detectRepo>): boolean {
-    return this.isGitWorkspace()
-      || Boolean(repo.testCommand || repo.buildCommand)
-      || Boolean(task.verificationCommand)
-      || (task.acceptanceCriteria?.length ?? 0) > 0
-      || (task.fileScope?.length ?? 0) > 0
-      || this.taskMentionsExistingFile(task);
-  }
-
   /** File-path tokens named by the task text (title + description). */
   private taskFileTokens(task: Task): string[] {
     const text = `${task.title} ${task.description ?? ''}`;
     return (text.match(/[\w./-]+\.[a-z]{1,6}\b/g) ?? [])
       .map((t) => t.replace(/^\.\//, '').replace(/[.,;:)]+$/, ''))
       .filter((t) => t && !t.includes('://'));
-  }
-
-  /** Does the task text name a file that exists in the workspace? */
-  private taskMentionsExistingFile(task: Task): boolean {
-    for (const token of this.taskFileTokens(task)) {
-      try { if (existsSync(resolve(this.cwd, token))) return true; } catch { /* keep looking */ }
-    }
-    return false;
   }
 
   /** Was the run's own verification attempt vetoed by policy (approval
@@ -8001,18 +8052,33 @@ Continue from 'Next:', do not redo completed progress.`,
       // label) that "did nothing" == "resolved". It now returns the
       // VerifierEngine's BLOCKED verdict as a failed verify, so the run
       // retries and ends verification_failed instead of completed.
+      // EDIT-1 (2026-10-27): the old changeExpectationGrounded escape is
+      // gone — grounding no longer gates the BLOCK. A mutation-kind run
+      // with zero changes and zero checks in a completely ungrounded
+      // workspace (no git repo, no detected repo check, nothing named by
+      // the task) has produced NO evidence either; "there was nothing to
+      // check against" is not evidence the deliverable exists. It BLOCKs
+      // exactly like the grounded no-checks case.
       // Exemptions mirror the reproduce-first gate's, for the same reasons:
       // warm starts (this run's changes predate it — reproFileChangedAtRunStart
       // — and were judged by the run that made them) and simple-script tasks
       // (create-and-run shape; the run itself is the deliverable check).
       // Read-only kinds (chat/research/plan, review→research) returned above.
-      if (MUTATION_KINDS.has(taskKind) && task.role !== 'reviewer' && task.role !== 'pr_reviewer' && !this.verifyWasPolicyDenied() && !this.reproFileChangedAtRunStart && !isSimpleScriptTask(task) && this.changeExpectationGrounded(task, repo)) {
-        return {
-          passed: false, status: 'BLOCKED', checks: [],
-          summary: `Verification blocked: this ${taskKind} task requires file changes, but the run changed no files (no write/edit/patch and no shell-side workspace changes). Do the work the task asks for, then finish — completion without changes is not verifiable.`,
-        };
+      if (MUTATION_KINDS.has(taskKind) && task.role !== 'reviewer' && task.role !== 'pr_reviewer' && !this.verifyWasPolicyDenied() && !this.reproFileChangedAtRunStart && !isSimpleScriptTask(task)) {
+        if (!repo.testCommand && !repo.buildCommand) {
+          return {
+            passed: false, status: 'BLOCKED', checks: [],
+            summary: `Verification blocked: this ${taskKind} task requires file changes, but the run changed no files (no write/edit/patch and no shell-side workspace changes). Do the work the task asks for, then finish — completion without changes is not verifiable.`,
+          };
+        }
+        // Runnable repo checks exist: fall through to the checks below
+        // instead of blocking. Green checks PASS — the acceptance state
+        // holds even though this run changed nothing; red checks FAIL as
+        // today. The BLOCK stays for the no-evidence case only (no
+        // runnable checks at all), which is the hole P0.5 closed.
+      } else {
+        return { passed: true, status: 'PASS', checks: [], summary: 'No changes made to verify.' };
       }
-      return { passed: true, status: 'PASS', checks: [], summary: 'No changes made to verify.' };
     }
 
     const checks: string[] = [];
@@ -8249,7 +8315,13 @@ Continue from 'Next:', do not redo completed progress.`,
     // skips do not count. Content-only and greenfield runs skip it: there
     // is no behavior for a suite to guard. Best-effort like the engine's:
     // a machinery error never fails verification by itself.
-    if (!this.contentOnly && !greenfield && !this.greenfieldTask) {
+    // No changes, no changed logic to guard: the mutation check injects a
+    // bug into repo code and fails the run when tests do not catch it — on
+    // a zero-change run a surviving mutant reflects the repo's pre-existing
+    // test strength, not this run, so it must not downgrade a green verify.
+    // (Zero-change runs never reached this gate before the fall-through
+    // above, so this narrows nothing for changed runs.)
+    if (!this.contentOnly && !greenfield && !this.greenfieldTask && (this.fileChanged || this.shellWorkspaceMoved)) {
       const mutationCmd =
         (autoTestCmd && genuinePasses.includes(autoTestCmd) ? autoTestCmd : undefined) ??
         (gatePlan?.mode === 'selected' && gatePlan.command && genuinePasses.includes(gatePlan.command) && !isWeakVerification(repo.testCommand) ? gatePlan.command : undefined) ??
@@ -9053,13 +9125,13 @@ Continue from 'Next:', do not redo completed progress.`,
       `(3) reduce scope or report a concrete blocker.`;
 
     try {
-      this.context.addMessage({ role: 'system', content: summary });
-      this.lastStruggleInjectIter = iter;
-      this.events.emit({
-        type: 'agent:log',
-        agentId: this.id,
-        message: `[struggle] injected state summary (${parts.length} signal(s))`,
-      });
+      // Soft nudge: queued for the policy flush before the next model call
+      // (competes with the commit directive; the once-per-2-iters throttle
+      // still counts actual injections, updated at flush time).
+      const res = this.interventions.queue('struggle', summary, parts.length);
+      if (res === 'suppressed') {
+        this.events.emit({ type: 'agent:log', agentId: this.id, message: '[intervention] struggle summary suppressed (policy: higher-priority nudge or run budget)' });
+      }
     } catch { /* never block the loop on injection */ }
   }
 
@@ -9612,6 +9684,10 @@ Continue from 'Next:', do not redo completed progress.`,
   }
 
   private async finishOnce(task: Task, success: boolean, summary: string, stopReason: AgentStopReason = success ? 'completed' : 'aborted'): Promise<AgentResult> {
+    // The summary is what the user reads: clean it once here (single exit)
+    // so every finish path — claims, force-finishes, errors — renders the
+    // same tidy text instead of raw prose + raw verify output.
+    summary = cleanFinishSummary(summary);
     // MCH-33: tear down MCP server connections on every finish path.
     try {
       const { closeMcpConnections } = await import('../tools/mcp.js');
@@ -10005,16 +10081,12 @@ Continue from 'Next:', do not redo completed progress.`,
       summary,
       doc,
     });
-    const _runDigestParts: string[] = [];
     const _read = Array.from(this.readCache.keys())
       .map((k) => (k.startsWith(this.cwd) ? k.slice(this.cwd.length + 1) : k))
       .slice(-25);
     const _changed = [...new Set(this.context.state.filesModified ?? [])].map((p) => (p.startsWith(this.cwd) ? p.slice(this.cwd.length + 1) : p)).slice(0, 25);
     const _errs = (this.context.state.knownErrors ?? []).slice(0, 6);
-    if (_changed.length) _runDigestParts.push(`changed=[${_changed.join(', ')}]`);
-    if (_read.length) _runDigestParts.push(`read=[${_read.join(', ')}]`);
-    if (_errs.length) _runDigestParts.push(`errors=[${_errs.join('; ').slice(0, 300)}]`);
-    const _runDigest = _runDigestParts.length ? `[run-digest] ${_runDigestParts.join(' | ')}`.slice(0, 800) : undefined;
+    const _runDigest = buildRunDigest(_changed, _read, _errs, success);
     await this.maybeRecordHarnessIssue(task, success, summary, stopReason);
     const cacheRatio = cacheHitRatio(this.cacheCalls);
 
@@ -10026,6 +10098,13 @@ Continue from 'Next:', do not redo completed progress.`,
       recordFastLaneOutcome(this.workspace, this.fastLaneEscalated
         ? (success ? 'completed-after-escalation' : 'failed-after-escalation')
         : (success ? 'completed-in-lane' : 'failed-in-lane'));
+    }
+
+    // Intervention telemetry: how many soft nudges fired vs were suppressed
+    // by the per-call policy (exactly once — finishOnce is the single exit).
+    {
+      const s = this.interventions.stats;
+      this.events.emit({ type: 'agent:log', agentId: this.id, message: `[intervention-telemetry] soft nudges fired: ${s.fired} (struggle ${s.firedByTag.struggle ?? 0}, commit ${s.firedByTag.commit ?? 0}, pulse ${s.firedByTag.pulse ?? 0}), suppressed: ${s.suppressed}` });
     }
 
     return {

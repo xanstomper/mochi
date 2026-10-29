@@ -634,7 +634,13 @@ describe('Agent', () => {
     });
 
     const result = await agent.run(task);
-    expect(result.success).toBe(true);
+    // EDIT-1: the prose reply no longer auto-completes the ungrounded
+    // zero-change implement task — it routes through verify(), which BLOCKs
+    // the run (write was vetoed, so nothing changed and nothing ran). The
+    // test's subject is the WIRE protocol below: the veto must still be
+    // answered on the original tool_call_id, not dangled.
+    expect(result.success).toBe(false);
+    expect(result.stopReason).toBe('verification_failed');
     expect(existsSync(resolve(dir, 'x.txt'))).toBe(false);
     // The provider must have received a tool-role reply for the vetoed call.
     const messages = fake.requests.flatMap((r) => r.body?.messages ?? []);
@@ -1668,8 +1674,12 @@ describe('stream repetition guards (reasoning floods + K-phrase cycles)', () => 
       { content: 'ok, done thinking. The answer is 4.', finishReason: 'stop' },
     ]);
     // The degenerate response must be detected (bounded), the loop recovers
-    // on the next scripted response instead of flooding forever.
-    expect(result.success).toBe(true);
+    // on the next scripted response instead of flooding forever. EDIT-1:
+    // recovery now lands on the verify gate, which BLOCKs the ungrounded
+    // zero-change fix task (verification_failed) — still a bounded, clean
+    // finish, never a flood or a stall.
+    expect(result.success).toBe(false);
+    expect(result.stopReason).toBe('verification_failed');
     expect(fake.requests.length).toBeLessThanOrEqual(3);
   }, 30_000);
 
@@ -1681,7 +1691,11 @@ describe('stream repetition guards (reasoning floods + K-phrase cycles)', () => 
       { content: flood, finishReason: 'stop' },
       { content: 'ok', finishReason: 'stop' },
     ]);
-    expect(result.success).toBe(true);
+    // EDIT-1: the recovered prose turn reaches the verify gate and the
+    // ungrounded zero-change fix task BLOCKs — bounded and honest, not a
+    // flood and not the old ungrounded auto-pass.
+    expect(result.success).toBe(false);
+    expect(result.stopReason).toBe('verification_failed');
   }, 30_000);
 
   it('does not punish a post-tool interim recap as failed recovery', async () => {
@@ -1702,7 +1716,11 @@ describe('stream repetition guards (reasoning floods + K-phrase cycles)', () => 
       { content: recap, finishReason: 'stop' },
     ]);
     expect(fake.requests.length).toBeGreaterThanOrEqual(3);
-    expect(result.stopReason).toBe('completed');
+    // The same-answer guard must NOT fail this as tool_loop (its old failure
+    // mode). EDIT-1: the recap now reaches the verify gate, which BLOCKs the
+    // ungrounded zero-change fix task — verification_failed, never tool_loop,
+    // never the old ungrounded auto-pass 'completed'.
+    expect(result.stopReason).toBe('verification_failed');
   }, 30_000);
 
   it('still fails when prose repeats after tools but execution was nudged and never happened', async () => {
@@ -1782,6 +1800,19 @@ describe('injectStruggleState (quality slice — agent must surface its struggle
     return (agent as any).context.messages as Array<{ role: string; content: string }>;
   }
 
+  /**
+   * Mirror the loop's policy flush (before the model packet): drain the
+   * queued soft nudge into context, advancing the struggle throttle on
+   * actual injection exactly as the production flush site does.
+   */
+  function flushSoft(agent: any, iter: number) {
+    const won = agent.interventions.flush();
+    if (won) {
+      agent.context.addMessage({ role: 'system', content: won.content });
+      if (won.tag === 'struggle') agent.lastStruggleInjectIter = iter;
+    }
+  }
+
   it('is a no-op on a healthy run (no signals)', async () => {
     const { agent, dir } = makeBareAgent();
     try {
@@ -1803,6 +1834,7 @@ describe('injectStruggleState (quality slice — agent must surface its struggle
       // Simulate 3 consecutive failures of the same tool.
       (agent as any).consecutiveToolErrors.set('edit', { error: 'oldText not found', count: 3 });
       await (agent as any).injectStruggleState(0);
+      flushSoft(agent, 0);
       const msgs = messagesOf(agent);
       const struggleMsgs = msgs.filter((m) =>
         m.role === 'system' && m.content.includes('STRUGGLE STATE'));
@@ -1819,6 +1851,7 @@ describe('injectStruggleState (quality slice — agent must surface its struggle
     try {
       (agent as any).emptyResponseCount = 3;
       await (agent as any).injectStruggleState(0);
+      flushSoft(agent, 0);
       const msgs = messagesOf(agent);
       const struggleMsgs = msgs.filter((m) =>
         m.role === 'system' && m.content.includes('STRUGGLE STATE'));
@@ -1834,12 +1867,15 @@ describe('injectStruggleState (quality slice — agent must surface its struggle
     try {
       (agent as any).emptyResponseCount = 3;
       await (agent as any).injectStruggleState(0);
+      flushSoft(agent, 0);
       await (agent as any).injectStruggleState(1); // rate-limited: should be no-op
+      flushSoft(agent, 1);
       const msgs = messagesOf(agent);
       const struggleMsgs = msgs.filter((m) =>
         m.role === 'system' && m.content.includes('STRUGGLE STATE'));
       expect(struggleMsgs.length).toBe(1);
       await (agent as any).injectStruggleState(2); // 2 iterations later: ok
+      flushSoft(agent, 2);
       const struggleMsgs2 = msgs.filter((m) =>
         m.role === 'system' && m.content.includes('STRUGGLE STATE'));
       expect(struggleMsgs2.length).toBe(2);
@@ -1860,6 +1896,7 @@ describe('injectStruggleState (quality slice — agent must surface its struggle
       (agent as any).toolCallsTotal = 25;
       (agent as any).context.addKnownError('verification failed: test_x broke');
       await (agent as any).injectStruggleState(0);
+      flushSoft(agent, 0);
       const msg = messagesOf(agent)
         .filter((m) => m.role === 'system' && m.content.includes('STRUGGLE STATE'))
         .pop();
@@ -2214,6 +2251,19 @@ describe('repeated tool result detection (quality slice 5 — flag when the mode
     return { agent, dir };
   }
 
+  /**
+   * Mirror the loop's policy flush (before the model packet): drain the
+   * queued soft nudge into context, advancing the struggle throttle on
+   * actual injection exactly as the production flush site does.
+   */
+  function flushSoft(agent: any, iter: number) {
+    const won = agent.interventions.flush();
+    if (won) {
+      agent.context.addMessage({ role: 'system', content: won.content });
+      if (won.tag === 'struggle') agent.lastStruggleInjectIter = iter;
+    }
+  }
+
   it('same output 3x from the same tool surfaces as STRUGGLE STATE', async () => {
     const { agent, dir } = makeBareAgent();
     try {
@@ -2227,6 +2277,7 @@ describe('repeated tool result detection (quality slice 5 — flag when the mode
       // Force a 2-iteration gap so the rate-limit doesn't drop the injection.
       (agent as any).lastStruggleInjectIter = -10;
       await (agent as any).injectStruggleState(0);
+      flushSoft(agent, 0);
       const msgs = (agent as any).context.messages as Array<{ role: string; content: string }>;
       const struggle = msgs.find((m) => m.role === 'system' && m.content.includes('STRUGGLE STATE'));
       expect(struggle).toBeDefined();
@@ -2262,6 +2313,7 @@ describe('repeated tool result detection (quality slice 5 — flag when the mode
       (agent as any).trackToolResultHash('grep', out);
       (agent as any).lastStruggleInjectIter = -10;
       await (agent as any).injectStruggleState(0);
+      flushSoft(agent, 0);
       const msgs = (agent as any).context.messages as Array<{ role: string; content: string }>;
       const struggle = msgs.find((m) => m.role === 'system' && m.content.includes('STRUGGLE STATE'));
       expect(struggle).toBeDefined();
