@@ -80,6 +80,10 @@ export interface FakeOpenAI {
   close(): Promise<void>;
   /** Bodies of every /chat/completions request received, in order. */
   requests: { body: any }[];
+  /** Date.now() arrival time of every /chat/completions request, in order —
+   *  lets TTFT benches measure when the agent's first model call landed
+   *  without touching the provider layer under test. */
+  arrivals: number[];
 }
 
 /**
@@ -91,6 +95,7 @@ export interface FakeOpenAI {
 export async function startFakeOpenAI(script?: FakeScriptResponse[]): Promise<FakeOpenAI> {
   const queue: FakeScriptResponse[] = [...(script ?? [])];
   const requests: { body: any }[] = [];
+  const arrivals: number[] = [];
   /** Open stalled response sockets - server.close() never fires while these
    *  stay open, so close() must destroy them explicitly. */
   const openStalls = new Set<any>();
@@ -108,6 +113,7 @@ export async function startFakeOpenAI(script?: FakeScriptResponse[]): Promise<Fa
         return;
       }
       requests.push({ body: JSON.parse(body || '{}') });
+      arrivals.push(Date.now());
       let resp = queue.length ? queue.shift()! : { ...defaultResp };
       if (resp.sticky) queue.unshift(resp); // router answers every call, in any arrival order
       if (resp.respondFn) resp = { ...resp.respondFn(JSON.parse(body || '{}')) };
@@ -197,6 +203,7 @@ export async function startFakeOpenAI(script?: FakeScriptResponse[]): Promise<Fa
   return {
     url,
     requests,
+    arrivals,
     append(responses: FakeScriptResponse[]) {
       queue.push(...responses);
     },

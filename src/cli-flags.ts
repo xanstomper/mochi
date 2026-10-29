@@ -15,6 +15,7 @@ const BOOLEAN_FLAGS = new Set([
   'y', 'yolo', 'dangerously-skip-permissions', 'force', 'user',
   'u', 'uncensored', 'admin',
   'strict', 'json', 'diff-only', 'auto-commit', 'repair', 'post',
+  'warm',
 ]);
 
 export function parseArgs(argv: string[]): { flags: Record<string, string | boolean>; positional: string[] } {

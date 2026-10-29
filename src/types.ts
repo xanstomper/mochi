@@ -264,6 +264,13 @@ export interface MochiConfig {
    *  provider is deliberately not reused implicitly. semanticIndex:false
    *  disables the index entirely. */
   retrieval?: { embeddingProvider?: string; embeddingModel?: string; semanticIndex?: boolean };
+  /** Warm daemon (feat/warm-daemon): opt-in per-project daemon that pre-loads
+   *  the goal engine, tools registry and skills at start, and gates every task
+   *  through config/skills/repo invalidation so warm state is never stale.
+   *  Flag: `mochi daemon start --warm`. Idle policy + measurement in
+   *  src/daemon/warm.ts. Default OFF (cold start stays the default until the
+   *  measurement justifies flipping it). */
+  warmDaemon?: boolean;
   /** @deprecated NO-OP, retained only so existing config files still parse.
    *  Mochi has NO outbound telemetry (see PRIVACY.md); nothing in `src/`
    *  reads this key and no new behaviour should be hidden behind it. It is
