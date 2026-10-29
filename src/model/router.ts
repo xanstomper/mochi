@@ -17,6 +17,18 @@ export type { ProviderConfig } from './openai.js';
 // startup; re-exported here for all existing importers.
 import { normalizeModelName } from './model-name.js';
 export { normalizeModelName };
+// Local-first model tier (item 19): resolution, egress policy, connect-
+// failure guidance and the offline egress guard live in local.ts.
+import {
+  isLocalTierProvider,
+  isLocalTierPrimary,
+  offlineMode,
+  remoteFallbackAllowed,
+  resolveLocalEndpoint,
+  resolveLocalModel,
+  withLocalConnectGuidance,
+  withRemoteEgressBlock,
+} from './local.js';
 
 const ALIASES: Record<string, { baseUrl: string; defaultModel: string }> = {
   'opencode-zen': { baseUrl: 'https://opencode.ai/zen/v1', defaultModel: 'deepseek-v4-flash' },
@@ -44,8 +56,17 @@ const ALIAS_KIND: Record<string, 'anthropic' | 'gemini' | 'vertex'> = {
 export function resolveProvider(config: ModelConfig): ProviderConfig {
   const name = config.provider.toLowerCase();
   const alias = ALIASES[name];
-  const baseUrl = config.baseUrl || alias?.baseUrl || 'https://api.openai.com/v1';
-  const rawModel = config.model || alias?.defaultModel || 'gpt-4o-mini';
+  // Local tier (item 19): endpoint/model come from model.local / MOCHI_LOCAL_*
+  // with their own precedence chain — a generic `baseUrl` never overrides the
+  // local-specific knobs (provider switching stamps it with the static
+  // default, which would otherwise pin the endpoint).
+  const isLocal = isLocalTierProvider(name);
+  const baseUrl = isLocal
+    ? resolveLocalEndpoint(config)
+    : (config.baseUrl || alias?.baseUrl || 'https://api.openai.com/v1');
+  const rawModel = isLocal
+    ? resolveLocalModel(config)
+    : (config.model || alias?.defaultModel || 'gpt-4o-mini');
   const model = normalizeModelName(rawModel, baseUrl);
   return { baseUrl, apiKey: config.apiKey, model, providerName: config.provider };
 }
@@ -56,6 +77,12 @@ export function selectModel(config: ModelConfig, profile: ModelProfile): string 
 }
 
 export function createProvider(config: ModelConfig, profile?: ModelProfile) {
+  // Local tier egress policy (item 19): when the LOCAL tier is the run's
+  // primary in OFFLINE mode, every non-local chain entry is wrapped in an
+  // egress guard that refuses the call BEFORE any fetch — even if a stale or
+  // explicit failover entry is still present. Config-time stripping lives in
+  // loadConfig; this is the router-level guarantee for direct SDK configs.
+  const offlineLocal = isLocalTierPrimary(config) && offlineMode(config);
   const chain = [config, ...(config.failover ?? [])].map((c) => {
     // A failover entry may omit profiles; only inherit from primary if targeting the same provider.
     const merged: ModelConfig = c.profiles
@@ -64,7 +91,11 @@ export function createProvider(config: ModelConfig, profile?: ModelProfile) {
         ? { ...c, profiles: config.profiles }
         : { ...c, profiles: undefined });
     const raw = createRawProvider(merged, profile);
-    return withCapabilityGate(raw, merged, resolveProvider(merged));
+    const gated = withCapabilityGate(raw, merged, resolveProvider(merged));
+    if (offlineLocal && !raw.isLocal) {
+      return withRemoteEgressBlock(gated, merged.provider, merged.baseUrl);
+    }
+    return gated;
   });
   if (chain.length === 1) return chain[0];
   return withFailover(chain, resolveProvider(config).providerName ?? config.provider);
@@ -97,6 +128,14 @@ export function withFailover(chain: RawProvider[], primaryName: string): RawProv
         lastErr = err;
         errors.push(`[chain ${i}]: ${err instanceof Error ? err.message : String(err)}`);
         if (began) throw err; // mid-stream: never replay
+        // Item 19: a local-tier primary falling through to a remote provider is
+        // NEVER silent — task content is about to leave the machine. Emitted
+        // only when the local entry ACTUALLY failed (a successful local run
+        // must not warn about a fallback that never happened), and never for
+        // an offline egress guard (that call is refused, not sent).
+        if (chain[i].isLocal && chain[i + 1] && !chain[i + 1].isLocal && !chain[i + 1].egressBlocked) {
+          console.warn(`[failover] LOCAL TIER: local endpoint failed before output; falling back to REMOTE provider "${chain[i + 1].providerId ?? 'unknown'}" — task content will be sent off-machine. Disable via model.local.offline / MOCHI_OFFLINE=1.`);
+        }
       }
     }
     const combinedMsg = errors.length > 1
@@ -118,6 +157,12 @@ export function withFailover(chain: RawProvider[], primaryName: string): RawProv
         options?.signal?.throwIfAborted();
         lastErr = err;
         errors.push(`[chain ${i}]: ${err instanceof Error ? err.message : String(err)}`);
+        // Item 19: same rule for the non-streaming path — warn only when the
+        // local entry actually failed, a remote entry is next, and that entry
+        // is not an offline egress guard (refused ≠ sent).
+        if (chain[i].isLocal && chain[i + 1] && !chain[i + 1].isLocal && !chain[i + 1].egressBlocked) {
+          console.warn(`[failover] LOCAL TIER: local endpoint failed; falling back to REMOTE provider "${chain[i + 1].providerId ?? 'unknown'}" — task content will be sent off-machine. Disable via model.local.offline / MOCHI_OFFLINE=1.`);
+        }
       }
     }
     const combinedMsg = errors.length > 1
@@ -138,11 +183,23 @@ function createRawProvider(config: ModelConfig, profile?: ModelProfile) {
   if (profile && config.profiles?.[profile]) {
     resolved.model = normalizeModelName(config.profiles[profile], resolved.baseUrl);
   }
-  if (name === 'antigravity' || name === 'google-antigravity') return createAntigravityProvider(resolved);
-  if (kind === 'anthropic' || name === 'anthropic') return createAnthropicProvider(resolved);
-  if (kind === 'gemini' || name === 'gemini' || name === 'google') return createGeminiProvider(resolved);
-  if (name === 'vertex' || kind === 'vertex') return createVertexProvider(resolved);
-  return createOpenAIProvider(resolved);
+  let raw: RawProvider;
+  if (name === 'antigravity' || name === 'google-antigravity') raw = createAntigravityProvider(resolved);
+  else if (kind === 'anthropic' || name === 'anthropic') raw = createAnthropicProvider(resolved);
+  else if (kind === 'gemini' || name === 'gemini' || name === 'google') raw = createGeminiProvider(resolved);
+  else if (name === 'vertex' || kind === 'vertex') raw = createVertexProvider(resolved);
+  else raw = createOpenAIProvider(resolved);
+  // Item 19: local-tier routes get the connect-failure relabeling (fast,
+  // visible, actionable dead-endpoint errors) and every entry carries routing
+  // metadata so withFailover can make a local→remote fallthrough visible and
+  // createProvider can apply the offline egress guard.
+  const isLocal = isLocalTierProvider(name);
+  const tagged: RawProvider = isLocal
+    ? withLocalConnectGuidance(raw, resolved.baseUrl, remoteFallbackAllowed(config))
+    : raw;
+  tagged.providerId = name;
+  tagged.isLocal = isLocal;
+  return tagged;
 }
 
 function kindOf(id: string): 'openai' | 'anthropic' | 'gemini' | 'vertex' | undefined {
@@ -154,6 +211,15 @@ function kindOf(id: string): 'openai' | 'anthropic' | 'gemini' | 'vertex' | unde
 export interface RawProvider {
   streamChat(messages: ChatMessage[], tools: ToolDefinition[], options?: { temperature?: number; maxTokens?: number; signal?: AbortSignal; reasoningEffort?: string }): AsyncGenerator<StreamChunk>;
   chat(messages: ChatMessage[], tools: ToolDefinition[], options?: { temperature?: number; maxTokens?: number; signal?: AbortSignal; reasoningEffort?: string }): Promise<ModelResponse>;
+  /** Routing metadata (item 19): which provider id this entry routes to, and
+   *  whether it is a local-tier route (on-machine model server). Set by
+   *  createRawProvider; absent on hand-built providers (tests). */
+  providerId?: string;
+  isLocal?: boolean;
+  /** Set by the offline egress guard: this entry refuses every call BEFORE
+   *  any network activity. withFailover must not announce a remote fallback
+   *  to it (the call never leaves the machine). */
+  egressBlocked?: boolean;
 }
 
 /**
@@ -241,7 +307,9 @@ function withCapabilityGate(provider: RawProvider, config: ModelConfig, resolved
     }
   }
 
-  return { streamChat, chat };
+  // Forward routing metadata (item 19): withFailover and the offline egress
+  // guard key off these flags.
+  return { streamChat, chat, providerId: provider.providerId, isLocal: provider.isLocal };
 }
 
 function isPermanent(err: unknown): boolean {

@@ -51,6 +51,13 @@ export const PROVIDERS: Provider[] = [
   { id: 'cloudflare', name: 'Cloudflare Workers AI', kind: 'openai', baseUrl: 'https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/v1', envKey: 'CLOUDFLARE_API_TOKEN', models: ['@cf/meta/llama-3.3-70b-instruct-fp8-fast'], defaultModel: '@cf/meta/llama-3.3-70b-instruct-fp8-fast' },
   { id: 'ollama', name: 'Ollama (local)', kind: 'openai', baseUrl: 'http://localhost:11434/v1', envKey: '', models: ['llama3.1', 'qwen2.5-coder'], defaultModel: 'llama3.1' },
   { id: 'llamacpp', name: 'llama.cpp (local)', kind: 'openai', baseUrl: 'http://localhost:8080/v1', envKey: '', models: ['local-model'], defaultModel: 'local-model' },
+  // Item 19 (local-first model tier): the CONFIGURABLE local route. Endpoint
+  // + model resolve from model.local / MOCHI_LOCAL_* (see model/local.ts);
+  // the values here are the fallback defaults. When this provider is the
+  // run's primary, task content must not leave the machine: remote failover
+  // is opt-in (model.local.allowRemoteFallback) and offline mode
+  // (model.local.offline / MOCHI_OFFLINE) refuses remote routes outright.
+  { id: 'local', name: 'Local model (self-hosted)', kind: 'openai', baseUrl: 'http://localhost:11434/v1', envKey: '', models: ['local-model'], defaultModel: 'local-model', keyHelp: 'Point model.local.endpoint (or MOCHI_LOCAL_ENDPOINT) at any OpenAI-compatible local server (ollama, llama.cpp, LM Studio, vLLM); set model.local.model to the served model id.' },
   { id: 'perplexity', name: 'Perplexity', kind: 'openai', baseUrl: 'https://api.perplexity.ai', envKey: 'PERPLEXITY_API_KEY', models: ['sonar-pro'], defaultModel: 'sonar-pro', consoleUrl: 'https://www.perplexity.ai/settings/api' },
   { id: 'sambanova', name: 'SambaNova', kind: 'openai', baseUrl: 'https://api.sambanova.ai/v1', envKey: 'SAMBANOVA_API_KEY', models: ['Meta-Llama-3.3-70B-Instruct'], defaultModel: 'Meta-Llama-3.3-70B-Instruct' },
   { id: 'siliconflow', name: 'SiliconFlow', kind: 'openai', baseUrl: 'https://api.siliconflow.cn/v1', envKey: 'SILICONFLOW_API_KEY', models: ['deepseek-ai/DeepSeek-V3', 'Qwen/Qwen2.5-Coder-32B-Instruct'], defaultModel: 'deepseek-ai/DeepSeek-V3' },
