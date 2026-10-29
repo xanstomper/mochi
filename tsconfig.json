@@ -14,13 +14,10 @@
     "declarationMap": true,
     "sourceMap": true,
     "resolveJsonModule": true,
-    "downlevelIteration": true,
+    "types": ["node"],
     "noUnusedLocals": true,
     "noUnusedParameters": true
   },
   "include": ["src/**/*"],
-  // testutil is a vitest-only in-process fake provider: excluding it keeps the
-  // fake (and its HTTP harness) out of dist/ and the published tarball.
-  // Vitest transforms TS sources directly, so tests are unaffected.
   "exclude": ["node_modules", "dist", "**/*.test.ts", "src/testutil"]
 }
