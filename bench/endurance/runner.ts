@@ -18,6 +18,7 @@ import { ContextEngine } from '../../src/context.js';
 import { EventBus } from '../../src/events.js';
 import { Workspace } from '../../src/workspace.js';
 import { createTask } from '../../src/goals/task.js';
+import { UsageSidecarRecorder } from '../../src/observability/usage-sidecar.js';
 import { TASK_DESCRIPTION, TASK_ID, TASK_TITLE } from './fixture.js';
 import type { MochiConfig } from '../../src/types.js';
 import type { Tool } from '../../src/tools/types.js';
@@ -104,6 +105,13 @@ async function main(): Promise<void> {
     extraTools: new Map([['display_snapshot', displaySnapshotTool]]),
   });
 
+  // D1: per-run usage sidecar — the endurance rig's result files (last-run
+  // JSON + MILEAGE.md) get token counts from the same usage JSON the gate
+  // reads. Subagent chaos-run usage lands in the sidecar's per-aux
+  // breakdown because the recorder sees the children's events on this bus.
+  const runId = `endurance-${env.ENDURANCE_PHASE ?? 'run'}-${TASK_ID}`;
+  const usageSidecar = new UsageSidecarRecorder(workspace.dir, runId, { model: config.model.model, provider: config.model.provider }).attach(events);
+
   // Mid-run steer channel: the driver drops a text file; the host polls and
   // pushes it into the running agent, exactly once.
   let steerDelivered = false;
@@ -127,6 +135,7 @@ async function main(): Promise<void> {
   const task = createTask(TASK_TITLE, TASK_DESCRIPTION, { id: TASK_ID });
   const result = await agent.run(task);
   clearInterval(poller);
+  usageSidecar.finish({ exitReason: String((result as any).stopReason ?? 'unknown'), success: result.success, durationMs: (result as any).durationMs });
   const out = {
     success: result.success,
     stopReason: (result as any).stopReason,

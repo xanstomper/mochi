@@ -35,6 +35,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { execArgvText } from '../exec.js';
 import { estimateCostUsd, type PriceOverrides } from '../pricing.js';
+import { measuredNumber, newestUsageSidecar, sidecarCostUsd, sidecarTotalTokens } from '../observability/usage-sidecar.js';
 
 export class GateError extends Error {
   /** Process exit code the CLI should use for this failure class. */
@@ -263,6 +264,12 @@ export interface AgentStepResult {
   failureClass: string | null;
   traceIds: string[];
   detail: string;
+  /** D1: where the usage figures came from — the spawned run's usage
+   *  sidecar when one was written, else the trace scan. Absent on runners
+   *  that fabricate nothing measurable (dry-run). */
+  usageSource?: 'sidecar' | 'traces';
+  /** D1: the spawned run's exit reason from its sidecar, when read. */
+  exitReason?: string | null;
 }
 
 /** Performs the agent step inside an already-prepared workdir. */
@@ -284,6 +291,10 @@ export interface TrialOutcome {
   detail: string;
   durationMs: number;
   traceIds: string[];
+  /** D1: usage figures sourced from the spawned run's sidecar when present,
+   *  else the trace scan (older runs, runners that spawn nothing). */
+  usageSource?: 'sidecar' | 'traces';
+  exitReason?: string | null;
 }
 
 export interface RunResults {
@@ -372,15 +383,29 @@ export function createSubprocessRunner(opts: { mochiBin: string; timeoutMs?: num
     });
     const timedOut = !!r.error && (r.error as NodeJS.ErrnoException).code === 'ETIMEDOUT';
     const scan = scanRunTraces(workdir);
+    // D1: prefer the spawned run's usage sidecar when it wrote one — it is
+    // the run's own accounting (includes aux work + the run's exit reason)
+    // and is scoped to exactly this spawn, where the trace scan folds every
+    // trace left in the workdir. No sidecar (older build, killed run) → the
+    // trace scan stands, unchanged.
+    const sidecar = newestUsageSidecar(join(workdir, '.mochi'));
+    const tokens = sidecar ? (sidecarTotalTokens(sidecar) ?? scan.tokens) : scan.tokens;
+    // Cost: when a sidecar exists it is the authority — an incomplete cost
+    // (provider reports $0 and the price table cannot price the model) stays
+    // null/unknown, never laundered into the trace scan's $0-stands figure.
+    const costUsd = sidecar ? sidecarCostUsd(sidecar) : scan.costUsd;
+    const turns = sidecar ? (measuredNumber(sidecar.usage.apiCalls) ?? scan.turns) : scan.turns;
     return {
       exitCode: r.status,
       timedOut,
-      tokens: scan.tokens,
-      costUsd: scan.costUsd,
-      turns: scan.turns,
+      tokens,
+      costUsd,
+      turns,
       failureClass: timedOut ? 'F12' : scan.failureClass ?? (r.error && !timedOut ? 'X' : null),
       traceIds: scan.traceIds,
       detail: timedOut ? `agent timed out after ${timeoutMs}ms` : `agent exit ${r.status}`,
+      usageSource: sidecar ? 'sidecar' : 'traces',
+      exitReason: sidecar ? (typeof sidecar.exitReason === 'string' ? sidecar.exitReason : null) : null,
     };
   };
 }
@@ -455,6 +480,8 @@ export async function executeRun(
           detail: v.passed ? v.detail : `${v.detail} [${step.detail}]`,
           durationMs: Date.now() - t0,
           traceIds: step.traceIds,
+          ...(step.usageSource ? { usageSource: step.usageSource } : {}),
+          ...(step.exitReason !== undefined ? { exitReason: step.exitReason } : {}),
         });
       } finally {
         if (!opts.keepWork) {

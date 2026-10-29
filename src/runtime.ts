@@ -16,6 +16,7 @@ import type { SpeculativeResult } from './agent/speculative.js';
 import { BudgetEngine } from './budget.js';
 import {currentConfig, login as doLogin, selectProviderById, describeConfig, listModelsForProvider, addFallbackModel, removeFallbackModel, clearFallbackModels} from './model/model-manager.js';
 import { UsageStore } from './model/usage.js';
+import { UsageSidecarRecorder } from './observability/usage-sidecar.js';
 import { applyMode, modeInstruction, MODE_IDS, isMode } from './modes.js';
 import { loadConfigFile, saveConfigFile } from './model/providers.js';
 import { createRequire } from 'node:module';
@@ -458,11 +459,16 @@ export class Runtime {
     const goals = await this.ensureGoals();
     const { TraceRecorder } = await import('./observability/trace.js');
     const recorder = new TraceRecorder(this.workspace.dir, goal.id).attach(this.events);
+    // D1: per-run usage sidecar — attaches to the same event stream as the
+    // trace; writes <workspace>/usage/<goalId>.json at run end. Best-effort,
+    // one small file write, no behavior change for consumers that never read it.
+    const usageSidecar = new UsageSidecarRecorder(this.workspace.dir, goal.id, { model: this.config.model.model, provider: this.config.model.provider }).attach(this.events);
     try {
       const extra = await this.enhancedCtx(objective, opts);
       const sessionId = this.activeSessionId ?? (this.activeSessionId = goals['store'].begin({ goalId: goal.id, objective: objective.slice(0, 80) }));
       const result = await goals.runGoal(goal, tasks, extra, signal ?? this.abortSignal, sessionId, opts?.journalRunId);
       this.recordUsage(objective, result);
+      usageSidecar.finish({ goalResult: result });
       recorder.log({ t: Date.now(), kind: 'goal:summary', status: result.goal?.status ?? 'unknown', tokensUsed: result.tokensUsed, costUsd: result.costUsd, durationMs: result.durationMs });
       // Plan mode: the agents' plan text is the deliverable.
       if (isPlan) {
@@ -472,6 +478,7 @@ export class Runtime {
       return { summary: result.summary, result };
     } finally {
       recorder.close();
+      usageSidecar.close();
     }
   }
 
@@ -675,13 +682,19 @@ export class Runtime {
     const { TraceRecorder } = await import('./observability/trace.js');
     const goal = await goals.createGoal(objective);
     const recorder = new TraceRecorder(this.workspace.dir, goal.id).attach(this.events);
+    // D1: per-run usage sidecar — attaches to the same event stream as the
+    // trace; writes <workspace>/usage/<goalId>.json at run end. Best-effort,
+    // one small file write, no behavior change for consumers that never read it.
+    const usageSidecar = new UsageSidecarRecorder(this.workspace.dir, goal.id, { model: this.config.model.model, provider: this.config.model.provider }).attach(this.events);
     try {
       const extra = await this.enhancedCtx(objective, opts);
       const { summary, status } = await runTeam(goals, goal, { signal: this.abortSignal, extras: extra });
+      usageSidecar.finish({ exitReason: `team: ${status}` });
       recorder.log({ t: Date.now(), kind: 'team:summary', status, summary: summary.slice(0, 500) });
       return summary;
     } finally {
       recorder.close();
+      usageSidecar.close();
     }
   }
 
@@ -716,6 +729,9 @@ export class Runtime {
     // restore the caller's selected mode.
     const previousPlanMode = this.config.planMode;
     this.setPlanMode(false);
+    // D1: this path runs without a TraceRecorder; the sidecar still records
+    // the run's usage from the event stream (events-only attribution).
+    const usageSidecar = new UsageSidecarRecorder(this.workspace.dir, goal.id, { model: this.config.model.model, provider: this.config.model.provider }).attach(this.events);
     try {
       if (previousPlanMode && (pending.planMode || (savedTasks.length > 0 && savedTasks.every(isPlanOnlyTask)))) {
         // A pending decomposition made while planning tells every task to
@@ -729,9 +745,11 @@ export class Runtime {
       }
       const result = await goals.runGoal(goal, tasks, [], this.abortSignal);
       this.recordUsage(pending.objective, result);
+      usageSidecar.finish({ goalResult: result });
       this.workspace.writeJson('state/pending-goal.json', {});
       return result.summary;
     } finally {
+      usageSidecar.close();
       this.setPlanMode(previousPlanMode);
     }
   }
@@ -758,13 +776,19 @@ export class Runtime {
     const goals = await this.ensureGoals();
     const { TraceRecorder } = await import('./observability/trace.js');
     const recorder = new TraceRecorder(this.workspace.dir, goal.id).attach(this.events);
+    // D1: per-run usage sidecar — attaches to the same event stream as the
+    // trace; writes <workspace>/usage/<goalId>.json at run end. Best-effort,
+    // one small file write, no behavior change for consumers that never read it.
+    const usageSidecar = new UsageSidecarRecorder(this.workspace.dir, goal.id, { model: this.config.model.model, provider: this.config.model.provider }).attach(this.events);
     try {
       const result = await goals.runGoal(goal, tasks, [], this.abortSignal);
       this.recordUsage(goal.objective, result);
+      usageSidecar.finish({ goalResult: result });
       recorder.log({ t: Date.now(), kind: 'goal:summary', status: goal.status, tokensUsed: result.tokensUsed, costUsd: result.costUsd, durationMs: result.durationMs });
       return result.summary;
     } finally {
       recorder.close();
+      usageSidecar.close();
     }
   }
 
@@ -842,9 +866,14 @@ export class Runtime {
     this.workspace.saveTasks(goal.id, [task]);
     const { TraceRecorder } = await import('./observability/trace.js');
     const recorder = new TraceRecorder(this.workspace.dir, goal.id).attach(this.events);
+    // D1: per-run usage sidecar — attaches to the same event stream as the
+    // trace; writes <workspace>/usage/<goalId>.json at run end. Best-effort,
+    // one small file write, no behavior change for consumers that never read it.
+    const usageSidecar = new UsageSidecarRecorder(this.workspace.dir, goal.id, { model: this.config.model.model, provider: this.config.model.provider }).attach(this.events);
     try {
       const result = await goals.runGoal(goal, [task], [], opts?.signal ?? this.abortSignal, sessionId);
       this.recordUsage(prompt, result);
+      usageSidecar.finish({ goalResult: result });
       recorder.log({ t: Date.now(), kind: 'goal:summary', status: goal.status, tokensUsed: result.tokensUsed, costUsd: result.costUsd, durationMs: result.durationMs });
       let summary = result.summary;
       const outputs = result.completedTasks.map((t) => t.output).filter((o) => o && o.trim()).join('\n\n');
@@ -889,6 +918,7 @@ export class Runtime {
       };
     } finally {
       recorder.close();
+      usageSidecar.close();
     }
   }
 
@@ -908,13 +938,19 @@ export class Runtime {
     );
     const { TraceRecorder } = await import('./observability/trace.js');
     const recorder = new TraceRecorder(this.workspace.dir, goal.id).attach(this.events);
+    // D1: per-run usage sidecar — attaches to the same event stream as the
+    // trace; writes <workspace>/usage/<goalId>.json at run end. Best-effort,
+    // one small file write, no behavior change for consumers that never read it.
+    const usageSidecar = new UsageSidecarRecorder(this.workspace.dir, goal.id, { model: this.config.model.model, provider: this.config.model.provider }).attach(this.events);
     try {
       const result = await goals.runGoal(goal, [task], [], this.abortSignal);
       this.recordUsage('review', result);
+      usageSidecar.finish({ goalResult: result });
       const output = result.completedTasks.map((t) => t.output).filter((o) => o && o.trim()).join('\n');
       return output || result.summary || '(no findings)';
     } finally {
       recorder.close();
+      usageSidecar.close();
     }
   }
 
@@ -926,12 +962,18 @@ export class Runtime {
     task.description = `${task.description}\n\nCONTEXT FROM PIPE:\n${input.slice(0, 120_000)}`;
     const { TraceRecorder } = await import('./observability/trace.js');
     const recorder = new TraceRecorder(this.workspace.dir, goal.id).attach(this.events);
+    // D1: per-run usage sidecar — attaches to the same event stream as the
+    // trace; writes <workspace>/usage/<goalId>.json at run end. Best-effort,
+    // one small file write, no behavior change for consumers that never read it.
+    const usageSidecar = new UsageSidecarRecorder(this.workspace.dir, goal.id, { model: this.config.model.model, provider: this.config.model.provider }).attach(this.events);
     try {
       const result = await goals.runGoal(goal, [task], [], this.abortSignal);
       this.recordUsage(input.slice(0, 100), result);
+      usageSidecar.finish({ goalResult: result });
       return result.summary;
     } finally {
       recorder.close();
+      usageSidecar.close();
     }
   }
 
