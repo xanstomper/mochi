@@ -558,6 +558,10 @@ export type MochiEvent =
       filesModified: string[];
       summary: string;
       doc?: unknown;
+      /** Item 17: evidence grade of the summary's substantive claims
+       *  (cited / test-backed / ungrounded, with the no-fabrication rule).
+       *  Present on completed runs whose summary holds substantive claims. */
+      claimGrade?: import('./summary/claim-grade.js').ClaimGradeReport;
     } & EventMeta)
   | ({ type: 'context:compacted'; agentId: string; beforeTokens: number; afterTokens: number; preservedSections: string[] } & EventMeta)
   | ({ type: 'session:completed'; agentId: string; stopReason: string; durationMs: number } & EventMeta);

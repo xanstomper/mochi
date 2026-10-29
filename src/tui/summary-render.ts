@@ -91,7 +91,8 @@ export function renderSummary(doc: SummaryDocument, width = 80): string[] {
     doc.failures.length > 0 ||
     doc.warnings.length > 0 ||
     doc.references.length > 0 ||
-    doc.next.length > 0;
+    doc.next.length > 0 ||
+    (doc.evidence?.length ?? 0) > 0;
 
   // ── Metrics row: files n · checks n · tools n · time ──
   if (doc.metrics.length) {
@@ -130,6 +131,10 @@ export function renderSummary(doc: SummaryDocument, width = 80): string[] {
 
   section('What Changed', 'CHANGE', doc.whatChanged, paintChangeLine);
   section('Verification', 'TEST', doc.verification, paintVerifyLine);
+  // Item 17: the finished response's evidence block — citations for claims
+  // sourced from code or verification, and the visibly-marked ungrounded
+  // claims. Content carried by the doc (doc.evidence), not TUI styling.
+  section('Evidence', 'REFERENCE', doc.evidence ?? [], paintEvidenceLine);
   section('Failed', 'ERROR', doc.failures, (l) => `${T.error}${l}${T.reset}`);
   section('Warnings', 'WARNING', doc.warnings, (l) => `${T.warning}${l}${T.reset}`);
   section('References', 'REFERENCE', doc.references, paintReferenceLine);
@@ -239,6 +244,18 @@ function paintVerifyLine(line: string): string {
 function paintReferenceLine(line: string): string {
   const m = /^([\w-]+):\s*(.*)$/.exec(line);
   if (m) return `${T.orange}${T.bold}${m[1]}:${T.reset} ${T.grayDark}${m[2]}${T.reset}`;
+  return line;
+}
+
+/** EVIDENCE line: the grade tag carries the semantics — cited/test-backed in
+ *  success green, ungrounded in warning amber, the headline line plain. */
+function paintEvidenceLine(line: string): string {
+  if (line.startsWith('- [cited]') || line.startsWith('- [test-backed]')) {
+    return `  ${T.success}${line.slice(2)}${T.reset}`;
+  }
+  if (line.startsWith('- [ungrounded]')) {
+    return `  ${T.warning}${line.slice(2)}${T.reset}`;
+  }
   return line;
 }
 
