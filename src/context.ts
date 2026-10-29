@@ -34,6 +34,15 @@ import {
   recordCompactionLineage, renderProbeOutcome, renderSummaryLineage, probeTextOf,
   type CompactionVerification,
 } from './summary/verified-compaction.js';
+import {
+  DEFAULT_REINJECTION_BUDGET_CHARS, DEFAULT_SPILL_THRESHOLD_CHARS,
+  describeSpilledRef, retrieveSpilled, scanSpillRefs, spillContent, spillMarker,
+  type SpilledRef,
+} from './summary/spill-store.js';
+import {
+  buildReinjectionBlock, collectProtectedHead, readOpenTodos,
+  type ReinjectionResult,
+} from './summary/protected-head.js';
 
 const CANDIDATE_RULES = ['MOCHI.md', 'mochi.md', 'AGENTS.md', 'CLAUDE.md', 'GEMINI.md', '.cursorrules', '.github/copilot-instructions.md'];
 
@@ -558,6 +567,54 @@ export class ContextEngine {
    *  the compacted ledger instead of silently continuing. */
   lastCompactionVerification?: CompactionVerification;
 
+  // ── D2: compaction evidence-survival bundle ────────────────────────────
+  /** Oversized-output spill threshold in chars. Tool outputs (and other
+   *  compacted units) above this are spilled WHOLE to the content-addressed
+   *  store (.mochi/spill/, hash-keyed, gitignored, never truncated or
+   *  evicted) and the in-context copy becomes a small head + an elision
+   *  marker naming the store key and the retrieval command. Sits above every
+   *  pre-existing fold/condense limit so ordinary folding is untouched. */
+  private spillThresholdChars: number = DEFAULT_SPILL_THRESHOLD_CHARS;
+
+  /** Post-compaction re-injection budget in chars (leg 3). The hook appends
+   *  the protected head plus surviving-marker store keys; the bound keeps
+   *  re-injection from blowing the context back up. */
+  private reinjectionBudgetChars: number = DEFAULT_REINJECTION_BUDGET_CHARS;
+
+  /** Skill NAMES loaded in play this session, mined from `skill` tool calls
+   *  (names only — bodies are re-loadable; the name is what must survive). */
+  private skillsInPlay = new Set<string>();
+
+  /** D2: record of the last post-compaction re-injection — budget, spend,
+   *  keys referenced/included, truncation. Diagnostics and tests read this. */
+  lastReinjection?: ReinjectionResult;
+
+  /** D2: override the spill threshold (tests, or hosts with a tighter
+   *  context window). Non-positive/non-finite values are ignored. */
+  setSpillThresholdChars(chars: number): void {
+    if (Number.isFinite(chars) && chars > 0) this.spillThresholdChars = Math.floor(chars);
+  }
+
+  getSpillThresholdChars(): number {
+    return this.spillThresholdChars;
+  }
+
+  /** D2: override the re-injection budget (tests). Non-positive/non-finite
+   *  values are ignored; the configured minimum floor is 200 chars. */
+  setReinjectionBudgetChars(chars: number): void {
+    if (Number.isFinite(chars) && chars >= 200) this.reinjectionBudgetChars = Math.floor(chars);
+  }
+
+  getReinjectionBudgetChars(): number {
+    return this.reinjectionBudgetChars;
+  }
+
+  /** D2: skill names mined from this session's `skill` tool calls (for
+   *  diagnostics/tests; the protected head reads the same set). */
+  getSkillsInPlay(): string[] {
+    return [...this.skillsInPlay];
+  }
+
   // ── P5: prefix-cache bookkeeping ─────────────────────────────────────
   // The composed system prompt is tracked per segment (see
   // prompt/stable-prefix.ts). A mid-run change to the system bytes — or an
@@ -766,8 +823,30 @@ export class ContextEngine {
     }
     // Phase 2: mine file-op tool calls so read/edited sets survive compaction.
     this.trackFileOp(msg);
+    // D2: mine skill loads so the skill NAMES in play survive compaction.
+    this.trackSkillUse(msg);
     if (msg.role === 'tool' && typeof msg.content === 'string') {
       const text = msg.content;
+
+      // D2 leg 1: oversized-output spill. Above the threshold the FULL text
+      // goes to the content-addressed store (self-verifying, never
+      // truncated, never evicted) and the in-context copy becomes a small
+      // head + tail around an elision marker naming the store key and the
+      // retrieval command. The marker is emitted ONLY when the spill
+      // actually landed — a marker that points nowhere is a silent drop,
+      // not a save — and on spill failure the pre-existing fold/condense
+      // paths below still apply.
+      if (text.length > this.spillThresholdChars) {
+        try {
+          const ref = spillContent(this.projectRoot, text, { tool: msg.name ?? 'tool' });
+          if (ref) {
+            const marked = `${text.slice(0, 400)}${spillMarker(ref.key, { tool: msg.name ?? 'tool', chars: ref.chars })}${text.slice(-200)}`;
+            this.messages.push({ ...msg, content: marked });
+            return;
+          }
+        } catch { /* spill is best-effort; fall through to fold */ }
+      }
+
       const hasErrors =
         /error(\[[A-Za-z0-9_-]+\])?:/i.test(text) ||
         /\bFAIL\b/.test(text) ||
@@ -1783,6 +1862,23 @@ ${this.toolGuidelines(tools)}
     }
   }
 
+  /** D2: mine `skill` tool calls so the skill NAMES in play survive
+   *  compaction via the protected head. Names only, never bodies: bodies
+   *  are re-loadable through the skill tool; the name is the part a
+   *  post-compaction agent cannot re-derive once the load event is cut.
+   *  `skill list` calls advertise, they do not load — not "in play". */
+  private trackSkillUse(message: ChatMessage) {
+    if (message.role !== 'assistant' || !message.tool_calls) return;
+    for (const tc of message.tool_calls) {
+      const canonical = TOOL_ALIASES[tc.function.name] || tc.function.name;
+      if (canonical !== 'skill') continue;
+      let args: Record<string, unknown> = {};
+      try { args = JSON.parse(tc.function.arguments || '{}'); } catch { continue; }
+      const name = typeof args.name === 'string' ? args.name.trim() : '';
+      if (name && name !== 'list') this.skillsInPlay.add(name);
+    }
+  }
+
   /** Detect files whose on-disk fingerprint changed since the agent last read
    *  or edited them. Returns paths whose content the agent may be mis-modeling.
    *  Each stale file is reported only once per change (no repeated nagging for
@@ -2007,6 +2103,26 @@ ${this.toolGuidelines(tools)}
     // apart from budget/floor compactions.
     this.notePrefixBreak(opts?.reason ?? 'compaction');
 
+    // D2 leg 1 at the cut: evidence must not die with the dropped slice.
+    // (a) Oversized units being dropped are spilled WHOLE to the
+    //     content-addressed store — content-hash keyed, so a unit already
+    //     spilled at ingestion lands on the SAME key (idempotent).
+    // (b) Spill keys referenced by markers inside the dropped slice are
+    //     carried forward — the marker would otherwise die with its message
+    //     and the retrieval path would be orphaned (a silent drop).
+    const spilledRefs = new Map<string, SpilledRef>();
+    for (const key of scanSpillRefs(dropped.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n'))) {
+      const hit = retrieveSpilled(this.projectRoot, key);
+      if (hit) spilledRefs.set(key, { key, chars: hit.chars });
+    }
+    for (const m of dropped) {
+      const c = typeof m.content === 'string' ? m.content : '';
+      if (c.length > this.spillThresholdChars) {
+        const ref = spillContent(this.projectRoot, c, { tool: m.name ?? m.role });
+        if (ref) spilledRefs.set(ref.key, ref);
+      }
+    }
+
     // MCH-219 (lineage compression): a PRIOR compaction's ledger is a dropped
     // system message. Losing it silently orphans earlier sessions' memory —
     // the new checkpoint would know nothing before the last window. Carry the
@@ -2081,12 +2197,22 @@ ${this.toolGuidelines(tools)}
     // cheap), so repo context survives compaction instead of being forbidden.
     if (this.filesEdited.size) fileOps.push(`Files already edited in this session: ${[...this.filesEdited].slice(-30).join(', ')}`);
     if (this.filesRead.size) fileOps.push(`Files previously read (their contents were compacted away; re-read the ones relevant to the current step): ${[...this.filesRead].slice(-30).join(', ')}`);
+    // D2: spilled-evidence pointers ride the ledger, so the chain of
+    // summaries keeps the retrieval path even when the message that carried
+    // the original marker was among the dropped.
+    const spillOps: string[] = [];
+    if (spilledRefs.size > 0) {
+      const rendered = [...spilledRefs.values()]
+        .map((r) => `${r.key}${r.tool ? ` (${r.tool}, ${r.chars.toLocaleString('en-US')} chars)` : ` (${r.chars.toLocaleString('en-US')} chars)`}`)
+        .join('; ');
+      spillOps.push(`Spilled oversized outputs (content-addressed local store; retrieve the FULL text with recall_output key="<key>"): ${rendered}`);
+    }
     // MCH-219: prior ledger CONTENT leads (oldest→newest, capped at 2) so the
     // model reads the session's full arc; muse's C7 lineage marker (id
     // pointers) rides on top. Both mechanisms coexist: content carry-forward
     // keeps memory, lineage ids keep provenance.
     const priorBody = priorLedgers.slice(-2).join('\n---\n(earlier compaction)\n---\n');
-    const body = [priorBody, checkpoint?.trim(), ledger, fileOps.join('\n'), facts.length ? 'Session facts:\n' + facts.join('\n') : ''].filter(Boolean).join('\n');
+    const body = [priorBody, checkpoint?.trim(), ledger, fileOps.join('\n'), spillOps.join('\n'), facts.length ? 'Session facts:\n' + facts.join('\n') : ''].filter(Boolean).join('\n');
     // The compacted ledger leads with its lineage marker: the next
     // compaction that drops THIS message adopts its id as a parent.
     let compactionMsg: ChatMessage | undefined;
@@ -2147,6 +2273,13 @@ ${this.toolGuidelines(tools)}
       };
     }
 
+    // D2 leg 3: post-compaction re-injection hook — the protected head plus
+    // every store key referenced by a marker that survived the cut, so the
+    // agent resumes with its evidence reachable instead of re-asking or
+    // guessing. Bounded by reinjectionBudgetChars; omissions are named, and
+    // a later compaction that drops this block rebuilds it.
+    this.runPostCompactionReinjection();
+
     // C7 lineage record: persist this compaction's provenance — source
     // range + slice fingerprint, digest fingerprint, the probe outcome
     // (kept / repaired / still-missed), and the recall_output archive ids
@@ -2168,6 +2301,37 @@ ${this.toolGuidelines(tools)}
         }));
       } catch { /* best-effort */ }
     }
+  }
+
+  /** D2 leg 3: build and append the bounded post-compaction re-injection
+   *  block: the protected head (root goal, plan state, open TODOs, skill
+   *  names in play) plus a described line for every spill-store key
+   *  referenced by markers that survived the cut. Bounded by
+   *  reinjectionBudgetChars — when the budget cuts, omissions are NAMED in
+   *  the block, never silent; keys still resolve via their markers and the
+   *  ledger line. Stats land on lastReinjection for diagnostics/tests. */
+  private runPostCompactionReinjection(): ReinjectionResult | null {
+    const head = collectProtectedHead({
+      goal: this.initialUserPrompt || this.state.goal,
+      nextAction: this.state.nextAction,
+      todos: readOpenTodos(this.projectRoot),
+      skillNames: [...this.skillsInPlay],
+    });
+    const transcriptText = this.messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n');
+    const keys = scanSpillRefs(transcriptText);
+    const result = buildReinjectionBlock({
+      head,
+      keys,
+      describeKey: (key) => describeSpilledRef(this.projectRoot, key),
+      budgetChars: this.reinjectionBudgetChars,
+    });
+    if (result.block) {
+      // Trailing system message: buildPacket's walk always carries system
+      // messages, and the state prompt appended after it stays byte-stable.
+      this.messages.push({ role: 'system', content: result.block });
+    }
+    this.lastReinjection = result;
+    return result;
   }
 }
 
